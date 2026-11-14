@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """`vm run -- rootfs`: a system from one executable and nothing of the
-host's file system. rootfs serves the image linked into it, the executables
-of busybox and python, whose modules the kernel compiles as they are executed, and a
-/dev and a /tmp in its memory, and starts busybox's shell on the terminal;
-the shell's status is vm's. Each server's files are on a
-device of their own and belong to who made them, a directory keeps its
-mode, a directory removed while it is read is removed whole, mkdir -p
-finds what is there, and rename keeps a directory out of itself and off a
-directory that is not empty. Appends from two shells lose no line, flock's
-and fcntl's locks are an open file's, a FIFO's readers and writers meet,
-a file has hard links, ctime is its own, statvfs tells the capacity of
-/tmp and a root that is read-only, and who is not root gets no more than
-the modes give.
+host's file system. rootfs has the image linked into it, which erofs
+serves at the root, the executables of busybox and python, whose modules
+the kernel compiles as they are executed, a /dev and a /tmp, and starts
+busybox's shell on the terminal; the shell's status is vm's. Each
+server's files are on a device of their own and belong to who made them,
+a directory keeps its mode, a directory removed while it is read is
+removed whole, mkdir -p finds what is there, and rename keeps a directory
+out of itself and off a directory that is not empty. Appends from two
+shells lose no line, flock's and fcntl's locks are an open file's, a
+FIFO's readers and writers meet, a file has hard links, ctime is its own,
+statvfs tells the capacity of /tmp and a root that is read-only, and who
+is not root gets no more than the modes give.
 
     test_rootfs.py <vm> <rootfs>
 """
@@ -215,7 +215,7 @@ def main():
         assert not os.listdir(empty), os.listdir(empty)
         result = subprocess.run([vm, "run", "--", rootfs], input=b"ls /missing\n", capture_output=True, cwd=empty, env=env, timeout=120)
         assert result.returncode == 1 and b"No such file" in result.stderr and result.stdout == b"", result
-    print("rootfs: busybox's shell runs from the image a server of the kernel's serves, without the host's files")
+    print("rootfs: busybox's shell runs from the image erofs serves, without the host's files")
 
 
 if __name__ == "__main__":

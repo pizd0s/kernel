@@ -494,7 +494,7 @@ python_exe = executable("python_exe", python, "$(B)/bin/python/python3", tail=py
 # The tools of the system, its services and the commands that speak to
 # them, in one multicall executable, /bin/tools, each a link to it in the
 # image (bin/tools).
-TOOLS = ["blk", "devfs", "devices", "gpt", "mount", "tmpfs", "umount"]
+TOOLS = ["blk", "devfs", "devices", "erofs", "gpt", "mount", "tmpfs", "umount"]
 PROTOCOL_SOURCES = build.glob("$(S)/lib/protocol/*.cpp")
 PROTOCOL_HEADERS = build.glob("$(S)/lib/protocol/*.h")
 TOOL_SOURCES = [*build.glob("$(S)/bin/tools/*.cpp"), *PROTOCOL_SOURCES]
@@ -550,10 +550,12 @@ fuse2fs = command(
 )
 fuse2fs_exe = executable("fuse2fs_exe", fuse2fs, "$(B)/bin/fuse2fs/fuse2fs")
 
-# A system from one executable: rootfs, the first process, serves the image
-# linked into it, the executables of busybox with its links, python, the
-# tools with theirs and fuse2fs, with /dev and /tmp of its own, to the shell it starts,
-# and the kernel compiles each module as it is executed (bin/rootfs).
+# A system from one executable: rootfs, the first process and the VFS, has
+# the image linked into it, the executables of busybox with its links,
+# python, the tools with theirs and fuse2fs, which erofs of the tools
+# serves at the root, with /dev and /tmp of its own, to the shell it
+# starts, and the kernel compiles each module as it is executed
+# (bin/rootfs).
 rootfs_image = command(
     name="rootfs_image",
     inputs=["$(S)/bin/rootfs/image.py"],
@@ -562,7 +564,7 @@ rootfs_image = command(
     cmd=["python3", "$(S)/bin/rootfs/image.py", "$(B)/bin/rootfs/rootfs.img",
          "--busybox", busybox_exe.outputs[0], busybox.outputs[1], "--python", python_exe.outputs[0],
          "--program", "tools", tools.outputs[0], *(arg for tool in TOOLS for arg in ("--link", tool, "tools")),
-         "--program", "fuse2fs", fuse2fs_exe.outputs[0]],
+         "--program", "fuse2fs", fuse2fs_exe.outputs[0], "--server", "tools"],
     descr="IM",
     color="cyan",
 )

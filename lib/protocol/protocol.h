@@ -2,14 +2,15 @@
 
 // The file protocol of the system: three interfaces on one wire.
 //
-//   The VFS's: the kernel's calls with a path (bin/vm/kernel_remote.go),
+//   The VFS's: the kernel's calls with a path (bin/vm/kernel_vfs.go),
 //   on a handle of rootfs's (bin/rootfs). rootfs is the VFS: it alone
 //   walks a path, follows symbolic links, knows the mounts and where ".."
 //   goes, and makes the last step of a call as Linux makes it.
 //
 //   A file system's: rootfs's calls by node, on the channel of a file
 //   system it mounted, which knows its own nodes and nothing of paths,
-//   mounts or roots: libfuse's (lib/fuse) and rootfs's own trees.
+//   mounts or roots: libfuse's (lib/fuse), and erofs's, the image at the
+//   root, tmpfs's and devfs's, which rootfs starts (bin/tools).
 //
 //   An open file's: the kernel's calls on the endpoint of an open file, a
 //   file system's or a device's (bin/tools); a handle takes them too.
@@ -72,8 +73,8 @@
 //                                         makes a name
 //     CONNECT               root u64, path    OK, fds[0] the listener the
 //                                         socket node holds
-//   and an open file's calls but READ and WRITE. A handle's FSTAT that
-//   rootfs answers itself has its id after the stat.
+//   and an open file's calls but READ and WRITE: a handle's FSTAT has its
+//   id after the stat.
 //
 //   A file system's, on its channel, by node: a node is its inode number,
 //   the root's in the stat its connection answered, 1 for a file system

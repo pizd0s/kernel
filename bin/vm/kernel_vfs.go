@@ -42,8 +42,7 @@ const (
 )
 
 // handleID is the handle's id, asked once: an open or a chdir gave it,
-// else the handle's FSTAT says it, which rootfs answers itself for a
-// handle of its own trees.
+// else the handle's FSTAT says it, after the stat.
 func (d *remoteDir) handleID() (uint64, error) {
 	if id := d.id.Load(); id != 0 {
 		return id, nil

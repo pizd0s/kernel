@@ -778,19 +778,21 @@ func (p *Process) libcFexecve(fd, argv, envp uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	pathed, ok := obj.(Pathed)
+	// A file of the host is its path under the root; another, a memfd or a
+	// server's file, has none but its descriptor's.
+	path := fmt.Sprintf("/dev/fd/%d", fd)
 
-	if !ok {
-		return p.result(0, syscall.EACCES)
+	if pathed, ok := obj.(Pathed); ok {
+		host, err := pathed.hostPath()
+
+		if err != nil {
+			return p.result(0, err)
+		}
+
+		path = p.guestPath(host)
 	}
 
-	host, err := pathed.hostPath()
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	return p.result(0, p.execFrom(p.guestPath(host), obj, p.strings(argv), p.strings(envp)))
+	return p.result(0, p.execFrom(path, obj, p.strings(argv), p.strings(envp)))
 }
 
 func (p *Process) libcExecl(path, arg0, va uint32) uint32 {

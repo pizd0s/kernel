@@ -98,7 +98,7 @@ func (f *memfdFile) unref() {
 }
 
 func (f *memfdFile) stat(st *syscall.Stat_t) error {
-	*st = syscall.Stat_t{Ino: f.ino, Mode: syscall.S_IFREG | 0o600, Nlink: 1, Size: int64(len(f.mem)),
+	*st = syscall.Stat_t{Ino: f.ino, Mode: syscall.S_IFREG | 0o777, Nlink: 1, Size: int64(len(f.mem)),
 		Uid: uint32(syscall.Getuid()), Gid: uint32(syscall.Getgid()), Blksize: 4096}
 	st.Atim = syscall.NsecToTimespec(f.made.UnixNano())
 	st.Mtim, st.Ctim = st.Atim, st.Atim

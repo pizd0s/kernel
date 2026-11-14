@@ -14,6 +14,7 @@ namespace {
         {"blk", blkMain},
         {"devfs", devfsMain},
         {"devices", devicesMain},
+        {"erofs", erofsMain},
         {"gpt", gptMain},
         {"mount", mountMain},
         {"tmpfs", tmpfsMain},
