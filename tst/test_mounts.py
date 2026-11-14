@@ -9,15 +9,18 @@ busy to rmdir and to another mount; umount lets go of it; what is not
 there, not a directory, or a device is refused.
 
 File systems on a disk: blk serves the disk, gpt each partition, and
-gpt starts /bin/ext4 for one with an ext2 file system, /dev/<part>fs, a
-file system to mount, read-only, there before the shell starts. The
-disk's ext2 and ext4 file systems are made here (Image): their files'
-bytes come whole from runs of blocks, from blocks interleaved with
-another file's, through indirect blocks and an extent tree of a leaf,
-holes and unwritten extents as zeros; links are followed, an absolute one
-from the root of the process; ".." out of the root goes to where it is
-mounted, and so does the path of a directory. A file system of features
-ext4 does not know is refused, and nothing is written.
+gpt starts fuse2fs, on the system's libfuse, for one with an ext2 file
+system, /dev/<part>fs, a file system to mount, there before the shell
+starts. The disk's ext2 and ext4 file systems are made here (Image),
+the test's user's: their files' bytes come whole from runs of blocks,
+from blocks interleaved with another file's, through indirect blocks and
+an extent tree of a leaf, holes and unwritten extents as zeros; links are
+followed, an absolute one from the root of the process; ".." out of the
+root goes to where it is mounted, and so does the path of a directory.
+Names are made, moved, linked and removed, modes, times and bytes
+written, and all of it is there when the system starts again: it writes
+what it holds as it goes down. A file system of features fuse2fs does
+not know is refused.
 
     test_mounts.py <vm> <rootfs>
 """
@@ -38,8 +41,8 @@ class Image:
     files' blocks taken in turn, or one of every two, the other another's,
     holes left, unwritten extents, fast and slow links."""
 
-    def __init__(self, block, blocks, extents, inodes=64):
-        self.block, self.blocks, self.extents, self.inodes = block, blocks, extents, inodes
+    def __init__(self, block, blocks, extents, owner=0, inodes=64):
+        self.block, self.blocks, self.extents, self.inodes, self.owner = block, blocks, extents, inodes, owner
         self.disk = bytearray(block * blocks)
         self.first_data = 1 if block == 1024 else 0
         self.gdt = self.first_data + 1
@@ -64,9 +67,10 @@ class Image:
         return {"ino": ino, "parent": parent, "entries": []}
 
     def inode(self, ino, mode, size, links, blocks_used, flags, i_block):
-        raw = struct.pack("<HHIIIIIHHIII", mode, 0, size & 0xFFFFFFFF, 1000000000, 1000000000, 1000000000, 0, 0, links,
-                          blocks_used * (self.block // 512), flags, 0)
-        raw += i_block.ljust(60, b"\0") + struct.pack("<IIII", 0, 0, size >> 32, 0) + bytes(12)
+        raw = struct.pack("<HHIIIIIHHIII", mode, self.owner & 0xFFFF, size & 0xFFFFFFFF, 1000000000, 1000000000, 1000000000, 0,
+                          self.owner & 0xFFFF, links, blocks_used * (self.block // 512), flags, 0)
+        raw += i_block.ljust(60, b"\0") + struct.pack("<IIII", 0, 0, size >> 32, 0) + struct.pack("<IHH", 0, self.owner >> 16,
+                                                                                                   self.owner >> 16) + bytes(4)
         assert len(raw) == 128
         at = self.inode_table * self.block + (ino - 1) * 128
         self.disk[at:at + 128] = raw
@@ -330,8 +334,17 @@ cd /tmp/two/sub && pwd -P && ls .. | head -2 && cd /
 ls /tmp/four/sub/../..
 stat -c '%F %s %h' /tmp/two/sub /tmp/four/big /tmp/two/link
 python3 -c 'import os; s = os.statvfs("/tmp/four"); print(s.f_bsize, s.f_flag & 1, s.f_blocks)'
-echo x > /tmp/two/new
-umount /tmp/two && ls /tmp/two | wc -l
+for root in /tmp/two /tmp/four; do echo new > $root/new.txt && mkdir $root/dir && mv $root/new.txt $root/dir/moved.txt && ln -s hello.txt $root/sym && chmod 600 $root/hello.txt && touch -d @1500000000 $root/hello.txt && rm $root/filler && ls $root/dir; done
+rmdir /tmp/two/dir
+python3 -c '
+import os
+p = bytes(i * 13 % 256 for i in range(1 << 20))
+f = os.open("/tmp/four/written", os.O_CREAT | os.O_RDWR, 0o644)
+print(os.write(f, p), os.pread(f, 1 << 20, 0) == p)
+os.ftruncate(f, 1000)
+os.write(os.open("/tmp/four/written", os.O_WRONLY | os.O_APPEND), b"tail")
+print(os.fstat(f).st_size, os.pread(f, 4, 1000))
+'
 """
 
 EXT_WANT = """\
@@ -368,13 +381,48 @@ two
 directory 1024 2
 regular file 1048576 1
 symbolic link 9 1
-4096 1 2048
-0
+4096 0 2043
+moved.txt
+moved.txt
+1048576 True
+1004 b'tail'
 """
 
 EXT_ERRORS = """\
-ext4: /dev/sda3: features 0x10000 unknown
-sh: can't create /tmp/two/new: Read-only file system
+FUSE2FS (sda3): Filesystem has unsupported feature(s).
+FUSE2FS (sda3): Please run e2fsck -fy.
+rmdir: '/tmp/two/dir': Directory not empty
+"""
+
+# What the first start wrote, there when the system starts again.
+AGAIN = """\
+mkdir /tmp/two /tmp/four
+mount /tmp/two /dev/sda1fs && mount /tmp/four /dev/sda2fs
+cat /tmp/two/dir/moved.txt /tmp/four/dir/moved.txt
+readlink /tmp/two/sym; readlink /tmp/four/sym
+stat -c '%a %Y' /tmp/two/hello.txt /tmp/four/hello.txt
+ls /tmp/two /tmp/four | grep -c filler
+python3 -c '
+import os
+f = os.open("/tmp/four/written", os.O_RDONLY)
+print(os.fstat(f).st_size, os.pread(f, 4, 1000), os.pread(f, 1000, 0) == bytes(i * 13 % 256 for i in range(1000)))
+'
+"""
+
+AGAIN_WANT = """\
+new
+new
+hello.txt
+hello.txt
+600 1500000000
+600 1500000000
+0
+1004 b'tail' True
+"""
+
+AGAIN_ERRORS = """\
+FUSE2FS (sda3): Filesystem has unsupported feature(s).
+FUSE2FS (sda3): Please run e2fsck -fy.
 """
 
 
@@ -391,17 +439,16 @@ def main():
         os.mkdir(empty)
         result = run(vm, rootfs, [], BIND, empty)
         assert (result.returncode, result.stdout.decode(), result.stderr.decode()) == (3, BIND_WANT, BIND_ERRORS), result
-        strange = bytearray(Image(1024, 1024, False).finish())
-        struct.pack_into("<I", strange, 1024 + 96, 0x2 | 0x10000)
+        owner = os.getuid()
+        strange = bytearray(Image(1024, 1024, False, owner).finish())
+        struct.pack_into("<I", strange, 1024 + 96, 0x2 | 0x40000000)
         disk = os.path.join(work, "disk.img")
-        gpt_image(disk, [tree(Image(1024, 4096, False)), tree(Image(4096, 2048, True)), bytes(strange)])
-        with open(disk, "rb") as f:
-            before = f.read()
+        gpt_image(disk, [tree(Image(1024, 4096, False, owner)), tree(Image(4096, 2048, True, owner)), bytes(strange)])
         result = run(vm, rootfs, ["--disk", f"sda={disk}"], EXT, empty)
         assert (result.returncode, result.stdout.decode(), result.stderr.decode()) == (3, EXT_WANT, EXT_ERRORS), result
-        with open(disk, "rb") as f:
-            assert f.read() == before
-    print("mounts: servers' directories and the ext2 and ext4 file systems of a disk's partitions mount on rootfs's directories")
+        result = run(vm, rootfs, ["--disk", f"sda={disk}"], AGAIN, empty)
+        assert (result.returncode, result.stdout.decode(), result.stderr.decode()) == (3, AGAIN_WANT, AGAIN_ERRORS), result
+    print("mounts: servers' directories, and the ext2 and ext4 file systems of a disk's partitions through fuse2fs, mount on rootfs's directories")
 
 
 if __name__ == "__main__":

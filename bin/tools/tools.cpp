@@ -1,22 +1,8 @@
-// tools: the programs of the system in one executable, as busybox's are
-// in its: the services rootfs starts, devices, blk, gpt and ext4
-// (service.h), and the commands mount and umount. Each is a link to
-// /bin/tools in the image, and runs by the name it is run by, or by the
-// name after tools.
-//
-//     <tool> [arg...]
-//     tools <tool> [arg...]
+#include "tools.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-
-int blkMain(int, char**);
-int devicesMain(int, char**);
-int ext4Main(int, char**);
-int gptMain(int, char**);
-int mountMain(int, char**);
-int umountMain(int, char**);
 
 namespace {
     struct Tool {
@@ -24,17 +10,16 @@ namespace {
         int (*main)(int, char**);
     };
 
-    const Tool tools[] = {
+    static const Tool tools[] = {
         {"blk", blkMain},
         {"devices", devicesMain},
-        {"ext4", ext4Main},
         {"gpt", gptMain},
         {"mount", mountMain},
         {"umount", umountMain},
     };
 }
 
-int main(int argc, char** argv) {
+int runTool(int argc, char** argv) {
     for (; argc > 0; --argc, ++argv) {
         const char* slash = strrchr(argv[0], '/');
         const char* name = slash ? slash + 1 : argv[0];

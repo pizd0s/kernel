@@ -63,6 +63,9 @@ __pycache__/
 /rootfs_module
 /tools_module
 /tools_exe
+/fuse2fs
+/fuse2fs_exe
+/e2fsprogs_tarball
 /devices_service_module
 /devices_service_exe
 /llvm_exe

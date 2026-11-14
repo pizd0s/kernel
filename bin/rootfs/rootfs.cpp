@@ -96,7 +96,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "../tools/protocol.h"
+#include <lib/protocol/protocol.h>
 
 using u8 = uint8_t;
 using u32 = uint32_t;
@@ -632,6 +632,8 @@ namespace {
         Endpoint* next;  // among the free ones
         u8 nameLength;
         char name[NAME_MAX];
+        Endpoint* after;  // among the live ones
+        Endpoint* before;
     };
 
     static u32 hashIno(u64 ino) {
@@ -1195,6 +1197,7 @@ namespace {
     int watcher = -1;
     Endpoint* freeEndpoints;
     Endpoint* buried;  // closed in this batch of events: free after it
+    Endpoint* live;  // every endpoint not closed
     usize endpointCount;  // the endpoints of all servers
 
     // The signal mask of the wait, once reapOnChild blocked SIGCHLD
@@ -1222,10 +1225,14 @@ namespace {
         if (name.length > NAME_MAX) {
             fatal("rootfs: a name of %zu bytes for an endpoint", name.length);
         }
-        *ep = {fd, reads, writes, role, false, &s, n, dir, nullptr, u8(name.length), {}};
+        *ep = {fd, reads, writes, role, false, &s, n, dir, nullptr, u8(name.length), {}, live, nullptr};
         if (!name.empty()) {
             memcpy(ep->name, name.at, name.length);
         }
+        if (live) {
+            live->before = ep;
+        }
+        live = ep;
         ++n->opens;
         if (dir) {
             ++dir->holds;
@@ -1308,6 +1315,14 @@ namespace {
         release(*ep->server, n);
         if (ep->dir) {
             drop(ep->dir);
+        }
+        if (ep->before) {
+            ep->before->after = ep->after;
+        } else {
+            live = ep->after;
+        }
+        if (ep->after) {
+            ep->after->before = ep->before;
         }
         ep->next = buried;
         buried = ep;
@@ -2529,16 +2544,47 @@ namespace {
 
     static void booted();
 
+    // The shell ended: the system goes down. The services' devices lose
+    // their names and the mounted servers their mounts; a service ends once
+    // what is open of it is closed, a file system once it has written what
+    // it holds, the file systems first, as the devices under them serve
+    // them until then.
+    static void shutdown() {
+        for (Endpoint* ep = live; ep;) {
+            Endpoint* after = ep->after;
+            if (ep->role == Role::Channel || ep->role == Role::Mount) {
+                closed(ep);
+            }
+            ep = after;
+        }
+    }
+
+    static i64 monotonicMilliseconds() {
+        timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return i64(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+    }
+
     // Serves the servers until the last endpoint of them all closes: then
-    // nobody can reach them; or until the shell ends. The end of bootEnd,
-    // no packet on it, is the services' being up. An endpoint closed while
-    // a batch of events is handled stays dead to the rest of the batch.
+    // nobody can reach them. When the shell ends, the system goes down
+    // (shutdown) and they are served until its processes are gone, the last
+    // endpoint closed, or for 10 seconds at most. The end of bootEnd, no
+    // packet on it, is the services' being up. An endpoint closed while a
+    // batch of events is handled stays dead to the rest of the batch.
     static void serve() {
         epoll_event events[64];
+        i64 deadline = -1;
         while (endpointCount > 0) {
-            const int n = epoll_pwait(watcher, events, 64, -1, waitMasked ? &waitMask : nullptr);
-            if (!reap()) {
-                return;
+            const i64 left = deadline < 0 ? -1 : deadline - monotonicMilliseconds();
+            if (deadline >= 0 && left <= 0) {
+                break;
+            }
+            const int n = epoll_pwait(watcher, events, 64, int(left), waitMasked ? &waitMask : nullptr);
+            if (!reap() && deadline < 0) {
+                deadline = monotonicMilliseconds() + 10000;
+                shutdown();
+                bury();
+                continue;
             }
             for (int i = 0; i < n; ++i) {
                 if (events[i].data.ptr == &bootMarker) {

@@ -14,6 +14,8 @@
 //     devices_service copy <device> <off> <woff> <n>
 //     devices_service put <device> <text>
 
+#include <lib/protocol/service.h>
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -22,83 +24,84 @@
 #include <sys/epoll.h>
 #include <sys/mman.h>
 #include <sys/param.h>
-#include <sys/socket.h>
 #include <unistd.h>
 
-#include "../bin/tools/protocol.h"
-
 namespace {
-    alignas(Header) unsigned char packet[65536];
+    static const char* text;
+    static size_t length;
+    static Device device;
 
-    struct Open {
-        int fd;
-        bool channel;
-        bool writeOnly;
-    };
-
-    void answer(int fd, uint32_t op, uint32_t arg, const void* data = nullptr, size_t size = 0) {
-        Header h{op, arg, 0, 0};
-        const iovec parts[] = {{&h, sizeof h}, {const_cast<void*>(data), size}};
-        sendPacket(fd, parts, size ? 2 : 1, nullptr, 0);
+    static void readText(const Endpoint& e, const Request& r) {
+        uint64_t off;
+        uint32_t woff;
+        if (!e.reads) {
+            return fail(r.reply(), EBADF);
+        }
+        if (r.window() < 0 || !r.at(0, off) || !r.at(8, woff)) {
+            return fail(r.reply(), EINVAL);
+        }
+        const size_t part = off < length ? MIN(size_t(r.h.arg), length - size_t(off)) : 0;
+        pwrite(r.window(), text + MIN(off, uint64_t(length)), part, woff);
+        const uint32_t done = uint32_t(part);
+        answer(r.reply(), opOk, 0, &done, sizeof done);
     }
 
-    void watch(int epoll, Open o) {
-        auto* at = static_cast<Open*>(malloc(sizeof(Open)));
-        *at = o;
-        epoll_event ev{};
-        ev.events = EPOLLIN;
-        ev.data.ptr = at;
-        epoll_ctl(epoll, EPOLL_CTL_ADD, o.fd, &ev);
+    static bool handle(Endpoint& e, Request& r) {
+        if (e.channel) {
+            answer(r.reply(), opOk, 0, &device.st, sizeof device.st);
+            return true;
+        }
+        switch (r.h.op) {
+            case opRead:
+                readText(e, r);
+                break;
+            case opFstat:
+                answer(r.reply(), opOk, 0, &device.st, sizeof device.st);
+                break;
+            default:
+                fail(r.reply(), EINVAL);
+        }
+        return false;
+    }
+
+    static int copy(const char* path, long long off, long long woff, long long n) {
+        char bytes[16];
+        memset(bytes, '.', sizeof bytes);
+        const int source = open(path, O_RDONLY);
+        const int window = memfd_create(bytes, sizeof bytes, O_RDWR);
+        off_t from = off;
+        off_t to = woff;
+        const ssize_t got = copy_file_range(source, &from, window, &to, size_t(n), 0);
+        printf("%zd %lld %lld %.16s\n", got, (long long)from, (long long)to, bytes);
+        return 0;
+    }
+
+    static int put(const char* path, const char* bytes) {
+        const int target = open(path, O_WRONLY);
+        const int window = memfd_create(const_cast<char*>(bytes), strlen(bytes), O_RDONLY);
+        printf("%zd\n", copy_file_range(window, nullptr, target, nullptr, strlen(bytes), 0));
+        return 0;
     }
 }
 
 int main(int argc, char** argv) {
     if (argc == 6 && strcmp(argv[1], "copy") == 0) {
-        char bytes[16];
-        memset(bytes, '.', sizeof bytes);
-        const int device = open(argv[2], O_RDONLY);
-        const int window = memfd_create(bytes, sizeof bytes, O_RDWR);
-        off_t from = atoll(argv[3]);
-        off_t to = atoll(argv[4]);
-        const ssize_t n = copy_file_range(device, &from, window, &to, size_t(atoll(argv[5])), 0);
-        printf("%zd %lld %lld %.16s\n", n, (long long)from, (long long)to, bytes);
-        return 0;
+        return copy(argv[2], atoll(argv[3]), atoll(argv[4]), atoll(argv[5]));
     }
     if (argc == 4 && strcmp(argv[1], "put") == 0) {
-        const int device = open(argv[2], O_WRONLY);
-        const int window = memfd_create(argv[3], strlen(argv[3]), O_RDONLY);
-        printf("%zd\n", copy_file_range(window, nullptr, device, nullptr, strlen(argv[3]), 0));
-        return 0;
+        return put(argv[2], argv[3]);
     }
     if (argc < 4) {
         dprintf(STDERR_FILENO, "usage: devices_service <name> <mode> <text> [ro]\n");
         return 2;
     }
     const char* name = argv[1];
-    const uint32_t mode = uint32_t(strtoul(argv[2], nullptr, 8));
-    const char* text = argv[3];
-    const size_t length = strlen(text);
-    const int reg = open("/dev/init", argc > 4 ? O_RDONLY : O_RDWR);
-    int pair[2];
-    int reply[2];
-    if (reg < 0 || socketpair(AF_UNIX, SOCK_SEQPACKET, 0, pair) != 0 || socketpair(AF_UNIX, SOCK_SEQPACKET, 0, reply) != 0) {
-        perror("devices_service");
-        return 1;
-    }
-    Header h{opRegister, mode, geteuid(), getegid()};
-    const iovec parts[] = {{&h, sizeof h}, {const_cast<char*>(name), strlen(name)}};
-    const int fds[] = {pair[1], reply[1]};
-    sendPacket(reg, parts, 2, fds, 2);
-    close(pair[1]);
-    close(reply[1]);
-    close(reg);
-    struct {
-        Header h;
-        Stat st;
-    } registered;
-    const ssize_t n = recv(reply[0], &registered, sizeof registered, 0);
-    if (n != ssize_t(sizeof registered) || registered.h.op != opOk) {
-        printf("register %s: %s\n", name, strerror(n >= ssize_t(sizeof(Header)) ? int(registered.h.arg) : EIO));
+    text = argv[3];
+    length = strlen(text);
+    const int registry = open("/dev/init", argc > 4 ? O_RDONLY : O_RDWR);
+    const int e = registry < 0 ? errno : enroll(registry, name, uint32_t(strtoul(argv[2], nullptr, 8)), device);
+    if (e != 0) {
+        printf("register %s: %s\n", name, strerror(e));
         return 1;
     }
     printf("registered %s\n", name);
@@ -113,55 +116,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     const int epoll = epoll_create1(0);
-    watch(epoll, {pair[0], true, false});
-    for (;;) {
-        epoll_event ev;
-        if (epoll_wait(epoll, &ev, 1, -1) != 1) {
-            continue;
-        }
-        Open* o = static_cast<Open*>(ev.data.ptr);
-        int in[maxFds];
-        size_t count = 0;
-        const ssize_t got = receivePacket(o->fd, packet, sizeof packet, in, count);
-        if (got <= 0) {
-            if (o->channel) {
-                return 0;
-            }
-            epoll_ctl(epoll, EPOLL_CTL_DEL, o->fd, nullptr);
-            close(o->fd);
-            free(o);
-            continue;
-        }
-        if (count == 0 || size_t(got) < sizeof(Header)) {
-            continue;
-        }
-        Header q;
-        memcpy(&q, packet, sizeof q);
-        const int fd = in[count - 1];
-        if (o->channel) {
-            // An OPEN rootfs handed on: its endpoint is the open file's.
-            watch(epoll, {fd, false, (q.arg & O_ACCMODE) == O_WRONLY});
-            answer(fd, opOk, 0, &registered.st, sizeof registered.st);
-            continue;
-        }
-        if (q.op == opRead && o->writeOnly) {
-            answer(fd, opErr, EBADF);
-        } else if (q.op == opRead && count == 2) {
-            uint64_t off;
-            uint32_t woff;
-            memcpy(&off, packet + sizeof q, sizeof off);
-            memcpy(&woff, packet + sizeof q + sizeof off, sizeof woff);
-            const size_t part = off < length ? MIN(size_t(q.arg), length - size_t(off)) : 0;
-            pwrite(in[0], text + MIN(off, uint64_t(length)), part, woff);
-            const uint32_t done = uint32_t(part);
-            answer(fd, opOk, 0, &done, sizeof done);
-        } else if (q.op == opFstat) {
-            answer(fd, opOk, 0, &registered.st, sizeof registered.st);
-        } else {
-            answer(fd, opErr, EINVAL);
-        }
-        for (size_t i = 0; i < count; ++i) {
-            close(in[i]);
-        }
-    }
+    watch(epoll, {device.end, true, false, false, nullptr});
+    serve(epoll, handle);
+    return 0;
 }

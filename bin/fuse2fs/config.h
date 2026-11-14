@@ -1,0 +1,84 @@
+/*
+ * e2fsprogs' configuration for fuse2fs on the system (bin/fuse2fs): wasm32
+ * on lib/c, one thread, no NLS, the system's libfuse (lib/fuse) at
+ * FUSE_USE_VERSION 29.
+ */
+#define FUSE_USE_VERSION 29
+#define HAVE_FUSE_H 1
+#define CONFIG_MMP 1
+
+#define HAVE_DIRENT_H 1
+#define HAVE_ERRNO_H 1
+#define HAVE_FCHOWN 1
+#define HAVE_FCNTL 1
+#define HAVE_FDATASYNC 1
+#define HAVE_FSYNC 1
+#define HAVE_FUTIMES 1
+#define HAVE_GETCWD 1
+#define HAVE_GETENTROPY 1
+#define HAVE_GETHOSTNAME 1
+#define HAVE_GETOPT_H 1
+#define HAVE_GETRLIMIT 1
+#define HAVE_GETRUSAGE 1
+#define HAVE_INTPTR_T 1
+#define HAVE_INTTYPES_H 1
+#define HAVE_MALLOC_H 1
+#define HAVE_MBSTOWCS 1
+#define HAVE_MMAP 1
+#define HAVE_NANOSLEEP 1
+#define HAVE_PATHCONF 1
+#define HAVE_PATHS_H 1
+#define HAVE_POSIX_MEMALIGN 1
+#define HAVE_PREAD 1
+#define HAVE_PWRITE 1
+#define HAVE_SETJMP_H 1
+#define HAVE_SIGNAL_H 1
+#define HAVE_SNPRINTF 1
+#define HAVE_SRANDOM 1
+#define HAVE_STDARG_H 1
+#define HAVE_STDINT_H 1
+#define HAVE_STDIO_H 1
+#define HAVE_STDLIB_H 1
+#define HAVE_STRCASECMP 1
+#define HAVE_STRDUP 1
+#define HAVE_STRINGS_H 1
+#define HAVE_STRING_H 1
+#define HAVE_STRNLEN 1
+#define HAVE_STRTOULL 1
+#define HAVE_STRUCT_STAT_ST_ATIM 1
+#define HAVE_SYSCONF 1
+#define HAVE_SYS_FILE_H 1
+#define HAVE_SYS_IOCTL_H 1
+#define HAVE_SYS_MMAN_H 1
+#define HAVE_SYS_MOUNT_H 1
+#define HAVE_SYS_RESOURCE_H 1
+#define HAVE_SYS_SELECT_H 1
+#define HAVE_SYS_SOCKET_H 1
+#define HAVE_SYS_STAT_H 1
+#define HAVE_SYS_SYSMACROS_H 1
+#define HAVE_SYS_TIME_H 1
+#define HAVE_SYS_TYPES_H 1
+#define HAVE_SYS_UN_H 1
+#define HAVE_SYS_WAIT_H 1
+#define HAVE_TERMIOS_H 1
+#define HAVE_TYPE_SSIZE_T 1
+#define HAVE_UNISTD_H 1
+#define HAVE_USLEEP 1
+#define HAVE_UTIME 1
+#define HAVE_UTIMES 1
+#define HAVE_UTIME_H 1
+#define HAVE_VPRINTF 1
+#define HAVE_WCHAR_H 1
+
+#define SIZEOF_INT 4
+#define SIZEOF_LONG 4
+#define SIZEOF_LONG_LONG 8
+#define SIZEOF_OFF_T 8
+#define SIZEOF_SHORT 2
+#define SIZEOF_TIME_T 8
+#define SIZEOF_VOID_P 4
+#define STDC_HEADERS 1
+
+#define PACKAGE "e2fsprogs"
+#define PACKAGE_NAME "e2fsprogs"
+#define VERSION "1.47.4"

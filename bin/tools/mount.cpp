@@ -4,6 +4,8 @@
 //
 //     mount <where> <what>
 
+#include <bin/tools/tools.h>
+
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>

@@ -34,6 +34,7 @@ GO = tool("go")
 
 MUSL = "1.2.5"
 BUSYBOX = "1.36.1"
+E2FSPROGS = "1.47.4"
 DOOMGENERIC = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
 PYTHON = "3.14.10"
 STR = "1318a0f603c8d23839f02840cc1d9129c82f0839"
@@ -71,6 +72,13 @@ doomgeneric_tarball = fetch(
     f"https://github.com/ozkl/doomgeneric/archive/{DOOMGENERIC}.tar.gz",
     "26f8f60daa6c6e4d3c01e5eac9fb700d592dede803d13ac848154ff356b2a2e7",
     f"$(B)/ext/doomgeneric-{DOOMGENERIC}.tar.gz",
+)
+
+e2fsprogs_tarball = fetch(
+    "e2fsprogs_tarball",
+    f"https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v{E2FSPROGS}/e2fsprogs-{E2FSPROGS}.tar.xz",
+    "fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b",
+    f"$(B)/ext/e2fsprogs-{E2FSPROGS}.tar.xz",
 )
 
 python_tarball = fetch(
@@ -486,9 +494,11 @@ python_exe = executable("python_exe", python, "$(B)/bin/python/python3", tail=py
 # The tools of the system, its services and the commands that speak to
 # them, in one multicall executable, /bin/tools, each a link to it in the
 # image (bin/tools).
-TOOLS = ["blk", "devices", "ext4", "gpt", "mount", "umount"]
-TOOL_SOURCES = build.glob("$(S)/bin/tools/*.cpp")
-TOOL_INPUTS = [*build.glob("$(S)/bin/tools/*.h"), "$(S)/bin/tools/make.py", "$(S)/dev/wasm.py", *LIBC_HEADERS]
+TOOLS = ["blk", "devices", "gpt", "mount", "umount"]
+PROTOCOL_SOURCES = build.glob("$(S)/lib/protocol/*.cpp")
+PROTOCOL_HEADERS = build.glob("$(S)/lib/protocol/*.h")
+TOOL_SOURCES = [*build.glob("$(S)/bin/tools/*.cpp"), *PROTOCOL_SOURCES]
+TOOL_INPUTS = [*build.glob("$(S)/bin/tools/*.h"), *PROTOCOL_HEADERS, "$(S)/bin/tools/make.py", "$(S)/dev/wasm.py", *LIBC_HEADERS]
 tools_module = command(
     name="tools_module",
     inputs=[*TOOL_SOURCES, *TOOL_INPUTS],
@@ -503,37 +513,55 @@ tools = executable("tools_exe", tools_module, "$(B)/bin/tools/tools")
 # A service of tst/test_devices.py, which hands it to the system it runs.
 devices_service = executable("devices_service_exe", command(
     name="devices_service_module",
-    inputs=["$(S)/tst/devices_service.cpp", *TOOL_INPUTS],
+    inputs=["$(S)/tst/devices_service.cpp", *PROTOCOL_SOURCES, *TOOL_INPUTS],
     outputs=["$(B)/tst/devices_service.wasm"],
     deps=[libc],
     cmd=["python3", "$(S)/bin/tools/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], "$(B)/tst/devices_service.wasm",
-         "$(S)/tst/devices_service.cpp"],
+         "$(S)/tst/devices_service.cpp", *PROTOCOL_SOURCES],
     descr="CC",
     color="cyan",
 ), "$(B)/tst/devices_service")
 
+# fuse2fs, e2fsprogs' FUSE server of ext2, ext3 and ext4, on the system's
+# libfuse (lib/fuse), which gpt starts for such a partition (bin/fuse2fs).
+FUSE_SOURCES = [*build.glob("$(S)/lib/fuse/*.cpp"), *build.glob("$(S)/lib/fuse/*.h")]
+fuse2fs = command(
+    name="fuse2fs",
+    inputs=["$(S)/bin/fuse2fs/make.py", "$(S)/bin/fuse2fs/config.h", "$(S)/bin/fuse2fs/blkid.c", *FUSE_SOURCES, *PROTOCOL_SOURCES,
+            *PROTOCOL_HEADERS, "$(S)/dev/wasm.py", *LIBC_HEADERS],
+    outputs=["$(B)/bin/fuse2fs/fuse2fs.wasm"],
+    deps=[libc, e2fsprogs_tarball],
+    cmd=["python3", "$(S)/bin/fuse2fs/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], e2fsprogs_tarball.outputs[0],
+         "$(B)/bin/fuse2fs/fuse2fs.wasm"],
+    descr="CC",
+    color="cyan",
+)
+fuse2fs_exe = executable("fuse2fs_exe", fuse2fs, "$(B)/bin/fuse2fs/fuse2fs")
+
 # A system from one executable: rootfs, the first process, serves the image
-# linked into it, the executables of busybox with its links, python and the
-# tools with theirs, with /dev and /tmp of its own, to the shell it starts,
+# linked into it, the executables of busybox with its links, python, the
+# tools with theirs and fuse2fs, with /dev and /tmp of its own, to the shell it starts,
 # and the kernel compiles each module as it is executed (bin/rootfs).
 rootfs_image = command(
     name="rootfs_image",
     inputs=["$(S)/bin/rootfs/image.py"],
     outputs=["$(B)/bin/rootfs/rootfs.tar"],
-    deps=[busybox, busybox_exe, python_exe, tools],
+    deps=[busybox, busybox_exe, python_exe, tools, fuse2fs_exe],
     cmd=["python3", "$(S)/bin/rootfs/image.py", "$(B)/bin/rootfs/rootfs.tar",
          "--busybox", busybox_exe.outputs[0], busybox.outputs[1], "--python", python_exe.outputs[0],
-         "--program", "tools", tools.outputs[0], *(arg for tool in TOOLS for arg in ("--link", tool, "tools"))],
+         "--program", "tools", tools.outputs[0], *(arg for tool in TOOLS for arg in ("--link", tool, "tools")),
+         "--program", "fuse2fs", fuse2fs_exe.outputs[0]],
     descr="IM",
     color="cyan",
 )
 rootfs_module = command(
     name="rootfs_module",
-    inputs=["$(S)/bin/rootfs/rootfs.cpp", "$(S)/bin/tools/protocol.h", "$(S)/bin/rootfs/make.py", "$(S)/dev/wasm.py", *LIBC_HEADERS],
+    inputs=["$(S)/bin/rootfs/rootfs.cpp", "$(S)/lib/protocol/protocol.cpp", "$(S)/lib/protocol/protocol.h", "$(S)/bin/rootfs/make.py",
+            "$(S)/dev/wasm.py", *LIBC_HEADERS],
     outputs=["$(B)/bin/rootfs/rootfs.wasm"],
     deps=[libc, rootfs_image],
-    cmd=["python3", "$(S)/bin/rootfs/make.py", CLANG, WASM_LD, "$(S)/bin/rootfs/rootfs.cpp", "$(S)/lib/c/include",
-         libc.outputs[0], rootfs_image.outputs[0], "$(B)/bin/rootfs/rootfs.wasm"],
+    cmd=["python3", "$(S)/bin/rootfs/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], rootfs_image.outputs[0],
+         "$(B)/bin/rootfs/rootfs.wasm", "$(S)/bin/rootfs/rootfs.cpp", "$(S)/lib/protocol/protocol.cpp"],
     descr="CC",
     color="cyan",
 )

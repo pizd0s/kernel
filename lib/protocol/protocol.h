@@ -1,6 +1,7 @@
 // The file protocol of the system: what the kernel speaks for the POSIX
 // calls of a process (bin/vm/kernel_remote.go), and what rootfs
-// (bin/rootfs) and the services of the system (bin/tools) serve. An open file is one end of a
+// (bin/rootfs), the services of the system (bin/tools) and its libfuse
+// (lib/fuse) serve. An open file is one end of a
 // seqpacket pair; its server holds the other and answers on it. Every
 // request brings a fresh endpoint, last among its descriptors: the reply
 // goes on it, and an OPEN's stays the open file's. A server may hand a
@@ -98,25 +99,53 @@
 
 #pragma once
 
-#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <sys/uio.h>
+#include <sys/types.h>
+
+struct iovec;
 
 enum : uint32_t {
-    opOpen = 1, opStat, opReadlink, opMkdir, opUnlink, opRename, opSymlink,
-    opResolve, opRead, opWrite, opReaddir, opFstat, opChmod, opChown, opUtimes,
-    opTruncate, opFchmod, opFchown, opFutimes, opFtruncate, opFsync,
-    opMknod, opLink, opStatfs, opFstatfs, opFlock, opLock, opPath, opOk, opErr,
-    opRegister, opMount, opUnmount, opMounted,
+    opOpen = 1,
+    opStat,
+    opReadlink,
+    opMkdir,
+    opUnlink,
+    opRename,
+    opSymlink,
+    opResolve,
+    opRead,
+    opWrite,
+    opReaddir,
+    opFstat,
+    opChmod,
+    opChown,
+    opUtimes,
+    opTruncate,
+    opFchmod,
+    opFchown,
+    opFutimes,
+    opFtruncate,
+    opFsync,
+    opMknod,
+    opLink,
+    opStatfs,
+    opFstatfs,
+    opFlock,
+    opLock,
+    opPath,
+    opOk,
+    opErr,
+    opRegister,
+    opMount,
+    opUnmount,
+    opMounted,
 };
 
 // The most descriptors a packet brings: a READ's or WRITE's memfd and its
 // endpoint, a REGISTER's end and its endpoint.
 constexpr size_t maxFds = 4;
-constexpr uint32_t noId = 0xffffffff;  // a uid or gid CHOWN keeps
+constexpr uint32_t noId = 0xffffffff; // a uid or gid CHOWN keeps
 // UTIMES's when.
 constexpr uint32_t whenAtimeNow = 2;
 constexpr uint32_t whenMtimeNow = 4;
@@ -124,15 +153,15 @@ constexpr uint32_t whenAtimeKept = 8;
 constexpr uint32_t whenMtimeKept = 16;
 // RESOLVE's reply: where the walk ended, the kind of the last name and
 // what goes with it.
-constexpr uint32_t stepDone = 0;  // at the directory of the last name
-constexpr uint32_t stepRoot = 1;  // the walk goes on from the root of the process
+constexpr uint32_t stepDone = 0; // at the directory of the last name
+constexpr uint32_t stepRoot = 1; // the walk goes on from the root of the process
 constexpr uint32_t lastName = 0;
 constexpr uint32_t lastDot = 1;
 constexpr uint32_t lastDotdot = 2;
-constexpr uint32_t lastNone = 3;  // the path is "/" alone
-constexpr uint32_t stepSlash = 1;  // a slash ends the path
-constexpr uint32_t stepKept = 2;  // the reply's endpoint is the directory's from now on
-constexpr uint32_t resolveHanded = 1;  // RESOLVE's arg: a server handed the walk on
+constexpr uint32_t lastNone = 3;      // the path is "/" alone
+constexpr uint32_t stepSlash = 1;     // a slash ends the path
+constexpr uint32_t stepKept = 2;      // the reply's endpoint is the directory's from now on
+constexpr uint32_t resolveHanded = 1; // RESOLVE's arg: a server handed the walk on
 
 struct Header {
     uint32_t op;
@@ -171,50 +200,9 @@ static_assert(sizeof(Statfs) == 52);
 
 // Sends the parts as one packet, the descriptors with it: what was sent,
 // or -1 and errno. An endpoint nobody reads any more is EPIPE, no signal.
-inline ssize_t sendPacket(int fd, const iovec* parts, size_t count, const int* fds, size_t fdCount, int flags = 0) {
-    alignas(cmsghdr) unsigned char control[CMSG_SPACE(maxFds * sizeof(int))] = {};
-    msghdr m{};
-    m.msg_iov = const_cast<iovec*>(parts);
-    m.msg_iovlen = int(count);
-    if (fdCount > 0) {
-        if (fdCount > maxFds) {
-            errno = EINVAL;
-            return -1;
-        }
-        m.msg_control = control;
-        m.msg_controllen = socklen_t(CMSG_LEN(fdCount * sizeof(int)));
-        cmsghdr* c = CMSG_FIRSTHDR(&m);
-        c->cmsg_level = SOL_SOCKET;
-        c->cmsg_type = SCM_RIGHTS;
-        c->cmsg_len = m.msg_controllen;
-        memcpy(CMSG_DATA(c), fds, fdCount * sizeof(int));
-    }
-    return sendmsg(fd, &m, flags | MSG_NOSIGNAL);
-}
+ssize_t sendPacket(int fd, const iovec* parts, size_t count, const int* fds, size_t fdCount, int flags = 0);
 
 // Receives one packet into buffer, its descriptors into fds, close on
 // exec: its length, 0 at the end of the endpoint, or -1 and errno. The
 // kernel drops descriptors past maxFds.
-inline ssize_t receivePacket(int fd, void* buffer, size_t size, int* fds, size_t& fdCount, int flags = 0) {
-    alignas(cmsghdr) unsigned char control[CMSG_SPACE(maxFds * sizeof(int))];
-    iovec iov{buffer, size};
-    msghdr m{};
-    m.msg_iov = &iov;
-    m.msg_iovlen = 1;
-    m.msg_control = control;
-    m.msg_controllen = sizeof control;
-    fdCount = 0;
-    const ssize_t n = recvmsg(fd, &m, flags | MSG_CMSG_CLOEXEC);
-    if (n < 0) {
-        return n;
-    }
-    for (cmsghdr* c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c)) {
-        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && c->cmsg_len >= CMSG_LEN(0)) {
-            const size_t count = (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
-            for (size_t i = 0; i < count && fdCount < maxFds; ++i) {
-                memcpy(&fds[fdCount++], CMSG_DATA(c) + i * sizeof(int), sizeof(int));
-            }
-        }
-    }
-    return n;
-}
+ssize_t receivePacket(int fd, void* buffer, size_t size, int* fds, size_t& fdCount, int flags = 0);

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build a program of the system for the kernel from its sources: clang
-compiles each for wasm32 against lib/c's headers, with no C++ library, and
+compiles each for wasm32 against lib/c's headers, with no C++ library and
+the source root on the include path (<lib/protocol/service.h>), and
 wasm-ld links them with libc.a. bin/tools is one such program, the tools'
 multicall executable.
 
@@ -11,7 +12,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "dev"))
+ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(ROOT / "dev"))
 
 import wasm  # noqa: E402
 
@@ -31,8 +33,8 @@ def main():
 
     with tempfile.TemporaryDirectory(dir=output.parent, prefix=output.stem + "-") as work:
         work = Path(work)
-        flags = [*CXXFLAGS, "-isystem", str(Path(include).resolve())]
-        units = [(source, work / (source.stem + ".o"), flags) for source in sources]
+        flags = [*CXXFLAGS, "-I", str(ROOT), "-isystem", str(Path(include).resolve())]
+        units = [(source, work / f"{i}-{source.stem}.o", flags) for i, source in enumerate(sources)]
         wasm.compile_all(cc, units)
         subprocess.run([ld, *LINK, "-o", str(output), *(str(o) for _, o, _ in units), libc], check=True)
 
