@@ -12,9 +12,11 @@ namespace {
 
     static const Tool tools[] = {
         {"blk", blkMain},
+        {"devfs", devfsMain},
         {"devices", devicesMain},
         {"gpt", gptMain},
         {"mount", mountMain},
+        {"tmpfs", tmpfsMain},
         {"umount", umountMain},
     };
 }

@@ -3,22 +3,20 @@
 // rootfs walks it: names, "." and "..", symbolic links, mounts, the root
 // of the process that asks, and the last step of the call as Linux makes
 // it (lib/protocol/protocol.h is the protocol, the VFS's calls on handles,
-// a file system's calls by node, an open file's). It serves three trees of
-// its own from one loop: the image linked into it, read-only, at the
-// root; /dev, the terminal the kernel gave vm as descriptor 0, /dev/init,
-// and the devices the services of the system register there; and /tmp, a
-// tree in its memory of at most tmpCapacity bytes, a quarter of what a
-// memory of wasm32 holds. It mounts the file systems of other processes
-// too, and asks them by node. A walk in its own trees never waits; one in
-// another's waits for that file system's answers, as a coroutine, while
-// the loop goes on with other calls.
+// a file system's calls by node, an open file's). It serves the image
+// linked into it, read-only, at the root, a tree of its own, from one
+// loop, and the file systems of other processes are mounted on it, which
+// it asks by node: /tmp and /dev, which it starts itself (bin/tools tmpfs
+// and devfs), and those a MOUNT names. A walk in its own tree never waits;
+// one in another's waits for that file system's answers, as a coroutine,
+// while the loop goes on with other calls.
 //
 // It makes itself the root of everything else with what POSIX has: one
 // seqpacket pair, chroot to one end in each process it starts. It starts
-// the services of the system (bin/tools), /bin/devices first, and the
-// shell on the terminal once they are up, each with a clean environment,
-// reaps what ends under it, and ends with the shell's status, as a system
-// does.
+// tmpfs, devfs, which starts the services of the system's devices and gets
+// the disks vm gave the system, and the shell on the terminal once they
+// are up, each with a clean environment, reaps what ends under it, and
+// ends with the shell's status, as a system does.
 //
 // The VFS's tree is mounts: a directory of a file system, the mount's
 // root, mounted on a node of another mount; the VFS's root is on none. A
@@ -32,23 +30,17 @@
 // is out of the way, and rootfs serves only the open files of its own
 // trees.
 //
-// A tree of rootfs's makes what it creates theirs who ask, and lets them
-// do what its modes let them: root everything but executing what nobody
-// may, the owner what the owner's bits say, the group of gid the group's,
-// everyone else the others'. A name is looked up in a directory who asks
-// may search, made or removed in one they may write, and in a sticky one
-// removed only by the owner of the name's node or of the directory. A file
-// system of another's checks what it does itself.
+// The image lets who asks do what its modes let them: root everything
+// but executing what nobody may, the owner what the owner's bits say, the
+// group of gid the group's, everyone else the others'; a name is looked up
+// in a directory who asks may search. A file system of another's checks
+// what it does itself.
 //
-// A device of /dev is a service's, which registered it at /dev/init: an
-// open of it goes on to the service, its endpoint with it, and the service
-// serves that open file from then on. rootfs keeps the name, its mode and
-// its owner, and lets the name go when the service's end of the pair
-// closes. A file system's service registers a socket: MOUNT connects to
-// it, and its end is the file system's channel. The services rootfs starts
-// get an end they close once their devices are there, and hand on to the
-// services they start: when the last of them has closed it, the system is
-// up.
+// A file system's service registers a socket at /dev/init (devfs): MOUNT
+// connects to it, and the end of the connection is the file system's
+// channel. The file systems and services rootfs starts get an end they
+// close once they are up, and hand on to the services they start: when
+// the last of them has closed it, the system is up.
 //
 // A directory's entries have positions, each after those before it: a
 // READDIR gives the entries after one, so a reading that removes what it
@@ -184,7 +176,6 @@ namespace {
     constexpr u64 blockSize = 4096;
     constexpr u32 maxLinks = 40;     // the symbolic links one path goes through, Linux's
     constexpr u64 past = UINT64_MAX; // the stop of a lock to the end of a file and past it
-    constexpr u64 tmpCapacity = u64(1) << 30;
 
     [[noreturn, gnu::format(printf, 1, 2)]] static void fatal(const char* format, ...) {
         va_list args;
@@ -575,19 +566,13 @@ namespace {
         Dir,
         File,
         Link,
-        Fifo,       // a named pipe: the kernel makes the pipe
-        Object,     // an object of the kernel the server hands out: a tty
-        Registry,   // /dev/init, where services register devices
-        CharDevice, // a service's device: the service serves its opens
-        BlockDevice,
-        Service, // a service's file system, a server to mount
+        Fifo, // a named pipe: the kernel makes the pipe
     };
 
     // What an endpoint is to the loop.
     enum class Role : u8 {
         File,    // an open file of a tree of ours: requests come on it
         Handle,  // a handle of the VFS's, at a place: calls with a path walk from there
-        Channel, // a service's end of its pair, a name of /dev: only its close comes
         Fs,      // ours of the channel of another's file system: only its close comes
         Pending, // ours of a call to a file system: its answer goes on with the call
     };
@@ -724,12 +709,9 @@ namespace {
         bool reads; // what its open lets it do
         bool writes;
         Role role;
-        bool dead;      // closed, while a batch of events may still name it
-        Server* server; // a File's tree
-        Node* node;     // what a File is open on, a Channel's device
-        Node* dir;      // a Channel's directory, and the name there
-        u8 nameLength;
-        char name[NAME_MAX];
+        bool dead;       // closed, while a batch of events may still name it
+        Server* server;  // a File's tree
+        Node* node;      // what a File or a Handle is open on, of a tree of ours
         Place at;        // a Handle's
         u64 id;          // a Handle's
         Fs* fs;          // a Fs's
@@ -985,14 +967,8 @@ namespace {
                 return S_IFREG | n->perm;
             case Kind::Link:
                 return S_IFLNK | n->perm;
-            case Kind::Fifo:
-                return S_IFIFO | n->perm;
-            case Kind::BlockDevice:
-                return S_IFBLK | n->perm;
-            case Kind::Service:
-                return S_IFSOCK | n->perm;
             default:
-                return S_IFCHR | n->perm;
+                return S_IFIFO | n->perm;
         }
     }
 
@@ -1004,14 +980,8 @@ namespace {
                 return DT_REG;
             case Kind::Link:
                 return DT_LNK;
-            case Kind::Fifo:
-                return DT_FIFO;
-            case Kind::BlockDevice:
-                return DT_BLK;
-            case Kind::Service:
-                return DT_SOCK;
             default:
-                return DT_CHR;
+                return DT_FIFO;
         }
     }
 
@@ -1323,17 +1293,6 @@ namespace {
         }
     }
 
-    // A service's end of its pair closed: the service is gone, and the
-    // name of /dev with it. What is open of the device stays the
-    // service's, gone too.
-    static void unregister(Endpoint* ep) {
-        Node* n = ep->node;
-        if (Entry* entry = lookup(ep->dir, {ep->name, ep->nameLength}); entry && entry->node == n) {
-            unplace(ep->dir, entry, now());
-        }
-        n->fd = -1;
-    }
-
     // The locks an endpoint holds on a node go with it.
     static void unlock(Node* n, int fd) {
         n->shared.keepIf([fd](int holder) {
@@ -1367,12 +1326,6 @@ namespace {
                     release(*ep->at.m->fs->tree, n);
                 }
                 letGo(ep->at.m);
-                break;
-            case Role::Channel:
-                unregister(ep);
-                --ep->node->opens;
-                release(*ep->server, ep->node);
-                drop(ep->dir);
                 break;
             case Role::Fs:
                 gone(ep->fs);
@@ -2260,20 +2213,6 @@ namespace {
         ok(fd, b, sizeof b);
     }
 
-    // An open of a device goes on to the service that registered it, the
-    // reply's endpoint with it: the service answers there and serves the
-    // open file from then on. ENXIO when the service is gone, EAGAIN when
-    // it does not keep up with its opens.
-    static bool forward(const Node* n, const Header& h, int flags, int fd) {
-        const Header head{opOpen, u32(flags), h.uid, h.gid};
-        const u32 mode = 0;
-        const iovec parts[] = {part(&head, sizeof head), part(&mode, sizeof mode)};
-        if (n->fd < 0 || sendPacket(n->fd, parts, 2, &fd, 1, MSG_DONTWAIT) < 0) {
-            return error(fd, n->fd >= 0 && errno == EAGAIN ? EAGAIN : ENXIO);
-        }
-        return false;
-    }
-
     // A call handed on to another's file system, with the kernel's
     // endpoint, which the file system answers on: the node of a place,
     // then what follows it in the call. EIO when the file system is gone,
@@ -2291,9 +2230,8 @@ namespace {
     // An open of a node of a tree of ours, on the reply's endpoint: read or
     // written as its access mode says and who asks may, emptied when
     // O_TRUNC asks, with O_PATH only held. A directory, and what O_PATH
-    // opens, is a handle; an object of the kernel is handed out, a device
-    // opened by its service; a FIFO is its stat, the kernel makes its
-    // pipe; a link is ELOOP but with O_PATH and O_NOFOLLOW, ENOTDIR with
+    // opens, is a handle; a FIFO is its stat, the kernel makes its pipe; a
+    // link is ELOOP but with O_PATH and O_NOFOLLOW, ENOTDIR with
     // O_DIRECTORY. made: who asks made it now. Whether fd is kept.
     static bool openOurs(const Place& at, int flags, bool made, const Header& h, int fd) {
         Node* n = at.n;
@@ -2320,24 +2258,10 @@ namespace {
                 return error(fd, EROFS);
             }
         }
-        if (!opath) {
-            switch (n->kind) {
-                case Kind::Object:
-                    reply(fd, opOk, 0, nullptr, 0, &n->fd, 1); // the object itself becomes the caller's
-                    return false;
-                case Kind::CharDevice:
-                case Kind::BlockDevice:
-                    return forward(n, h, flags, fd);
-                case Kind::Service:
-                    return error(fd, ENXIO);
-                case Kind::Fifo: {
-                    const Stat st = statOf(s, n);
-                    ok(fd, &st, sizeof st);
-                    return false;
-                }
-                default:
-                    break;
-            }
+        if (!opath && n->kind == Kind::Fifo) {
+            const Stat st = statOf(s, n);
+            ok(fd, &st, sizeof st);
+            return false;
         }
         if (truncates && n->kind == Kind::File && n->content.size() > 0) {
             resize(s, n, 0);
@@ -2354,11 +2278,15 @@ namespace {
     }
 
     // An open of a place of another's file system: a directory, and what
-    // O_PATH opens, is a handle of ours, who asks may read it, else the
-    // file system opens it on the kernel's endpoint.
+    // O_PATH opens, is a handle of ours, who asks may read it; a socket
+    // opens nothing, ENXIO; else the file system opens it on the kernel's
+    // endpoint.
     static bool openTheirs(const Place& at, int flags, const Header& h, int fd) {
         const bool opath = (flags & O_PATH) != 0;
         const u32 access = flags & O_ACCMODE;
+        if (!opath && S_ISSOCK(at.st.mode)) {
+            return error(fd, ENXIO);
+        }
         if ((flags & O_DIRECTORY) != 0 && !isDir(at)) {
             return error(fd, ENOTDIR);
         }
@@ -3383,15 +3311,14 @@ namespace {
             ok(fd);
             co_return;
         }
-        if (!ours(src) || src.n->kind != Kind::Service) {
+        if (ours(src) || !S_ISSOCK(src.st.mode)) {
             error(fd, ENOTDIR);
             co_return;
         }
-        Ask connect;
-        connect.to = src.n->fd;
-        connect.head = {opOpen, O_RDWR, h.uid, h.gid};
-        connect.size = 4;
-        memset(connect.body, 0, 4);
+        // The socket's file system opens it, its service: the endpoint of
+        // ours is the service's channel from then on.
+        Ask connect = asking(src, h, fsOpen, {});
+        connect.head.arg = O_RDWR;
         connect.connects = true;
         const Answer got = co_await connect;
         Stat st;
@@ -3486,54 +3413,6 @@ Name Path::text() const {
 }
 
 namespace {
-    // ---- devices ----------------------------------------------------------------
-
-    // A service's end of its pair, a name of directory dir: when it closes,
-    // the service is gone and the name with it.
-    static void listenChannel(Server& s, int fd, Node* n, Node* dir, Name name) {
-        Endpoint* ep = listen(fd, Role::Channel);
-        ep->server = &s;
-        ep->node = n;
-        ep->dir = dir;
-        ep->nameLength = u8(name.length);
-        memcpy(ep->name, name.at, name.length);
-        ++n->opens;
-        ++dir->holds;
-    }
-
-    // A service's device: a name in the registry's tree of the mode asked
-    // for, S_IFCHR, S_IFBLK, or S_IFSOCK for a file system to mount, whose
-    // opens go on to the end of a pair the request brings, the service's
-    // the other; its stat is the reply. Only on an endpoint of /dev/init
-    // open to write.
-    static bool registerName(Endpoint* ep, const Header& h, Body body, int fd) {
-        const Name name = body.string();
-        const u32 type = h.arg & S_IFMT;
-        if (ep->node->kind != Kind::Registry || !ep->writes) {
-            return error(fd, EBADF);
-        }
-        Server& s = *ep->server;
-        if (packetFdCount != 2 || (type != S_IFCHR && type != S_IFBLK && type != S_IFSOCK) || name.empty()) {
-            return error(fd, EINVAL);
-        }
-        if (const int e = badName(name)) {
-            return error(fd, e);
-        }
-        if (lookup(s.root, name)) {
-            return error(fd, EEXIST);
-        }
-        Node* n = makeNode(s, s.root, name, type == S_IFBLK ? Kind::BlockDevice : type == S_IFSOCK ? Kind::Service : Kind::CharDevice);
-        n->perm = h.arg & 07777;
-        n->uid = h.uid;
-        n->gid = h.gid;
-        n->fd = packetFds[0];
-        packetFds[0] = -1; // the device's now: handle leaves it open
-        listenChannel(s, n->fd, n, s.root, name);
-        const Stat st = statOf(s, n);
-        ok(fd, &st, sizeof st);
-        return false;
-    }
-
     // ---- the loop ---------------------------------------------------------------
 
     // fchmod, fchown, futimes, ftruncate and fsync of an open file of a
@@ -3581,8 +3460,6 @@ namespace {
                 return flockNode(ep, h, fd);
             case opLock:
                 return lockNode(ep, h, body, fd);
-            case opRegister:
-                return registerName(ep, h, body, fd);
             default:
                 return error(fd, ENOSYS);
         }
@@ -3776,9 +3653,9 @@ namespace {
             answered(ep);
             return;
         }
-        if (ep->role == Role::Channel || ep->role == Role::Fs) {
-            // Nothing comes on a service's end of its pair, or on a file
-            // system's channel, but its close; what else does is dropped.
+        if (ep->role == Role::Fs) {
+            // Nothing comes on a file system's channel but its close; what
+            // else does is dropped.
             const ssize_t got = receivePacket(ep->fd, packet, sizeof packet, packetFds, packetFdCount);
             for (usize i = 0; i < packetFdCount; ++i) {
                 close(packetFds[i]);
@@ -3850,7 +3727,7 @@ namespace {
     static void shutdown() {
         for (Endpoint* ep = live; ep;) {
             Endpoint* after = ep->after;
-            if (!ep->dead && (ep->role == Role::Channel || ep->role == Role::Fs)) {
+            if (!ep->dead && ep->role == Role::Fs) {
                 closed(ep);
             }
             ep = after;
@@ -4007,16 +3884,9 @@ namespace {
         }
     }
 
-    // The terminal is descriptor 0, from the kernel: the object itself goes
-    // to whoever opens /dev/tty. /dev/init takes the devices of services,
-    // from the system's user.
-    static void devfs(Server& s) {
-        makeNode(s, s.root, literal("tty"), Kind::Object, false)->fd = STDIN_FILENO;
-        Node* init = makeNode(s, s.root, literal("init"), Kind::Registry, false);
-        init->perm = 0600;
-        init->uid = geteuid();
-        init->gid = getegid();
-    }
+    // The most descriptors a child gets: the end of boot's pair, a file
+    // system's channel, and the disks.
+    constexpr int maxKept = 2 + 32;
 
     // A program run in a child whose root and working directory are root,
     // an end of a pair of ours: the child asks us, who serve when it does.
@@ -4032,7 +3902,7 @@ namespace {
                 _exit(127);
             }
             close(root);
-            int high[4];
+            int high[maxKept];
             for (int i = 0; i < count; ++i) {
                 high[i] = fcntl(kept[i], F_DUPFD_CLOEXEC, 64);
             }
@@ -4061,42 +3931,85 @@ namespace {
     char* const environment[] = {pathVariable, homeVariable, termVariable, nullptr};
     int rootEnd = -1;
 
-    // Starts the services of the system with the far end of a pair of ours
-    // as their descriptor 3: they close it once they are up, after the
-    // services they start have it. When the last one has, the shell starts
-    // (booted). /bin/devices is the devices every system has; /bin/blk serves
-    // each disk vm gave us, our descriptors after 2, in order, named by
-    // DISKS: the disk is its descriptor 4, and it starts the services of
-    // the disk's partitions.
+    Server image; // the root
+    Fs imageFs;
+
+    // Mounts the root of a file system rootfs started, on a directory of
+    // the image's root: the file system's channel ours, its root its node
+    // 1, a directory of root's of mode perm as it starts, until its own
+    // stat says more.
+    static void mountStarted(int channel, const char* name, u32 perm) {
+        const Entry* entry = lookup(image.root, literal(name));
+        if (!entry || entry->node->kind != Kind::Dir) {
+            fatal("rootfs: mount on /%s", name);
+        }
+        auto* fs = new (allocate(sizeof(Fs))) Fs();
+        fs->channel = listen(channel, Role::Fs);
+        fs->channel->fs = fs;
+        Place top;
+        top.node = 1;
+        top.st.ino = 1;
+        top.st.mode = S_IFDIR | perm;
+        top.st.nlink = 2;
+        mountAt(fs, top, ourPlace(rootMount, entry->node), image.root->ino, literal(name));
+    }
+
+    // Starts the file systems and the services of the system, the far end
+    // of a pair of ours their descriptor 3: they close it once they are up,
+    // after the services they start have it, and when the last one has, the
+    // shell starts (booted). /bin/tmpfs is /tmp, its channel its descriptor
+    // 3. /bin/devfs is /dev, its channel its descriptor 4, and it gets the
+    // disks vm gave us, our descriptors after 2, in order, named by DISKS:
+    // its 5 and on, and it starts their services and every system's
+    // devices.
     static void boot() {
         int ends[2];
-        if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ends) != 0) {
-            fatal("rootfs: socketpair: errno %d", errno);
+        int tmp[2];
+        int dev[2];
+        int* pairs[] = {ends, tmp, dev};
+        for (int* pair : pairs) {
+            if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+                fatal("rootfs: socketpair: errno %d", errno);
+            }
         }
-        // The disks are no one's but their services'.
+        // The disks are no one's but devfs's.
         char disks[256] = {};
         if (const char* given = getenv("DISKS")) {
             strncpy(disks, given, sizeof disks - 1);
         }
-        char* names[32];
-        int count = 0;
-        for (char* name = strtok(disks, " "); name && count < 32; name = strtok(nullptr, " ")) {
-            fcntl(3 + count, F_SETFD, FD_CLOEXEC);
-            names[count++] = name;
-        }
-        char devicesName[] = "devices";
-        char blkName[] = "blk";
+        int kept[maxKept] = {ends[1], dev[1]};
+        char numbers[maxKept][12];
+        char* argv[3 + 2 * maxKept];
+        char devfsName[] = "devfs";
         char option[] = "-r";
         char three[] = "3";
         char four[] = "4";
-        char* const devicesArgv[] = {devicesName, option, three, nullptr};
-        spawn("/bin/devices", devicesArgv, environment, rootEnd, &ends[1], 1);
-        for (int i = 0; i < count; ++i) {
-            char* const argv[] = {blkName, option, three, names[i], four, nullptr};
-            const int kept[] = {ends[1], 3 + i};
-            spawn("/bin/blk", argv, environment, rootEnd, kept, 2);
-            close(3 + i);
+        int count = 2;
+        int args = 0;
+        argv[args++] = devfsName;
+        argv[args++] = option;
+        argv[args++] = three;
+        argv[args++] = four;
+        for (char* name = strtok(disks, " "); name && count < maxKept; name = strtok(nullptr, " ")) {
+            fcntl(3 + count - 2, F_SETFD, FD_CLOEXEC);
+            kept[count] = 3 + count - 2;
+            snprintf(numbers[count], sizeof numbers[count], "%d", 3 + count);
+            argv[args++] = name;
+            argv[args++] = numbers[count];
+            ++count;
         }
+        argv[args] = nullptr;
+        char tmpfsName[] = "tmpfs";
+        char* const tmpfsArgv[] = {tmpfsName, three, nullptr};
+        spawn("/bin/tmpfs", tmpfsArgv, environment, rootEnd, &tmp[1], 1);
+        close(tmp[1]);
+        mountStarted(tmp[0], "tmp", 01777);
+        mountStarted(dev[0], "dev", 0755);
+        spawn("/bin/devfs", argv, environment, rootEnd, kept, count);
+        for (int i = 2; i < count; ++i) {
+            close(kept[i]);
+        }
+        close(dev[1]);
         close(ends[1]);
         bootEnd = ends[0];
         epoll_event ev{};
@@ -4119,48 +4032,23 @@ namespace {
         rootEnd = -1;
     }
 
-    Server image;     // the root
-    Server devices;   // /dev
-    Server temporary; // /tmp
-    Fs imageFs;
-    Fs devicesFs;
-    Fs temporaryFs;
-
-    // A tree of ours as a file system of the VFS's.
-    static void tree(Server& s, Fs& fs, bool writable, u64 capacity) {
-        s.writable = writable;
-        s.capacity = capacity;
+    // The image as a file system of the VFS's.
+    static void tree(Server& s, Fs& fs) {
         s.root = makeNode(s, nullptr, {}, Kind::Dir);
         fs.tree = &s;
         fs.dev = s.dev;
     }
-
-    // Mounts a tree of ours on a directory of the image, a name in its
-    // root.
-    static void mountTree(Fs& fs, const char* name) {
-        const Entry* entry = lookup(image.root, literal(name));
-        if (!entry || entry->node->kind != Kind::Dir) {
-            fatal("rootfs: mount on /%s", name);
-        }
-        mountAt(&fs, ourPlace(nullptr, fs.tree->root), ourPlace(rootMount, entry->node), image.root->ino, literal(name));
-    }
 }
 
 int main() {
-    tree(image, imageFs, false, 0);
+    tree(image, imageFs);
     load(image);
-    tree(devices, devicesFs, false, 0);
-    devfs(devices);
-    tree(temporary, temporaryFs, true, tmpCapacity);
-    temporary.root->perm = 01777;
     rootMount = new (allocate(sizeof(Mount))) Mount();
     rootMount->fs = &imageFs;
     imageFs.mounts = 1;
     rootMount->root = image.root->ino;
     rootMount->rootNode = image.root;
     mounts = rootMount;
-    mountTree(devicesFs, "dev");
-    mountTree(temporaryFs, "tmp");
     int ends[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ends) != 0) {
         fatal("rootfs: socketpair: errno %d", errno);
