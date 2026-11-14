@@ -35,13 +35,15 @@ int readyDescriptor(int argc, char** argv, int& first);
 
 // What an event of the loop is of: ours of a device's pair, where its
 // opens come, or the endpoint of an open file of it, with what its open
-// lets it do and what the service keeps of it.
+// lets it do and what the service keeps of it; or a socket that listens,
+// whose connections the loop accepts.
 struct Endpoint {
     int fd;
     bool channel;
     bool reads;
     bool writes;
     void* of;
+    bool listens = false;
 };
 
 void watch(int epoll, Endpoint e);
@@ -73,15 +75,18 @@ bool Request::at(size_t offset, T& out) const {
 // serve keeps; gone hears of an endpoint whose other end closed.
 using Handle = bool (*)(Endpoint& e, Request& r);
 using Gone = void (*)(Endpoint& e);
+using Accepted = void (*)(Endpoint& e, int connection);
 
 // Serves the endpoints of epoll while a device's channel or any endpoint
 // is open, or until stopServing: when rootfs lets go of the devices, as
 // the system ends, what is open of them is still served until it closes.
 // Every request goes to handle, its descriptors closed after it but for
-// those it set to -1. An OPEN on a channel, which rootfs handed on, keeps
-// its endpoint when handle says so, what it lets do from its flags. An
-// endpoint whose other end closed goes to gone, then is closed.
-void serve(int epoll, Handle handle, Gone gone = nullptr);
+// those it set to -1. An OPEN on a channel, which devfs handed on, keeps
+// its endpoint when handle says so, what it lets do from its flags. A
+// request without an endpoint is a question, answered on the endpoint it
+// came on. An endpoint whose other end closed goes to gone, then is closed.
+// A socket that listens has its connections accepted, each to accepted.
+void serve(int epoll, Handle handle, Gone gone = nullptr, Accepted accepted = nullptr);
 
 // Ends serve once the events it has are handled.
 void stopServing();

@@ -522,6 +522,18 @@ devices_service = executable("devices_service_exe", command(
     color="cyan",
 ), "$(B)/tst/devices_service")
 
+# The sockets of tst/test_unix_sockets.py, which hands them to the system.
+unix_sockets = executable("unix_sockets_exe", command(
+    name="unix_sockets_module",
+    inputs=["$(S)/tst/unix_sockets.cpp", *TOOL_INPUTS],
+    outputs=["$(B)/tst/unix_sockets.wasm"],
+    deps=[libc],
+    cmd=["python3", "$(S)/bin/tools/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], "$(B)/tst/unix_sockets.wasm",
+         "$(S)/tst/unix_sockets.cpp"],
+    descr="CC",
+    color="cyan",
+), "$(B)/tst/unix_sockets")
+
 # fuse2fs, e2fsprogs' FUSE server of ext2, ext3 and ext4, on the system's
 # libfuse (lib/fuse), which gpt starts for such a partition (bin/fuse2fs).
 FUSE_SOURCES = [*build.glob("$(S)/lib/fuse/*.cpp"), *build.glob("$(S)/lib/fuse/*.h")]
@@ -893,6 +905,7 @@ APPLICATION_TESTED = {
     "devices": [vm, rootfs, devices_service],
     "disks": [vm, rootfs],
     "mounts": [vm, rootfs],
+    "unix_sockets": [vm, rootfs, unix_sockets],
     "vfs": [vm, rootfs, python_exe],
     "busybox_abi": [busybox],
     "busybox": [vm, busybox_exe, busybox],

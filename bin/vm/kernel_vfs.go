@@ -37,6 +37,8 @@ const (
 	vMount
 	vUnmount
 	vPath
+	vBind
+	vConnect
 )
 
 // handleID is the handle's id, asked once: an open or a chdir gave it,
@@ -93,9 +95,10 @@ func (p *Process) vfsAt(dirfd int32, path string) (*remoteDir, error) {
 	return nil, nil
 }
 
-// vfs is a call of the VFS's on the handle: the root's id, then the body.
-// The reply's packet and its endpoint come back, which an open keeps.
-func (d *remoteDir) vfs(p *Process, op, arg uint32, body []byte) (packet, *pairEnd, error) {
+// vfs is a call of the VFS's on the handle: the root's id, then the body,
+// the files with it. The reply's packet and its endpoint come back, which
+// an open keeps.
+func (d *remoteDir) vfs(p *Process, op, arg uint32, body []byte, files ...File) (packet, *pairEnd, error) {
 	root, err := p.rootID(d)
 
 	if err != nil {
@@ -105,12 +108,12 @@ func (d *remoteDir) vfs(p *Process, op, arg uint32, body []byte) (packet, *pairE
 	b := make([]byte, 8, 8+len(body))
 	binary.LittleEndian.PutUint64(b, root)
 
-	return d.call(op, arg, append(b, body...), nil)
+	return d.call(op, arg, append(b, body...), files)
 }
 
 // vfsDone is a call of the VFS's that opens nothing: its reply's packet.
-func (d *remoteDir) vfsDone(p *Process, op, arg uint32, body []byte) (packet, error) {
-	pk, mine, err := d.vfs(p, op, arg, body)
+func (d *remoteDir) vfsDone(p *Process, op, arg uint32, body []byte, files ...File) (packet, error) {
+	pk, mine, err := d.vfs(p, op, arg, body, files...)
 
 	if err != nil {
 		return packet{}, err
@@ -353,11 +356,45 @@ func (d *remoteDir) path(p *Process) (string, error) {
 }
 
 // mountPath mounts on the directory target names the directory source
-// names, or the root of the file system whose socket source names.
-func (d *remoteDir) mountPath(p *Process, target, source string) error {
-	_, err := d.vfsDone(p, vMount, 0, append(append([]byte(target), 0), source...))
+// names, or, with a connection to the file system whose socket source
+// names, its root: the connection is its channel from then on.
+func (d *remoteDir) mountPath(p *Process, target, source string, conn *pairEnd) error {
+	body := append(append([]byte(target), 0), source...)
+
+	if conn != nil {
+		_, err := d.vfsDone(p, vMount, 0, body, conn)
+
+		return err
+	}
+
+	_, err := d.vfsDone(p, vMount, 0, body)
 
 	return err
+}
+
+// bindPath makes a socket node of the last name of a path, of a mode,
+// which holds a listener.
+func (d *remoteDir) bindPath(p *Process, path string, mode uint32, l *unixListener) error {
+	_, err := d.vfsDone(p, vBind, mode, []byte(path), l)
+
+	return err
+}
+
+// connectPath is the listener the socket node a path names holds.
+func (d *remoteDir) connectPath(p *Process, path string) (File, error) {
+	pk, mine, err := d.vfs(p, vConnect, 0, []byte(path))
+
+	if err != nil {
+		return nil, err
+	}
+
+	mine.unref()
+
+	if len(pk.files) == 0 {
+		return nil, syscall.ECONNREFUSED
+	}
+
+	return pk.files[0], nil
 }
 
 func (d *remoteDir) unmountPath(p *Process, path string, flags uint32) error {

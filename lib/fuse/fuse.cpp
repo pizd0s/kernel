@@ -1,14 +1,13 @@
 // The system's libfuse: libfuse 2.9's high-level API (fuse.h) as a file
-// system of the VFS's (lib/protocol/protocol.h). fuse_main registers the
-// file system at rootfs's /dev/init by the name its mount point argument
-// gives, S_IFSOCK, a file system to mount (mount <where> /dev/<name>), and
-// serves it on one thread: a request is a call of the file system's
-// operations on a path, answered before the next. The context of each
-// call is the request's uid and gid.
+// system of the VFS's (lib/protocol/protocol.h). fuse_main binds the file
+// system's socket, SOCK_SEQPACKET, at /dev/<name>, the name its mount
+// point argument gives (mount <where> /dev/<name>), and serves it on one
+// thread: a request is a call of the file system's operations on a path,
+// answered before the next. The context of each call is the request's uid
+// and gid.
 //
-// rootfs connects to the file system as it mounts it: the open of the
-// name's channel is a channel of the file system's, on which rootfs's
-// calls come by node, an inode as the file system's getattr says it, at
+// mount(2) connects to the socket: the connection is a channel of the
+// file system's, on which rootfs's calls come by node, an inode as the file system's getattr says it, at
 // the path it was last looked up by. The file system knows nothing of the
 // VFS's paths, mounts or roots: rootfs walks a path and asks one name at a
 // time, and the file system checks who may, by the call's ids. An open
@@ -36,6 +35,7 @@
 #include <sys/epoll.h>
 #include <sys/param.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/uio.h>
@@ -231,7 +231,7 @@ namespace {
 
     // An endpoint watched: the request's reply endpoint, a channel's or an
     // open file's from now on.
-    static Open* keep(Request& r, bool channel, char* path, bool reads, bool writes) {
+    static Open* keepOn(int fd, bool channel, char* path, bool reads, bool writes) {
         auto* o = static_cast<Open*>(allocate(sizeof(Open)));
         o->channel = channel;
         o->path = path;
@@ -240,7 +240,12 @@ namespace {
             opens->previous = o;
         }
         opens = o;
-        watch(epoll, {r.reply(), false, reads, writes, o});
+        watch(epoll, {fd, false, reads, writes, o});
+        return o;
+    }
+
+    static Open* keep(Request& r, bool channel, char* path, bool reads, bool writes) {
+        Open* o = keepOn(r.reply(), channel, path, reads, writes);
         r.fds[r.count - 1] = -1;
         return o;
     }
@@ -507,6 +512,14 @@ namespace {
     // operations on the node's path, or on a name of it.
     static void fsCall(Request& r) {
         uint64_t ino;
+        if (r.h.op == fsRoot) {
+            struct stat st;
+            if (const int failed = attributes("/", st)) {
+                return fail(r.reply(), failed);
+            }
+            know(uint64_t(st.st_ino), "/");
+            return answerStat(r.reply(), st);
+        }
         if (!r.at(0, ino)) {
             return fail(r.reply(), EINVAL);
         }
@@ -727,20 +740,6 @@ namespace {
     static bool handle(Endpoint& e, Request& r) {
         context.uid = uid_t(r.h.uid);
         context.gid = gid_t(r.h.gid);
-        if (e.channel) {
-            // rootfs connects as it mounts the file system: the endpoint is
-            // a channel of its calls, the root's stat the answer.
-            struct stat st;
-            if (const int failed = attributes("/", st)) {
-                fail(r.reply(), failed);
-                return false;
-            }
-            know(uint64_t(st.st_ino), "/");
-            answerStat(r.reply(), st);
-            keep(r, true, nullptr, true, false);
-            ++channels;
-            return false;
-        }
         Open& o = *static_cast<Open*>(e.of);
         if (o.channel) {
             fsCall(r);
@@ -748,6 +747,13 @@ namespace {
             fileCall(o, e, r);
         }
         return false;
+    }
+
+    // A connection mount(2) made to the file system's socket: a channel of
+    // rootfs's calls, ROOT the first.
+    static void accepted(Endpoint&, int connection) {
+        keepOn(connection, true, nullptr, true, true);
+        ++channels;
     }
 
     // An endpoint closed: the file system's release of an open file; the
@@ -848,24 +854,28 @@ int fuse_main_real(int argc, char* argv[], const fuse_operations* op, size_t siz
         conn.capable = FUSE_CAP_BIG_WRITES | FUSE_CAP_ATOMIC_O_TRUNC;
         context.private_data = operations.init(&conn);
     }
-    Device registered{};
-    const int registry = open("/dev/init", O_RDWR | O_CLOEXEC);
-    const int e = registry < 0 ? errno : enroll(registry, name, S_IFSOCK | 0660, registered);
-    if (registry >= 0) {
-        close(registry);
-    }
-    if (e != 0) {
-        dprintf(STDERR_FILENO, "fuse: /dev/%s: %s\n", name, strerror(e));
+    // The file system's socket, /dev/<name>, one a file system before it
+    // left taken away first.
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    snprintf(address.sun_path, sizeof address.sun_path, "/dev/%s", name);
+    const int listening = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    unlink(address.sun_path);
+    if (listening < 0 || bind(listening, reinterpret_cast<const sockaddr*>(&address), sizeof address) != 0 || listen(listening, 16) != 0) {
+        dprintf(STDERR_FILENO, "fuse: %s: %s\n", address.sun_path, strerror(errno));
         if (operations.destroy) {
             operations.destroy(context.private_data);
         }
         return 3;
     }
-    watch(epoll, {registered.end, true, false, false, nullptr});
+    Endpoint socketEndpoint{listening, false, false, false, nullptr};
+    socketEndpoint.listens = true;
+    watch(epoll, socketEndpoint);
     if (ready >= 0) {
         close(ready);
     }
-    serve(epoll, handle, gone);
+    serve(epoll, handle, gone, accepted);
+    unlink(address.sun_path);
     if (operations.destroy) {
         operations.destroy(context.private_data);
     }

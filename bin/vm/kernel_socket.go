@@ -687,6 +687,14 @@ func (p *Process) libcSocket(domain, kind, protocol uint32) uint32 {
 		return p.result(0, syscall.EAFNOSUPPORT)
 	}
 
+	if p.systemSocket(domain, kind) {
+		if protocol != 0 {
+			return p.result(0, syscall.EPROTONOSUPPORT)
+		}
+
+		return p.result(p.install(newUnixSocket(kind&sockNonblock != 0), 0, kind&sockCloexec != 0))
+	}
+
 	host, err := syscall.Socket(int(domain), int(kind&^(sockNonblock|sockCloexec))|syscall.SOCK_CLOEXEC, int(protocol))
 
 	if err != nil {

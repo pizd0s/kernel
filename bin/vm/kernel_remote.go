@@ -309,7 +309,7 @@ func (n *remoteNode) call(op, arg uint32, body []byte, files []File) (packet, *p
 		return packet{}, nil, err
 	}
 
-	if op == vOpen && len(pk.files) > 0 {
+	if (op == vOpen || op == vConnect) && len(pk.files) > 0 {
 		dropFiles(pk.files[1:])
 		pk.files = pk.files[:1]
 	} else {

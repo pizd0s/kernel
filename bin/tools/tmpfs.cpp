@@ -464,7 +464,8 @@ namespace {
         Dir,
         File,
         Link,
-        Fifo, // a named pipe: the kernel makes the pipe
+        Fifo,   // a named pipe: the kernel makes the pipe
+        Socket, // a socket's name: it holds the socket's listener, which CONNECT gives
     };
 
     // What an endpoint is to the loop.
@@ -530,6 +531,7 @@ namespace {
         u32 holds = 0;         // what else points at it: directories under it, files opened in it by name
         bool released = false; // gone from its server, its memory kept for what holds it
         Kind kind = Kind::Dir;
+        int fd = -1;          // a socket's listener
         int exclusive = -1;   // the endpoint that holds flock's exclusive lock, or -1
         SmallVec<int> shared; // the endpoints that hold flock's shared lock
         SmallVec<Range> ranges;
@@ -755,6 +757,10 @@ namespace {
                 n->content.view = nullptr;
                 n->content.viewSize = 0;
             }
+            if (n->fd >= 0) {
+                close(n->fd);
+                n->fd = -1;
+            }
             s.byIno.erase(hashIno(n->ino), n);
             --s.nodes;
             n->released = true;
@@ -817,6 +823,8 @@ namespace {
                 return S_IFREG | n->perm;
             case Kind::Link:
                 return S_IFLNK | n->perm;
+            case Kind::Socket:
+                return S_IFSOCK | n->perm;
             default:
                 return S_IFIFO | n->perm;
         }
@@ -830,6 +838,8 @@ namespace {
                 return DT_REG;
             case Kind::Link:
                 return DT_LNK;
+            case Kind::Socket:
+                return DT_SOCK;
             default:
                 return DT_FIFO;
         }
@@ -1644,6 +1654,11 @@ namespace {
     // A call of rootfs's on its channel, by node, answered on fd: whether
     // fd is kept.
     static bool fsCall(const Header& h, Body body, int fd) {
+        if (h.op == fsRoot) {
+            const Stat st = statOf(tree, tree.root);
+            ok(fd, &st, sizeof st);
+            return false;
+        }
         if (body.size() < 8) {
             return error(fd, EINVAL);
         }
@@ -1739,6 +1754,32 @@ namespace {
             }
             case fsPath:
                 return pathOf(n, fd);
+            case fsBind: {
+                // A socket's name, which holds the listener the call brings.
+                if (packetFdCount != 2) {
+                    return error(fd, EINVAL);
+                }
+                const Name name = body.rest();
+                if (const int e = creates(&tree, n, name, h)) {
+                    return error(fd, e);
+                }
+                Node* made = makeNode(tree, n, name, Kind::Socket);
+                made->perm = h.arg & 07777;
+                made->uid = h.uid;
+                made->gid = h.gid;
+                made->fd = packetFds[0];
+                packetFds[0] = -1; // the node's now
+                return answer(fd, 0);
+            }
+            case fsConnect:
+                if (n->kind != Kind::Socket) {
+                    return error(fd, ECONNREFUSED);
+                }
+                if (!may(n, h, 2)) {
+                    return error(fd, EACCES);
+                }
+                reply(fd, opOk, 0, nullptr, 0, &n->fd, 1);
+                return false;
             default:
                 return error(fd, ENOSYS);
         }

@@ -36,11 +36,11 @@
 // in a directory who asks may search. A file system of another's checks
 // what it does itself.
 //
-// A file system's service registers a socket at /dev/init (devfs): MOUNT
-// connects to it, and the end of the connection is the file system's
-// channel. The file systems and services rootfs starts get an end they
-// close once they are up, and hand on to the services they start: when
-// the last of them has closed it, the system is up.
+// A file system of another process's is a socket it binds and listens on:
+// mount(2) connects to it, and the connection is the file system's channel
+// rootfs asks it on. The file systems and services rootfs starts get an
+// end they close once they are up, and hand on to the services they
+// start: when the last of them has closed it, the system is up.
 //
 // A directory's entries have positions, each after those before it: a
 // READDIR gives the entries after one, so a reading that removes what it
@@ -571,10 +571,9 @@ namespace {
 
     // What an endpoint is to the loop.
     enum class Role : u8 {
-        File,    // an open file of a tree of ours: requests come on it
-        Handle,  // a handle of the VFS's, at a place: calls with a path walk from there
-        Fs,      // ours of the channel of another's file system: only its close comes
-        Pending, // ours of a call to a file system: its answer goes on with the call
+        File,   // an open file of a tree of ours: requests come on it
+        Handle, // a handle of the VFS's, at a place: calls with a path walk from there
+        Fs,     // ours of the channel of another's file system: only its close comes
     };
 
     // A lock of fcntl: an endpoint's, on the bytes [start, stop), to read
@@ -717,7 +716,6 @@ namespace {
         Place at;        // a Handle's
         u64 id;          // a Handle's
         Fs* fs;          // a Fs's
-        Ask* ask;        // a Pending's
         Endpoint* next;  // among the free ones
         Endpoint* after; // among the live ones
         Endpoint* before;
@@ -1330,9 +1328,9 @@ namespace {
                 letGo(ep->at.m);
                 break;
             case Role::Fs:
-                gone(ep->fs);
-                break;
-            case Role::Pending:
+                if (ep->fs) {
+                    gone(ep->fs);
+                }
                 break;
         }
         if (ep->before) {
@@ -1600,29 +1598,24 @@ namespace {
     Frames frames[32];
 
     // What a file system answered: OK with its body, which is the packet's
-    // until the call waits again, or the errno. A connection's channel
-    // comes with it, its endpoint ours from then on.
+    // until the call waits again, or the errno.
     struct Answer {
         int error = 0;
         Body body{nullptr, nullptr};
-        Endpoint* channel = nullptr;
     };
 
-    // A question of a call's to a file system, which the call waits for:
-    // the request goes on to with an endpoint of ours, whose answer goes on
-    // with the call (Role::Pending). connects: the endpoint is the channel
-    // of a mount, kept when the answer is OK.
+    // A question of a call's to a file system, which the call waits for: it
+    // goes on the file system's channel with no endpoint, and the file
+    // system answers it there, after the questions before it.
     struct Ask {
         bool await_ready() const noexcept;
         bool await_suspend(std::coroutine_handle<void> h);
         Answer await_resume() const noexcept;
 
         Fs* fs = nullptr; // whose channel a question goes on
-        int to = -1;      // what a connection's request goes on
         Header head{};
         u8 body[8 + NAME_MAX];
         usize size = 0;
-        bool connects = false;
         Answer answer;
         std::coroutine_handle<void> call;
         Ask* next = nullptr; // among the file system's questions
@@ -1632,7 +1625,6 @@ namespace {
     static Ask asking(const Place& p, const Header& h, u32 op, Name name) {
         Ask a;
         a.fs = p.m->fs;
-        a.to = p.m->fs->channel ? p.m->fs->channel->fd : -1;
         a.head = {op, 0, h.uid, h.gid};
         memcpy(a.body, &p.node, 8);
         memcpy(a.body + 8, name.at, MIN(name.length, usize(NAME_MAX)));
@@ -1708,40 +1700,18 @@ bool Ask::await_ready() const noexcept {
 // the error, EIO for a file system that is gone.
 bool Ask::await_suspend(std::coroutine_handle<void> h) {
     const iovec parts[] = {part(&head, sizeof head), part(body, size)};
-    int ends[2];
+    Endpoint* channel = fs ? fs->channel : nullptr;
     call = h;
-    if (!connects) {
-        // A question brings no endpoint: the file system answers it on its
-        // channel, after the questions before it.
-        Endpoint* channel = fs ? fs->channel : nullptr;
-        if (!channel || sendPacket(channel->fd, parts, 2, nullptr, 0, MSG_DONTWAIT) < 0) {
-            answer.error = channel && errno == EAGAIN ? EAGAIN : EIO;
-            return false;
-        }
-        if (fs->lastWaiting) {
-            fs->lastWaiting->next = this;
-        } else {
-            fs->waiting = this;
-        }
-        fs->lastWaiting = this;
-        return true;
-    }
-    if (to < 0) {
-        answer.error = EIO;
+    if (!channel || sendPacket(channel->fd, parts, 2, nullptr, 0, MSG_DONTWAIT) < 0) {
+        answer.error = channel && errno == EAGAIN ? EAGAIN : EIO;
         return false;
     }
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ends) != 0) {
-        answer.error = errno;
-        return false;
+    if (fs->lastWaiting) {
+        fs->lastWaiting->next = this;
+    } else {
+        fs->waiting = this;
     }
-    if (sendPacket(to, parts, 2, &ends[1], 1, MSG_DONTWAIT) < 0) {
-        answer.error = errno == EAGAIN ? EAGAIN : EIO;
-        close(ends[0]);
-        close(ends[1]);
-        return false;
-    }
-    close(ends[1]);
-    listen(ends[0], Role::Pending)->ask = this;
+    fs->lastWaiting = this;
     return true;
 }
 
@@ -2238,11 +2208,12 @@ namespace {
     // endpoint, which the file system answers on: the node of a place,
     // then what follows it in the call. EIO when the file system is gone,
     // EAGAIN when it does not keep up.
-    static bool hand(const Place& p, const Header& h, u32 op, u32 arg, const void* args, usize size, Name name, int fd) {
+    static bool hand(const Place& p, const Header& h, u32 op, u32 arg, const void* args, usize size, Name name, int fd, int extra = -1) {
         const Header head{op, arg, h.uid, h.gid};
         const iovec parts[] = {part(&head, sizeof head), part(&p.node, 8), part(args, size), part(name.at, name.length)};
+        const int fds[] = {extra, fd};
         Endpoint* channel = p.m->fs->channel;
-        if (!channel || sendPacket(channel->fd, parts, 4, &fd, 1, MSG_DONTWAIT) < 0) {
+        if (!channel || sendPacket(channel->fd, parts, 4, extra >= 0 ? fds : fds + 1, extra >= 0 ? 2 : 1, MSG_DONTWAIT) < 0) {
             return error(fd, channel && errno == EAGAIN ? EAGAIN : EIO);
         }
         return false;
@@ -3290,12 +3261,13 @@ namespace {
     }
 
     // MOUNT: on the directory target names, a directory source names, or
-    // the root of the file system whose socket of /dev it names, which
-    // rootfs connects to: the file system's end of the connection is its
-    // channel from then on. A target that is a mount's root, of what is
-    // mounted on it or of the VFS's, is EBUSY.
-    static Task mountCall(Header h, int fd, Place root, Place from, Name target, Name source) {
+    // with a connection the kernel made to a file system's socket, the
+    // root of that file system, which the connection's first question
+    // asks: the connection is its channel from then on. A target that is a
+    // mount's root, of what is mounted on it or of the VFS's, is EBUSY.
+    static Task mountCall(Header h, int fd, Place root, Place from, int conn, Name target, Name source) {
         Reply r{fd};
+        Reply connection{conn};
         Buffer second;
         second.append(source.at, source.length);
         Walk t;
@@ -3318,6 +3290,32 @@ namespace {
             error(fd, EBUSY);
             co_return;
         }
+        if (conn >= 0) {
+            auto* fs = new (allocate(sizeof(Fs))) Fs();
+            fs->channel = listen(conn, Role::Fs);
+            fs->channel->fs = fs;
+            connection.fd = -1; // the channel's now
+            Ask ask;
+            ask.fs = fs;
+            ask.head = {fsRoot, 0, h.uid, h.gid};
+            const Answer got = co_await ask;
+            Stat st;
+            if (got.error != 0 || !statIn(got.body, st)) {
+                if (fs->channel) {
+                    closed(fs->channel);
+                }
+                free(fs);
+                error(fd, got.error != 0 ? got.error : EIO);
+                co_return;
+            }
+            fs->dev = st.dev;
+            Place top;
+            top.node = st.ino;
+            top.st = st;
+            mountAt(fs, top, t.target, t.here.node, t.last);
+            ok(fd);
+            co_return;
+        }
         Walk ws;
         ws.start(h, from, root, {static_cast<const char*>(second.data()), second.size()}, true, true, false);
         for (Walk::Step s = ws.run(); s != Walk::Step::Done; s = ws.answered(co_await ws.question())) {
@@ -3327,38 +3325,63 @@ namespace {
             }
         }
         const Place& src = ws.target;
-        if (isDir(src)) {
-            mountAt(src.m->fs, src, t.target, t.here.node, t.last);
-            ok(fd);
-            co_return;
-        }
-        if (ours(src) || !S_ISSOCK(src.st.mode)) {
+        if (!isDir(src)) {
             error(fd, ENOTDIR);
             co_return;
         }
-        // The socket's file system opens it, its service: the endpoint of
-        // ours is the service's channel from then on.
-        Ask connect = asking(src, h, fsOpen, {});
-        connect.head.arg = O_RDWR;
-        connect.connects = true;
-        const Answer got = co_await connect;
-        Stat st;
-        if (got.error != 0 || !statIn(got.body, st)) {
-            if (got.channel) {
-                closed(got.channel);
+        mountAt(src.m->fs, src, t.target, t.here.node, t.last);
+        ok(fd);
+    }
+
+    // BIND: a socket node of the last name, which holds the listener the
+    // call brings, made as MKNOD makes a name: one that is there, and ".",
+    // ".." and the root alone, are EEXIST, which the kernel says
+    // EADDRINUSE. A tree of ours holds no socket: EROFS.
+    static Task bindCall(Header h, int fd, Place root, Place from, int listener, Name path) {
+        Reply r{fd};
+        Reply object{listener};
+        Walk w;
+        w.start(h, from, root, path, false, false, false);
+        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, w.error);
+                co_return;
             }
-            error(fd, got.error != 0 ? got.error : EIO);
+        }
+        if (w.kind != lastName) {
+            error(fd, EEXIST);
             co_return;
         }
-        auto* fs = new (allocate(sizeof(Fs))) Fs();
-        fs->channel = got.channel;
-        fs->dev = st.dev;
-        got.channel->fs = fs;
-        Place top;
-        top.node = st.ino;
-        top.st = st;
-        mountAt(fs, top, t.target, t.here.node, t.last);
-        ok(fd);
+        if (ours(w.here)) {
+            const int e = creates(w.here.m->fs->tree, w.here.n, w.last, h);
+            error(fd, e != 0 ? e : EROFS);
+            co_return;
+        }
+        if (w.slash) {
+            const Answer a = co_await asking(w.here, h, fsLookup, w.last);
+            error(fd, a.error == 0 ? EEXIST : ENOENT);
+            co_return;
+        }
+        hand(w.here, h, fsBind, h.arg, nullptr, 0, w.last, fd, listener);
+    }
+
+    // CONNECT: the listener of the socket node a path names, a last link
+    // followed; what is no socket refuses, ECONNREFUSED.
+    static Task connectCall(Header h, int fd, Place root, Place from, Name path) {
+        Reply r{fd};
+        Walk w;
+        w.start(h, from, root, path, true, true, false);
+        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, w.error);
+                co_return;
+            }
+        }
+        if (ours(w.target) || !S_ISSOCK(w.target.st.mode)) {
+            error(fd, ECONNREFUSED);
+            co_return;
+        }
+        hand(w.target, h, fsConnect, 0, nullptr, 0, {}, fd);
     }
 
     // UNMOUNT: what is mounted where a path names, a last link followed
@@ -3550,7 +3573,7 @@ namespace {
     // open file's. Whether fd is kept: a call of the VFS's keeps it, and
     // closes it when it is done.
     static bool onHandle(Endpoint* ep, const Header& h, Body body, int fd) {
-        if (h.op < vfsOpen || h.op > vfsPath) {
+        if (h.op < vfsOpen || h.op > vfsConnect) {
             return onPlace(ep, h, body, fd);
         }
         Place root;
@@ -3621,9 +3644,25 @@ namespace {
                 break;
             case vfsMount: {
                 const Name target = body.string();
-                mountCall(h, fd, root, from, target, body.rest());
+                const int conn = packetFdCount == 2 ? packetFds[0] : -1;
+                if (conn >= 0) {
+                    packetFds[0] = -1; // the call's now
+                }
+                mountCall(h, fd, root, from, conn, target, body.rest());
                 break;
             }
+            case vfsBind: {
+                if (packetFdCount != 2) {
+                    return error(fd, EINVAL);
+                }
+                const int listener = packetFds[0];
+                packetFds[0] = -1; // the call's now
+                bindCall(h, fd, root, from, listener, body.rest());
+                break;
+            }
+            case vfsConnect:
+                connectCall(h, fd, root, from, body.rest());
+                break;
             case vfsUnmount:
                 unmountCall(h, fd, root, from, body.rest());
                 break;
@@ -3648,38 +3687,6 @@ namespace {
             a->answer.error = EIO;
             a->call.resume();
         }
-    }
-
-    // The answer to a call's question to a file system: the call goes on.
-    // A connection's endpoint stays, the channel from then on; any other
-    // is done with. An answer that is no OK or ERR, or none, is EIO.
-    static void answered(Endpoint* ep) {
-        Ask* a = ep->ask;
-        int fds[maxFds];
-        usize count = 0;
-        const ssize_t n = receivePacket(ep->fd, packet, sizeof packet, fds, count);
-        for (usize i = 0; i < count; ++i) {
-            close(fds[i]);
-        }
-        Header h{};
-        if (n >= ssize_t(sizeof h)) {
-            memcpy(&h, packet, sizeof h);
-        }
-        if (n < ssize_t(sizeof h) || (h.op != opOk && h.op != opErr)) {
-            a->answer.error = EIO;
-        } else if (h.op == opErr) {
-            a->answer.error = h.arg != 0 ? int(h.arg) : EIO;
-        } else {
-            a->answer.body = {packet + sizeof h, packet + n};
-        }
-        if (a->connects && a->answer.error == 0) {
-            ep->role = Role::Fs;
-            ep->ask = nullptr;
-            a->answer.channel = ep;
-        } else {
-            closed(ep);
-        }
-        a->call.resume();
     }
 
     // The answer to a question on a file system's channel, its first: the
@@ -3720,10 +3727,6 @@ namespace {
 
     static void handle(Endpoint* ep) {
         if (ep->dead) {
-            return;
-        }
-        if (ep->role == Role::Pending) {
-            answered(ep);
             return;
         }
         if (ep->role == Role::Fs) {

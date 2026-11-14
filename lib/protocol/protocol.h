@@ -60,11 +60,18 @@
 //     REALPATH              root u64, path    OK the path from the root,
 //                                         with no link, "." or ".."
 //     MOUNT                 root u64, target 0 source   a directory is
-//                                         mounted on target too; a file
-//                                         system's socket of /dev is
-//                                         connected to, and its root mounted
+//                                         mounted on target too; with
+//                                         fds[0] a connection to a file
+//                                         system's socket, its root: the
+//                                         connection is its channel
 //     UNMOUNT   arg flags   root u64, path    UMOUNT_NOFOLLOW
 //     PATH                  root u64          OK the handle's path from the root
+//     BIND      arg mode    root u64, path    fds[0] a listener of the
+//                                         kernel's: a socket node of the
+//                                         last name holds it, made as MKNOD
+//                                         makes a name
+//     CONNECT               root u64, path    OK, fds[0] the listener the
+//                                         socket node holds
 //   and an open file's calls but READ and WRITE. A handle's FSTAT that
 //   rootfs answers itself has its id after the stat.
 //
@@ -98,6 +105,12 @@
 //     STATFS                                  OK statfs
 //     PATH                  node u64          OK the node's path from the
 //                                         file system's root
+//     BIND      arg mode    node u64, name    fds[0] a listener: a socket
+//                                         node of the name holds it
+//     CONNECT               node u64          OK, fds[0] the listener a
+//                                         socket node holds: who asks may
+//                                         write it
+//     ROOT                                    OK stat: the root's
 //
 //   An open file's, on its endpoint:
 //     READ      arg len     off u64 woff u32
@@ -124,19 +137,21 @@
 //                                         way, F_UNLCK for none: type u32
 //                                         start u64 len u64
 //
-//   A service's, on the channel rootfs has of it, and on /dev/init:
-//     OPEN      arg flags   mode u32      a device's: the reply's endpoint
-//                                         is the open file; a file
-//                                         system's: it is the channel of a
-//                                         mount, OK the root's stat
+//   A device's service's, on the channel devfs has of it, and on
+//   /dev/init:
+//     OPEN      arg flags   mode u32      the reply's endpoint is the open
+//                                         file
 //     REGISTER  arg mode    name          on /dev/init. OK stat: a device,
-//                                         S_IFCHR or S_IFBLK, or a file
-//                                         system to mount, S_IFSOCK, of that
-//                                         name in /dev. fds[0] is the end of
-//                                         a pair whose other end the service
-//                                         keeps, the channel: rootfs hands
+//                                         S_IFCHR or S_IFBLK, of that name
+//                                         in /dev. fds[0] is the end of a
+//                                         pair whose other end the service
+//                                         keeps, the channel: devfs hands
 //                                         every open of the name on to it,
 //                                         and the name goes when it closes
+//
+//   A file system is a socket of its own, SOCK_SEQPACKET, bound to a path
+//   (BIND): mount(2) connects to it and mounts the connection, and every
+//   connection the file system accepts is a channel of its calls.
 //
 //   replies: OK, ERR with arg the errno
 //   stat { ino u64, size u64, mtime u64 nanoseconds, mode u32, nlink u32,
@@ -170,6 +185,8 @@ enum : uint32_t {
     vfsMount,
     vfsUnmount,
     vfsPath,
+    vfsBind,
+    vfsConnect,
     // A file system's.
     fsLookup = 32,
     fsGetattr,
@@ -189,6 +206,9 @@ enum : uint32_t {
     fsTruncate,
     fsStatfs,
     fsPath,
+    fsBind,
+    fsConnect,
+    fsRoot,
     // An open file's.
     opRead = 64,
     opWrite,

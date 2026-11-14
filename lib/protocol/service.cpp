@@ -130,7 +130,7 @@ void stopServing() {
     stopping = true;
 }
 
-void serve(int epoll, Handle handle, Gone gone) {
+void serve(int epoll, Handle handle, Gone gone, Accepted accepted) {
     alignas(Header) static unsigned char packet[65536];
     while (!stopping && watched > 0) {
         epoll_event events[16];
@@ -140,6 +140,15 @@ void serve(int epoll, Handle handle, Gone gone) {
         }
         for (int i = 0; i < n; ++i) {
             auto* e = static_cast<Endpoint*>(events[i].data.ptr);
+            if (e->listens) {
+                const int connection = accept4(e->fd, nullptr, nullptr, SOCK_CLOEXEC);
+                if (connection >= 0 && accepted) {
+                    accepted(*e, connection);
+                } else if (connection >= 0) {
+                    close(connection);
+                }
+                continue;
+            }
             Request r{};
             const ssize_t got = receivePacket(e->fd, packet, sizeof packet, r.fds, r.count);
             if (got <= 0) {

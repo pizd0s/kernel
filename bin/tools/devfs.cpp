@@ -3,12 +3,13 @@
 // asks it by node, its root node 1. It holds the terminal the kernel gave
 // vm as descriptor 0, tty, whose open hands out the terminal itself; init,
 // where the services of the system register their devices (REGISTER,
-// lib/protocol/service.h); and those devices, each a service's: an open of
+// lib/protocol/service.h); those devices, each a service's: an open of
 // one goes on to its service, the reply's endpoint with it, and the
-// service serves the open file from then on, as it answers a file
-// system's connection for a mount. devfs keeps a device's name, its mode
-// and its owner, and lets the name go when the service's end of the pair
-// closes. It starts the services of the system's devices, /bin/devices
+// service serves the open file from then on; and the sockets the file
+// systems of the system bind there, for mount(2) to connect to. devfs
+// keeps a device's name, its mode and its owner, and lets the name go when
+// the service's end of the pair closes; a socket's goes when it is
+// unlinked. It starts the services of the system's devices, /bin/devices
 // and /bin/blk for each disk vm gave the system, and ends when rootfs lets
 // go of its channel.
 //
@@ -40,7 +41,8 @@ namespace {
         Dir,
         Terminal,
         Registry,
-        Device, // a service's: a character or block device, or a file system's socket
+        Device, // a service's: a character or block device
+        Socket, // a socket's name: it holds the socket's listener, which CONNECT gives
     };
 
     // A node of /dev: its root, the terminal, init, or a service's device;
@@ -55,7 +57,7 @@ namespace {
         uint64_t atime;
         uint64_t mtime;
         uint64_t ctime;
-        int fd; // the terminal's; a device's end of its service's pair
+        int fd; // the terminal's; a device's end of its service's pair; a socket's listener
         char name[NAME_MAX + 1];
         Node* next; // among the root's entries, in their order
     };
@@ -174,6 +176,9 @@ namespace {
             }
         }
         root.mtime = root.ctime = now();
+        if (n->kind == Kind::Socket && n->fd >= 0) {
+            close(n->fd);
+        }
         free(n);
     }
 
@@ -204,6 +209,9 @@ namespace {
         const bool writes = access != O_RDONLY;
         if (n.kind == Kind::Dir) {
             return fail(r.reply(), EISDIR);
+        }
+        if (n.kind == Kind::Socket) {
+            return fail(r.reply(), ENXIO);
         }
         if (!may(n, r.h, (reads ? 4 : 0) | (writes || (r.h.arg & O_TRUNC) != 0 ? 2 : 0))) {
             return fail(r.reply(), EACCES);
@@ -264,6 +272,9 @@ namespace {
     // as Linux finds it first, else EROFS.
     static void fsCall(Request& r) {
         uint64_t ino;
+        if (r.h.op == fsRoot) {
+            return answerStat(r.reply(), root);
+        }
         if (!r.at(0, ino)) {
             return fail(r.reply(), EINVAL);
         }
@@ -325,7 +336,58 @@ namespace {
                 }
                 return fail(r.reply(), named(name, length) ? EEXIST : EROFS);
             }
-            case fsUnlink:
+            case fsUnlink: {
+                // A socket's name goes as a writer of /dev takes it away;
+                // nothing else of /dev does.
+                if (!nameAt(r, 8, name, length)) {
+                    return fail(r.reply(), EINVAL);
+                }
+                Node* found = named(name, length);
+                if (!found) {
+                    return fail(r.reply(), ENOENT);
+                }
+                if (found->kind != Kind::Socket || (r.h.arg & AT_REMOVEDIR) != 0) {
+                    return fail(r.reply(), EROFS);
+                }
+                if (!may(root, r.h, 3)) {
+                    return fail(r.reply(), EACCES);
+                }
+                unregister(found);
+                return answer(r.reply(), opOk, 0);
+            }
+            case fsBind: {
+                if (!nameAt(r, 8, name, length) || r.count != 2) {
+                    return fail(r.reply(), EINVAL);
+                }
+                if (const int e = badName(name, length)) {
+                    return fail(r.reply(), e);
+                }
+                if (n->kind != Kind::Dir) {
+                    return fail(r.reply(), ENOTDIR);
+                }
+                if (named(name, length)) {
+                    return fail(r.reply(), EEXIST);
+                }
+                if (!may(*n, r.h, 3)) {
+                    return fail(r.reply(), EACCES);
+                }
+                Node* made = add(name, length, Kind::Socket, S_IFSOCK | (r.h.arg & 07777), r.h.uid, r.h.gid);
+                made->fd = r.fds[0];
+                r.fds[0] = -1; // the node's now
+                return answer(r.reply(), opOk, 0);
+            }
+            case fsConnect: {
+                if (n->kind != Kind::Socket) {
+                    return fail(r.reply(), ECONNREFUSED);
+                }
+                if (!may(*n, r.h, 2)) {
+                    return fail(r.reply(), EACCES);
+                }
+                const Header ok{opOk, 0, 0, 0};
+                const iovec parts[] = {{const_cast<Header*>(&ok), sizeof ok}};
+                sendPacket(r.reply(), parts, 1, &n->fd, 1);
+                return;
+            }
             case fsRename:
             case fsChmod:
             case fsChown:
@@ -352,10 +414,10 @@ namespace {
         }
     }
 
-    // A service's device: a name in /dev of the mode asked for, S_IFCHR,
-    // S_IFBLK, or S_IFSOCK for a file system to mount, whose opens go on to
-    // the end of a pair the request brings, the service's the other; its
-    // stat is the reply. Only on an endpoint of init open to write.
+    // A service's device: a name in /dev of the mode asked for, S_IFCHR or
+    // S_IFBLK, whose opens go on to the end of a pair the request brings,
+    // the service's the other; its stat is the reply. Only on an endpoint of
+    // init open to write.
     static void registerName(const Endpoint& e, Request& r) {
         const char* name;
         size_t length;
@@ -363,7 +425,7 @@ namespace {
         if (!e.writes) {
             return fail(r.reply(), EBADF);
         }
-        if (r.count != 2 || (type != S_IFCHR && type != S_IFBLK && type != S_IFSOCK) || !nameAt(r, 0, name, length)) {
+        if (r.count != 2 || (type != S_IFCHR && type != S_IFBLK) || !nameAt(r, 0, name, length)) {
             return fail(r.reply(), EINVAL);
         }
         if (const int bad = badName(name, length)) {
@@ -439,6 +501,8 @@ int devfsMain(int argc, char** argv) {
     root.ino = ++inodes;
     root.kind = Kind::Dir;
     root.mode = S_IFDIR | 0755;
+    root.uid = uint32_t(geteuid());
+    root.gid = uint32_t(getegid());
     root.atime = root.mtime = root.ctime = now();
     add("tty", 3, Kind::Terminal, S_IFCHR | 0666, 0, 0)->fd = STDIN_FILENO;
     add("init", 4, Kind::Registry, S_IFCHR | 0600, uint32_t(geteuid()), uint32_t(getegid()));
