@@ -6,49 +6,43 @@ import "syscall"
 
 const umountNofollow = 8
 
-// mount mounts the directory source names on the directory target names:
-// target's server hands every walk into target, and every call on its
-// name, on to the server of source from then on (MOUNT, kernel_remote.go).
-// source is opened as a directory, a server's: the end of that open is
-// what is mounted. fstype, flags and data are not used.
+// mount mounts on the directory target names the directory source names,
+// or the root of the file system whose socket of /dev source names: the
+// VFS's call (kernel_vfs.go), both paths from the working directory or
+// the root. fstype, flags and data are not used; a process of the host's
+// mounts nothing.
 func (p *Process) libcMount(source, target, fstype, flags, data uint32) uint32 {
-	f, err := p.openPath(p.str(source), syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	from, to := p.str(source), p.str(target)
 
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	defer f.unref()
-
-	served, ok := f.(*remoteDir)
-
-	if !ok {
-		return p.result(0, syscall.EINVAL)
-	}
-
-	return p.result(0, p.onName(atFdcwd, p.str(target), true, func(d Dir, name string, st *syscall.Stat_t) error {
-		at, ok := d.(*remoteDir)
-
-		if !ok || name == "" {
-			return syscall.EINVAL
+	for _, path := range []string{from, to} {
+		if err := checked(path); err != nil {
+			return p.result(0, err)
 		}
+	}
 
-		return at.mount(name, served.end)
-	}))
+	handled, err := p.onVFS(atFdcwd, ".", func(v *remoteDir) error {
+		return v.mountPath(p, to, from)
+	})
+
+	if !handled {
+		err = syscall.EINVAL
+	}
+
+	return p.result(0, err)
 }
 
 // umount2 unmounts what is mounted on the directory target names; the
 // flags but UMOUNT_NOFOLLOW are not used.
 func (p *Process) libcUmount2(target, flags uint32) uint32 {
-	return p.result(0, p.onName(atFdcwd, p.str(target), flags&umountNofollow == 0, func(d Dir, name string, st *syscall.Stat_t) error {
-		at, ok := d.(*remoteDir)
+	handled, err := p.onVFS(atFdcwd, p.str(target), func(v *remoteDir) error {
+		return v.unmountPath(p, p.str(target), flags&umountNofollow)
+	})
 
-		if !ok || name == "" {
-			return syscall.EINVAL
-		}
+	if !handled {
+		err = syscall.EINVAL
+	}
 
-		return at.simpleName(rUnmount, 0, []byte(name))
-	}))
+	return p.result(0, err)
 }
 
 func (p *Process) libcUmount(target uint32) uint32 {

@@ -324,6 +324,23 @@ func (p *Process) loadFrom(path string, first File, argv []string) (*execImage, 
 func (p *Process) openProgram(path string) (File, string, error) {
 	var f File
 	var program string
+
+	if handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
+		var err error
+
+		if f, err = v.openPath(p, path, syscall.O_RDONLY, 0); err != nil {
+			return err
+		}
+
+		if real, err := v.realpathOf(p, path); err == nil {
+			program = real
+		}
+
+		return nil
+	}); handled {
+		return f, program, err
+	}
+
 	err := p.onName(atFdcwd, path, true, func(d Dir, name string, st *syscall.Stat_t) error {
 		if name == "" {
 			return syscall.EACCES

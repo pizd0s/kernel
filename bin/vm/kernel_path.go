@@ -101,6 +101,41 @@ func checked(path string) error {
 	return nil
 }
 
+// onVFS runs call on the handle a path relative to dirfd starts at when
+// it is rootfs's, the VFS's, which walks the path whole: handled says it
+// did, or that the path is none a call takes.
+func (p *Process) onVFS(dirfd int32, path string, call func(v *remoteDir) error) (bool, error) {
+	if err := checked(path); err != nil {
+		return true, err
+	}
+
+	v, err := p.vfsAt(dirfd, path)
+
+	if err != nil {
+		return true, err
+	}
+
+	if v == nil {
+		return false, nil
+	}
+
+	defer v.unref()
+
+	return true, call(v)
+}
+
+// onVFSTo runs call on the handle a second path of a call starts at,
+// which must be rootfs's too: EXDEV for a directory of the host's.
+func (p *Process) onVFSTo(dirfd int32, path string, call func(v *remoteDir) error) error {
+	handled, err := p.onVFS(dirfd, path, call)
+
+	if !handled {
+		return syscall.EXDEV
+	}
+
+	return err
+}
+
 // start is the directory a path starts at, which the caller holds a
 // reference to: the root for an absolute one, else the working directory
 // or the directory of dirfd.
@@ -331,7 +366,7 @@ func (p *Process) onName(dirfd int32, path string, follow bool, call func(d Dir,
 // onAt runs a call on what an *at call names: byName on the path, a last
 // link followed unless AT_SYMLINK_NOFOLLOW, or byFile on the descriptor's
 // own file when the path is empty with AT_EMPTY_PATH.
-func (p *Process) onAt(dirfd int32, path string, flags uint32, byName func(d Dir, name string, st *syscall.Stat_t) error, byFile func(f File) error) error {
+func (p *Process) onAt(dirfd int32, path string, flags uint32, byName func(d Dir, name string, st *syscall.Stat_t) error, byFile func(f File) error, byVFS func(v *remoteDir, follow bool) error) error {
 	if path == "" && flags&atEmptyPath != 0 {
 		if dirfd == atFdcwd {
 			return byFile(p.cwd)
@@ -344,6 +379,12 @@ func (p *Process) onAt(dirfd int32, path string, flags uint32, byName func(d Dir
 		}
 
 		return byFile(obj)
+	}
+
+	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
+		return byVFS(v, flags&atSymlinkNofollow == 0)
+	}); handled {
+		return err
 	}
 
 	return p.onName(dirfd, path, flags&atSymlinkNofollow == 0, byName)
@@ -374,6 +415,12 @@ func (p *Process) openAt(dirfd int32, path string, flags int, mode uint32) (File
 
 	if err != nil {
 		return nil, err
+	}
+
+	if v, ok := d.(*remoteDir); ok {
+		defer v.unref()
+
+		return v.openPath(p, path, flags, mode)
 	}
 
 	if dev, name, ok, err := p.hostDevice(d, path); ok || err != nil {
@@ -545,12 +592,29 @@ func (p *Process) makeAt(dirfd int32, path string, dir bool, make func(d Dir, na
 }
 
 func (p *Process) mkdir(dirfd int32, path string, mode uint32) error {
+	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
+		return v.makePath(p, vMkdir, mode&0o7777&^p.umask, "", path)
+	}); handled {
+		return err
+	}
+
 	return p.makeAt(dirfd, path, true, func(d Dir, name string) error {
 		return d.mkdir(p, name, mode&0o7777&^p.umask)
 	})
 }
 
 func (p *Process) mknod(dirfd int32, path string, mode uint32, dev uint64) error {
+	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
+		switch mode & syscall.S_IFMT {
+		case 0, syscall.S_IFREG, syscall.S_IFIFO:
+			return v.makePath(p, vMknod, mode&^(p.umask&0o777), "", path)
+		}
+
+		return syscall.EPERM
+	}); handled {
+		return err
+	}
+
 	return p.makeAt(dirfd, path, false, func(d Dir, name string) error {
 		return d.mknod(p, name, mode&^(p.umask&0o777), dev)
 	})
@@ -559,6 +623,12 @@ func (p *Process) mknod(dirfd int32, path string, mode uint32, dev uint64) error
 func (p *Process) symlink(target string, dirfd int32, path string) error {
 	if target == "" {
 		return syscall.ENOENT
+	}
+
+	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
+		return v.makePath(p, vSymlink, 0, target, path)
+	}); handled {
+		return err
 	}
 
 	return p.makeAt(dirfd, path, false, func(d Dir, name string) error {
@@ -571,6 +641,12 @@ func (p *Process) symlink(target string, dirfd int32, path string) error {
 // alone EBUSY, and all three EISDIR to unlink; a slash after a name that
 // is no directory is ENOTDIR to unlink, EISDIR after one that is.
 func (p *Process) remove(dirfd int32, path string, dir bool) error {
+	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
+		return v.unlinkPath(p, path, dir)
+	}); handled {
+		return err
+	}
+
 	s, err := p.walkTo(dirfd, path)
 
 	if err != nil {
@@ -612,6 +688,14 @@ func (p *Process) remove(dirfd int32, path string, dir bool) error {
 // ".", ".." and the root alone are EBUSY, a slash after either is for a
 // directory only.
 func (p *Process) rename(olddir int32, old string, newdir int32, new string) error {
+	if handled, err := p.onVFS(olddir, old, func(v *remoteDir) error {
+		return p.onVFSTo(newdir, new, func(to *remoteDir) error {
+			return v.renamePath(p, old, to, new)
+		})
+	}); handled {
+		return err
+	}
+
 	a, err := p.walkTo(olddir, old)
 
 	if err != nil {
@@ -650,6 +734,14 @@ func (p *Process) rename(olddir int32, old string, newdir int32, new string) err
 // names, a last link of it followed when follow says: a directory is
 // EPERM, and the new name is made as makeAt makes one.
 func (p *Process) link(olddir int32, old string, newdir int32, new string, follow bool) error {
+	if handled, err := p.onVFS(olddir, old, func(v *remoteDir) error {
+		return p.onVFSTo(newdir, new, func(to *remoteDir) error {
+			return v.linkPath(p, old, to, new, follow)
+		})
+	}); handled {
+		return err
+	}
+
 	return p.onName(olddir, old, follow, func(d Dir, name string, st *syscall.Stat_t) error {
 		if name == "" || st.Mode&syscall.S_IFMT == syscall.S_IFDIR {
 			return syscall.EPERM
@@ -664,6 +756,12 @@ func (p *Process) link(olddir int32, old string, newdir int32, new string, follo
 // statPath is the metadata of what a path names, or of a last symbolic
 // link itself.
 func (p *Process) statPath(path string, follow bool, st *syscall.Stat_t) error {
+	if handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
+		return v.statPath(p, path, follow, st)
+	}); handled {
+		return err
+	}
+
 	return p.onName(atFdcwd, path, follow, func(d Dir, name string, found *syscall.Stat_t) error {
 		*st = *found
 
@@ -674,6 +772,12 @@ func (p *Process) statPath(path string, follow bool, st *syscall.Stat_t) error {
 // accessAt checks what a path names for mode, as access does, or with
 // AT_SYMLINK_NOFOLLOW a last link itself.
 func (p *Process) accessAt(dirfd int32, path string, mode, flags uint32) error {
+	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
+		return v.accessName(p, path, mode, flags)
+	}); handled {
+		return err
+	}
+
 	return p.onName(dirfd, path, flags&atSymlinkNofollow == 0, func(d Dir, name string, st *syscall.Stat_t) error {
 		return d.accessName(p, name, mode, flags)
 	})
@@ -729,6 +833,12 @@ func (p *Process) putStatfsOf(at uint32, st *syscall.Statfs_t) {
 
 // statfsPath is the file system of what a path names.
 func (p *Process) statfsPath(path string, st *syscall.Statfs_t) error {
+	if handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
+		return v.statfsPath(p, path, st)
+	}); handled {
+		return err
+	}
+
 	return p.onName(atFdcwd, path, true, func(d Dir, name string, _ *syscall.Stat_t) error {
 		return d.statfsName(p, name, st)
 	})
@@ -750,6 +860,8 @@ func (p *Process) libcFstatat(dirfd, path, at, flags uint32) uint32 {
 		return nil
 	}, func(f File) error {
 		return statFile(f, &st)
+	}, func(v *remoteDir, follow bool) error {
+		return v.statPath(p, p.str(path), follow, &st)
 	})
 
 	if err == nil {
@@ -774,10 +886,18 @@ func (p *Process) libcFaccessat(dirfd, path, mode, flags uint32) uint32 {
 		}
 
 		return nil
+	}, func(v *remoteDir, follow bool) error {
+		return v.accessName(p, p.str(path), mode, flags)
 	}))
 }
 
 func (p *Process) libcTruncate(path uint32, size uint64) uint32 {
+	if handled, err := p.onVFS(atFdcwd, p.str(path), func(v *remoteDir) error {
+		return v.truncatePath(p, p.str(path), int64(size))
+	}); handled {
+		return p.result(0, err)
+	}
+
 	return p.result(0, p.onName(atFdcwd, p.str(path), true, func(d Dir, name string, st *syscall.Stat_t) error {
 		return d.truncateName(p, name, int64(size))
 	}))
@@ -852,6 +972,35 @@ func (p *Process) dirOf(d Dir, name string) (Dir, error) {
 // held: for a working directory or a root.
 func (p *Process) directory(path string) (Dir, error) {
 	var nd Dir
+
+	if handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
+		f, err := v.openPath(p, path, oPath|syscall.O_DIRECTORY, 0)
+
+		if err != nil {
+			return err
+		}
+
+		h, ok := f.(*remoteDir)
+
+		if !ok {
+			f.unref()
+
+			return syscall.ENOTDIR
+		}
+
+		if err := h.accessName(p, "", 1, 0); err != nil {
+			h.unref()
+
+			return err
+		}
+
+		nd = h
+
+		return nil
+	}); handled {
+		return nd, err
+	}
+
 	err := p.onName(atFdcwd, path, true, func(d Dir, name string, st *syscall.Stat_t) error {
 		if st.Mode&syscall.S_IFMT != syscall.S_IFDIR {
 			return syscall.ENOTDIR
@@ -899,6 +1048,11 @@ func (p *Process) libcFchdir(fd uint32) uint32 {
 	}
 
 	d := asRoot(obj)
+
+	if h, ok := d.(*remoteDir); ok && h.mode != 0 && h.mode&syscall.S_IFMT != syscall.S_IFDIR {
+		d.unref()
+		d = nil
+	}
 
 	if d == nil {
 		return p.result(0, syscall.ENOTDIR)
@@ -1050,6 +1204,20 @@ func (p *Process) libcSymlinkat(target, dirfd, path uint32) uint32 {
 // no link is EINVAL, a slash after one follows it.
 func (p *Process) readlinkAt(dirfd int32, path string, buf, size uint32) (int, error) {
 	var target string
+
+	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
+		var err error
+		target, err = v.readlinkPath(p, path)
+
+		return err
+	}); handled {
+		if err != nil {
+			return 0, err
+		}
+
+		return copy(p.span(buf, size), target), nil
+	}
+
 	err := p.onName(dirfd, path, false, func(d Dir, name string, st *syscall.Stat_t) error {
 		if name == "" || st.Mode&syscall.S_IFMT != syscall.S_IFLNK {
 			return syscall.EINVAL
@@ -1105,6 +1273,20 @@ func (p *Process) libcReadlinkat(dirfd, path, buf, size uint32) uint32 {
 // directory's own.
 func (p *Process) realpath(path string) (string, error) {
 	var out string
+
+	if handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
+		var err error
+		out, err = v.realpathOf(p, path)
+
+		return err
+	}); handled {
+		if err == nil && len(out) >= 4096 {
+			err = syscall.ENAMETOOLONG
+		}
+
+		return out, err
+	}
+
 	err := p.onName(atFdcwd, path, true, func(d Dir, name string, st *syscall.Stat_t) error {
 		if name == "" || st.Mode&syscall.S_IFMT == syscall.S_IFDIR {
 			nd, err := p.dirOf(d, name)
@@ -1234,6 +1416,12 @@ func (p *Process) libcRealpath(path, resolved uint32) uint32 {
 }
 
 func (p *Process) libcChmod(path, mode uint32) uint32 {
+	if handled, err := p.onVFS(atFdcwd, p.str(path), func(v *remoteDir) error {
+		return v.chmodPath(p, p.str(path), mode&0o7777, true)
+	}); handled {
+		return p.result(0, err)
+	}
+
 	return p.result(0, p.onName(atFdcwd, p.str(path), true, func(d Dir, name string, st *syscall.Stat_t) error {
 		return p.chmodName(d, name, st, mode)
 	}))
@@ -1244,7 +1432,9 @@ func (p *Process) libcFchmodat(dirfd, path, mode, flags uint32) uint32 {
 		return p.chmodName(d, name, st, mode)
 	}, attrsCall(func(a Attrs) error {
 		return a.chmod(mode & 0o7777)
-	})))
+	}), func(v *remoteDir, follow bool) error {
+		return v.chmodPath(p, p.str(path), mode&0o7777, follow)
+	}))
 }
 
 func (p *Process) libcFchownat(dirfd, path, uid, gid, flags uint32) uint32 {
@@ -1252,7 +1442,9 @@ func (p *Process) libcFchownat(dirfd, path, uid, gid, flags uint32) uint32 {
 		return d.chownName(p, name, int(int32(uid)), int(int32(gid)))
 	}, attrsCall(func(a Attrs) error {
 		return a.chown(int(int32(uid)), int(int32(gid)))
-	})))
+	}), func(v *remoteDir, follow bool) error {
+		return v.chownPath(p, p.str(path), int(int32(uid)), int(int32(gid)), follow)
+	}))
 }
 
 func (p *Process) libcMknod(path, mode uint32, dev uint64) uint32 {
@@ -1397,6 +1589,12 @@ func (p *Process) stat(path, at uint32, follow bool) uint32 {
 }
 
 func (p *Process) chown(path, uid, gid uint32, follow bool) uint32 {
+	if handled, err := p.onVFS(atFdcwd, p.str(path), func(v *remoteDir) error {
+		return v.chownPath(p, p.str(path), int(int32(uid)), int(int32(gid)), follow)
+	}); handled {
+		return p.result(0, err)
+	}
+
 	return p.result(0, p.onName(atFdcwd, p.str(path), follow, func(d Dir, name string, st *syscall.Stat_t) error {
 		return d.chownName(p, name, int(int32(uid)), int(int32(gid)))
 	}))
@@ -1405,6 +1603,12 @@ func (p *Process) chown(path, uid, gid uint32, follow bool) uint32 {
 // utimens sets the times of what a path names, or of a last symbolic
 // link itself.
 func (p *Process) utimens(dirfd int32, path string, ts []syscall.Timespec, follow bool) error {
+	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
+		return v.utimesPath(p, path, ts, follow)
+	}); handled {
+		return err
+	}
+
 	return p.onName(dirfd, path, follow, func(d Dir, name string, st *syscall.Stat_t) error {
 		return d.utimesName(p, name, ts)
 	})
@@ -1457,6 +1661,12 @@ func (p *Process) mkstemp(template, suffix, flags uint32) uint32 {
 // last name, connect finds what the path names. A path of a server names
 // no socket of the host: EOPNOTSUPP.
 func (p *Process) unixPath(guest string, bind bool, call func(host string) error) error {
+	if handled, err := p.onVFS(atFdcwd, guest, func(v *remoteDir) error {
+		return syscall.EOPNOTSUPP
+	}); handled {
+		return err
+	}
+
 	if bind {
 		s, err := p.walkTo(atFdcwd, guest)
 

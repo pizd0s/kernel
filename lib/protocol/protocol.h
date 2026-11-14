@@ -1,53 +1,103 @@
-// The file protocol of the system: what the kernel speaks for the POSIX
-// calls of a process (bin/vm/kernel_remote.go), and what rootfs
-// (bin/rootfs), the services of the system (bin/tools) and its libfuse
-// (lib/fuse) serve. An open file is one end of a
-// seqpacket pair; its server holds the other and answers on it. Every
-// request brings a fresh endpoint, last among its descriptors: the reply
-// goes on it, and an OPEN's stays the open file's. A server may hand a
-// request on, its descriptors with it, to another server, which answers
-// on that endpoint and keeps it: the one that handed it on is out of the
-// way from then on. A server that is gone is EIO to the kernel.
+#pragma once
+
+// The file protocol of the system: three interfaces on one wire.
+//
+//   The VFS's: the kernel's calls with a path (bin/vm/kernel_remote.go),
+//   on a handle of rootfs's (bin/rootfs). rootfs is the VFS: it alone
+//   walks a path, follows symbolic links, knows the mounts and where ".."
+//   goes, and makes the last step of a call as Linux makes it.
+//
+//   A file system's: rootfs's calls by node, on the channel of a file
+//   system it mounted, which knows its own nodes and nothing of paths,
+//   mounts or roots: libfuse's (lib/fuse) and rootfs's own trees.
+//
+//   An open file's: the kernel's calls on the endpoint of an open file, a
+//   file system's or a device's (bin/tools); a handle takes them too.
+//
+// An endpoint is one end of a seqpacket pair: whose holds the other end
+// answers on it. Every request brings a fresh endpoint, last among its
+// descriptors: the reply goes on it, and an open's stays the open file's.
+// A server may hand a request on, its descriptors with it, to another,
+// which answers on that endpoint and keeps it: the one that handed it on
+// is out of the way from then on. A server that is gone is EIO.
 //
 // A packet is a Header and a body; descriptors ride with it (SCM_RIGHTS).
 //
 //   Header { op u32, arg u32, uid u32, gid u32 }
 //
-// uid and gid are who asks: the kernel puts its process's ids, a program
-// that speaks the protocol its own. A reply's are zero.
+// uid and gid are who asks: the kernel puts its process's ids, rootfs
+// the ids of the call it makes a file system's for. A reply's are zero.
 //
-//   on a directory's endpoint, about the directory or one name in it: ""
-//   is the directory itself; a name is no "." or "..", has no "/" and is
-//   never followed: a symbolic link is itself, and to the calls that look
-//   at a name the root of a server mounted on it is what it is:
-//     RESOLVE   arg handed  root dev u64, root ino u64, links u32, path
-//                                         OK step u32, links u32, last u32,
-//                                         flags u32, name (resolve); handed
-//                                         1: a server handed the walk on,
-//                                         the reply's endpoint is kept
-//     OPEN      arg flags   mode u32 name OK stat; fds[0] an object: the file is it
-//     STAT                  name          OK stat
-//     READLINK              name          OK target
-//     MKDIR     arg mode    name
-//     MKNOD     arg mode    name          a FIFO or a regular file
-//     UNLINK    arg flags   name          AT_REMOVEDIR
-//     RENAME                dev u64 ino u64 old 0 new   new a name of the
-//                                         directory of device dev, inode ino
-//     LINK                  dev u64 ino u64 old 0 new
-//     SYMLINK               target 0 name
-//     CHMOD     arg mode    name
-//     CHOWN                 uid u32 gid u32 name
-//     UTIMES    arg when    atime u64 mtime u64 name   when: 2 atime now,
-//                                         4 mtime now, 8 atime kept,
-//                                         16 mtime kept
-//     TRUNCATE              size u64 name
-//     STATFS                name          OK statfs
-//     MOUNT                 name          fds[0] the end of an open of a
-//                                         directory of another server: a
-//                                         walk into the name, and a call on
-//                                         it, go on to that server
-//     UNMOUNT               name
-//   on a node's endpoint:
+//   The VFS's, on a handle: a directory of the VFS's tree, or what O_PATH
+//   opened; the root, the working directory and the directory descriptors
+//   of a process are handles. A path walks from the handle, or from the
+//   root when it is absolute: root is the id of the process's root, which
+//   its handle's open gave. A call follows a last link as Linux's does,
+//   and checks what Linux checks before the file system.
+//     OPEN      arg flags   root u64, mode u32, path
+//                                         OK stat [id u64]: the reply's
+//                                         endpoint is the open file, or
+//                                         with id a handle; fds[0] an
+//                                         object: the file is it. A FIFO
+//                                         is its stat: the kernel makes
+//                                         its pipe
+//     STAT      arg follow  root u64, path    OK stat
+//     READLINK              root u64, path    OK target
+//     MKDIR     arg mode    root u64, path
+//     MKNOD     arg mode    root u64, path    a FIFO or a regular file
+//     SYMLINK               root u64, target 0 path
+//     UNLINK    arg flags   root u64, path    AT_REMOVEDIR
+//     RENAME                root u64, to u64, old 0 new   new from the
+//                                         handle of id to
+//     LINK      arg follow  root u64, to u64, old 0 new
+//     CHMOD     arg mode    root u64, flags u32, path   AT_SYMLINK_NOFOLLOW
+//     CHOWN                 root u64, flags u32, uid u32, gid u32, path
+//     UTIMES    arg when    root u64, flags u32, atime u64, mtime u64, path
+//                                         when: 2 atime now, 4 mtime now,
+//                                         8 atime kept, 16 mtime kept
+//     TRUNCATE              root u64, size u64, path
+//     STATFS                root u64, path    OK statfs
+//     REALPATH              root u64, path    OK the path from the root,
+//                                         with no link, "." or ".."
+//     MOUNT                 root u64, target 0 source   a directory is
+//                                         mounted on target too; a file
+//                                         system's socket of /dev is
+//                                         connected to, and its root mounted
+//     UNMOUNT   arg flags   root u64, path    UMOUNT_NOFOLLOW
+//     PATH                  root u64          OK the handle's path from the root
+//   and an open file's calls but READ and WRITE. A handle's FSTAT that
+//   rootfs answers itself has its id after the stat.
+//
+//   A file system's, on its channel, by node: a node is its inode number,
+//   the root's in the stat its connection answered. A name is no "." or
+//   "..", has no "/" and is never followed. The file system checks who
+//   may, by the header's ids.
+//     LOOKUP                node u64, name    OK stat: the name's; ".." the
+//                                         parent, the root's the root
+//     GETATTR               node u64          OK stat
+//     READLINK              node u64          OK target
+//     READDIR               node u64, after u64   as an open file's
+//     OPEN      arg flags   node u64          OK stat: the reply's endpoint
+//                                         is the open file, but a FIFO's
+//     CREATE    arg flags   node u64, mode u32, name   OK stat: the reply's
+//                                         endpoint is the open file of the
+//                                         name, made when it is not there;
+//                                         with O_EXCL EEXIST when it is
+//     MKDIR     arg mode    node u64, name
+//     MKNOD     arg mode    node u64, name    a FIFO or a regular file
+//     SYMLINK               node u64, target 0 name
+//     LINK                  node u64, to u64, name   a name in to for node
+//     UNLINK    arg flags   node u64, name    AT_REMOVEDIR
+//     RENAME                node u64, to u64, old 0 new
+//     CHMOD     arg mode    node u64
+//     CHOWN                 node u64, uid u32, gid u32
+//     UTIMES    arg when    node u64, atime u64, mtime u64
+//     TRUNCATE              node u64, size u64
+//     STATFS                                  OK statfs
+//     PATH                  node u64          OK the node's path from the
+//                                         file system's root
+//
+//   An open file's, on its endpoint:
 //     READ      arg len     off u64 woff u32
 //                                         OK count u32; fds[0] a memfd of
 //                                         the reader's memory, the bytes
@@ -71,33 +121,26 @@
 //                                         OK; with get, the lock in the
 //                                         way, F_UNLCK for none: type u32
 //                                         start u64 len u64
-//     PATH                  root dev u64, root ino u64
-//                                         OK the path from the root of the
-//                                         process: a directory's, a file's
-//                                         by the name it was opened by
-//   on the endpoint of rootfs's /dev/init:
-//     REGISTER  arg mode    name          OK stat: a device, S_IFCHR or
-//                                         S_IFBLK, or a file system to
-//                                         mount, S_IFSOCK, of that name in
-//                                         /dev.
-//                                         fds[0] is the end of a pair whose
-//                                         other end the service keeps:
-//                                         rootfs hands every OPEN of the
-//                                         name on to it, and the name goes
-//                                         when the end closes
-//   on the root's endpoint of a server rootfs mounts, with no reply:
-//     MOUNTED                             fds[0] an endpoint of the mount
-//                                         point: a walk out of the server's
-//                                         root by ".." goes on there as
-//                                         "../" and the names left, and a
-//                                         PATH there is where it is mounted
+//
+//   A service's, on the channel rootfs has of it, and on /dev/init:
+//     OPEN      arg flags   mode u32      a device's: the reply's endpoint
+//                                         is the open file; a file
+//                                         system's: it is the channel of a
+//                                         mount, OK the root's stat
+//     REGISTER  arg mode    name          on /dev/init. OK stat: a device,
+//                                         S_IFCHR or S_IFBLK, or a file
+//                                         system to mount, S_IFSOCK, of that
+//                                         name in /dev. fds[0] is the end of
+//                                         a pair whose other end the service
+//                                         keeps, the channel: rootfs hands
+//                                         every open of the name on to it,
+//                                         and the name goes when it closes
+//
 //   replies: OK, ERR with arg the errno
 //   stat { ino u64, size u64, mtime u64 nanoseconds, mode u32, nlink u32,
 //          uid u32, gid u32, atime u64, dev u64, ctime u64 }
 //   statfs { blocks u64, bfree u64, files u64, ffree u64, dev u64,
 //            bsize u32, namemax u32, flags u32 }  flags: 1 read-only
-
-#pragma once
 
 #include <stddef.h>
 #include <stdint.h>
@@ -106,40 +149,63 @@
 struct iovec;
 
 enum : uint32_t {
-    opOpen = 1,
-    opStat,
-    opReadlink,
-    opMkdir,
-    opUnlink,
-    opRename,
-    opSymlink,
-    opResolve,
-    opRead,
+    // The VFS's.
+    vfsOpen = 1,
+    vfsStat,
+    vfsReadlink,
+    vfsMkdir,
+    vfsMknod,
+    vfsSymlink,
+    vfsUnlink,
+    vfsRename,
+    vfsLink,
+    vfsChmod,
+    vfsChown,
+    vfsUtimes,
+    vfsTruncate,
+    vfsStatfs,
+    vfsRealpath,
+    vfsMount,
+    vfsUnmount,
+    vfsPath,
+    // A file system's.
+    fsLookup = 32,
+    fsGetattr,
+    fsReadlink,
+    fsReaddir,
+    fsOpen,
+    fsCreate,
+    fsMkdir,
+    fsMknod,
+    fsSymlink,
+    fsLink,
+    fsUnlink,
+    fsRename,
+    fsChmod,
+    fsChown,
+    fsUtimes,
+    fsTruncate,
+    fsStatfs,
+    fsPath,
+    // An open file's.
+    opRead = 64,
     opWrite,
     opReaddir,
     opFstat,
-    opChmod,
-    opChown,
-    opUtimes,
-    opTruncate,
     opFchmod,
     opFchown,
     opFutimes,
     opFtruncate,
     opFsync,
-    opMknod,
-    opLink,
-    opStatfs,
     opFstatfs,
     opFlock,
     opLock,
-    opPath,
-    opOk,
-    opErr,
+    // A service's.
+    opOpen = 96,
     opRegister,
-    opMount,
-    opUnmount,
-    opMounted,
+    // Replies.
+    opOk = 128,
+    opErr,
 };
 
 // The most descriptors a packet brings: a READ's or WRITE's memfd and its
@@ -151,17 +217,6 @@ constexpr uint32_t whenAtimeNow = 2;
 constexpr uint32_t whenMtimeNow = 4;
 constexpr uint32_t whenAtimeKept = 8;
 constexpr uint32_t whenMtimeKept = 16;
-// RESOLVE's reply: where the walk ended, the kind of the last name and
-// what goes with it.
-constexpr uint32_t stepDone = 0; // at the directory of the last name
-constexpr uint32_t stepRoot = 1; // the walk goes on from the root of the process
-constexpr uint32_t lastName = 0;
-constexpr uint32_t lastDot = 1;
-constexpr uint32_t lastDotdot = 2;
-constexpr uint32_t lastNone = 3;      // the path is "/" alone
-constexpr uint32_t stepSlash = 1;     // a slash ends the path
-constexpr uint32_t stepKept = 2;      // the reply's endpoint is the directory's from now on
-constexpr uint32_t resolveHanded = 1; // RESOLVE's arg: a server handed the walk on
 
 struct Header {
     uint32_t op;

@@ -1,78 +1,83 @@
-// rootfs: the system, the first process. It serves three file systems
-// from one loop: the image linked into it, read-only, at the root; /dev,
-// the terminal the kernel gave vm as descriptor 0, /dev/init, and the
-// devices the services of the system register there; and /tmp, a tree in
-// its memory of at most tmpCapacity bytes, a quarter of what a memory of
-// wasm32 holds. It makes itself the root of everything else with what
-// POSIX has: one seqpacket pair, chroot to one end in each process it
-// starts. It starts the services of the system (bin/tools), /bin/devices
-// first, and the shell on the terminal once they are up, each with a clean
-// environment, reaps what ends under it, and ends with the shell's
-// status, as a system does.
+// rootfs: the system, the first process, and its VFS. Every call with a
+// path of the system's processes comes here whole from the kernel, and
+// rootfs walks it: names, "." and "..", symbolic links, mounts, the root
+// of the process that asks, and the last step of the call as Linux makes
+// it (lib/protocol/protocol.h is the protocol, the VFS's calls on handles,
+// a file system's calls by node, an open file's). It serves three trees of
+// its own from one loop: the image linked into it, read-only, at the
+// root; /dev, the terminal the kernel gave vm as descriptor 0, /dev/init,
+// and the devices the services of the system register there; and /tmp, a
+// tree in its memory of at most tmpCapacity bytes, a quarter of what a
+// memory of wasm32 holds. It mounts the file systems of other processes
+// too, and asks them by node. A walk in its own trees never waits; one in
+// another's waits for that file system's answers, as a coroutine, while
+// the loop goes on with other calls.
 //
-// A file server is a tree of nodes behind endpoints, which speaks the
-// protocol of bin/tools/protocol.h. The kernel speaks it for the POSIX calls of a
-// process (bin/vm/kernel_remote.go) and walks a path as Linux does:
-// RESOLVE walks it here to the directory of its last name, and the call
-// is one on that name, which the kernel follows itself when it is a
-// symbolic link. /dev and /tmp are servers of this process mounted on
-// names of the image (mountOn): a walk goes into the root of a server
-// mounted on a name, and by ".." out of that root to where it is mounted.
-// Another process's server is mounted on a directory by MOUNT: a walk into
-// the directory goes on to that server with the names left, a call on the
-// directory's name goes on to it as one on its root, and the server walks
-// out of its root by ".." through the endpoint of the mount point it gets
-// (MOUNTED).
+// It makes itself the root of everything else with what POSIX has: one
+// seqpacket pair, chroot to one end in each process it starts. It starts
+// the services of the system (bin/tools), /bin/devices first, and the
+// shell on the terminal once they are up, each with a clean environment,
+// reaps what ends under it, and ends with the shell's status, as a system
+// does.
 //
-// A server makes what it creates theirs who ask, and lets them do what
-// its modes let them: root everything but executing what nobody may, the
-// owner what the owner's bits say, the group of gid the group's, everyone
-// else the others'. A path is searched through directories who asks may
-// search, a name is made or removed in a directory they may write, and in
-// a sticky one removed only by the owner of the name's node or of the
-// directory.
+// The VFS's tree is mounts: a directory of a file system, the mount's
+// root, mounted on a node of another mount; the VFS's root is on none. A
+// walk goes into the root of what is mounted on a name, by ".." out of a
+// mount's root to where it is mounted, and never above the root of the
+// process that asks. A place is a mount and a node of its file system. A
+// handle is an endpoint of rootfs's at a place, which a path walks from:
+// the root, the working directory and the directory descriptors of a
+// process are handles, and so is what O_PATH opens. An open file is its
+// file system's endpoint: the kernel reads and writes it there, the VFS
+// is out of the way, and rootfs serves only the open files of its own
+// trees.
+//
+// A tree of rootfs's makes what it creates theirs who ask, and lets them
+// do what its modes let them: root everything but executing what nobody
+// may, the owner what the owner's bits say, the group of gid the group's,
+// everyone else the others'. A name is looked up in a directory who asks
+// may search, made or removed in one they may write, and in a sticky one
+// removed only by the owner of the name's node or of the directory. A file
+// system of another's checks what it does itself.
 //
 // A device of /dev is a service's, which registered it at /dev/init: an
-// OPEN of it goes on to the service as it came, its endpoint with it, and
-// the service serves that open file from then on. rootfs keeps the name,
-// its mode and its owner, and lets the name go when the service's end of
-// the pair closes. The services rootfs starts get an end they close once
-// their devices are there, and hand on to the services they start: when
-// the last of them has closed it, the system is up.
-//
-// The root of the process that asks is a device and an inode: ".." stays
-// there, and an absolute link goes on from there. A node of this
-// process's servers is found by them; a root that is no node of theirs
-// sends the walk back to the kernel to go on from there.
+// open of it goes on to the service, its endpoint with it, and the service
+// serves that open file from then on. rootfs keeps the name, its mode and
+// its owner, and lets the name go when the service's end of the pair
+// closes. A file system's service registers a socket: MOUNT connects to
+// it, and its end is the file system's channel. The services rootfs starts
+// get an end they close once their devices are there, and hand on to the
+// services they start: when the last of them has closed it, the system is
+// up.
 //
 // A directory's entries have positions, each after those before it: a
 // READDIR gives the entries after one, so a reading that removes what it
 // read misses nothing. A node has the names that are links to it, a
-// directory one. dev is the server's: the number of a pair it makes as it
+// directory one. dev is a tree's: the number of a pair it makes as it
 // makes its root, which no other pair in the kernel has.
 //
-// A WRITE with append writes at the end the file has when the server takes
+// A WRITE with append writes at the end the file has when the tree takes
 // it, which no other write comes between. A lock is an endpoint's, an open
 // file's, as Linux's open file description locks are: flock's on the
 // whole file, fcntl's on a range of its bytes, refused with EAGAIN when
 // another endpoint holds one in the way, and gone when the endpoint
 // closes. A FIFO is a node and nothing more: the kernel makes the pipe its
-// openers share. A writable server holds what its capacity lets it, in
-// bytes and in nodes, a node a block's worth: past that, ENOSPC.
+// openers share. A writable tree holds what its capacity lets it, in bytes
+// and in nodes, a node a block's worth: past that, ENOSPC.
 //
-// Memory. A request is received into one buffer, packet, and answered
-// before the next: its names are read where they are in it. A file's bytes
-// go straight to the memory of the process that reads them, or come
-// straight from the memory of the one that writes them, through the memfd
-// of it a READ or WRITE brings: one copy. A reply is sent from where its
-// parts are: a header on the stack, a stat built there, a name of the
-// request, a link's target. What a reply assembles, the entries of a
-// directory, a path, goes into one buffer of its own, out. Nothing is
-// allocated to answer a request; what a request makes is: a node, its
-// name, a file's bytes, an endpoint. The image's files and names are its
-// own bytes, never copied. The names of every directory are one
-// open-addressing table, by directory and name; a directory keeps its
-// entries in the order of their positions.
+// Memory. A request is received into one buffer, packet, and a call that
+// never waits is answered before the next: its names are read where they
+// are in it. A call that waits keeps its path, its own copy, in its
+// coroutine, whose frames the loop keeps for the next. A file's bytes go
+// straight to the memory of the process that reads them, or come straight
+// from the memory of the one that writes them, through the memfd of it a
+// READ or WRITE brings: one copy. What a reply assembles, the entries of a
+// directory, a path, goes into one buffer of its own, out. The image's
+// files and names are its own bytes, never copied. The names of every
+// directory are one open-addressing table, by directory and name; a
+// directory keeps its entries in the order of their positions.
+
+#include <lib/protocol/protocol.h>
 
 #include <dirent.h>
 #include <errno.h>
@@ -87,6 +92,7 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/file.h>
+#include <sys/mount.h>
 #include <sys/param.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -95,8 +101,6 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-
-#include <lib/protocol/protocol.h>
 
 using u8 = uint8_t;
 using u32 = uint32_t;
@@ -108,6 +112,66 @@ using usize = size_t;
 // call uses this overload. Its declaration supplies the freestanding ABI.
 void* operator new(size_t, void*) noexcept;
 
+// The names of C++20's coroutines that clang asks the library for, with
+// no library: a coroutine's handle over its frame, and the awaitable that
+// never waits. They are core-language support, which has no other
+// spelling.
+namespace std {
+    template <typename R, typename... Args>
+    struct coroutine_traits {
+        using promise_type = typename R::promise_type;
+    };
+
+    template <typename P = void>
+    struct coroutine_handle;
+
+    template <>
+    struct coroutine_handle<void> {
+        static coroutine_handle from_address(void* frame) noexcept;
+        void resume() const;
+
+        void* frame = nullptr;
+    };
+
+    template <typename P>
+    struct coroutine_handle: public coroutine_handle<void> {
+        static coroutine_handle from_address(void* frame) noexcept;
+    };
+
+    struct suspend_never {
+        bool await_ready() const noexcept;
+        void await_suspend(coroutine_handle<void> h) const noexcept;
+        void await_resume() const noexcept;
+    };
+}
+
+std::coroutine_handle<void> std::coroutine_handle<void>::from_address(void* frame) noexcept {
+    coroutine_handle h;
+    h.frame = frame;
+    return h;
+}
+
+void std::coroutine_handle<void>::resume() const {
+    __builtin_coro_resume(frame);
+}
+
+template <typename P>
+std::coroutine_handle<P> std::coroutine_handle<P>::from_address(void* frame) noexcept {
+    coroutine_handle h;
+    h.frame = frame;
+    return h;
+}
+
+bool std::suspend_never::await_ready() const noexcept {
+    return true;
+}
+
+void std::suspend_never::await_suspend(coroutine_handle<void>) const noexcept {
+}
+
+void std::suspend_never::await_resume() const noexcept {
+}
+
 // The image: a ustar archive (bin/rootfs/image.py) linked in as data
 // (bin/rootfs/make.py).
 extern "C" const u8 rootfs_image[];
@@ -118,8 +182,8 @@ namespace {
 
     // The servers'.
     constexpr u64 blockSize = 4096;
-    constexpr u32 maxLinks = 40;  // the symbolic links one path goes through, Linux's
-    constexpr u64 past = UINT64_MAX;  // the stop of a lock to the end of a file and past it
+    constexpr u32 maxLinks = 40;     // the symbolic links one path goes through, Linux's
+    constexpr u64 past = UINT64_MAX; // the stop of a lock to the end of a file and past it
     constexpr u64 tmpCapacity = u64(1) << 30;
 
     [[noreturn, gnu::format(printf, 1, 2)]] static void fatal(const char* format, ...) {
@@ -350,7 +414,7 @@ namespace {
     struct OpenTable {
         struct Slot {
             u32 hash;
-            T* item;  // none: the slot is empty
+            T* item; // none: the slot is empty
         };
 
         template <typename Same>
@@ -503,25 +567,29 @@ namespace {
     struct Node;
     struct Server;
     struct Endpoint;
+    struct Fs;
+    struct Mount;
+    struct Ask;
 
     enum class Kind : u8 {
         Dir,
         File,
         Link,
-        Fifo,  // a named pipe: the kernel makes the pipe
-        Object,  // an object of the kernel the server hands out: a tty
-        Registry,  // /dev/init, where services register devices
-        CharDevice,  // a service's device: the service serves its opens
+        Fifo,       // a named pipe: the kernel makes the pipe
+        Object,     // an object of the kernel the server hands out: a tty
+        Registry,   // /dev/init, where services register devices
+        CharDevice, // a service's device: the service serves its opens
         BlockDevice,
-        Service,  // a service's file system, a server to mount
+        Service, // a service's file system, a server to mount
     };
 
     // What an endpoint is to the loop.
     enum class Role : u8 {
-        File,  // an open file or directory: requests come on it
-        Channel,  // a device's end of its service's pair: only its close comes
-        Mount,  // the end of the root of a server mounted on its node: only its close comes
-        Up,  // an endpoint of a mount point its server has, for its walks out
+        File,    // an open file of a tree of ours: requests come on it
+        Handle,  // a handle of the VFS's, at a place: calls with a path walk from there
+        Channel, // a service's end of its pair, a name of /dev: only its close comes
+        Fs,      // ours of the channel of another's file system: only its close comes
+        Pending, // ours of a call to a file system: its answer goes on with the call
     };
 
     // A lock of fcntl: an endpoint's, on the bytes [start, stop), to read
@@ -537,7 +605,7 @@ namespace {
     struct Entry {
         Node* dir;
         Node* node;
-        u64 pos;  // where the name is among the directory's entries
+        u64 pos; // where the name is among the directory's entries
         Name name;
         u32 hash;
     };
@@ -546,7 +614,7 @@ namespace {
     // one leaves a hole, until holes are half of them.
     struct Slot {
         u64 pos;
-        Entry* entry;  // none: removed
+        Entry* entry; // none: removed
     };
 
     // A file's bytes or a link's target: the image's, or the node's own.
@@ -570,31 +638,29 @@ namespace {
 
     struct Node {
         u64 ino = 0;
-        u32 perm = 0;  // the permission bits
+        u32 perm = 0; // the permission bits
         u32 uid = 0;
         u32 gid = 0;
-        u64 atime = 0;  // nanoseconds
+        u64 atime = 0; // nanoseconds
         u64 mtime = 0;
         u64 ctime = 0;
-        u32 links = 0;  // the names that are links to it
-        u32 opens = 0;  // the endpoints open on it
-        u32 holds = 0;  // what else points at it: directories under it, files opened in it by name
-        bool released = false;  // gone from its server, its memory kept for what holds it
+        u32 links = 0;         // the names that are links to it
+        u32 opens = 0;         // the endpoints open on it
+        u32 holds = 0;         // what else points at it: directories under it, files opened in it by name
+        bool released = false; // gone from its server, its memory kept for what holds it
         Kind kind = Kind::Dir;
-        int exclusive = -1;  // the endpoint that holds flock's exclusive lock, or -1
-        int fd = -1;  // an object's; a device's end of its service's pair
-        SmallVec<int> shared;  // the endpoints that hold flock's shared lock
+        int exclusive = -1;   // the endpoint that holds flock's exclusive lock, or -1
+        int fd = -1;          // an object's; a service's end of its pair
+        u32 covered = 0;      // the mounts on it
+        SmallVec<int> shared; // the endpoints that hold flock's shared lock
         SmallVec<Range> ranges;
-        Content content;  // a file's, a link's
+        Content content; // a file's, a link's
         // a directory's
-        Node* parent = nullptr;  // where ".." goes; none for the root
-        Entry* entry = nullptr;  // its name in parent
-        Server* served = nullptr;  // a server of this process mounted here
-        Endpoint* mount = nullptr;  // the root of another's mounted here
-        Endpoint* up = nullptr;  // the endpoint of it that other server has
-        u64 entries = 0;  // the last position given out
-        u32 names = 0;  // the names in it
-        u32 subdirs = 0;  // the directories among them
+        Node* parent = nullptr; // where ".." goes; none for the root
+        Entry* entry = nullptr; // its name in parent
+        u64 entries = 0;        // the last position given out
+        u32 names = 0;          // the names in it
+        u32 subdirs = 0;        // the directories among them
         u32 holes = 0;
         SmallVec<Slot> order;
     };
@@ -602,37 +668,74 @@ namespace {
     struct Server {
         Node* root = nullptr;
         bool writable = false;
-        u64 capacity = 0;  // the bytes a writable server's files may hold
-        u64 inodes = 0;  // the inode numbers given out
-        u64 nodes = 0;  // the nodes there are
-        u64 used = 0;  // the bytes the files hold
-        u64 dev = 0;  // the device of the server's files
-        OpenTable<Node> byIno;  // the nodes there are, by inode
-        Node* above = nullptr;  // where the server is mounted, of aboveServer
-        Server* aboveServer = nullptr;
+        u64 capacity = 0;      // the bytes a writable server's files may hold
+        u64 inodes = 0;        // the inode numbers given out
+        u64 nodes = 0;         // the nodes there are
+        u64 used = 0;          // the bytes the files hold
+        u64 dev = 0;           // the device of the server's files
+        OpenTable<Node> byIno; // the nodes there are, by inode
 
         Node* find(u64 ino) const;
     };
 
-    // A node of one of this process's servers.
+    // A file system of the VFS's: a tree of ours, or another process's
+    // behind the channel rootfs connected to it by.
+    struct Fs {
+        Server* tree = nullptr;      // ours
+        Endpoint* channel = nullptr; // ours of another's channel, none once it is gone
+        u64 dev = 0;
+        u32 mounts = 0; // it goes with its last
+    };
+
+    // A mount: a directory of a file system, its root, as a directory of
+    // the VFS's tree on a node of another mount, the point; the VFS's own
+    // root is on none. The stats of the root and the point are as they
+    // were when it was mounted, of a file system of another's.
+    struct Mount {
+        Fs* fs = nullptr;
+        u64 root = 0;
+        Node* rootNode = nullptr; // the root, of a tree of ours
+        Stat rootStat{};
+        Mount* parent = nullptr;
+        u64 point = 0;
+        Node* pointNode = nullptr; // the point, of a tree of ours
+        Stat pointStat{};
+        u64 pointDir = 0; // the directory of the point, and its name there
+        u8 pointLength = 0;
+        char pointName[NAME_MAX];
+        u32 refs = 1;          // the mount itself, and the handles and calls at it
+        bool gone = false;     // unmounted: no walk goes into it
+        Mount* next = nullptr; // among the mounts
+    };
+
+    // A place of the VFS's tree: a mount and a node of its file system;
+    // the node itself in a tree of ours, else its stat as the file system
+    // gave it, fresh when it came in an answer to the call.
     struct Place {
-        Server* s = nullptr;
-        Node* node = nullptr;
+        Mount* m = nullptr;
+        u64 node = 0;
+        Node* n = nullptr;
+        Stat st{};
+        bool fresh = false;
     };
 
     struct Endpoint {
         int fd;
-        bool reads;  // what its open lets it do
+        bool reads; // what its open lets it do
         bool writes;
         Role role;
-        bool dead;  // closed, while a batch of events may still name it
-        Server* server;
-        Node* node;  // what the endpoint is open on
-        Node* dir;  // the directory a file was opened in, by name
-        Endpoint* next;  // among the free ones
+        bool dead;      // closed, while a batch of events may still name it
+        Server* server; // a File's tree
+        Node* node;     // what a File is open on, a Channel's device
+        Node* dir;      // a Channel's directory, and the name there
         u8 nameLength;
         char name[NAME_MAX];
-        Endpoint* after;  // among the live ones
+        Place at;        // a Handle's
+        u64 id;          // a Handle's
+        Fs* fs;          // a Fs's
+        Ask* ask;        // a Pending's
+        Endpoint* next;  // among the free ones
+        Endpoint* after; // among the live ones
         Endpoint* before;
     };
 
@@ -787,18 +890,18 @@ namespace {
         n->kind = kind;
         n->atime = n->mtime = n->ctime = t;
         switch (kind) {
-        case Kind::Dir:
-            n->perm = 0755;
-            break;
-        case Kind::File:
-        case Kind::Fifo:
-            n->perm = 0644;
-            break;
-        case Kind::Link:
-            n->perm = 0777;
-            break;
-        default:
-            n->perm = 0666;
+            case Kind::Dir:
+                n->perm = 0755;
+                break;
+            case Kind::File:
+            case Kind::Fifo:
+                n->perm = 0644;
+                break;
+            case Kind::Link:
+                n->perm = 0777;
+                break;
+            default:
+                n->perm = 0666;
         }
         s.byIno.insert(hashIno(n->ino), n);
         if (parent) {
@@ -854,16 +957,6 @@ namespace {
         return true;
     }
 
-    // Whether a node is a service's device.
-    static bool isDevice(const Node* n) {
-        return n->kind == Kind::CharDevice || n->kind == Kind::BlockDevice || n->kind == Kind::Service;
-    }
-
-    // Whether a server is mounted on the node.
-    static bool mountPoint(const Node* n) {
-        return n->kind == Kind::Dir && (n->served || n->mount);
-    }
-
     // Whether who asks may read (4), write (2), and search or execute (1)
     // the node.
     static bool may(const Node* n, const Header& h, u32 want) {
@@ -886,91 +979,40 @@ namespace {
 
     static u32 modeOf(const Node* n) {
         switch (n->kind) {
-        case Kind::Dir:
-            return S_IFDIR | n->perm;
-        case Kind::File:
-            return S_IFREG | n->perm;
-        case Kind::Link:
-            return S_IFLNK | n->perm;
-        case Kind::Fifo:
-            return S_IFIFO | n->perm;
-        case Kind::BlockDevice:
-            return S_IFBLK | n->perm;
-        case Kind::Service:
-            return S_IFSOCK | n->perm;
-        default:
-            return S_IFCHR | n->perm;
+            case Kind::Dir:
+                return S_IFDIR | n->perm;
+            case Kind::File:
+                return S_IFREG | n->perm;
+            case Kind::Link:
+                return S_IFLNK | n->perm;
+            case Kind::Fifo:
+                return S_IFIFO | n->perm;
+            case Kind::BlockDevice:
+                return S_IFBLK | n->perm;
+            case Kind::Service:
+                return S_IFSOCK | n->perm;
+            default:
+                return S_IFCHR | n->perm;
         }
     }
 
     static u8 dtype(const Node* n) {
         switch (n->kind) {
-        case Kind::Dir:
-            return DT_DIR;
-        case Kind::File:
-            return DT_REG;
-        case Kind::Link:
-            return DT_LNK;
-        case Kind::Fifo:
-            return DT_FIFO;
-        case Kind::BlockDevice:
-            return DT_BLK;
-        case Kind::Service:
-            return DT_SOCK;
-        default:
-            return DT_CHR;
+            case Kind::Dir:
+                return DT_DIR;
+            case Kind::File:
+                return DT_REG;
+            case Kind::Link:
+                return DT_LNK;
+            case Kind::Fifo:
+                return DT_FIFO;
+            case Kind::BlockDevice:
+                return DT_BLK;
+            case Kind::Service:
+                return DT_SOCK;
+            default:
+                return DT_CHR;
         }
-    }
-
-    // ---- places ------------------------------------------------------------------
-
-    // A walk goes from place to place: into the root of a server mounted on
-    // a name, and by ".." from such a root to the parent of where it is
-    // mounted, never above the root of the process that asks.
-
-    Server image;  // the root
-    Server devices;  // /dev
-    Server temporary;  // /tmp
-    Server* const everyServer[] = {&image, &devices, &temporary};
-
-    // Whether a place is the node of a device and inode.
-    static bool at(Place p, u64 dev, u64 ino) {
-        return p.s->dev == dev && p.node->ino == ino;
-    }
-
-    // The place of a device and inode, or none of this process.
-    static Place found(u64 dev, u64 ino) {
-        for (Server* s : everyServer) {
-            if (s->dev == dev) {
-                return {s, s->find(ino)};
-            }
-        }
-        return {};
-    }
-
-    // Where a name goes: the root of a server mounted on it, or its node.
-    static Place down(Place p) {
-        while (p.node->kind == Kind::Dir && p.node->served) {
-            Server* s = p.node->served;
-            p = {s, s->root};
-        }
-        return p;
-    }
-
-    // Where ".." goes from a directory: nowhere from the root of the
-    // process, the node of dev and ino; from the root of a mounted server,
-    // to the parent of where it is mounted; else to the parent.
-    static Place up(Place p, u64 dev, u64 ino) {
-        while (!at(p, dev, ino)) {
-            if (p.node != p.s->root) {
-                return {p.s, p.node->parent};
-            }
-            if (!p.s->above) {
-                return p;
-            }
-            p = {p.s->aboveServer, p.s->above};
-        }
-        return p;
     }
 
     // Why a name is none a call takes, 0 for one it does: "." and ".." and
@@ -987,28 +1029,6 @@ namespace {
 
     // What a name of a directory is to a call that looks at it: the
     // directory itself for "", else the name's node, or the root of a
-    // server mounted on it; 0, or why there is none.
-    static int named(Server* s, Node* c, Name name, const Header& h, Place& out) {
-        if (name.empty()) {
-            out = {s, c};
-            return 0;
-        }
-        if (const int e = badName(name)) {
-            return e;
-        }
-        if (c->kind != Kind::Dir) {
-            return ENOTDIR;
-        }
-        if (!may(c, h, 1)) {
-            return EACCES;
-        }
-        const Entry* entry = lookup(c, name);
-        if (!entry) {
-            return ENOENT;
-        }
-        out = down({s, entry->node});
-        return 0;
-    }
 
     // Whether a directory was removed: it takes no name.
     static bool gone(const Server* s, const Node* c) {
@@ -1108,7 +1128,7 @@ namespace {
         for (usize i = 0; i < count; ++i) {
             iov[1 + i] = parts[i];
         }
-        sendPacket(fd, iov, 1 + count, fds, fdCount);  // a gone reader is its own loss
+        sendPacket(fd, iov, 1 + count, fds, fdCount); // a gone reader is its own loss
     }
 
     static iovec part(const void* data, usize size) {
@@ -1190,15 +1210,15 @@ namespace {
 
     // ---- the loop's endpoints -------------------------------------------------------
     //
-    // One epoll of the process watches every endpoint of its servers: an
-    // endpoint joins it when it is listened on, leaves it before it closes.
-    // An event carries its endpoint.
+    // One epoll of the process watches every endpoint: an endpoint joins it
+    // when it is listened on, leaves it before it closes. An event carries
+    // its endpoint.
 
     int watcher = -1;
     Endpoint* freeEndpoints;
-    Endpoint* buried;  // closed in this batch of events: free after it
-    Endpoint* live;  // every endpoint not closed
-    usize endpointCount;  // the endpoints of all servers
+    Endpoint* buried; // closed in this batch of events: free after it
+    Endpoint* live;   // every endpoint not closed
+    usize endpointCount;
 
     // The signal mask of the wait, once reapOnChild blocked SIGCHLD
     // everywhere else: a child's end that comes while the loop works waits
@@ -1209,41 +1229,76 @@ namespace {
     bool waitMasked;
     volatile sig_atomic_t childEnded = 1;
 
-    // An endpoint the server answers on, open on node, or on the root, to
-    // read, to write or both; a file opened by a name of dir says it. A
-    // channel is a device's end of its service's pair, by its name in dir.
-    // Its descriptor came with MSG_CMSG_CLOEXEC, or from a pair of ours,
-    // made with SOCK_CLOEXEC.
-    static Endpoint* listen(Server& s, int fd, Node* node, bool reads, bool writes, Node* dir, Name name, Role role = Role::File) {
-        Node* n = node ? node : s.root;
+    // The handles, by id; the ids given out.
+    OpenTable<Endpoint> handles;
+    u64 handleIds;
+
+    static u32 hashId(u64 id) {
+        return finish(id);
+    }
+
+    static Endpoint* handleOf(u64 id) {
+        return handles.find(hashId(id), [id](const Endpoint* ep) {
+            return ep->id == id;
+        });
+    }
+
+    // An endpoint of a role on a descriptor of ours, which came with
+    // MSG_CMSG_CLOEXEC or from a pair of ours made with SOCK_CLOEXEC; the
+    // caller fills in what its role has.
+    static Endpoint* listen(int fd, Role role) {
         Endpoint* ep = freeEndpoints;
         if (ep) {
             freeEndpoints = ep->next;
         } else {
             ep = static_cast<Endpoint*>(allocate(sizeof(Endpoint)));
         }
-        if (name.length > NAME_MAX) {
-            fatal("rootfs: a name of %zu bytes for an endpoint", name.length);
-        }
-        *ep = {fd, reads, writes, role, false, &s, n, dir, nullptr, u8(name.length), {}, live, nullptr};
-        if (!name.empty()) {
-            memcpy(ep->name, name.at, name.length);
-        }
+        new (ep) Endpoint();
+        ep->fd = fd;
+        ep->role = role;
+        ep->after = live;
         if (live) {
             live->before = ep;
         }
         live = ep;
-        ++n->opens;
-        if (dir) {
-            ++dir->holds;
-        }
         ++endpointCount;
         epoll_event ev{};
         ev.events = EPOLLIN;
         ev.data.ptr = ep;
         if (epoll_ctl(watcher, EPOLL_CTL_ADD, fd, &ev) != 0) {
-            fatal("fs: epoll_ctl: errno %d", errno);
+            fatal("rootfs: epoll_ctl: errno %d", errno);
         }
+        return ep;
+    }
+
+    // An open file of a tree of ours, to read, to write or both.
+    static Endpoint* listenFile(Server& s, int fd, Node* n, bool reads, bool writes) {
+        Endpoint* ep = listen(fd, Role::File);
+        ep->server = &s;
+        ep->node = n;
+        ep->reads = reads;
+        ep->writes = writes;
+        ++n->opens;
+        return ep;
+    }
+
+    static void hold(const Place& p);
+    static void letGo(Mount* m);
+
+    // A handle at a place, its id the next; O_PATH's reads nothing and
+    // changes nothing.
+    static Endpoint* listenHandle(int fd, const Place& p, bool opath) {
+        Endpoint* ep = listen(fd, Role::Handle);
+        ep->at = p;
+        ep->node = p.n;
+        ep->reads = !opath;
+        ep->writes = !opath;
+        ep->id = ++handleIds;
+        ++p.m->refs;
+        if (p.n) {
+            ++p.n->opens;
+        }
+        handles.insert(hashId(ep->id), ep);
         return ep;
     }
 
@@ -1262,13 +1317,14 @@ namespace {
     static void bury() {
         while (Endpoint* ep = buried) {
             buried = ep->next;
+            ep->~Endpoint();
             ep->next = freeEndpoints;
             freeEndpoints = ep;
         }
     }
 
-    // A device's end of its service's pair closed: the service is gone,
-    // and the device's name with it. What is open of the device stays the
+    // A service's end of its pair closed: the service is gone, and the
+    // name of /dev with it. What is open of the device stays the
     // service's, gone too.
     static void unregister(Endpoint* ep) {
         Node* n = ep->node;
@@ -1278,30 +1334,8 @@ namespace {
         n->fd = -1;
     }
 
-    // An endpoint that closes: its locks go with it, and its node when no
-    // name is left of it.
-    static void forget(Endpoint* ep) {
-        Node* n = ep->node;
-        const int fd = ep->fd;
-        ep->dead = true;
-        switch (ep->role) {
-        case Role::Channel:
-            unregister(ep);
-            break;
-        case Role::Mount:
-            // The server mounted here is gone, or let go of: its endpoint
-            // of the mount point goes too.
-            n->mount = nullptr;
-            if (n->up) {
-                closed(n->up);
-            }
-            break;
-        case Role::Up:
-            n->up = nullptr;
-            break;
-        case Role::File:
-            break;
-        }
+    // The locks an endpoint holds on a node go with it.
+    static void unlock(Node* n, int fd) {
         n->shared.keepIf([fd](int holder) {
             return holder != fd;
         });
@@ -1311,10 +1345,40 @@ namespace {
         n->ranges.keepIf([fd](const Range& l) {
             return l.owner != fd;
         });
-        --n->opens;
-        release(*ep->server, n);
-        if (ep->dir) {
-            drop(ep->dir);
+    }
+
+    static void gone(Fs* fs);
+
+    // An endpoint that closes: its locks go with it, and its node when no
+    // name is left of it.
+    static void forget(Endpoint* ep) {
+        ep->dead = true;
+        switch (ep->role) {
+            case Role::File:
+                unlock(ep->node, ep->fd);
+                --ep->node->opens;
+                release(*ep->server, ep->node);
+                break;
+            case Role::Handle:
+                handles.erase(hashId(ep->id), ep);
+                if (Node* n = ep->at.n) {
+                    unlock(n, ep->fd);
+                    --n->opens;
+                    release(*ep->at.m->fs->tree, n);
+                }
+                letGo(ep->at.m);
+                break;
+            case Role::Channel:
+                unregister(ep);
+                --ep->node->opens;
+                release(*ep->server, ep->node);
+                drop(ep->dir);
+                break;
+            case Role::Fs:
+                gone(ep->fs);
+                break;
+            case Role::Pending:
+                break;
         }
         if (ep->before) {
             ep->before->after = ep->after;
@@ -1329,423 +1393,423 @@ namespace {
         --endpointCount;
     }
 
-    // ---- calls on paths and names ------------------------------------------------
-    //
-    // Each takes the reply's endpoint and says whether it is kept: an
-    // endpoint of the server now, which the loop does not close.
+    // ---- places and mounts ---------------------------------------------------------
 
-    // The names of a walk: the path's, and before them the targets of the
-    // links it went through, the last on top.
-    struct Walk {
-        Name stack[maxLinks + 1];
-        u32 depth = 0;
+    Mount* mounts; // every mount, the VFS's root among them
+    Mount* rootMount;
 
-        void push(Name n) {
-            if (depth == maxLinks + 1) {
-                fatal("rootfs: a walk of too many links");
-            }
-            stack[depth++] = n;
+    // Whether a place is in a tree of ours: its node is there.
+    static bool ours(const Place& p) {
+        return p.m->fs->tree != nullptr;
+    }
+
+    static u32 modeAt(const Place& p) {
+        return ours(p) ? modeOf(p.n) : p.st.mode;
+    }
+
+    static bool isDir(const Place& p) {
+        return S_ISDIR(modeAt(p));
+    }
+
+    static bool isLink(const Place& p) {
+        return S_ISLNK(modeAt(p));
+    }
+
+    static bool same(const Place& a, const Place& b) {
+        return a.m == b.m && a.node == b.node;
+    }
+
+    // Whether who asks may read (4), write (2), and search or execute (1)
+    // what a stat says, as may says of a node.
+    static bool mayStat(const Stat& st, const Header& h, u32 want) {
+        if (h.uid == 0) {
+            return (want & 1) == 0 || S_ISDIR(st.mode) || (st.mode & 0111) != 0;
         }
+        const u32 bits = h.uid == st.uid ? st.mode >> 6 : h.gid == st.gid ? st.mode >> 3 : st.mode;
+        return (bits & want) == want;
+    }
 
-        static Name trimmed(Name n) {
-            while (n.length && *n.at == '/') {
-                ++n.at;
-                --n.length;
-            }
-            return n;
-        }
+    static bool mayAt(const Place& p, const Header& h, u32 want) {
+        return ours(p) ? may(p.n, h, want) : mayStat(p.st, h, want);
+    }
 
-        // The next name, or false at the end.
-        bool take(Name& name) {
-            for (; depth > 0; --depth) {
-                Name& top = stack[depth - 1];
-                top = trimmed(top);
-                if (!top.empty()) {
-                    const auto* slash = static_cast<const char*>(memchr(top.at, '/', top.length));
-                    name = {top.at, slash ? usize(slash - top.at) : top.length};
-                    top.at += name.length;
-                    top.length -= name.length;
-                    return true;
-                }
-            }
-            return false;
-        }
+    static Place ourPlace(Mount* m, Node* n) {
+        Place p;
+        p.m = m;
+        p.node = n->ino;
+        p.n = n;
+        return p;
+    }
 
-        // Whether a name is left.
-        bool more() const {
-            for (u32 i = 0; i < depth; ++i) {
-                if (!trimmed(stack[i]).empty()) {
-                    return true;
-                }
-            }
-            return false;
+    // A place of another's file system, as a stat of an answer says.
+    static Place theirPlace(Mount* m, const Stat& st) {
+        Place p;
+        p.m = m;
+        p.node = st.ino;
+        p.st = st;
+        p.fresh = true;
+        return p;
+    }
+
+    static Place rootOf(Mount* m) {
+        if (m->rootNode) {
+            return ourPlace(m, m->rootNode);
         }
+        Place p;
+        p.m = m;
+        p.node = m->root;
+        p.st = m->rootStat;
+        return p;
+    }
+
+    // Where a mount is mounted: its point, in its parent.
+    static Place pointOf(Mount* m) {
+        if (m->pointNode) {
+            return ourPlace(m->parent, m->pointNode);
+        }
+        Place p;
+        p.m = m->parent;
+        p.node = m->point;
+        p.st = m->pointStat;
+        return p;
+    }
+
+    static bool isMountRoot(const Place& p) {
+        return p.node == p.m->root;
+    }
+
+    // What is mounted on a place, the last mounted on it, or none.
+    static Mount* mountedOn(const Place& p) {
+        if (p.n && p.n->covered == 0) {
+            return nullptr;
+        }
+        Mount* found = nullptr;
+        for (Mount* m = mounts; m; m = m->next) {
+            if (!m->gone && m->parent == p.m && m->point == p.node) {
+                found = m;
+            }
+        }
+        return found;
+    }
+
+    // What a name's place is to a walk: the root of what is mounted on it.
+    static Place down(Place p) {
+        while (Mount* m = mountedOn(p)) {
+            p = rootOf(m);
+        }
+        return p;
+    }
+
+    // Whether a name of a directory of a mount's is a mount point: a call
+    // on the name, which would take it away, is EBUSY.
+    static bool pointNamed(const Place& dir, Name name) {
+        for (Mount* m = mounts; m; m = m->next) {
+            if (!m->gone && m->parent == dir.m && m->pointDir == dir.node && m->pointLength == name.length && memcmp(m->pointName, name.at, name.length) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // A call or a handle at a place keeps its mount, and its node in a
+    // tree of ours.
+    static void hold(const Place& p) {
+        ++p.m->refs;
+        if (p.n) {
+            ++p.n->holds;
+        }
+    }
+
+    static void unhold(const Place& p) {
+        if (p.n) {
+            drop(p.n);
+        }
+        letGo(p.m);
+    }
+
+    // A place of a call's taken for another one: the new one held first.
+    static void moveTo(Place& to, const Place& from) {
+        hold(from);
+        if (to.m) {
+            unhold(to);
+        }
+        to = from;
+    }
+
+    // A mount nothing is at any more, unmounted: its memory goes, and its
+    // file system's with its last mount, which closes the channel of
+    // another's.
+    static void letGo(Mount* m) {
+        if (--m->refs != 0) {
+            return;
+        }
+        Fs* fs = m->fs;
+        free(m);
+        if (--fs->mounts == 0 && !fs->tree) {
+            if (fs->channel) {
+                closed(fs->channel);
+            }
+            free(fs);
+        }
+    }
+
+    // Takes a mount, and what is mounted under it, out of the VFS's tree:
+    // no walk goes into it; what is at it stays until it lets go.
+    static void unmount(Mount* m) {
+        for (Mount* sub = mounts; sub;) {
+            if (!sub->gone && sub->parent == m) {
+                unmount(sub);
+                sub = mounts;
+                continue;
+            }
+            sub = sub->next;
+        }
+        m->gone = true;
+        for (Mount** at = &mounts; *at; at = &(*at)->next) {
+            if (*at == m) {
+                *at = m->next;
+                break;
+            }
+        }
+        if (Node* point = m->pointNode) {
+            --point->covered;
+            drop(point);
+        }
+        letGo(m->parent);
+        letGo(m);
+    }
+
+    // Mounts a directory of a file system, its root, on a place of the
+    // VFS's: the name of the place in its directory is dirName.
+    static void mountAt(Fs* fs, const Place& root, const Place& point, u64 pointDir, Name pointName) {
+        auto* m = new (allocate(sizeof(Mount))) Mount();
+        m->fs = fs;
+        ++fs->mounts;
+        m->root = root.node;
+        m->rootNode = root.n;
+        m->rootStat = root.st;
+        m->parent = point.m;
+        ++point.m->refs;
+        m->point = point.node;
+        m->pointNode = point.n;
+        m->pointStat = point.st;
+        m->pointDir = pointDir;
+        m->pointLength = u8(pointName.length);
+        memcpy(m->pointName, pointName.at, pointName.length);
+        if (Node* n = point.n) {
+            ++n->covered;
+            ++n->holds;
+        }
+        m->next = mounts;
+        mounts = m;
+    }
+
+    // Another's file system is gone, its channel closed: it is unmounted
+    // wherever it is mounted.
+    static void gone(Fs* fs) {
+        fs->channel = nullptr;
+        for (Mount* m = mounts; m;) {
+            Mount* next = m->next;
+            if (m->fs == fs && !m->gone) {
+                unmount(m);
+                next = mounts;
+            }
+            m = next;
+        }
+    }
+
+    // ---- coroutines ------------------------------------------------------------------
+
+    // A call of the VFS's that may wait for another's file system: a
+    // coroutine, which runs at once, until it waits, and goes on when the
+    // answer comes. Its frame is kept for the next call of the same size.
+    struct Task {
+        struct promise_type {
+            Task get_return_object() noexcept;
+            std::suspend_never initial_suspend() noexcept;
+            std::suspend_never final_suspend() noexcept;
+            void return_void() noexcept;
+            void unhandled_exception() noexcept;
+            static void* operator new(usize size);
+            static void operator delete(void* frame, usize size);
+        };
     };
 
-    // Hands a request on to the server mounted on n, the request's
-    // descriptors with it, its body the one given: that server answers it.
-    static bool toMounted(const Node* n, const Header& h, const void* body, usize size, int fd) {
-        Header head = h;
-        const iovec parts[] = {part(&head, sizeof head), part(body, size)};
-        if (sendPacket(n->mount->fd, parts, 2, packetFds, packetFdCount, MSG_DONTWAIT) < 0) {
-            return error(fd, errno == EAGAIN ? EAGAIN : EIO);
-        }
-        return false;
+    // The frames of the coroutines that ended, by size: few sizes, one of
+    // each kind of call.
+    struct Frames {
+        usize size;
+        void* free;
+    };
+
+    Frames frames[32];
+
+    // What a file system answered: OK with its body, which is the packet's
+    // until the call waits again, or the errno. A connection's channel
+    // comes with it, its endpoint ours from then on.
+    struct Answer {
+        int error = 0;
+        Body body{nullptr, nullptr};
+        Endpoint* channel = nullptr;
+    };
+
+    // A question of a call's to a file system, which the call waits for:
+    // the request goes on to with an endpoint of ours, whose answer goes on
+    // with the call (Role::Pending). connects: the endpoint is the channel
+    // of a mount, kept when the answer is OK.
+    struct Ask {
+        bool await_ready() const noexcept;
+        bool await_suspend(std::coroutine_handle<void> h);
+        Answer await_resume() const noexcept;
+
+        int to = -1;
+        Header head{};
+        u8 body[8 + NAME_MAX];
+        usize size = 0;
+        bool connects = false;
+        Answer answer;
+        std::coroutine_handle<void> call;
+    };
+
+    // A question by node of a place's file system, another's, with a name.
+    static Ask asking(const Place& p, const Header& h, u32 op, Name name) {
+        Ask a;
+        a.to = p.m->fs->channel ? p.m->fs->channel->fd : -1;
+        a.head = {op, 0, h.uid, h.gid};
+        memcpy(a.body, &p.node, 8);
+        memcpy(a.body + 8, name.at, MIN(name.length, usize(NAME_MAX)));
+        a.size = 8 + MIN(name.length, usize(NAME_MAX));
+        return a;
     }
 
-    // A walk into a directory another server is mounted on goes on to that
-    // server, from its root, with the names left.
-    static bool intoMounted(const Node* n, const Header& h, u64 dev, u64 ino, u32 links, Walk& walk, bool slash, int fd) {
-        Assembly a;
-        a.add(dev);
-        a.add(ino);
-        a.add(links);
-        Name left;
-        for (bool first = true; walk.take(left); first = false) {
-            if (!a.fits(left.length + 2)) {
-                return error(fd, ENAMETOOLONG);
+    // A call that never waits takes no frame of its own but its first.
+    static void* frameOf(usize size) {
+        for (Frames& f : frames) {
+            if (f.size == size && f.free) {
+                void* p = f.free;
+                memcpy(&f.free, p, sizeof(void*));
+                return p;
             }
-            if (!first) {
-                a.add("/", 1);
-            }
-            a.add(left.at, left.length);
         }
-        if (slash) {
-            a.add("/", 1);
-        }
-        Header handed = h;
-        handed.arg |= resolveHanded;
-        return toMounted(n, handed, out, a.size, fd);
+        return allocate(MAX(size, sizeof(void*)));
     }
 
-    // A walk to a root of no server of ours: the kernel goes on from the
-    // root of the process with the names left.
-    static bool fromRoot(int fd, u32 links, Walk& walk, bool slash) {
-        Assembly a;
-        a.add(stepRoot);
-        a.add(links);
-        a.add(lastNone);
-        a.add(u32(0));
-        Name left;
-        for (bool first = true; walk.take(left); first = false) {
-            if (!a.fits(left.length + 2)) {
-                return error(fd, ENAMETOOLONG);
+    static void keepFrame(void* p, usize size) {
+        for (Frames& f : frames) {
+            if (f.size == size || f.size == 0) {
+                f.size = size;
+                memcpy(p, &f.free, sizeof(void*));
+                f.free = p;
+                return;
             }
-            if (!first) {
-                a.add("/", 1);
-            }
-            a.add(left.at, left.length);
         }
-        if (slash) {
-            a.add("/", 1);
-        }
-        ok(fd, out, a.size);
-        return false;
+        free(p);
     }
 
-    // A path walked from the endpoint's directory to the directory of its
-    // last name, as Linux walks one: every name but the last must be a
-    // directory who asks may search, or a symbolic link, whose target takes
-    // its place, from the root of the process when it is absolute, no more
-    // than maxLinks of them in all; ".", "..", and the root of a mounted
-    // server for its mount point, as places have it. The reply is the
-    // step, the links gone through, the kind of the last name, whether a
-    // slash ends the path and whether the reply's endpoint is now the
-    // directory's, its own; then the last name. A walk to a root of no
-    // server of this process is the step stepRoot, with the path left.
-    static bool resolve(Endpoint* ep, const Header& h, Body body, int fd) {
-        const u64 dev = body.take<u64>();
-        const u64 ino = body.take<u64>();
-        u32 links = body.take<u32>();
-        const Name path = body.rest();
-        const bool slash = !path.empty() && path.at[path.length - 1] == '/';
-        Walk walk;
-        walk.push(path);
-        Place here{ep->server, ep->node};
-        Name name;
-        bool have = walk.take(name);
-        for (; have && walk.more(); have = walk.take(name)) {
-            if (here.node->kind != Kind::Dir) {
-                return error(fd, ENOTDIR);
-            }
-            if (!may(here.node, h, 1)) {
-                return error(fd, EACCES);
-            }
-            if (name.is(".")) {
-                continue;
-            }
-            if (name.is("..")) {
-                here = up(here, dev, ino);
-                continue;
-            }
-            if (name.length > NAME_MAX) {
-                return error(fd, ENAMETOOLONG);
-            }
-            const Entry* entry = lookup(here.node, name);
-            if (!entry) {
-                return error(fd, ENOENT);
-            }
-            const Place next = down({here.s, entry->node});
-            if (next.node->mount) {
-                return intoMounted(next.node, h, dev, ino, links, walk, slash, fd);
-            }
-            if (next.node->kind != Kind::Link) {
-                here = next;
-                continue;
-            }
-            if (links >= maxLinks) {
-                return error(fd, ELOOP);
-            }
-            const Name target = next.node->content.name();
-            if (target.empty()) {
-                return error(fd, ENOENT);
-            }
-            ++links;
-            walk.push(target);
-            if (target.at[0] == '/') {
-                here = found(dev, ino);
-                if (!here.node) {
-                    return fromRoot(fd, links, walk, slash);
-                }
-            }
-        }
-        if (here.node->kind != Kind::Dir) {
-            return error(fd, ENOTDIR);
-        }
-        u32 last = lastNone;
-        Name final;
-        if (have) {
-            if (!may(here.node, h, 1)) {
-                return error(fd, EACCES);
-            }
-            if (name.is(".")) {
-                last = lastDot;
-            } else if (name.is("..")) {
-                last = lastDotdot;
-                here = up(here, dev, ino);
-            } else if (name.length > NAME_MAX) {
-                return error(fd, ENAMETOOLONG);
-            } else {
-                last = lastName;
-                final = name;
-            }
-        }
-        // The kernel asked another server for a walk handed on here: what
-        // it gets back is the directory it goes on from, always.
-        const bool kept = here.s != ep->server || here.node != ep->node || (h.arg & resolveHanded) != 0;
-        const u32 head[4] = {stepDone, links, last, (slash && last == lastName ? stepSlash : 0) | (kept ? stepKept : 0)};
-        const iovec parts[] = {part(head, sizeof head), part(final.at, final.length)};
-        if (kept) {
-            listen(*here.s, fd, here.node, false, false, nullptr, {});
-        }
-        reply(fd, opOk, 0, parts, final.empty() ? 1 : 2);
-        return kept;
-    }
-
-    // The path of an endpoint's directory from the root of the process,
-    // the node of a device and inode, up through the places ".." goes to;
-    // of a file, its directory's and the name it was opened by. A removed
-    // directory has none, nor one the root is not above: ENOENT. The path
-    // is made from its end, at the end of out.
-    static bool pathOf(Endpoint* ep, Body body, int fd) {
-        const u64 dev = body.take<u64>();
-        const u64 ino = body.take<u64>();
-        Place here{ep->server, ep->node};
-        usize start = sizeof out;
-        auto prepend = [&start](Name name) {
-            if (start < name.length + 1) {
-                return false;
-            }
-            start -= name.length;
-            memcpy(out + start, name.at, name.length);
-            out[--start] = '/';
-            return true;
-        };
-        if (here.node->kind != Kind::Dir) {
-            if (!ep->dir) {
-                return error(fd, ENOENT);
-            }
-            if (!prepend({ep->name, ep->nameLength})) {
-                return error(fd, ENAMETOOLONG);
-            }
-            here = {ep->server, ep->dir};
-        }
-        while (!at(here, dev, ino)) {
-            if (here.node == here.s->root) {
-                if (!here.s->above) {
-                    return error(fd, ENOENT);
-                }
-                here = {here.s->aboveServer, here.s->above};
-                continue;
-            }
-            const Entry* entry = here.node->entry;
-            if (gone(here.s, here.node) || !entry || entry->name.empty()) {
-                return error(fd, ENOENT);
-            }
-            if (!prepend(entry->name)) {
-                return error(fd, ENAMETOOLONG);
-            }
-            here = {here.s, here.node->parent};
-        }
-        if (start == sizeof out) {
-            ok(fd, "/", 1);
-        } else {
-            ok(fd, out + start, sizeof out - start);
-        }
-        return false;
-    }
-
-    // An OPEN of a device goes on to the service that registered it as it
-    // came, its endpoint with it: the service answers on the endpoint and
-    // serves the open file from then on. ENXIO when the service is gone,
-    // EAGAIN when it does not keep up with its opens.
-    static bool forward(const Node* n, Body body, int fd) {
-        const iovec all = part(packet, usize(body.end - packet));
-        if (n->fd < 0 || sendPacket(n->fd, &all, 1, &fd, 1, MSG_DONTWAIT) < 0) {
-            return error(fd, n->fd >= 0 && errno == EAGAIN ? EAGAIN : ENXIO);
-        }
-        return false;
-    }
-
-    // A name of the directory opened, or the directory itself for "": read
-    // or written as its access mode says and who asks may, made when
-    // O_CREAT asks and it is not there, emptied when O_TRUNC asks; with
-    // O_PATH only held, for a working directory or a root. A symbolic link
-    // is ELOOP, for the kernel to follow, or held itself with O_PATH and
-    // O_NOFOLLOW.
-    static bool openName(Endpoint* ep, const Header& h, Body body, int fd) {
-        Server* s = ep->server;
-        Node* c = ep->node;
-        const u32 mode = body.take<u32>();
-        const Name name = body.string();
-        const u32 flags = h.arg;
-        const bool opath = (flags & O_PATH) != 0;
-        const u32 access = flags & O_ACCMODE;
-        const bool reads = !opath && access != O_WRONLY;
-        const bool writes = !opath && access != O_RDONLY;
-        const bool truncates = !opath && (flags & O_TRUNC) != 0;
-        const bool creating = (flags & O_CREAT) != 0 && !name.empty();
-        const bool there = !name.empty() && c->kind == Kind::Dir && lookup(c, name);
-        Place target;
-        bool made = false;
-        if (creating && there && (flags & O_EXCL) != 0) {
-            return error(fd, EEXIST);
-        }
-        if (creating && !there) {
-            if (const int e = creates(s, c, name, h)) {
-                return error(fd, e);
-            }
-            Node* n = makeNode(*s, c, name, Kind::File);
-            n->perm = mode & 07777;
-            n->uid = h.uid;
-            n->gid = h.gid;
-            target = {s, n};
-            made = true;
-        } else if (const int e = named(s, c, name, h, target)) {
-            return error(fd, e);
-        }
-        Node* n = target.node;
-        if (n->kind == Kind::Link && !(opath && (flags & O_NOFOLLOW) != 0)) {
-            return error(fd, ELOOP);
-        }
-        if ((flags & O_DIRECTORY) != 0 && n->kind != Kind::Dir && n->kind != Kind::Service) {
-            return error(fd, ENOTDIR);
-        }
-        if (!made && !opath) {
-            if (!may(n, h, (reads ? 4 : 0) | (writes || truncates ? 2 : 0))) {
-                return error(fd, EACCES);
-            }
-            if (n->kind == Kind::Dir && (writes || (flags & O_CREAT) != 0)) {
-                return error(fd, EISDIR);
-            }
-            if ((writes || truncates) && n->kind == Kind::File && !target.s->writable) {
-                return error(fd, EROFS);
-            }
-        }
-        if (n->kind == Kind::Object && !opath) {
-            reply(fd, opOk, 0, nullptr, 0, &n->fd, 1);  // the object itself becomes the caller's
+    static bool statIn(Body b, Stat& st) {
+        if (b.size() < sizeof st) {
             return false;
         }
-        if (isDevice(n) && !opath) {
-            return forward(n, body, fd);
-        }
-        if (truncates && n->kind == Kind::File && n->content.size() > 0) {
-            resize(*target.s, n, 0);
-            touch(n);
-        }
-        const Stat st = statOf(*target.s, n);
-        listen(*target.s, fd, n, reads, writes, name.empty() ? nullptr : c, name);
-        ok(fd, &st, sizeof st);
+        memcpy(&st, b.at, sizeof st);
         return true;
     }
+}
 
-    static bool statName(Endpoint* ep, const Header& h, Body body, int fd) {
-        Place t;
-        if (const int e = named(ep->server, ep->node, body.string(), h, t)) {
-            return error(fd, e);
-        }
-        const Stat st = statOf(*t.s, t.node);
-        ok(fd, &st, sizeof st);
+Task Task::promise_type::get_return_object() noexcept {
+    return {};
+}
+
+std::suspend_never Task::promise_type::initial_suspend() noexcept {
+    return {};
+}
+
+std::suspend_never Task::promise_type::final_suspend() noexcept {
+    return {};
+}
+
+void Task::promise_type::return_void() noexcept {
+}
+
+void Task::promise_type::unhandled_exception() noexcept {
+    fatal("rootfs: an exception in a call");
+}
+
+void* Task::promise_type::operator new(usize size) {
+    return frameOf(size);
+}
+
+void Task::promise_type::operator delete(void* frame, usize size) {
+    keepFrame(frame, size);
+}
+
+bool Ask::await_ready() const noexcept {
+    return false;
+}
+
+// The question goes out, or it cannot: then the call goes on at once with
+// the error, EIO for a file system that is gone.
+bool Ask::await_suspend(std::coroutine_handle<void> h) {
+    int ends[2];
+    if (to < 0) {
+        answer.error = EIO;
         return false;
     }
-
-    // The file system of a name: the server's, or the one mounted there.
-    static bool statfsName(Endpoint* ep, const Header& h, Body body, int fd) {
-        Place t;
-        if (const int e = named(ep->server, ep->node, body.string(), h, t)) {
-            return error(fd, e);
-        }
-        const Statfs st = statfsOf(*t.s);
-        ok(fd, &st, sizeof st);
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ends) != 0) {
+        answer.error = errno;
         return false;
     }
-
-    static bool readlinkName(Endpoint* ep, const Header& h, Body body, int fd) {
-        Place t;
-        if (const int e = named(ep->server, ep->node, body.string(), h, t)) {
-            return error(fd, e);
-        }
-        if (t.node->kind != Kind::Link) {
-            return error(fd, EINVAL);
-        }
-        ok(fd, t.node->content.data(), t.node->content.size());
+    const iovec parts[] = {part(&head, sizeof head), part(body, size)};
+    if (sendPacket(to, parts, 2, &ends[1], 1, MSG_DONTWAIT) < 0) {
+        answer.error = errno == EAGAIN ? EAGAIN : EIO;
+        close(ends[0]);
+        close(ends[1]);
         return false;
     }
+    close(ends[1]);
+    call = h;
+    listen(ends[0], Role::Pending)->ask = this;
+    return true;
+}
+
+Answer Ask::await_resume() const noexcept {
+    return answer;
+}
+
+namespace {
+    // ---- the calls of a tree of ours, by node --------------------------------------
 
     // mkdir, mknod and symlink: a new name in the directory, who asks may
     // write, theirs, with the mode asked for. mknod makes FIFOs and regular
     // files; a device is EPERM.
-    static bool create(Endpoint* ep, const Header& h, Body body, int fd) {
-        const Name target = h.op == opSymlink ? body.string() : Name{};
-        const Name name = body.string();
-        if (const int e = creates(ep->server, ep->node, name, h)) {
-            return error(fd, e);
+    static int makeOurs(Server& s, Node* dir, u32 op, u32 mode, Name name, Name target, const Header& h) {
+        if (const int e = creates(&s, dir, name, h)) {
+            return e;
         }
         Kind kind = Kind::Dir;
-        if (h.op == opSymlink) {
+        if (op == vfsSymlink) {
             kind = Kind::Link;
-        } else if (h.op == opMknod) {
-            switch (h.arg & S_IFMT) {
-            case S_IFIFO:
-                kind = Kind::Fifo;
-                break;
-            case 0:
-            case S_IFREG:
-                kind = Kind::File;
-                break;
-            default:
-                return error(fd, EPERM);
+        } else if (op == vfsMknod) {
+            switch (mode & S_IFMT) {
+                case S_IFIFO:
+                    kind = Kind::Fifo;
+                    break;
+                case 0:
+                case S_IFREG:
+                    kind = Kind::File;
+                    break;
+                default:
+                    return EPERM;
             }
         }
-        Node* n = makeNode(*ep->server, ep->node, name, kind);
+        Node* n = makeNode(s, dir, name, kind);
         n->uid = h.uid;
         n->gid = h.gid;
         if (kind == Kind::Link) {
             n->content.own.append(target.at, target.length);
         } else {
-            n->perm = h.arg & 07777;
+            n->perm = mode & 07777;
         }
-        return answer(fd, 0);
+        return 0;
     }
 
     static int unlinkError(Server* s, Node* c, Name name, bool removeDir, const Header& h) {
@@ -1778,7 +1842,7 @@ namespace {
         if (keeps(c, n, h)) {
             return EPERM;
         }
-        if (removeDir && mountPoint(n)) {
+        if (removeDir && n->covered > 0) {
             return EBUSY;
         }
         if (removeDir && n->names > 0) {
@@ -1786,10 +1850,6 @@ namespace {
         }
         release(*s, unplace(c, entry, now()));
         return 0;
-    }
-
-    static bool unlinkName(Endpoint* ep, const Header& h, Body body, int fd) {
-        return answer(fd, unlinkError(ep->server, ep->node, body.string(), (h.arg & AT_REMOVEDIR) != 0, h));
     }
 
     // Whether dir is n or under it.
@@ -1802,39 +1862,20 @@ namespace {
         return false;
     }
 
-    // The directory of a device and inode another name of a call is in:
-    // EXDEV on another server, ENOENT when it is no directory there now.
-    static int directory(const Server* s, u64 dev, u64 ino, Node*& dir) {
-        if (dev != s->dev) {
-            return EXDEV;
-        }
-        dir = s->find(ino);
-        if (!dir || dir->kind != Kind::Dir || gone(s, dir)) {
-            return ENOENT;
-        }
-        return 0;
-    }
-
-    // A name of the directory moved to a name of another of the server's,
-    // of a device and inode: on another server EXDEV. What the new name
-    // names goes, when it is of the old one's kind, and empty if a
-    // directory; a directory does not go under itself, nor a mount point
-    // anywhere, and one that goes to another directory must be one who
-    // asks may write, for its "..".
-    static int renameError(Server* s, Node* src, const Header& h, Body body) {
-        const u64 dev = body.take<u64>();
-        const u64 ino = body.take<u64>();
-        const Name oldName = body.string();
-        const Name newName = body.string();
-        Node* dst = nullptr;
+    // A name of a directory moved to a name of another of the tree's:
+    // what the new name names goes, when it is of the old one's kind, and
+    // empty if a directory; a directory does not go under itself, nor a
+    // mount point anywhere, and one that goes to another directory must be
+    // one who asks may write, for its "..".
+    static int renameOurs(Server* s, Node* src, Name oldName, Node* dst, Name newName, const Header& h) {
         if (const int e = badName(oldName)) {
             return e;
         }
         if (const int e = badName(newName)) {
             return e;
         }
-        if (const int e = directory(s, dev, ino, dst)) {
-            return e;
+        if (dst->kind != Kind::Dir || gone(s, dst)) {
+            return ENOENT;
         }
         if (src->kind != Kind::Dir) {
             return ENOTDIR;
@@ -1867,7 +1908,7 @@ namespace {
         if (n->kind == Kind::Dir && src != dst && !may(n, h, 2)) {
             return EACCES;
         }
-        if (mountPoint(n) || (old && mountPoint(old))) {
+        if (n->covered > 0 || (old && old->covered > 0)) {
             return EBUSY;
         }
         if (old && n->kind == Kind::Dir && old->kind != Kind::Dir) {
@@ -1888,49 +1929,23 @@ namespace {
         return 0;
     }
 
-    static bool renameName(Endpoint* ep, const Header& h, Body body, int fd) {
-        return answer(fd, renameError(ep->server, ep->node, h, body));
-    }
-
-    // A new name, in a directory of the server's of a device and inode, for
-    // the node a name of this one is, which is no directory.
-    static int linkError(Server* s, Node* src, const Header& h, Body body) {
-        const u64 dev = body.take<u64>();
-        const u64 ino = body.take<u64>();
-        const Name oldName = body.string();
-        const Name newName = body.string();
-        if (const int e = badName(oldName)) {
-            return e;
-        }
-        if (src->kind != Kind::Dir) {
-            return ENOTDIR;
-        }
-        if (!may(src, h, 1)) {
-            return EACCES;
-        }
-        const Entry* entry = lookup(src, oldName);
-        if (!entry) {
+    // A new name, in a directory of the tree's, for a node of it, which is
+    // no directory.
+    static int linkOurs(Server* s, Node* node, Node* dst, Name newName, const Header& h) {
+        if (dst->kind != Kind::Dir || gone(s, dst)) {
             return ENOENT;
-        }
-        Node* dst = nullptr;
-        if (const int e = directory(s, dev, ino, dst)) {
-            return e;
         }
         if (const int e = creates(s, dst, newName, h)) {
             return e;
         }
-        if (entry->node->kind == Kind::Dir) {
+        if (node->kind == Kind::Dir) {
             return EPERM;
         }
-        place(dst, newName, entry->node, now());
+        place(dst, newName, node, now());
         return 0;
     }
 
-    static bool linkName(Endpoint* ep, const Header& h, Body body, int fd) {
-        return answer(fd, linkError(ep->server, ep->node, h, body));
-    }
-
-    // The attributes of a node: set when the server is writable, by its owner
+    // The attributes of a node: set when the tree is writable, by its owner
     // or root, a group given away by the owner only to its own, the times set
     // to now by who may write it too, a size by who may write it.
 
@@ -1939,102 +1954,69 @@ namespace {
     static int change(Server& s, Node* node, u32 op, const Header& h, Body args) {
         const u64 t = now();
         switch (op) {
-        case opChmod:
-        case opFchmod:
-            if (!owns(node, h)) {
-                return EPERM;
+            case fsChmod:
+            case opFchmod:
+                if (!owns(node, h)) {
+                    return EPERM;
+                }
+                node->perm = h.arg & 07777;
+                break;
+            case fsChown:
+            case opFchown: {
+                const u32 uid = args.take<u32>();
+                const u32 gid = args.take<u32>();
+                const u32 toUid = uid == noId ? node->uid : uid;
+                const u32 toGid = gid == noId ? node->gid : gid;
+                if (h.uid != 0 && (h.uid != node->uid || toUid != node->uid || (toGid != node->gid && toGid != h.gid))) {
+                    return EPERM;
+                }
+                if ((toUid != node->uid || toGid != node->gid) && node->kind != Kind::Dir) {
+                    node->perm &= ~u32(S_ISUID | S_ISGID);
+                }
+                node->uid = toUid;
+                node->gid = toGid;
+                break;
             }
-            node->perm = h.arg & 07777;
-            break;
-        case opChown:
-        case opFchown: {
-            const u32 uid = args.take<u32>();
-            const u32 gid = args.take<u32>();
-            const u32 toUid = uid == noId ? node->uid : uid;
-            const u32 toGid = gid == noId ? node->gid : gid;
-            if (h.uid != 0 && (h.uid != node->uid || toUid != node->uid || (toGid != node->gid && toGid != h.gid))) {
-                return EPERM;
+            case fsUtimes:
+            case opFutimes: {
+                const u64 atime = args.take<u64>();
+                const u64 mtime = args.take<u64>();
+                const bool toNow = (h.arg & whenAtimeNow) != 0 && (h.arg & whenMtimeNow) != 0;
+                if (toNow && !owns(node, h) && !may(node, h, 2)) {
+                    return EACCES;
+                }
+                if (!toNow && !owns(node, h)) {
+                    return EPERM;
+                }
+                if ((h.arg & whenAtimeKept) == 0) {
+                    node->atime = (h.arg & whenAtimeNow) != 0 ? t : atime;
+                }
+                if ((h.arg & whenMtimeKept) == 0) {
+                    node->mtime = (h.arg & whenMtimeNow) != 0 ? t : mtime;
+                }
+                break;
             }
-            if ((toUid != node->uid || toGid != node->gid) && node->kind != Kind::Dir) {
-                node->perm &= ~u32(S_ISUID | S_ISGID);
+            case fsTruncate:
+            case opFtruncate: {
+                const u64 size = args.take<u64>();
+                if (node->kind == Kind::Dir) {
+                    return op == fsTruncate ? EISDIR : EINVAL;
+                }
+                if (node->kind != Kind::File || size > u64(INT32_MAX) * 1024) {
+                    return EINVAL;
+                }
+                if (op == fsTruncate && !may(node, h, 2)) {
+                    return EACCES;
+                }
+                if (!resize(s, node, size)) {
+                    return ENOSPC;
+                }
+                node->mtime = t;
+                break;
             }
-            node->uid = toUid;
-            node->gid = toGid;
-            break;
-        }
-        case opUtimes:
-        case opFutimes: {
-            const u64 atime = args.take<u64>();
-            const u64 mtime = args.take<u64>();
-            const bool toNow = (h.arg & whenAtimeNow) != 0 && (h.arg & whenMtimeNow) != 0;
-            if (toNow && !owns(node, h) && !may(node, h, 2)) {
-                return EACCES;
-            }
-            if (!toNow && !owns(node, h)) {
-                return EPERM;
-            }
-            if ((h.arg & whenAtimeKept) == 0) {
-                node->atime = (h.arg & whenAtimeNow) != 0 ? t : atime;
-            }
-            if ((h.arg & whenMtimeKept) == 0) {
-                node->mtime = (h.arg & whenMtimeNow) != 0 ? t : mtime;
-            }
-            break;
-        }
-        case opTruncate:
-        case opFtruncate: {
-            const u64 size = args.take<u64>();
-            if (node->kind == Kind::Dir) {
-                return op == opTruncate ? EISDIR : EINVAL;
-            }
-            if (node->kind != Kind::File || size > u64(INT32_MAX) * 1024) {
-                return EINVAL;
-            }
-            if (op == opTruncate && !may(node, h, 2)) {
-                return EACCES;
-            }
-            if (!resize(s, node, size)) {
-                return ENOSPC;
-            }
-            node->mtime = t;
-            break;
-        }
         }
         node->ctime = t;
         return 0;
-    }
-
-    // chmod, chown, utimes and truncate of a name, or of the directory.
-    static bool attr(Endpoint* ep, const Header& h, Body body, int fd) {
-        const usize ahead = h.op == opChown || h.op == opTruncate ? 8 : h.op == opUtimes ? 16 : 0;
-        if (body.size() < ahead) {
-            fatal("a short packet");
-        }
-        const Body args{body.at, body.at + ahead};
-        Body rest{body.at + ahead, body.end};
-        Place t;
-        if (const int e = named(ep->server, ep->node, rest.string(), h, t)) {
-            return error(fd, e);
-        }
-        if (!t.s->writable) {
-            return error(fd, EROFS);
-        }
-        return answer(fd, change(*t.s, t.node, h.op, h, args));
-    }
-
-    // fchmod, fchown, futimes, ftruncate and fsync of an open node; only an
-    // endpoint open to write truncates.
-    static bool fattr(Endpoint* ep, const Header& h, Body body, int fd) {
-        if (h.op == opFsync) {
-            return answer(fd, 0);
-        }
-        if (!ep->server->writable) {
-            return error(fd, EROFS);
-        }
-        if (h.op == opFtruncate && !ep->writes) {
-            return error(fd, EINVAL);
-        }
-        return answer(fd, change(*ep->server, ep->node, h.op, h, body));
     }
 
     // ---- calls on a node ---------------------------------------------------------
@@ -2055,16 +2037,16 @@ namespace {
             return error(fd, EINVAL);
         }
         switch (node->kind) {
-        case Kind::File: {
-            const usize size = node->content.size();
-            const usize count = off >= size ? 0 : MIN(n, size - usize(off));
-            if (!put(w, node->content.data() + (count ? usize(off) : 0), count, woff)) {
-                return error(fd, EIO);
+            case Kind::File: {
+                const usize size = node->content.size();
+                const usize count = off >= size ? 0 : MIN(n, size - usize(off));
+                if (!put(w, node->content.data() + (count ? usize(off) : 0), count, woff)) {
+                    return error(fd, EIO);
+                }
+                return readCount(fd, count);
             }
-            return readCount(fd, count);
-        }
-        default:
-            return error(fd, node->kind == Kind::Dir ? EISDIR : EINVAL);
+            default:
+                return error(fd, node->kind == Kind::Dir ? EISDIR : EINVAL);
         }
     }
 
@@ -2088,33 +2070,33 @@ namespace {
         }
         u64 count = length;
         switch (node->kind) {
-        case Kind::File: {
-            if (!s.writable) {
-                return error(fd, EROFS);
+            case Kind::File: {
+                if (!s.writable) {
+                    return error(fd, EROFS);
+                }
+                const u64 size = node->content.size();
+                if ((h.arg & 1) != 0) {
+                    off = size;
+                }
+                const u64 grows = off + count > size ? off + count - size : 0;
+                if (s.capacity > 0 && grows > s.capacity - s.used) {
+                    const u64 over = grows - (s.capacity - s.used);
+                    count = count > over ? count - over : 0;
+                }
+                if (count == 0 && length > 0) {
+                    return error(fd, ENOSPC);
+                }
+                if (size < off + count && !resize(s, node, off + count)) {
+                    return error(fd, ENOSPC);
+                }
+                if (count && pread(w, static_cast<u8*>(node->content.own.data()) + usize(off), usize(count), woff) != ssize_t(count)) {
+                    return error(fd, EIO);
+                }
+                touch(node);
+                break;
             }
-            const u64 size = node->content.size();
-            if ((h.arg & 1) != 0) {
-                off = size;
-            }
-            const u64 grows = off + count > size ? off + count - size : 0;
-            if (s.capacity > 0 && grows > s.capacity - s.used) {
-                const u64 over = grows - (s.capacity - s.used);
-                count = count > over ? count - over : 0;
-            }
-            if (count == 0 && length > 0) {
-                return error(fd, ENOSPC);
-            }
-            if (size < off + count && !resize(s, node, off + count)) {
-                return error(fd, ENOSPC);
-            }
-            if (count && pread(w, static_cast<u8*>(node->content.own.data()) + usize(off), usize(count), woff) != ssize_t(count)) {
-                return error(fd, EIO);
-            }
-            touch(node);
-            break;
-        }
-        default:
-            return error(fd, node->kind == Kind::Dir ? EISDIR : EINVAL);
+            default:
+                return error(fd, node->kind == Kind::Dir ? EISDIR : EINVAL);
         }
         Assembly a;
         a.add(u32(count));
@@ -2177,29 +2159,29 @@ namespace {
             });
         };
         switch (h.arg & ~u32(LOCK_NB)) {
-        case LOCK_UN:
-            unshare();
-            if (n->exclusive == me) {
+            case LOCK_UN:
+                unshare();
+                if (n->exclusive == me) {
+                    n->exclusive = -1;
+                }
+                break;
+            case LOCK_SH:
+                if (other) {
+                    return error(fd, EAGAIN);
+                }
                 n->exclusive = -1;
-            }
-            break;
-        case LOCK_SH:
-            if (other) {
-                return error(fd, EAGAIN);
-            }
-            n->exclusive = -1;
-            unshare();
-            n->shared.pushBack(me);
-            break;
-        case LOCK_EX:
-            if (other || others > 0) {
-                return error(fd, EAGAIN);
-            }
-            unshare();
-            n->exclusive = me;
-            break;
-        default:
-            return error(fd, EINVAL);
+                unshare();
+                n->shared.pushBack(me);
+                break;
+            case LOCK_EX:
+                if (other || others > 0) {
+                    return error(fd, EAGAIN);
+                }
+                unshare();
+                n->exclusive = me;
+                break;
+            default:
+                return error(fd, EINVAL);
         }
         return answer(fd, 0);
     }
@@ -2268,19 +2250,1269 @@ namespace {
         return answer(fd, 0);
     }
 
+    // ---- opens and calls handed on ---------------------------------------------------
+
+    // The reply of a handle's open: its stat and its id.
+    static void handleReply(int fd, const Stat& st, u64 id) {
+        u8 b[sizeof st + 8];
+        memcpy(b, &st, sizeof st);
+        memcpy(b + sizeof st, &id, 8);
+        ok(fd, b, sizeof b);
+    }
+
+    // An open of a device goes on to the service that registered it, the
+    // reply's endpoint with it: the service answers there and serves the
+    // open file from then on. ENXIO when the service is gone, EAGAIN when
+    // it does not keep up with its opens.
+    static bool forward(const Node* n, const Header& h, int flags, int fd) {
+        const Header head{opOpen, u32(flags), h.uid, h.gid};
+        const u32 mode = 0;
+        const iovec parts[] = {part(&head, sizeof head), part(&mode, sizeof mode)};
+        if (n->fd < 0 || sendPacket(n->fd, parts, 2, &fd, 1, MSG_DONTWAIT) < 0) {
+            return error(fd, n->fd >= 0 && errno == EAGAIN ? EAGAIN : ENXIO);
+        }
+        return false;
+    }
+
+    // A call handed on to another's file system, with the kernel's
+    // endpoint, which the file system answers on: the node of a place,
+    // then what follows it in the call. EIO when the file system is gone,
+    // EAGAIN when it does not keep up.
+    static bool hand(const Place& p, const Header& h, u32 op, u32 arg, const void* args, usize size, Name name, int fd) {
+        const Header head{op, arg, h.uid, h.gid};
+        const iovec parts[] = {part(&head, sizeof head), part(&p.node, 8), part(args, size), part(name.at, name.length)};
+        Endpoint* channel = p.m->fs->channel;
+        if (!channel || sendPacket(channel->fd, parts, 4, &fd, 1, MSG_DONTWAIT) < 0) {
+            return error(fd, channel && errno == EAGAIN ? EAGAIN : EIO);
+        }
+        return false;
+    }
+
+    // An open of a node of a tree of ours, on the reply's endpoint: read or
+    // written as its access mode says and who asks may, emptied when
+    // O_TRUNC asks, with O_PATH only held. A directory, and what O_PATH
+    // opens, is a handle; an object of the kernel is handed out, a device
+    // opened by its service; a FIFO is its stat, the kernel makes its
+    // pipe; a link is ELOOP but with O_PATH and O_NOFOLLOW, ENOTDIR with
+    // O_DIRECTORY. made: who asks made it now. Whether fd is kept.
+    static bool openOurs(const Place& at, int flags, bool made, const Header& h, int fd) {
+        Node* n = at.n;
+        Server& s = *at.m->fs->tree;
+        const bool opath = (flags & O_PATH) != 0;
+        const u32 access = flags & O_ACCMODE;
+        const bool reads = !opath && access != O_WRONLY;
+        const bool writes = !opath && access != O_RDONLY;
+        const bool truncates = !opath && (flags & O_TRUNC) != 0;
+        if (n->kind == Kind::Link && !(opath && (flags & O_NOFOLLOW) != 0)) {
+            return error(fd, (flags & O_DIRECTORY) != 0 ? ENOTDIR : ELOOP);
+        }
+        if ((flags & O_DIRECTORY) != 0 && n->kind != Kind::Dir) {
+            return error(fd, ENOTDIR);
+        }
+        if (!made && !opath) {
+            if (!may(n, h, (reads ? 4 : 0) | (writes || truncates ? 2 : 0))) {
+                return error(fd, EACCES);
+            }
+            if (n->kind == Kind::Dir && (writes || (flags & O_CREAT) != 0)) {
+                return error(fd, EISDIR);
+            }
+            if ((writes || truncates) && n->kind == Kind::File && !s.writable) {
+                return error(fd, EROFS);
+            }
+        }
+        if (!opath) {
+            switch (n->kind) {
+                case Kind::Object:
+                    reply(fd, opOk, 0, nullptr, 0, &n->fd, 1); // the object itself becomes the caller's
+                    return false;
+                case Kind::CharDevice:
+                case Kind::BlockDevice:
+                    return forward(n, h, flags, fd);
+                case Kind::Service:
+                    return error(fd, ENXIO);
+                case Kind::Fifo: {
+                    const Stat st = statOf(s, n);
+                    ok(fd, &st, sizeof st);
+                    return false;
+                }
+                default:
+                    break;
+            }
+        }
+        if (truncates && n->kind == Kind::File && n->content.size() > 0) {
+            resize(s, n, 0);
+            touch(n);
+        }
+        const Stat st = statOf(s, n);
+        if (opath || n->kind == Kind::Dir) {
+            handleReply(fd, st, listenHandle(fd, at, opath)->id);
+            return true;
+        }
+        listenFile(s, fd, n, reads, writes);
+        ok(fd, &st, sizeof st);
+        return true;
+    }
+
+    // An open of a place of another's file system: a directory, and what
+    // O_PATH opens, is a handle of ours, who asks may read it, else the
+    // file system opens it on the kernel's endpoint.
+    static bool openTheirs(const Place& at, int flags, const Header& h, int fd) {
+        const bool opath = (flags & O_PATH) != 0;
+        const u32 access = flags & O_ACCMODE;
+        if ((flags & O_DIRECTORY) != 0 && !isDir(at)) {
+            return error(fd, ENOTDIR);
+        }
+        if (!opath && isDir(at)) {
+            if (access != O_WRONLY && !mayStat(at.st, h, 4)) {
+                return error(fd, EACCES);
+            }
+            if (access != O_RDONLY || (flags & O_CREAT) != 0) {
+                return error(fd, EISDIR);
+            }
+        }
+        if (opath || isDir(at)) {
+            handleReply(fd, at.st, listenHandle(fd, at, opath)->id);
+            return true;
+        }
+        return hand(at, h, fsOpen, u32(flags), nullptr, 0, {}, fd);
+    }
+
+    static bool openAt(const Place& at, int flags, const Header& h, int fd) {
+        return ours(at) ? openOurs(at, flags, false, h, fd) : openTheirs(at, flags, h, fd);
+    }
+
+    // An open that makes the name in a directory, a file of the mode asked
+    // for, who asks's.
+    static bool createAt(const Place& dir, Name name, int flags, u32 mode, const Header& h, int fd) {
+        if (!ours(dir)) {
+            return hand(dir, h, fsCreate, u32(flags), &mode, sizeof mode, name, fd);
+        }
+        Server& s = *dir.m->fs->tree;
+        if (const int e = creates(&s, dir.n, name, h)) {
+            return error(fd, e);
+        }
+        Node* n = makeNode(s, dir.n, name, Kind::File);
+        n->perm = mode & 07777;
+        n->uid = h.uid;
+        n->gid = h.gid;
+        return openOurs(ourPlace(dir.m, n), flags, true, h, fd);
+    }
+
+    // chmod, chown, utimes and truncate of a place, its file system's call
+    // op with what goes with it, args: by a tree of ours, which writes
+    // nothing on a read-only one, or handed on.
+    static bool changeAt(const Place& at, u32 op, const Header& h, const void* args, usize size, int fd) {
+        if (!ours(at)) {
+            return hand(at, h, op, h.arg, args, size, {}, fd);
+        }
+        Server& s = *at.m->fs->tree;
+        if (!s.writable) {
+            return error(fd, EROFS);
+        }
+        const u8* bytes = static_cast<const u8*>(args);
+        return answer(fd, change(s, at.n, op, h, Body{bytes, bytes + size}));
+    }
+
+    // ---- the walk ---------------------------------------------------------------------
+
+    // The kinds of a path's last name.
+    constexpr u32 lastName = 0;
+    constexpr u32 lastDot = 1;
+    constexpr u32 lastDotdot = 2;
+    constexpr u32 lastNone = 3; // the path is "/" alone
+
+    // The longest a path gets with the targets of the links it goes
+    // through in it.
+    constexpr usize maxWalk = 65536;
+
+    // A walk of a path as Linux walks one, to the directory of its last
+    // name, here: every name but the last a directory who asks may search,
+    // or a symbolic link, whose target takes its place, from the root of
+    // the process when absolute, no more than maxLinks of them in all; "."
+    // and ".."; the root of what is mounted on a name for the name. With
+    // look, the last name is looked at too, target, a link there followed
+    // when follow says or a slash ends the path, which then wants a
+    // directory; with missing, a last name that is not there is no error:
+    // found says. The target of ".", ".." and the root alone is the
+    // directory itself. A path of "." alone names where it starts, which
+    // nobody is asked about. A step another's file system answers is a
+    // question (Step::Ask), which the call asks, and the walk goes on with
+    // the answer.
+    struct Walk {
+        enum class Step : u8 {
+            Done,
+            Ask,
+            Failed,
+            Go,
+        };
+
+        enum class Wait : u8 {
+            None,
+            Child,      // a name of here, which the walk goes through
+            Parent,     // here's parent
+            Target,     // the target of a link the walk goes through
+            Last,       // the last name
+            LastTarget, // the target of a last link
+        };
+
+        Walk() = default;
+        Walk(const Walk&) = delete;
+        Walk& operator=(const Walk&) = delete;
+        ~Walk();
+        void start(const Header& head, const Place& from, const Place& top, Name path, bool looks, bool follows, bool misses);
+        Step run();
+        Step answered(const Answer& a);
+        Ask question() const;
+        Step fail(int e);
+        Step up();
+        Step settle(Place next);
+        Step finish();
+        Step settleLast(Place t);
+        bool take(Name& name);
+        bool more() const;
+        bool onlyDots() const;
+        bool follow(Name to, bool lastOne);
+        void ask(u32 call, const Place& at, Name name, Wait w);
+
+        Header h{};
+        Place root;
+        Place here;
+        Place target;
+        bool look = false;
+        bool followLast = false;
+        bool missing = false;
+        bool found = false;
+        Buffer path; // the names left, from at on
+        usize at = 0;
+        bool slash = false;
+        bool fresh = false;  // the walk starts on its path: "." alone asks nobody
+        bool ending = false; // the ".." asked is the last name
+        u32 links = 0;
+        Name last; // the last name, in path while the walk is done
+        u32 kind = lastNone;
+        int error = 0;
+        Wait wait = Wait::None;
+        u32 op = 0; // the question: its call, whom, the name
+        Place asked;
+        Name name;
+    };
+
+    // The place of a handle a call names by its id: the root of the
+    // process, or where a second path starts.
+    static bool placeOf(u64 id, Place& out) {
+        const Endpoint* ep = handleOf(id);
+        if (!ep) {
+            return false;
+        }
+        out = ep->at;
+        return true;
+    }
+}
+
+Walk::~Walk() {
+    Place* held[] = {&root, &here, &target};
+    for (Place* p : held) {
+        if (p->m) {
+            unhold(*p);
+        }
+    }
+}
+
+void Walk::start(const Header& head, const Place& from, const Place& top, Name p, bool looks, bool follows, bool misses) {
+    h = head;
+    look = looks;
+    followLast = follows;
+    missing = misses;
+    moveTo(root, top);
+    moveTo(here, p.length != 0 && p.at[0] == '/' ? top : from);
+    path.clear();
+    path.append(p.at, p.length);
+    at = 0;
+    slash = p.length != 0 && p.at[p.length - 1] == '/';
+    fresh = true;
+    links = 0;
+}
+
+Walk::Step Walk::fail(int e) {
+    error = e;
+    return Step::Failed;
+}
+
+// The next name, or false at the end.
+bool Walk::take(Name& out) {
+    const char* text = static_cast<const char*>(path.data());
+    const usize size = path.size();
+    while (at < size && text[at] == '/') {
+        ++at;
+    }
+    if (at == size) {
+        return false;
+    }
+    const auto* slashAt = static_cast<const char*>(memchr(text + at, '/', size - at));
+    const usize end = slashAt ? usize(slashAt - text) : size;
+    out = {text + at, end - at};
+    at = end;
+    return true;
+}
+
+// Whether a name is left.
+bool Walk::more() const {
+    const char* text = static_cast<const char*>(path.data());
+    for (usize i = at; i < path.size(); ++i) {
+        if (text[i] != '/') {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Whether the names left are "." alone, or none.
+bool Walk::onlyDots() const {
+    const char* text = static_cast<const char*>(path.data());
+    for (usize i = at; i < path.size(); ++i) {
+        const bool dot = text[i] == '.' && (i == 0 || text[i - 1] == '/') && (i + 1 == path.size() || text[i + 1] == '/');
+        if (text[i] != '/' && !dot) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The target of a link takes the link's place, the names left after it,
+// or a slash that ended the path after the last's, and a slash that ends
+// the target ends the path then; from the root when it is absolute.
+bool Walk::follow(Name to, bool lastOne) {
+    Buffer next;
+    const char* text = static_cast<const char*>(path.data());
+    const usize left = path.size() - at;
+    if (to.length + 1 + left > maxWalk) {
+        return false;
+    }
+    next.append(to.at, to.length);
+    if (lastOne) {
+        if (slash) {
+            next.append("/", 1);
+        }
+    } else {
+        next.append("/", 1);
+        next.append(text + at, left);
+    }
+    path.swap(next);
+    at = 0;
+    if (lastOne) {
+        slash = path.size() != 0 && static_cast<const char*>(path.data())[path.size() - 1] == '/';
+    }
+    if (to.at[0] == '/') {
+        moveTo(here, root);
+    }
+    fresh = lastOne;
+    return true;
+}
+
+void Walk::ask(u32 call, const Place& p, Name n, Wait w) {
+    op = call;
+    asked = p;
+    name = n;
+    wait = w;
+}
+
+Ask Walk::question() const {
+    return asking(asked, h, op, name);
+}
+
+// ".." from here: nowhere from the root of the process; out of a mount's
+// root to where it is mounted, and on from there; else the parent, which
+// another's file system tells.
+Walk::Step Walk::up() {
+    for (;;) {
+        if (same(here, root)) {
+            return Step::Go;
+        }
+        if (!isMountRoot(here) || !here.m->parent) {
+            break;
+        }
+        moveTo(here, pointOf(here.m));
+    }
+    if (isMountRoot(here)) {
+        return Step::Go;
+    }
+    if (ours(here)) {
+        if (here.n->parent) {
+            moveTo(here, ourPlace(here.m, here.n->parent));
+        }
+        return Step::Go;
+    }
+    ask(fsLookup, here, literal(".."), Wait::Parent);
+    return Step::Ask;
+}
+
+// A name the walk goes through: into what is mounted on it, on along a
+// link's target, or into it.
+Walk::Step Walk::settle(Place next) {
+    next = down(next);
+    if (!isLink(next)) {
+        moveTo(here, next);
+        return Step::Go;
+    }
+    if (links >= maxLinks) {
+        return fail(ELOOP);
+    }
+    if (!ours(next)) {
+        ask(fsReadlink, next, {}, Wait::Target);
+        return Step::Ask;
+    }
+    const Name to = next.n->content.name();
+    if (to.empty()) {
+        return fail(ENOENT);
+    }
+    ++links;
+    return follow(to, false) ? Step::Go : fail(ENAMETOOLONG);
+}
+
+// The walk is at the directory of its last name: with look, it looks at
+// the name.
+Walk::Step Walk::finish() {
+    if (!look) {
+        return Step::Done;
+    }
+    if (kind != lastName) {
+        moveTo(target, here);
+        found = true;
+        return Step::Done;
+    }
+    if (!ours(here)) {
+        ask(fsLookup, here, last, Wait::Last);
+        return Step::Ask;
+    }
+    const Entry* entry = lookup(here.n, last);
+    if (!entry) {
+        if (!missing) {
+            return fail(ENOENT);
+        }
+        found = false;
+        return Step::Done;
+    }
+    return settleLast(ourPlace(here.m, entry->node));
+}
+
+// What the last name names: what is mounted on it, and a link followed
+// when the walk follows it.
+Walk::Step Walk::settleLast(Place t) {
+    t = down(t);
+    if (isLink(t) && (followLast || slash)) {
+        if (links >= maxLinks) {
+            return fail(ELOOP);
+        }
+        if (!ours(t)) {
+            ask(fsReadlink, t, {}, Wait::LastTarget);
+            return Step::Ask;
+        }
+        const Name to = t.n->content.name();
+        if (to.empty()) {
+            return fail(ENOENT);
+        }
+        ++links;
+        if (!follow(to, true)) {
+            return fail(ENAMETOOLONG);
+        }
+        return run();
+    }
+    if (slash && !isDir(t)) {
+        return fail(ENOTDIR);
+    }
+    moveTo(target, t);
+    found = true;
+    return Step::Done;
+}
+
+Walk::Step Walk::run() {
+    if (fresh) {
+        fresh = false;
+        if (onlyDots()) {
+            Name dot;
+            kind = take(dot) ? lastDot : lastNone;
+            if (kind == lastDot && !isDir(here)) {
+                return fail(ENOTDIR);
+            }
+            return finish();
+        }
+    }
+    for (;;) {
+        Name n;
+        if (!take(n)) {
+            kind = lastNone;
+            return finish();
+        }
+        const bool lastOne = !more();
+        if (!isDir(here)) {
+            return fail(ENOTDIR);
+        }
+        if (!mayAt(here, h, 1)) {
+            return fail(EACCES);
+        }
+        if (n.is(".")) {
+            if (lastOne) {
+                kind = lastDot;
+                return finish();
+            }
+            continue;
+        }
+        if (n.is("..")) {
+            ending = lastOne;
+            if (const Step s = up(); s != Step::Go) {
+                return s;
+            }
+            if (lastOne) {
+                kind = lastDotdot;
+                return finish();
+            }
+            continue;
+        }
+        if (n.length > NAME_MAX) {
+            return fail(ENAMETOOLONG);
+        }
+        if (lastOne) {
+            kind = lastName;
+            last = n;
+            return finish();
+        }
+        if (!ours(here)) {
+            ask(fsLookup, here, n, Wait::Child);
+            return Step::Ask;
+        }
+        const Entry* entry = lookup(here.n, n);
+        if (!entry) {
+            return fail(ENOENT);
+        }
+        if (const Step s = settle(ourPlace(here.m, entry->node)); s != Step::Go) {
+            return s;
+        }
+    }
+}
+
+// The answer to the walk's question, and the walk on from there.
+Walk::Step Walk::answered(const Answer& a) {
+    const Wait w = wait;
+    wait = Wait::None;
+    if (a.error != 0) {
+        if (w == Wait::Last && a.error == ENOENT && missing) {
+            found = false;
+            return Step::Done;
+        }
+        return fail(a.error);
+    }
+    Stat st;
+    switch (w) {
+        case Wait::Child:
+            if (!statIn(a.body, st)) {
+                return fail(EIO);
+            }
+            if (const Step s = settle(theirPlace(here.m, st)); s != Step::Go) {
+                return s;
+            }
+            return run();
+        case Wait::Parent:
+            if (!statIn(a.body, st)) {
+                return fail(EIO);
+            }
+            moveTo(here, theirPlace(here.m, st));
+            if (ending) {
+                kind = lastDotdot;
+                return finish();
+            }
+            return run();
+        case Wait::Last:
+            if (!statIn(a.body, st)) {
+                return fail(EIO);
+            }
+            return settleLast(theirPlace(here.m, st));
+        case Wait::Target:
+        case Wait::LastTarget: {
+            Body body = a.body;
+            const Name to = body.rest();
+            if (to.empty()) {
+                return fail(ENOENT);
+            }
+            ++links;
+            if (!follow(to, w == Wait::LastTarget)) {
+                return fail(ENAMETOOLONG);
+            }
+            return run();
+        }
+        case Wait::None:
+            break;
+    }
+    return fail(EIO);
+}
+
+namespace {
+    // ---- the VFS's calls ---------------------------------------------------------------
+    //
+    // Each is a coroutine that takes the kernel's endpoint, which it closes
+    // when it is done unless an endpoint of ours took it: walks the path as
+    // a walk does, waiting for another's file system when it must, and
+    // makes the last step as Linux makes it, by a tree of ours or by the
+    // file system the place is of, which answers the kernel itself. What a
+    // call needs of the request it copies before it first waits.
+
+    // The kernel's endpoint of a call.
+    struct Reply {
+        int fd;
+
+        ~Reply();
+    };
+
+    // What goes with a call of chmod, chown, utimes and truncate.
+    struct Args {
+        u8 bytes[16];
+        usize size;
+    };
+
+    // A path made from its end: the names of a place up to the root.
+    struct Path {
+        void prepend(Name name);
+        Name text() const;
+
+        Buffer bytes; // the names, each with a slash before it
+    };
+
+    // Whether a path is prefix or under it, and what follows it then.
+    static bool under(Name prefix, Name path, Name& rest) {
+        if (prefix.is("/")) {
+            rest = path.is("/") ? Name{} : path;
+            return true;
+        }
+        if (path.length < prefix.length || memcmp(path.at, prefix.at, prefix.length) != 0) {
+            return false;
+        }
+        if (path.length != prefix.length && path.at[prefix.length] != '/') {
+            return false;
+        }
+        rest = {path.at + prefix.length, path.length - prefix.length};
+        return true;
+    }
+
+    // A place of a call's, held while the call holds it.
+    struct Held {
+        Held(const Place& p);
+        ~Held();
+        Held(const Held&) = delete;
+        Held& operator=(const Held&) = delete;
+        void become(const Place& p);
+
+        Place at;
+    };
+
+    // OPEN: what the path names, opened as open(2) opens it.
+    static Task openCall(Header h, int fd, Place root, Place from, u32 mode, Name path) {
+        Reply r{fd};
+        const int flags = int(h.arg);
+        const bool excl = (flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL);
+        Walk w;
+        w.start(h, from, root, path, true, (flags & O_NOFOLLOW) == 0 && !excl, (flags & O_CREAT) != 0);
+        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, w.error);
+                co_return;
+            }
+        }
+        if (w.kind != lastName) {
+            if ((flags & O_CREAT) != 0) {
+                error(fd, EISDIR);
+            } else if (openAt(w.target, flags, h, fd)) {
+                r.fd = -1;
+            }
+            co_return;
+        }
+        int fl = flags;
+        if (w.slash) {
+            if ((flags & O_CREAT) != 0) {
+                error(fd, EISDIR);
+                co_return;
+            }
+            fl |= O_DIRECTORY;
+        }
+        if (!w.found) {
+            if (createAt(w.here, w.last, fl, mode, h, fd)) {
+                r.fd = -1;
+            }
+            co_return;
+        }
+        if (excl) {
+            error(fd, EEXIST);
+            co_return;
+        }
+        if (isLink(w.target) && !((fl & O_PATH) != 0 && (fl & O_NOFOLLOW) != 0)) {
+            error(fd, (fl & O_DIRECTORY) != 0 ? ENOTDIR : ELOOP);
+            co_return;
+        }
+        if (openAt(w.target, fl, h, fd)) {
+            r.fd = -1;
+        }
+    }
+
+    // STAT: the metadata of what the path names, or of a last link itself.
+    static Task statCall(Header h, int fd, Place root, Place from, Name path) {
+        Reply r{fd};
+        Walk w;
+        w.start(h, from, root, path, true, h.arg != 0, false);
+        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, w.error);
+                co_return;
+            }
+        }
+        const Place& t = w.target;
+        if (ours(t)) {
+            const Stat st = statOf(*t.m->fs->tree, t.n);
+            ok(fd, &st, sizeof st);
+            co_return;
+        }
+        if (t.fresh) {
+            ok(fd, &t.st, sizeof t.st);
+            co_return;
+        }
+        const Answer a = co_await asking(t, h, fsGetattr, {});
+        if (a.error != 0) {
+            error(fd, a.error);
+        } else {
+            ok(fd, a.body.at, a.body.size());
+        }
+    }
+
+    // READLINK: a last link's target; what is no link is EINVAL, a slash
+    // after one follows it.
+    static Task readlinkCall(Header h, int fd, Place root, Place from, Name path) {
+        Reply r{fd};
+        Walk w;
+        w.start(h, from, root, path, true, false, false);
+        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, w.error);
+                co_return;
+            }
+        }
+        const Place& t = w.target;
+        if (w.kind != lastName || !isLink(t)) {
+            error(fd, EINVAL);
+        } else if (ours(t)) {
+            ok(fd, t.n->content.data(), t.n->content.size());
+        } else {
+            hand(t, h, fsReadlink, 0, nullptr, 0, {}, fd);
+        }
+    }
+
+    // MKDIR, MKNOD and SYMLINK: the last name made. One that is there,
+    // ".", ".." and the root alone are EEXIST, and a slash after a name is
+    // for a directory only: EEXIST for one that is there, else ENOENT.
+    static Task makeCall(Header h, int fd, Place root, Place from, Name target, Name path) {
+        Reply r{fd};
+        Buffer link;
+        link.append(target.at, target.length);
+        Walk w;
+        w.start(h, from, root, path, false, false, false);
+        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, w.error);
+                co_return;
+            }
+        }
+        if (w.kind != lastName) {
+            error(fd, EEXIST);
+            co_return;
+        }
+        if (w.slash && h.op != vfsMkdir) {
+            if (ours(w.here)) {
+                error(fd, lookup(w.here.n, w.last) ? EEXIST : ENOENT);
+                co_return;
+            }
+            const Answer a = co_await asking(w.here, h, fsLookup, w.last);
+            error(fd, a.error == 0 ? EEXIST : ENOENT);
+            co_return;
+        }
+        const Name to{static_cast<const char*>(link.data()), link.size()};
+        if (ours(w.here)) {
+            answer(fd, makeOurs(*w.here.m->fs->tree, w.here.n, h.op, h.arg, w.last, to, h));
+            co_return;
+        }
+        if (h.op == vfsSymlink) {
+            Buffer names;
+            names.append(to.at, to.length);
+            names.append("", 1);
+            names.append(w.last.at, w.last.length);
+            hand(w.here, h, fsSymlink, 0, nullptr, 0, {static_cast<const char*>(names.data()), names.size()}, fd);
+            co_return;
+        }
+        hand(w.here, h, h.op == vfsMkdir ? fsMkdir : fsMknod, h.arg, nullptr, 0, w.last, fd);
+    }
+
+    // UNLINK: the last name taken away, a directory's with AT_REMOVEDIR.
+    // "." is EINVAL to rmdir, ".." ENOTEMPTY, the root alone EBUSY, and all
+    // three EISDIR to unlink; a slash after a name that is no directory is
+    // ENOTDIR to unlink, EISDIR after one that is; a mount point is EBUSY.
+    static Task unlinkCall(Header h, int fd, Place root, Place from, Name path) {
+        Reply r{fd};
+        const bool dir = (h.arg & AT_REMOVEDIR) != 0;
+        Walk w;
+        w.start(h, from, root, path, false, false, false);
+        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, w.error);
+                co_return;
+            }
+        }
+        if (w.kind != lastName) {
+            error(fd, !dir ? EISDIR : w.kind == lastDot ? EINVAL : w.kind == lastDotdot ? ENOTEMPTY : EBUSY);
+            co_return;
+        }
+        if (w.slash && !dir) {
+            if (ours(w.here)) {
+                const Entry* entry = lookup(w.here.n, w.last);
+                error(fd, !entry ? ENOENT : entry->node->kind == Kind::Dir ? EISDIR : ENOTDIR);
+                co_return;
+            }
+            const Answer a = co_await asking(w.here, h, fsLookup, w.last);
+            Stat st;
+            error(fd, a.error != 0 ? a.error : !statIn(a.body, st) ? EIO : S_ISDIR(st.mode) ? EISDIR : ENOTDIR);
+            co_return;
+        }
+        if (ours(w.here)) {
+            answer(fd, unlinkError(w.here.m->fs->tree, w.here.n, w.last, dir, h));
+        } else if (dir && pointNamed(w.here, w.last)) {
+            error(fd, EBUSY);
+        } else {
+            hand(w.here, h, fsUnlink, h.arg, nullptr, 0, w.last, fd);
+        }
+    }
+
+    // RENAME: the last name of one path moved to the last name of another,
+    // from the handle to: ".", ".." and the root alone are EBUSY, a slash
+    // after either is for a directory only, two mounts are EXDEV and a
+    // mount point EBUSY.
+    static Task renameCall(Header h, int fd, Place root, Place from, Place to, Name oldPath, Name newPath) {
+        Reply r{fd};
+        Buffer second;
+        second.append(newPath.at, newPath.length);
+        Held toward(to);
+        Walk a;
+        a.start(h, from, root, oldPath, false, false, false);
+        for (Walk::Step s = a.run(); s != Walk::Step::Done; s = a.answered(co_await a.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, a.error);
+                co_return;
+            }
+        }
+        Walk b;
+        b.start(h, toward.at, root, {static_cast<const char*>(second.data()), second.size()}, false, false, false);
+        for (Walk::Step s = b.run(); s != Walk::Step::Done; s = b.answered(co_await b.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, b.error);
+                co_return;
+            }
+        }
+        if (a.kind != lastName || b.kind != lastName) {
+            error(fd, EBUSY);
+            co_return;
+        }
+        if (a.slash || b.slash) {
+            bool directory = false;
+            if (ours(a.here)) {
+                const Entry* entry = lookup(a.here.n, a.last);
+                if (!entry) {
+                    error(fd, ENOENT);
+                    co_return;
+                }
+                directory = entry->node->kind == Kind::Dir;
+            } else {
+                const Answer got = co_await asking(a.here, h, fsLookup, a.last);
+                Stat st;
+                if (got.error != 0 || !statIn(got.body, st)) {
+                    error(fd, got.error != 0 ? got.error : EIO);
+                    co_return;
+                }
+                directory = S_ISDIR(st.mode);
+            }
+            if (!directory) {
+                error(fd, ENOTDIR);
+                co_return;
+            }
+        }
+        if (a.here.m != b.here.m) {
+            error(fd, EXDEV);
+            co_return;
+        }
+        if (ours(a.here)) {
+            answer(fd, renameOurs(a.here.m->fs->tree, a.here.n, a.last, b.here.n, b.last, h));
+            co_return;
+        }
+        if (pointNamed(a.here, a.last) || pointNamed(b.here, b.last)) {
+            error(fd, EBUSY);
+            co_return;
+        }
+        Buffer names;
+        names.append(a.last.at, a.last.length);
+        names.append("", 1);
+        names.append(b.last.at, b.last.length);
+        hand(a.here, h, fsRename, 0, &b.here.node, 8, {static_cast<const char*>(names.data()), names.size()}, fd);
+    }
+
+    // LINK: the last name of a new path, from the handle to, made a name of
+    // what an old path names, a last link of it followed when follow says:
+    // a directory is EPERM, the new name is made as MKDIR makes one, and
+    // two mounts are EXDEV, but EROFS when the new name's file system is
+    // read-only, which Linux finds first.
+    static Task linkCall(Header h, int fd, Place root, Place from, Place to, Name oldPath, Name newPath) {
+        Reply r{fd};
+        Buffer second;
+        second.append(newPath.at, newPath.length);
+        Held toward(to);
+        Walk a;
+        a.start(h, from, root, oldPath, true, h.arg != 0, false);
+        for (Walk::Step s = a.run(); s != Walk::Step::Done; s = a.answered(co_await a.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, a.error);
+                co_return;
+            }
+        }
+        if (a.kind != lastName || isDir(a.target)) {
+            error(fd, EPERM);
+            co_return;
+        }
+        Walk b;
+        b.start(h, toward.at, root, {static_cast<const char*>(second.data()), second.size()}, false, false, false);
+        for (Walk::Step s = b.run(); s != Walk::Step::Done; s = b.answered(co_await b.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, b.error);
+                co_return;
+            }
+        }
+        if (b.kind != lastName) {
+            error(fd, EEXIST);
+            co_return;
+        }
+        if (b.slash) {
+            if (ours(b.here)) {
+                error(fd, lookup(b.here.n, b.last) ? EEXIST : ENOENT);
+                co_return;
+            }
+            const Answer got = co_await asking(b.here, h, fsLookup, b.last);
+            error(fd, got.error == 0 ? EEXIST : ENOENT);
+            co_return;
+        }
+        if (a.target.m != b.here.m) {
+            bool readOnly = false;
+            if (ours(b.here)) {
+                readOnly = !b.here.m->fs->tree->writable;
+            } else {
+                const Answer got = co_await asking(b.here, h, fsStatfs, {});
+                Statfs st;
+                readOnly = got.error == 0 && got.body.size() >= sizeof st && (memcpy(&st, got.body.at, sizeof st), (st.flags & ST_RDONLY) != 0);
+            }
+            error(fd, readOnly ? EROFS : EXDEV);
+            co_return;
+        }
+        if (ours(b.here)) {
+            answer(fd, linkOurs(b.here.m->fs->tree, a.target.n, b.here.n, b.last, h));
+        } else {
+            hand(a.target, h, fsLink, 0, &b.here.node, 8, b.last, fd);
+        }
+    }
+
+    // CHMOD, CHOWN, UTIMES and TRUNCATE: the file system's call op on what
+    // the path names, a last link followed when follows says; a link has no
+    // mode to change, EOPNOTSUPP as Linux's fchmodat says.
+    static Task changeCall(Header h, int fd, Place root, Place from, u32 op, bool follows, Args args, Name path) {
+        Reply r{fd};
+        Walk w;
+        w.start(h, from, root, path, true, follows, false);
+        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, w.error);
+                co_return;
+            }
+        }
+        if (op == fsChmod && isLink(w.target)) {
+            error(fd, EOPNOTSUPP);
+        } else {
+            changeAt(w.target, op, h, args.bytes, args.size, fd);
+        }
+    }
+
+    // STATFS: the file system of what the path names.
+    static Task statfsCall(Header h, int fd, Place root, Place from, Name path) {
+        Reply r{fd};
+        Walk w;
+        w.start(h, from, root, path, true, true, false);
+        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, w.error);
+                co_return;
+            }
+        }
+        if (ours(w.target)) {
+            const Statfs st = statfsOf(*w.target.m->fs->tree);
+            ok(fd, &st, sizeof st);
+        } else {
+            hand(w.target, h, fsStatfs, 0, nullptr, 0, {}, fd);
+        }
+    }
+
+    // PATH and REALPATH: the path from the root of a place, up through the
+    // places ".." goes to: in a tree of ours by the names of its
+    // directories, in another's file system as it says, then where its
+    // mount is mounted. A removed directory has none, nor one the root is
+    // not above: ENOENT. PATH's place is a handle's; REALPATH's is what a
+    // path names, a last link followed: its directory's path and its name,
+    // or a directory's own, with no ".", ".." or link in it.
+    static Task pathCall(Header h, int fd, Place root, Place from, bool walks, Name path) {
+        Reply r{fd};
+        Held top(root);
+        Held up(from);
+        Path out;
+        if (walks) {
+            Walk w;
+            w.start(h, from, root, path, true, true, false);
+            for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+                if (s == Walk::Step::Failed) {
+                    error(fd, w.error);
+                    co_return;
+                }
+            }
+            if (isDir(w.target)) {
+                up.become(w.target);
+            } else {
+                out.prepend(w.last);
+                up.become(w.here);
+            }
+        }
+        while (!same(up.at, top.at)) {
+            if (isMountRoot(up.at)) {
+                if (!up.at.m->parent) {
+                    error(fd, ENOENT);
+                    co_return;
+                }
+                up.become(pointOf(up.at.m));
+                continue;
+            }
+            if (ours(up.at)) {
+                const Entry* entry = up.at.n->entry;
+                if (gone(up.at.m->fs->tree, up.at.n) || !entry || entry->name.empty()) {
+                    error(fd, ENOENT);
+                    co_return;
+                }
+                out.prepend(entry->name);
+                up.become(ourPlace(up.at.m, up.at.n->parent));
+                continue;
+            }
+            // Another's file system says the place's path in it, and that of
+            // the mount's root, or of the root of the process in this mount.
+            Buffer own;
+            {
+                const Answer got = co_await asking(up.at, h, fsPath, {});
+                if (got.error != 0) {
+                    error(fd, got.error);
+                    co_return;
+                }
+                own.append(got.body.at, got.body.size());
+            }
+            const bool rooted = top.at.m == up.at.m;
+            Buffer base;
+            {
+                const Answer got = co_await asking(rooted ? top.at : rootOf(up.at.m), h, fsPath, {});
+                if (got.error != 0) {
+                    error(fd, got.error);
+                    co_return;
+                }
+                base.append(got.body.at, got.body.size());
+            }
+            Name rest;
+            if (!under({static_cast<const char*>(base.data()), base.size()}, {static_cast<const char*>(own.data()), own.size()}, rest)) {
+                error(fd, ENOENT);
+                co_return;
+            }
+            out.prepend(rest);
+            if (rooted) {
+                break;
+            }
+            up.become(rootOf(up.at.m));
+        }
+        const Name text = out.text();
+        ok(fd, text.at, text.length);
+    }
+
+    // MOUNT: on the directory target names, a directory source names, or
+    // the root of the file system whose socket of /dev it names, which
+    // rootfs connects to: the file system's end of the connection is its
+    // channel from then on. A target that is a mount's root, of what is
+    // mounted on it or of the VFS's, is EBUSY.
+    static Task mountCall(Header h, int fd, Place root, Place from, Name target, Name source) {
+        Reply r{fd};
+        Buffer second;
+        second.append(source.at, source.length);
+        Walk t;
+        t.start(h, from, root, target, true, true, false);
+        for (Walk::Step s = t.run(); s != Walk::Step::Done; s = t.answered(co_await t.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, t.error);
+                co_return;
+            }
+        }
+        if (t.kind != lastName) {
+            error(fd, EINVAL);
+            co_return;
+        }
+        if (!isDir(t.target)) {
+            error(fd, ENOTDIR);
+            co_return;
+        }
+        if (isMountRoot(t.target)) {
+            error(fd, EBUSY);
+            co_return;
+        }
+        Walk ws;
+        ws.start(h, from, root, {static_cast<const char*>(second.data()), second.size()}, true, true, false);
+        for (Walk::Step s = ws.run(); s != Walk::Step::Done; s = ws.answered(co_await ws.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, ws.error);
+                co_return;
+            }
+        }
+        const Place& src = ws.target;
+        if (isDir(src)) {
+            mountAt(src.m->fs, src, t.target, t.here.node, t.last);
+            ok(fd);
+            co_return;
+        }
+        if (!ours(src) || src.n->kind != Kind::Service) {
+            error(fd, ENOTDIR);
+            co_return;
+        }
+        Ask connect;
+        connect.to = src.n->fd;
+        connect.head = {opOpen, O_RDWR, h.uid, h.gid};
+        connect.size = 4;
+        memset(connect.body, 0, 4);
+        connect.connects = true;
+        const Answer got = co_await connect;
+        Stat st;
+        if (got.error != 0 || !statIn(got.body, st)) {
+            if (got.channel) {
+                closed(got.channel);
+            }
+            error(fd, got.error != 0 ? got.error : EIO);
+            co_return;
+        }
+        auto* fs = new (allocate(sizeof(Fs))) Fs();
+        fs->channel = got.channel;
+        fs->dev = st.dev;
+        got.channel->fs = fs;
+        Place top;
+        top.node = st.ino;
+        top.st = st;
+        mountAt(fs, top, t.target, t.here.node, t.last);
+        ok(fd);
+    }
+
+    // UNMOUNT: what is mounted where a path names, a last link followed
+    // unless UMOUNT_NOFOLLOW says; EINVAL for what is no mount's root, EBUSY
+    // for one with mounts on it.
+    static Task unmountCall(Header h, int fd, Place root, Place from, Name path) {
+        Reply r{fd};
+        Walk w;
+        w.start(h, from, root, path, true, (h.arg & UMOUNT_NOFOLLOW) == 0, false);
+        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+            if (s == Walk::Step::Failed) {
+                error(fd, w.error);
+                co_return;
+            }
+        }
+        Mount* m = w.target.m;
+        if (w.kind != lastName || !isMountRoot(w.target) || !m->parent) {
+            error(fd, EINVAL);
+            co_return;
+        }
+        for (const Mount* sub = mounts; sub; sub = sub->next) {
+            if (sub->parent == m) {
+                error(fd, EBUSY);
+                co_return;
+            }
+        }
+        unmount(m);
+        ok(fd);
+    }
+}
+
+Reply::~Reply() {
+    if (fd >= 0) {
+        close(fd);
+    }
+}
+
+Held::Held(const Place& p)
+    : at(p)
+{
+    hold(at);
+}
+
+Held::~Held() {
+    unhold(at);
+}
+
+void Held::become(const Place& p) {
+    hold(p);
+    unhold(at);
+    at = p;
+}
+
+void Path::prepend(Name name) {
+    Buffer next;
+    const char* rest = static_cast<const char*>(bytes.data());
+    if (name.empty()) {
+        return;
+    }
+    if (name.at[0] != '/') {
+        next.append("/", 1);
+    }
+    next.append(name.at, name.length);
+    next.append(rest, bytes.size());
+    bytes.swap(next);
+}
+
+Name Path::text() const {
+    if (bytes.size() == 0) {
+        return literal("/");
+    }
+    return {static_cast<const char*>(bytes.data()), bytes.size()};
+}
+
+namespace {
     // ---- devices ----------------------------------------------------------------
 
-    // A service's device: a name in /dev of the mode asked for, S_IFCHR,
-    // S_IFBLK, or S_IFSOCK for a file system to mount, whose opens go on to
-    // the end of a pair the request brings, the service's the other; its
-    // stat is the reply. Only on an endpoint of /dev/init open to write.
+    // A service's end of its pair, a name of directory dir: when it closes,
+    // the service is gone and the name with it.
+    static void listenChannel(Server& s, int fd, Node* n, Node* dir, Name name) {
+        Endpoint* ep = listen(fd, Role::Channel);
+        ep->server = &s;
+        ep->node = n;
+        ep->dir = dir;
+        ep->nameLength = u8(name.length);
+        memcpy(ep->name, name.at, name.length);
+        ++n->opens;
+        ++dir->holds;
+    }
+
+    // A service's device: a name in the registry's tree of the mode asked
+    // for, S_IFCHR, S_IFBLK, or S_IFSOCK for a file system to mount, whose
+    // opens go on to the end of a pair the request brings, the service's
+    // the other; its stat is the reply. Only on an endpoint of /dev/init
+    // open to write.
     static bool registerName(Endpoint* ep, const Header& h, Body body, int fd) {
         const Name name = body.string();
         const u32 type = h.arg & S_IFMT;
-        Server& s = devices;
         if (ep->node->kind != Kind::Registry || !ep->writes) {
             return error(fd, EBADF);
         }
+        Server& s = *ep->server;
         if (packetFdCount != 2 || (type != S_IFCHR && type != S_IFBLK && type != S_IFSOCK) || name.empty()) {
             return error(fd, EINVAL);
         }
@@ -2295,194 +3527,258 @@ namespace {
         n->uid = h.uid;
         n->gid = h.gid;
         n->fd = packetFds[0];
-        packetFds[0] = -1;  // the device's now: handle leaves it open
-        listen(s, n->fd, n, false, false, s.root, name, Role::Channel);
+        packetFds[0] = -1; // the device's now: handle leaves it open
+        listenChannel(s, n->fd, n, s.root, name);
         const Stat st = statOf(s, n);
         ok(fd, &st, sizeof st);
         return false;
     }
 
-    // ---- mounts -------------------------------------------------------------------
-
-    // A directory of another server, the end of an open of it the request
-    // brings, mounted on a directory of a name here: a walk into the name,
-    // and a call on it, go on to that server from then on. The server gets
-    // an endpoint of the mount point (MOUNTED), for its walks out of its
-    // root by ".." and the paths it is asked. When the end closes, the
-    // server is gone, unmounted.
-    static bool mountName(Endpoint* ep, const Header& h, Body body, int fd) {
-        const Name name = body.string();
-        Place t;
-        if (packetFdCount != 2 || name.empty()) {
-            return error(fd, EINVAL);
-        }
-        if (const int e = named(ep->server, ep->node, name, h, t)) {
-            return error(fd, e);
-        }
-        Node* n = t.node;
-        if (n->kind != Kind::Dir) {
-            return error(fd, ENOTDIR);
-        }
-        if (mountPoint(n) || n == t.s->root) {
-            return error(fd, EBUSY);
-        }
-        int ends[2];
-        if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ends) != 0) {
-            return error(fd, errno);
-        }
-        n->mount = listen(*t.s, packetFds[0], n, false, false, nullptr, {}, Role::Mount);
-        packetFds[0] = -1;  // the mount's now
-        n->up = listen(*t.s, ends[0], n, false, false, nullptr, {}, Role::Up);
-        Header mounted{opMounted, 0, 0, 0};
-        const iovec parts[] = {part(&mounted, sizeof mounted)};
-        sendPacket(n->mount->fd, parts, 1, &ends[1], 1, MSG_DONTWAIT);
-        close(ends[1]);
-        return answer(fd, 0);
-    }
-
-    // The server mounted on a name of the directory let go of.
-    static bool unmountName(Endpoint* ep, const Header& h, Body body, int fd) {
-        const Name name = body.string();
-        if (ep->node->kind != Kind::Dir) {
-            return error(fd, ENOTDIR);
-        }
-        if (!may(ep->node, h, 1)) {
-            return error(fd, EACCES);
-        }
-        const Entry* entry = name.empty() ? nullptr : lookup(ep->node, name);
-        if (!entry) {
-            return error(fd, name.empty() ? EINVAL : ENOENT);
-        }
-        if (!entry->node->mount) {
-            return error(fd, EINVAL);
-        }
-        closed(entry->node->mount);
-        return answer(fd, 0);
-    }
-
-    // A call on a name of the directory another server is mounted on is a
-    // call on that server's root: it goes on to the server without the
-    // name, what comes before the name in the body kept. handled says it
-    // was such a call.
-    static bool onMounted(Endpoint* ep, const Header& h, Body body, int fd, bool& handled) {
-        usize ahead = 0;
-        handled = false;
-        switch (h.op) {
-        case opOpen:
-            ahead = 4;
-            break;
-        case opChown:
-        case opTruncate:
-            ahead = 8;
-            break;
-        case opUtimes:
-            ahead = 16;
-            break;
-        case opStat:
-        case opReadlink:
-        case opStatfs:
-        case opChmod:
-            break;
-        default:
-            return false;
-        }
-        if (body.size() < ahead || ep->node->kind != Kind::Dir) {
-            return false;
-        }
-        Body rest{body.at + ahead, body.end};
-        const Name name = rest.string();
-        const Entry* entry = name.empty() ? nullptr : lookup(ep->node, name);
-        if (!entry || !entry->node->mount) {
-            return false;
-        }
-        handled = true;
-        if (!may(ep->node, h, 1)) {
-            return error(fd, EACCES);
-        }
-        return toMounted(entry->node, h, body.at, ahead, fd);
-    }
-
     // ---- the loop ---------------------------------------------------------------
 
-    // A request on an endpoint, answered on fd: whether fd is kept.
-    static bool dispatch(Endpoint* ep, const Header& h, Body body, int fd) {
-        bool handled;
-        const bool kept = onMounted(ep, h, body, fd, handled);
-        if (handled) {
-            return kept;
+    // fchmod, fchown, futimes, ftruncate and fsync of an open file of a
+    // tree of ours; only an endpoint open to write truncates.
+    static bool fattr(Endpoint* ep, Server& s, Node* n, const Header& h, Body body, int fd) {
+        if (h.op == opFsync) {
+            return answer(fd, 0);
         }
+        if (!s.writable) {
+            return error(fd, EROFS);
+        }
+        if (h.op == opFtruncate && !ep->writes) {
+            return error(fd, EINVAL);
+        }
+        return answer(fd, change(s, n, h.op, h, body));
+    }
+
+    // A call on an open file of a tree of ours, answered on fd: whether fd
+    // is kept.
+    static bool onFile(Endpoint* ep, const Header& h, Body body, int fd) {
         switch (h.op) {
-        case opResolve:
-            return resolve(ep, h, body, fd);
-        case opPath:
-            return pathOf(ep, body, fd);
-        case opOpen:
-            return openName(ep, h, body, fd);
-        case opStat:
-            return statName(ep, h, body, fd);
-        case opStatfs:
-            return statfsName(ep, h, body, fd);
-        case opReadlink:
-            return readlinkName(ep, h, body, fd);
-        case opMkdir:
-        case opMknod:
-        case opSymlink:
-            return create(ep, h, body, fd);
-        case opUnlink:
-            return unlinkName(ep, h, body, fd);
-        case opRename:
-            return renameName(ep, h, body, fd);
-        case opLink:
-            return linkName(ep, h, body, fd);
-        case opChmod:
-        case opChown:
-        case opUtimes:
-        case opTruncate:
-            return attr(ep, h, body, fd);
-        case opFchmod:
-        case opFchown:
-        case opFutimes:
-        case opFtruncate:
-        case opFsync:
-            return fattr(ep, h, body, fd);
-        case opRead:
-            return readNode(ep, h, body, fd);
-        case opWrite:
-            return writeNode(ep, h, body, fd);
-        case opReaddir:
-            return readdirNode(ep->node, body, fd);
-        case opFstat: {
-            const Stat st = statOf(*ep->server, ep->node);
-            ok(fd, &st, sizeof st);
-            return false;
+            case opRead:
+                return readNode(ep, h, body, fd);
+            case opWrite:
+                return writeNode(ep, h, body, fd);
+            case opReaddir:
+                return error(fd, ENOTDIR);
+            case opFstat: {
+                const Stat st = statOf(*ep->server, ep->node);
+                ok(fd, &st, sizeof st);
+                return false;
+            }
+            case opFstatfs: {
+                const Statfs st = statfsOf(*ep->server);
+                ok(fd, &st, sizeof st);
+                return false;
+            }
+            case opFchmod:
+            case opFchown:
+            case opFutimes:
+            case opFtruncate:
+            case opFsync:
+                return fattr(ep, *ep->server, ep->node, h, body, fd);
+            case opFlock:
+                return flockNode(ep, h, fd);
+            case opLock:
+                return lockNode(ep, h, body, fd);
+            case opRegister:
+                return registerName(ep, h, body, fd);
+            default:
+                return error(fd, ENOSYS);
         }
-        case opFstatfs: {
-            const Statfs st = statfsOf(*ep->server);
-            ok(fd, &st, sizeof st);
-            return false;
+    }
+
+    // An open file's call on a handle: by a tree of ours, or handed on to
+    // the file system its place is of. O_PATH's handle reads, changes and
+    // locks nothing: EBADF.
+    static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
+        const Place& at = ep->at;
+        const bool opath = !ep->reads;
+        switch (h.op) {
+            case opFstat:
+                if (ours(at)) {
+                    handleReply(fd, statOf(*at.m->fs->tree, at.n), ep->id);
+                    return false;
+                }
+                return hand(at, h, fsGetattr, 0, nullptr, 0, {}, fd);
+            case opFstatfs:
+                if (ours(at)) {
+                    const Statfs st = statfsOf(*at.m->fs->tree);
+                    ok(fd, &st, sizeof st);
+                    return false;
+                }
+                return hand(at, h, fsStatfs, 0, nullptr, 0, {}, fd);
+            case opReaddir:
+                if (opath) {
+                    return error(fd, EBADF);
+                }
+                if (!isDir(at)) {
+                    return error(fd, ENOTDIR);
+                }
+                if (ours(at)) {
+                    return readdirNode(at.n, body, fd);
+                }
+                return hand(at, h, fsReaddir, 0, body.at, body.size(), {}, fd);
+            case opFsync:
+                return opath ? error(fd, EBADF) : answer(fd, 0);
+            case opFtruncate:
+                return error(fd, opath ? EBADF : EINVAL);
+            case opFchmod:
+            case opFchown:
+            case opFutimes:
+                if (opath) {
+                    return error(fd, EBADF);
+                }
+                if (ours(at)) {
+                    return fattr(ep, *at.m->fs->tree, at.n, h, body, fd);
+                }
+                return hand(at, h, h.op == opFchmod ? fsChmod : h.op == opFchown ? fsChown : fsUtimes, h.arg, body.at, body.size(), {}, fd);
+            case opFlock:
+            case opLock:
+                if (opath) {
+                    return error(fd, EBADF);
+                }
+                if (!ours(at)) {
+                    return error(fd, EINVAL);
+                }
+                return h.op == opFlock ? flockNode(ep, h, fd) : lockNode(ep, h, body, fd);
+            default:
+                return error(fd, ENOSYS);
         }
-        case opFlock:
-            return flockNode(ep, h, fd);
-        case opLock:
-            return lockNode(ep, h, body, fd);
-        case opRegister:
-            return registerName(ep, h, body, fd);
-        case opMount:
-            return mountName(ep, h, body, fd);
-        case opUnmount:
-            return unmountName(ep, h, body, fd);
-        default:
-            return error(fd, ENOSYS);
+    }
+
+    // A call on a handle, answered on fd: one of the VFS's, which names
+    // the process's root by its handle's id and walks from this one; or an
+    // open file's. Whether fd is kept: a call of the VFS's keeps it, and
+    // closes it when it is done.
+    static bool onHandle(Endpoint* ep, const Header& h, Body body, int fd) {
+        if (h.op < vfsOpen || h.op > vfsPath) {
+            return onPlace(ep, h, body, fd);
         }
+        Place root;
+        if (body.size() < 8 || !placeOf(body.take<u64>(), root)) {
+            return error(fd, EIO);
+        }
+        const Place from = ep->at;
+        switch (h.op) {
+            case vfsOpen: {
+                const u32 mode = body.take<u32>();
+                openCall(h, fd, root, from, mode, body.rest());
+                break;
+            }
+            case vfsStat:
+                statCall(h, fd, root, from, body.rest());
+                break;
+            case vfsReadlink:
+                readlinkCall(h, fd, root, from, body.rest());
+                break;
+            case vfsMkdir:
+            case vfsMknod:
+                makeCall(h, fd, root, from, {}, body.rest());
+                break;
+            case vfsSymlink: {
+                const Name target = body.string();
+                makeCall(h, fd, root, from, target, body.rest());
+                break;
+            }
+            case vfsUnlink:
+                unlinkCall(h, fd, root, from, body.rest());
+                break;
+            case vfsRename:
+            case vfsLink: {
+                Place to;
+                if (!placeOf(body.take<u64>(), to)) {
+                    return error(fd, EIO);
+                }
+                const Name old = body.string();
+                if (h.op == vfsRename) {
+                    renameCall(h, fd, root, from, to, old, body.rest());
+                } else {
+                    linkCall(h, fd, root, from, to, old, body.rest());
+                }
+                break;
+            }
+            case vfsChmod:
+            case vfsChown:
+            case vfsUtimes:
+            case vfsTruncate: {
+                const u32 flags = h.op == vfsTruncate ? 0 : body.take<u32>();
+                const usize size = h.op == vfsChown || h.op == vfsTruncate ? 8 : h.op == vfsUtimes ? 16 : 0;
+                Args args{};
+                if (body.size() < size) {
+                    return error(fd, EINVAL);
+                }
+                memcpy(args.bytes, body.at, size);
+                args.size = size;
+                body.at += size;
+                const u32 op = h.op == vfsChmod ? fsChmod : h.op == vfsChown ? fsChown : h.op == vfsUtimes ? fsUtimes : fsTruncate;
+                changeCall(h, fd, root, from, op, (flags & AT_SYMLINK_NOFOLLOW) == 0, args, body.rest());
+                break;
+            }
+            case vfsStatfs:
+                statfsCall(h, fd, root, from, body.rest());
+                break;
+            case vfsRealpath:
+                pathCall(h, fd, root, from, true, body.rest());
+                break;
+            case vfsMount: {
+                const Name target = body.string();
+                mountCall(h, fd, root, from, target, body.rest());
+                break;
+            }
+            case vfsUnmount:
+                unmountCall(h, fd, root, from, body.rest());
+                break;
+            case vfsPath:
+                pathCall(h, fd, root, from, false, {});
+                break;
+        }
+        return true;
+    }
+
+    // The answer to a call's question to a file system: the call goes on.
+    // A connection's endpoint stays, the channel from then on; any other
+    // is done with. An answer that is no OK or ERR, or none, is EIO.
+    static void answered(Endpoint* ep) {
+        Ask* a = ep->ask;
+        int fds[maxFds];
+        usize count = 0;
+        const ssize_t n = receivePacket(ep->fd, packet, sizeof packet, fds, count);
+        for (usize i = 0; i < count; ++i) {
+            close(fds[i]);
+        }
+        Header h{};
+        if (n >= ssize_t(sizeof h)) {
+            memcpy(&h, packet, sizeof h);
+        }
+        if (n < ssize_t(sizeof h) || (h.op != opOk && h.op != opErr)) {
+            a->answer.error = EIO;
+        } else if (h.op == opErr) {
+            a->answer.error = h.arg != 0 ? int(h.arg) : EIO;
+        } else {
+            a->answer.body = {packet + sizeof h, packet + n};
+        }
+        if (a->connects && a->answer.error == 0) {
+            ep->role = Role::Fs;
+            ep->ask = nullptr;
+            a->answer.channel = ep;
+        } else {
+            closed(ep);
+        }
+        a->call.resume();
     }
 
     static void handle(Endpoint* ep) {
         if (ep->dead) {
             return;
         }
-        if (ep->role == Role::Channel || ep->role == Role::Mount) {
-            // Nothing comes on a device's end of its service's pair, or on
-            // a mounted root's, but its close; what else does is dropped.
+        if (ep->role == Role::Pending) {
+            answered(ep);
+            return;
+        }
+        if (ep->role == Role::Channel || ep->role == Role::Fs) {
+            // Nothing comes on a service's end of its pair, or on a file
+            // system's channel, but its close; what else does is dropped.
             const ssize_t got = receivePacket(ep->fd, packet, sizeof packet, packetFds, packetFdCount);
             for (usize i = 0; i < packetFdCount; ++i) {
                 close(packetFds[i]);
@@ -2499,7 +3795,7 @@ namespace {
             return;
         }
         if (packetFdCount == 0) {
-            return;  // a request without its reply endpoint: nobody to answer
+            return; // a request without its reply endpoint: nobody to answer
         }
         if (h.op == opOk || h.op == opErr) {
             for (usize i = 0; i < packetFdCount; ++i) {
@@ -2508,7 +3804,9 @@ namespace {
             return;
         }
         const int fd = packetFds[packetFdCount - 1];
-        if (!dispatch(ep, h, Body{packet + sizeof(Header), packet + sizeof(Header) + n}, fd)) {
+        const Body body{packet + sizeof(Header), packet + sizeof(Header) + n};
+        const bool kept = ep->role == Role::Handle ? onHandle(ep, h, body, fd) : onFile(ep, h, body, fd);
+        if (!kept) {
             close(fd);
         }
         // The request's other descriptors, a READ's or WRITE's window, are
@@ -2539,20 +3837,20 @@ namespace {
         return shellStatus < 0;
     }
 
-    int bootEnd = -1;  // ours of the pair the services close once they are up
-    Endpoint bootMarker;  // what the events of bootEnd carry
+    int bootEnd = -1;    // ours of the pair the services close once they are up
+    Endpoint bootMarker; // what the events of bootEnd carry
 
     static void booted();
 
     // The shell ended: the system goes down. The services' devices lose
-    // their names and the mounted servers their mounts; a service ends once
-    // what is open of it is closed, a file system once it has written what
-    // it holds, the file systems first, as the devices under them serve
-    // them until then.
+    // their names and the file systems of others their channels; a service
+    // ends once what is open of it is closed, a file system once it has
+    // written what it holds, the file systems first, as the devices under
+    // them serve them until then.
     static void shutdown() {
         for (Endpoint* ep = live; ep;) {
             Endpoint* after = ep->after;
-            if (ep->role == Role::Channel || ep->role == Role::Mount) {
+            if (!ep->dead && (ep->role == Role::Channel || ep->role == Role::Fs)) {
                 closed(ep);
             }
             ep = after;
@@ -2565,12 +3863,12 @@ namespace {
         return i64(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
     }
 
-    // Serves the servers until the last endpoint of them all closes: then
-    // nobody can reach them. When the shell ends, the system goes down
-    // (shutdown) and they are served until its processes are gone, the last
-    // endpoint closed, or for 10 seconds at most. The end of bootEnd, no
-    // packet on it, is the services' being up. An endpoint closed while a
-    // batch of events is handled stays dead to the rest of the batch.
+    // Serves the VFS until the last endpoint closes: then nobody can reach
+    // it. When the shell ends, the system goes down (shutdown), and it is
+    // served until its processes are gone, the last endpoint closed, or for
+    // 10 seconds at most. The end of bootEnd, no packet on it, is the
+    // services' being up. An endpoint closed while a batch of events is
+    // handled stays dead to the rest of the batch.
     static void serve() {
         epoll_event events[64];
         i64 deadline = -1;
@@ -2602,28 +3900,6 @@ namespace {
     }
 
     // ---- the system ----------------------------------------------------------------
-
-    // Mounts a server of this process on a directory of ours, a path of
-    // names from our root: a walk goes into its root there, and by ".."
-    // from its root back here.
-    static void mountOn(Server& s, const char* path, Server& target) {
-        Node* n = s.root;
-        Walk walk;
-        walk.push(literal(path));
-        for (Name name; walk.take(name);) {
-            const Entry* entry = n->kind == Kind::Dir ? lookup(n, name) : nullptr;
-            if (!entry) {
-                fatal("mount on %s", path);
-            }
-            n = entry->node;
-        }
-        if (n->kind != Kind::Dir) {
-            fatal("mount on %s", path);
-        }
-        n->served = &target;
-        target.above = n;
-        target.aboveServer = &s;
-    }
 
     static void onChild(int) {
         childEnded = 1;
@@ -2661,11 +3937,17 @@ namespace {
     // The directory of a path, made on the way.
     static Node* dirOf(Server& s, Name path) {
         Node* n = s.root;
-        Walk walk;
-        walk.push(path);
-        for (Name part; walk.take(part);) {
-            const Entry* entry = lookup(n, part);
-            n = entry ? entry->node : makeNode(s, n, part, Kind::Dir, false);
+        for (usize i = 0; i < path.length;) {
+            usize j = i;
+            while (j < path.length && path.at[j] != '/') {
+                ++j;
+            }
+            if (j > i) {
+                const Name part{path.at + i, j - i};
+                const Entry* entry = lookup(n, part);
+                n = entry ? entry->node : makeNode(s, n, part, Kind::Dir, false);
+            }
+            i = j + 1;
         }
         return n;
     }
@@ -2699,27 +3981,27 @@ namespace {
             Node* dir = dirOf(s, {path.at, slash ? usize(slash - path.at) : 0});
             const Name base = slash ? Name{slash + 1, path.length - usize(slash + 1 - path.at)} : path;
             switch (kind) {
-            case '5':
-                if (!base.empty()) {
-                    const Entry* entry = lookup(dir, base);
-                    (entry ? entry->node : makeNode(s, dir, base, Kind::Dir, false))->perm = perm;
+                case '5':
+                    if (!base.empty()) {
+                        const Entry* entry = lookup(dir, base);
+                        (entry ? entry->node : makeNode(s, dir, base, Kind::Dir, false))->perm = perm;
+                    }
+                    break;
+                case '2': {
+                    unname(s, dir, base);
+                    Node* n = makeNode(s, dir, base, Kind::Link, false);
+                    n->content.view = reinterpret_cast<const u8*>(target.at);
+                    n->content.viewSize = target.length;
+                    break;
                 }
-                break;
-            case '2': {
-                unname(s, dir, base);
-                Node* n = makeNode(s, dir, base, Kind::Link, false);
-                n->content.view = reinterpret_cast<const u8*>(target.at);
-                n->content.viewSize = target.length;
-                break;
-            }
-            default: {
-                unname(s, dir, base);
-                Node* n = makeNode(s, dir, base, Kind::File, false);
-                n->content.view = block + 512;
-                n->content.viewSize = usize(size);
-                n->perm = perm;
-                s.used += size;
-            }
+                default: {
+                    unname(s, dir, base);
+                    Node* n = makeNode(s, dir, base, Kind::File, false);
+                    n->content.view = block + 512;
+                    n->content.viewSize = usize(size);
+                    n->perm = perm;
+                    s.used += size;
+                }
             }
             at += 512 + usize((size + 511) / 512 * 512);
         }
@@ -2729,7 +4011,6 @@ namespace {
     // to whoever opens /dev/tty. /dev/init takes the devices of services,
     // from the system's user.
     static void devfs(Server& s) {
-        s.root = makeNode(s, nullptr, {}, Kind::Dir);
         makeNode(s, s.root, literal("tty"), Kind::Object, false)->fd = STDIN_FILENO;
         Node* init = makeNode(s, s.root, literal("init"), Kind::Registry, false);
         init->perm = 0600;
@@ -2837,18 +4118,49 @@ namespace {
         close(rootEnd);
         rootEnd = -1;
     }
+
+    Server image;     // the root
+    Server devices;   // /dev
+    Server temporary; // /tmp
+    Fs imageFs;
+    Fs devicesFs;
+    Fs temporaryFs;
+
+    // A tree of ours as a file system of the VFS's.
+    static void tree(Server& s, Fs& fs, bool writable, u64 capacity) {
+        s.writable = writable;
+        s.capacity = capacity;
+        s.root = makeNode(s, nullptr, {}, Kind::Dir);
+        fs.tree = &s;
+        fs.dev = s.dev;
+    }
+
+    // Mounts a tree of ours on a directory of the image, a name in its
+    // root.
+    static void mountTree(Fs& fs, const char* name) {
+        const Entry* entry = lookup(image.root, literal(name));
+        if (!entry || entry->node->kind != Kind::Dir) {
+            fatal("rootfs: mount on /%s", name);
+        }
+        mountAt(&fs, ourPlace(nullptr, fs.tree->root), ourPlace(rootMount, entry->node), image.root->ino, literal(name));
+    }
 }
 
 int main() {
-    image.root = makeNode(image, nullptr, {}, Kind::Dir);
+    tree(image, imageFs, false, 0);
     load(image);
+    tree(devices, devicesFs, false, 0);
     devfs(devices);
-    temporary.writable = true;
-    temporary.capacity = tmpCapacity;
-    temporary.root = makeNode(temporary, nullptr, {}, Kind::Dir);
+    tree(temporary, temporaryFs, true, tmpCapacity);
     temporary.root->perm = 01777;
-    mountOn(image, "dev", devices);
-    mountOn(image, "tmp", temporary);
+    rootMount = new (allocate(sizeof(Mount))) Mount();
+    rootMount->fs = &imageFs;
+    imageFs.mounts = 1;
+    rootMount->root = image.root->ino;
+    rootMount->rootNode = image.root;
+    mounts = rootMount;
+    mountTree(devicesFs, "dev");
+    mountTree(temporaryFs, "tmp");
     int ends[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ends) != 0) {
         fatal("rootfs: socketpair: errno %d", errno);
@@ -2856,9 +4168,9 @@ int main() {
     reapOnChild();
     watcher = epoll_create1(EPOLL_CLOEXEC);
     if (watcher < 0) {
-        fatal("fs: epoll_create1: errno %d", errno);
+        fatal("rootfs: epoll_create1: errno %d", errno);
     }
-    listen(image, ends[0], nullptr, true, false, nullptr, {});
+    listenHandle(ends[0], rootOf(rootMount), false);
     rootEnd = ends[1];
     boot();
     serve();

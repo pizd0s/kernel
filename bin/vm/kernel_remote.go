@@ -9,17 +9,12 @@ import (
 	"time"
 )
 
-// A server's files. A process whose root is a connection to a server
-// reaches every file through it: an open file is one end of a seqpacket
-// pair (kernel_endpoint.go), the server holds the other and answers on
-// it. The kernel speaks the protocol here for the POSIX calls of a
-// process, as the libc of the process would; rootfs speaks it as the
-// servers (bin/rootfs/rootfs.cpp). The kernel walks a path as Linux does
-// (kernel_path.go): RESOLVE walks it from a directory to the directory of
-// its last name, and the call is then one on that name, which no server
-// follows: the kernel follows a symbolic link itself. A directory the
-// process holds, its root, its working directory, one a descriptor is,
-// is an endpoint of the server's, not a name.
+// A server's files: the kernel speaks the protocol of
+// lib/protocol/protocol.h here for the POSIX calls of a process, as the
+// libc of the process would. An open file is one end of a seqpacket pair
+// (kernel_endpoint.go), whose server holds the other and answers on it: a
+// file system's, a device's service's, or rootfs's for a handle, which the
+// calls with a path go to whole (kernel_vfs.go).
 //
 // A packet is a header and a body; files ride with it.
 //
@@ -30,48 +25,23 @@ import (
 //	its modes say, gid their group (permits). A reply's are zero.
 //
 //	Every request brings a fresh endpoint, last among its files: the reply
-//	comes on it, and an OPEN's stays the open file's. A READ or a WRITE
+//	comes on it, and an open's stays the open file's. A READ or a WRITE
 //	brings before it a memfd of the memory the process reads into or
 //	writes from (kernel_memfd.go): the server writes the bytes there or
-//	reads them from there itself, from the memfd's byte woff on, one
-//	copy, as many as asked, and closes it as it answers. A server may hand
-//	a request on to another, its files with it, which then answers it. A
-//	server that is gone is EIO. On the endpoint of a
-//	directory a call is about the directory or about one name in it, ""
-//	being the directory itself; a name is no "." or "..", has no "/" and
-//	is never followed: a symbolic link is itself, and to the calls that
-//	look at a name the root of a server mounted on it is what it is. On
-//	the endpoint of a node a node call is the node's.
-//	  RESOLVE   arg handed root dev u64, root ino u64, links u32, path
-//	                      OK step u32, links u32, last u32, flags u32, name;
-//	                      handed 1: a server handed the walk on, which keeps
-//	                      the reply's endpoint
-//	  OPEN      arg flags mode u32 name   OK stat; a file among the
-//	                      reply's files is the file itself
-//	  STAT                name             OK stat
-//	  READLINK            name             OK target
-//	  MKDIR     arg mode  name
-//	  MKNOD     arg mode  name             a FIFO or a regular file
-//	  UNLINK    arg flags name             AT_REMOVEDIR
-//	  RENAME              dev u64 ino u64 old 0 new   new a name of the
-//	                      directory of device dev and inode ino
-//	  LINK                dev u64 ino u64 old 0 new
-//	  SYMLINK             target 0 name
-//	  CHMOD     arg mode  name
-//	  CHOWN               uid u32 gid u32 name
-//	  UTIMES    arg when  atime u64 mtime u64 name   when: 2 atime now,
-//	                      4 mtime now, 8 atime kept, 16 mtime kept
-//	  TRUNCATE            size u64 name
-//	  STATFS              name             OK statfs
+//	reads them from there itself, from the memfd's byte woff on, one copy,
+//	as many as asked, and closes it as it answers. A server that is gone
+//	is EIO. An open file's calls:
 //	  READ      arg len   off u64 woff u32 OK count u32
 //	  WRITE     arg append off u64 len u32 woff u32
 //	                                       OK count u32 at u64, where an
 //	                                       append went
 //	  READDIR             after u64        OK (ino u64, pos u64, type u8, name, 0)*
-//	  FSTAT                                OK stat
+//	  FSTAT                                OK stat; a handle's that rootfs
+//	                                       answers itself: stat, id u64
 //	  FCHMOD    arg mode
 //	  FCHOWN              uid u32 gid u32
-//	  FUTIMES   arg when  atime u64 mtime u64
+//	  FUTIMES   arg when  atime u64 mtime u64   when: 2 atime now, 4 mtime
+//	                                       now, 8 atime kept, 16 mtime kept
 //	  FTRUNCATE           size u64
 //	  FSYNC     arg data
 //	  FSTATFS                              OK statfs
@@ -79,70 +49,41 @@ import (
 //	  LOCK      arg get   type u32 start u64 len u64   OK; with get the
 //	                      lock in the way, F_UNLCK for none:
 //	                      type u32 start u64 len u64
-//	  PATH                root dev u64, root ino u64   OK the path from the
-//	                      root of the process: a directory's, a file's by
-//	                      the name it was opened by in its directory
-//	  MOUNT               name             fds[0] the end of an open
-//	                      directory of a server: walks into the name, and
-//	                      the calls on it, go on to that server
-//	  UNMOUNT             name
 //	replies: OK, ERR with arg the errno
 //	stat { ino u64, size u64, mtime u64 nanoseconds, mode u32, nlink u32,
 //	       uid u32, gid u32, atime u64, dev u64, ctime u64 }
 //	statfs { blocks u64, bfree u64, files u64, ffree u64, dev u64,
 //	         bsize u32, namemax u32, flags u32 }   flags: 1 read-only
 //
-// The root of the process is its device and inode: ".." stays there, an
-// absolute link starts there. RESOLVE's step is 0 at the directory of the
-// last name, which is the reply's endpoint from then on when flags has 2,
-// else the directory asked; last is the kind of the last name (a name,
-// ".", "..", or none: the root alone), flags 1 a slash after it. A walk to
-// a root the server has no node of is step 1, with the path left to walk
-// from the root. A directory's entries have positions, each after those
-// before it, and a READDIR gives those after one: removing what was read
-// moves nothing a reading has to come to. dev is the server's own, the
-// files of two servers never share one. A WRITE with append goes at the
-// end the file has when the server takes it: O_APPEND is the server's,
-// so no write of another comes between. A lock is the endpoint's, an open
-// file's, as the host's open file description locks are, and goes when
-// it closes; a FIFO's pipe is the kernel's (kernel_fifo.go).
+// A directory's entries have positions, each after those before it, and a
+// READDIR gives those after one: removing what was read moves nothing a
+// reading has to come to. dev is the file system's own, the files of two
+// never share one. A WRITE with append goes at the end the file has when
+// the server takes it: O_APPEND is the server's, so no write of another
+// comes between. A lock is the endpoint's, an open file's, as the host's
+// open file description locks are, and goes when it closes; a FIFO's pipe
+// is the kernel's (kernel_fifo.go).
 const (
-	rOpen uint32 = iota + 1
-	rStat
-	rReadlink
-	rMkdir
-	rUnlink
-	rRename
-	rSymlink
-	rResolve
-	rRead
+	rRead uint32 = iota + 64
 	rWrite
 	rReaddir
 	rFstat
-	rChmod
-	rChown
-	rUtimes
-	rTruncate
 	rFchmod
 	rFchown
 	rFutimes
 	rFtruncate
 	rFsync
-	rMknod
-	rLink
-	rStatfs
 	rFstatfs
 	rFlock
 	rLock
-	rPath
-	rOk
-	rErr
-	rRegister // rootfs's, never the kernel's
-	rMount
-	rUnmount
-	remoteHeader = 16
-	remoteStat   = 64
-	remoteStatfs = 52
+)
+
+const (
+	rOk          uint32 = 128
+	rErr         uint32 = 129
+	remoteHeader        = 16
+	remoteStat          = 64
+	remoteStatfs        = 52
 	// The whens of UTIMES and FUTIMES.
 	whenAtimeNow  = 2
 	whenMtimeNow  = 4
@@ -150,11 +91,6 @@ const (
 	whenMtimeKept = 16
 	utimeNow      = 1<<30 - 1
 	utimeOmit     = 1<<30 - 2
-	// RESOLVE's steps and flags.
-	stepDone  = 0
-	stepRoot  = 1
-	stepSlash = 1
-	stepKept  = 2
 )
 
 // remoteNode is an open file of a server: the end of its pair, and what
@@ -176,11 +112,15 @@ type remoteFile struct {
 	remoteNode
 }
 
-// remoteDir is a directory of a server; dev and ino are its, once known.
+// remoteDir is a handle of rootfs's (kernel_vfs.go): a directory of the
+// VFS's, or what O_PATH opened, of mode; dev and ino are its, once known,
+// and its id.
 type remoteDir struct {
 	remoteNode
 	known    atomic.Bool
 	dev, ino atomic.Uint64
+	id       atomic.Uint64
+	mode     uint32
 }
 
 var (
@@ -369,7 +309,7 @@ func (n *remoteNode) call(op, arg uint32, body []byte, files []File) (packet, *p
 		return packet{}, nil, err
 	}
 
-	if op == rOpen && len(pk.files) > 0 {
+	if op == vOpen && len(pk.files) > 0 {
 		dropFiles(pk.files[1:])
 		pk.files = pk.files[:1]
 	} else {
@@ -607,28 +547,7 @@ func (n *remoteNode) recordLock(cmd int, lk *syscall.Flock_t) error {
 	return nil
 }
 
-// The Dir role.
-
-// name is a file's path from the root of the process: its directory's,
-// and the name it was opened by.
-func (n *remoteNode) name(p *Process) (string, error) {
-	return n.pathFrom(p.root)
-}
-
-// pathFrom is the path the server gives the node from root.
-func (n *remoteNode) pathFrom(root Dir) (string, error) {
-	dev, ino := identity(root)
-	var body [16]byte
-	binary.LittleEndian.PutUint64(body[:], dev)
-	binary.LittleEndian.PutUint64(body[8:], ino)
-	pk, err := n.on(rPath, 0, body[:])
-
-	if err != nil {
-		return "", err
-	}
-
-	return string(pk.data), nil
-}
+// The Dir role, of a handle (kernel_vfs.go).
 
 // identity is a directory's device and inode, which a server finds the
 // root of a process by.
@@ -662,305 +581,6 @@ func (d *remoteDir) ident() (uint64, uint64) {
 	}
 
 	return d.dev.Load(), d.ino.Load()
-}
-
-// resolve asks the server to walk a path from the directory: a step at
-// the directory of the last name, this one or one the reply's endpoint
-// is, or a walk to go on from the root of the process.
-func (d *remoteDir) resolve(p *Process, path string, w *walk) (step, error) {
-	dev, ino := identity(w.root)
-	body := make([]byte, 20, 20+len(path))
-	le := binary.LittleEndian
-	le.PutUint64(body, dev)
-	le.PutUint64(body[8:], ino)
-	le.PutUint32(body[16:], uint32(w.links))
-	pk, mine, err := d.call(rResolve, 0, append(body, path...), nil)
-
-	if err != nil {
-		return step{}, err
-	}
-
-	if len(pk.data) < 16 {
-		mine.unref()
-
-		return step{}, syscall.EIO
-	}
-
-	w.links = int(le.Uint32(pk.data[4:]))
-	flags := le.Uint32(pk.data[12:])
-	s := step{last: string(pk.data[16:]), kind: int(le.Uint32(pk.data[8:])), slash: flags&stepSlash != 0}
-
-	switch {
-	case le.Uint32(pk.data) == stepRoot:
-		mine.unref()
-		w.root.ref()
-
-		return step{dir: w.root, more: true, rest: s.last}, nil
-	case flags&stepKept != 0:
-		s.dir = remoteDirOn(mine)
-	default:
-		mine.unref()
-		d.ref()
-		s.dir = d
-	}
-
-	return s, nil
-}
-
-func (d *remoteDir) path(p *Process) (string, error) {
-	return d.pathFrom(p.root)
-}
-
-// done drops the reply's endpoint and files of a call that opened
-// nothing.
-func done(pk packet, mine *pairEnd) {
-	mine.unref()
-}
-
-// simpleName is a call on a name that answers OK or an error.
-func (d *remoteDir) simpleName(op, arg uint32, body []byte) error {
-	pk, mine, err := d.call(op, arg, body, nil)
-
-	if err != nil {
-		return err
-	}
-
-	done(pk, mine)
-
-	return nil
-}
-
-func (d *remoteDir) statName(p *Process, name string, st *syscall.Stat_t) error {
-	pk, mine, err := d.call(rStat, 0, []byte(name), nil)
-
-	if err != nil {
-		return err
-	}
-
-	defer done(pk, mine)
-
-	return decodeStat(pk.data, st)
-}
-
-func (d *remoteDir) readlinkName(p *Process, name string) (string, error) {
-	pk, mine, err := d.call(rReadlink, 0, []byte(name), nil)
-
-	if err != nil {
-		return "", err
-	}
-
-	defer done(pk, mine)
-
-	return string(pk.data), nil
-}
-
-func (d *remoteDir) openName(p *Process, name string, flags int, mode uint32) (File, error) {
-	if chaosFail("openat") {
-		return nil, syscall.EIO
-	}
-
-	body := make([]byte, 4, 4+len(name))
-	binary.LittleEndian.PutUint32(body, mode)
-	pk, mine, err := d.call(rOpen, uint32(flags), append(body, name...), nil)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if len(pk.files) > 0 {
-		// The file itself: an object of the kernel the server hands out.
-		mine.unref()
-
-		return pk.files[0], nil
-	}
-
-	var st syscall.Stat_t
-
-	if err := decodeStat(pk.data, &st); err != nil {
-		mine.unref()
-
-		return nil, err
-	}
-
-	node := remoteNode{end: mine, accmode: flags & 3, append: flags&syscall.O_APPEND != 0}
-	node.refs.Store(1)
-
-	switch {
-	case st.Mode&syscall.S_IFMT == syscall.S_IFDIR:
-		dir := &remoteDir{remoteNode: node}
-		dir.dev.Store(st.Dev)
-		dir.ino.Store(st.Ino)
-		dir.known.Store(true)
-
-		return dir, nil
-	case flags&syscall.O_DIRECTORY != 0:
-		mine.unref()
-
-		return nil, syscall.ENOTDIR
-	case st.Mode&syscall.S_IFMT == syscall.S_IFIFO && flags&oPath == 0:
-		// The server said who may open it; its pipe is the kernel's.
-		mine.unref()
-
-		return p.openFifo(&st, flags)
-	}
-
-	return &remoteFile{node}, nil
-}
-
-// mount mounts what end is the end of an open of, a directory of a
-// server, on a name of the directory.
-func (d *remoteDir) mount(name string, end *pairEnd) error {
-	pk, mine, err := d.call(rMount, 0, []byte(name), []File{end})
-
-	if err != nil {
-		return err
-	}
-
-	done(pk, mine)
-
-	return nil
-}
-
-func (d *remoteDir) mkdir(p *Process, name string, mode uint32) error {
-	return d.simpleName(rMkdir, mode, []byte(name))
-}
-
-// mknod makes a FIFO or a regular file; a server makes no device.
-func (d *remoteDir) mknod(p *Process, name string, mode uint32, dev uint64) error {
-	switch mode & syscall.S_IFMT {
-	case 0, syscall.S_IFREG, syscall.S_IFIFO:
-		return d.simpleName(rMknod, mode, []byte(name))
-	}
-
-	return syscall.EPERM
-}
-
-func (d *remoteDir) symlink(p *Process, target, name string) error {
-	return d.simpleName(rSymlink, 0, append(append([]byte(target), 0), name...))
-}
-
-func (d *remoteDir) unlink(p *Process, name string, dir bool) error {
-	flags := uint32(0)
-
-	if dir {
-		flags = atRemovedir
-	}
-
-	return d.simpleName(rUnlink, flags, []byte(name))
-}
-
-// across is the body of a call on a name of the directory and a name of
-// another of the same server's, which the server knows by its device and
-// inode: none for one of another server, which is EXDEV.
-func (d *remoteDir) across(name string, to Dir, toName string) ([]byte, error) {
-	other, ok := to.(*remoteDir)
-
-	if !ok {
-		return nil, syscall.EXDEV
-	}
-
-	dev, ino := other.ident()
-	body := make([]byte, 16, 16+len(name)+1+len(toName))
-	binary.LittleEndian.PutUint64(body, dev)
-	binary.LittleEndian.PutUint64(body[8:], ino)
-
-	return append(append(append(body, name...), 0), toName...), nil
-}
-
-func (d *remoteDir) rename(p *Process, name string, to Dir, toName string) error {
-	body, err := d.across(name, to, toName)
-
-	if err != nil {
-		return err
-	}
-
-	return d.simpleName(rRename, 0, body)
-}
-
-// link makes a name of another directory for what a name of this one is:
-// to a directory of another file system EXDEV, but EROFS when that one is
-// read-only, which Linux finds first.
-func (d *remoteDir) link(p *Process, name string, to Dir, toName string) error {
-	body, err := d.across(name, to, toName)
-
-	if err == nil {
-		dev, _ := d.ident()
-
-		if other, _ := to.(*remoteDir); other != nil {
-			if theirs, _ := other.ident(); theirs != dev {
-				err = syscall.EXDEV
-			}
-		}
-	}
-
-	if err == syscall.EXDEV {
-		var st syscall.Statfs_t
-
-		if to.statfsName(p, "", &st) == nil && st.Flags&1 != 0 {
-			return syscall.EROFS
-		}
-
-		return err
-	}
-
-	if err != nil {
-		return err
-	}
-
-	return d.simpleName(rLink, 0, body)
-}
-
-// accessName is the server's walk to the name, which a directory the
-// process may not search ends, and the name's mode for the process: the
-// ids are vm's, real and effective alike.
-func (d *remoteDir) accessName(p *Process, name string, mode, flags uint32) error {
-	var st syscall.Stat_t
-
-	if err := d.statName(p, name, &st); err != nil {
-		return err
-	}
-
-	if !permits(&st, mode&7) {
-		return syscall.EACCES
-	}
-
-	return nil
-}
-
-func (d *remoteDir) chmodName(p *Process, name string, mode uint32) error {
-	return d.simpleName(rChmod, mode, []byte(name))
-}
-
-func (d *remoteDir) chownName(p *Process, name string, uid, gid int) error {
-	body := make([]byte, 8, 8+len(name))
-	binary.LittleEndian.PutUint32(body, uint32(uid))
-	binary.LittleEndian.PutUint32(body[4:], uint32(gid))
-
-	return d.simpleName(rChown, 0, append(body, name...))
-}
-
-func (d *remoteDir) utimesName(p *Process, name string, ts []syscall.Timespec) error {
-	when, body := whens(ts)
-
-	return d.simpleName(rUtimes, when, append(body, name...))
-}
-
-func (d *remoteDir) truncateName(p *Process, name string, size int64) error {
-	body := make([]byte, 8, 8+len(name))
-	binary.LittleEndian.PutUint64(body, uint64(size))
-
-	return d.simpleName(rTruncate, 0, append(body, name...))
-}
-
-// statfsName is the file system of the server a name is on.
-func (d *remoteDir) statfsName(p *Process, name string, st *syscall.Statfs_t) error {
-	pk, err := d.on(rStatfs, 0, []byte(name))
-
-	if err != nil {
-		return err
-	}
-
-	return decodeStatfs(pk.data, st)
 }
 
 // readdir fills the entries after the last it gave, as many as fit, in

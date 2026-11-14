@@ -70,7 +70,9 @@ type Seeker interface {
 // (kernel_path.go). resolve walks a path from the directory to the
 // directory of its last name, or to where the walk goes on, which only it
 // knows: the host's directories walk with the host's calls one name at a
-// time (kernel_hostdir.go), a server's with RESOLVE (kernel_remote.go).
+// time (kernel_hostdir.go). A handle of rootfs's is a Dir too, but the
+// kernel walks nothing of the VFS's: a call with a path goes to rootfs
+// whole (kernel_vfs.go), and its names are paths of one name from it.
 // The calls on a name never follow it: a symbolic link is itself, and the
 // caller follows it when it means to; "" names the directory itself for
 // the calls that look at a name. path is the directory's path from the

@@ -5,7 +5,7 @@
  * a file system's operations on paths, fuse_main to serve them, and the
  * context of the call being served. fuse_main registers the file system
  * at rootfs's /dev/init by the name its mount point argument gives, and
- * serves it on one thread.
+ * serves it on one thread, a file system of the VFS's by node.
  */
 
 #ifndef FUSE_USE_VERSION
