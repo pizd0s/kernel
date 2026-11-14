@@ -8,7 +8,7 @@
 #include <sys/mount.h>
 #include <unistd.h>
 
-int main(int argc, char** argv) {
+int umountMain(int argc, char** argv) {
     if (argc != 2) {
         dprintf(STDERR_FILENO, "usage: umount <where>\n");
         return 2;

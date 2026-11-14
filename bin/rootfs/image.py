@@ -3,13 +3,15 @@
 and the directories it expects.
 
     image.py <rootfs.tar> --busybox <busybox> <busybox.links> --python <python3> [--program <name> <path>]...
+             [--link <name> <target>]...
 
 The programs are executables (dev/exe.py), whose modules the kernel
 unpacks and compiles as they are executed, and every one is in /bin:
 busybox is /bin/busybox, and each name of busybox.links, wherever busybox
 would install it, a link to it in /bin; python is /bin/python3, its
-standard library the tail of its executable; each --program, a service of
-the system, is /bin/<name>. /usr is a link to the root,
+standard library the tail of its executable; each --program is
+/bin/<name>, each --link a link /bin/<name> to target, as the tools of the
+system are to /bin/tools. /usr is a link to the root,
 for what names /usr/bin and the like: /usr/bin is /bin. No times, no
 owners: the same inputs are the same archive.
 """
@@ -49,6 +51,8 @@ def main():
                 symlinks["bin/python"] = "python3"
             case ["--program", name, program, *rest]:
                 files["bin/" + name] = (Path(program).read_bytes(), 0o755)
+            case ["--link", name, target, *rest]:
+                symlinks["bin/" + name] = target
             case _:
                 raise SystemExit(f"image.py: unknown arguments {args}")
 

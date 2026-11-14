@@ -1,6 +1,6 @@
 // The file protocol of the system: what the kernel speaks for the POSIX
-// calls of a process (bin/vm/kernel_remote.go), and what rootfs and the
-// services of the system serve (bin/rootfs). An open file is one end of a
+// calls of a process (bin/vm/kernel_remote.go), and what rootfs
+// (bin/rootfs) and the services of the system (bin/tools) serve. An open file is one end of a
 // seqpacket pair; its server holds the other and answers on it. Every
 // request brings a fresh endpoint, last among its descriptors: the reply
 // goes on it, and an OPEN's stays the open file's. A server may hand a

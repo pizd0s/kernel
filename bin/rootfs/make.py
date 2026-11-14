@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Build a program of the system for the kernel: rootfs, or a service it
-starts. clang compiles the source for wasm32 against lib/c's headers, with
-no C++ library, and wasm-ld links it with libc.a; rootfs's image is linked
-in as data.
+"""Build rootfs for the kernel: clang compiles rootfs.cpp for wasm32 against
+lib/c's headers, with no C++ library, the image is linked in as data, and
+wasm-ld links them with libc.a.
 
-    make.py <clang> <wasm-ld> <source.cpp> <libc-include> <libc.a> <output.wasm> [<rootfs.tar>]
+    make.py <clang> <wasm-ld> <rootfs.cpp> <libc-include> <libc.a> <rootfs.tar> <rootfs.wasm>
 
 The image is the symbols rootfs_image, its bytes, and rootfs_image_size,
 which rootfs.cpp declares.
@@ -39,19 +38,15 @@ rootfs_image_size:
 
 
 def main():
-    if len(sys.argv) not in (7, 8):
-        raise SystemExit(__doc__)
-    cc, ld, source, include, libc, output = sys.argv[1:7]
-    image = Path(sys.argv[7]).resolve() if len(sys.argv) == 8 else None
-    output = Path(output)
+    cc, ld, source, include, libc, image, output = sys.argv[1:8]
+    image, output = Path(image).resolve(), Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(dir=output.parent, prefix=output.stem + "-") as work:
+    with tempfile.TemporaryDirectory(dir=output.parent, prefix="rootfs-") as work:
         work = Path(work)
-        units = [(Path(source), work / (Path(source).stem + ".o"), [*CXXFLAGS, "-isystem", str(Path(include).resolve())])]
-        if image:
-            (work / "image.s").write_text(IMAGE_S.format(path=image, size=image.stat().st_size))
-            units.append((work / "image.s", work / "image.o", []))
+        (work / "image.s").write_text(IMAGE_S.format(path=image, size=image.stat().st_size))
+        units = [(Path(source), work / "rootfs.o", [*CXXFLAGS, "-isystem", str(Path(include).resolve())]),
+                 (work / "image.s", work / "image.o", [])]
         wasm.compile_all(cc, units)
         subprocess.run([ld, *LINK, "-o", str(output), *(str(o) for _, o, _ in units), libc], check=True)
 

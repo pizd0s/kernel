@@ -1,4 +1,4 @@
-// What the services of the system share (bin/rootfs): registering a
+// What the services of the system share (bin/tools): registering a
 // device at rootfs's /dev/init, answering a request, the -r descriptor
 // they close once they are up, and the loop of their endpoints. The
 // protocol is protocol.h's.

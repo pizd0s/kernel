@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mounts: mount <where> <what> (bin/rootfs/mount.cpp, mount(2)) mounts a
+"""Mounts: mount <where> <what> (bin/tools/mount.cpp, mount(2)) mounts a
 server's directory on a directory of rootfs's: a walk into it, and a call
 on its name, go on to that server, which answers the kernel itself.
 
@@ -34,7 +34,7 @@ DIR, REG, LNK = 0o040755, 0o100644, 0o120777
 
 class Image:
     """An ext2 file system, or an ext4 one with extents, in one block group,
-    as ext4 (bin/rootfs/ext4.cpp) reads it and e2fsck finds it whole: its
+    as ext4 (bin/tools/ext4.cpp) reads it and e2fsck finds it whole: its
     files' blocks taken in turn, or one of every two, the other another's,
     holes left, unwritten extents, fast and slow links."""
 

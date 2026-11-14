@@ -25,7 +25,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "../bin/rootfs/protocol.h"
+#include "../bin/tools/protocol.h"
 
 namespace {
     alignas(Header) unsigned char packet[65536];

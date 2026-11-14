@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The devices of /dev are services': rootfs's /dev/init takes a name, a
-mode and the end of a pair (REGISTER, bin/rootfs/protocol.h), and every
+mode and the end of a pair (REGISTER, bin/tools/protocol.h), and every
 open of /dev/<name> goes on to the service that registered it, which
 serves the open file from then on. copy_file_range between such a file and
 a memfd brings the memfd itself in the READ or WRITE, at its offset. The system's own, null, zero, random

@@ -5,13 +5,13 @@
 // its memory of at most tmpCapacity bytes, a quarter of what a memory of
 // wasm32 holds. It makes itself the root of everything else with what
 // POSIX has: one seqpacket pair, chroot to one end in each process it
-// starts. It starts the services of the system, /bin/devices first, and
-// the shell on the terminal once they are up, each with a clean
+// starts. It starts the services of the system (bin/tools), /bin/devices
+// first, and the shell on the terminal once they are up, each with a clean
 // environment, reaps what ends under it, and ends with the shell's
 // status, as a system does.
 //
 // A file server is a tree of nodes behind endpoints, which speaks the
-// protocol of protocol.h. The kernel speaks it for the POSIX calls of a
+// protocol of bin/tools/protocol.h. The kernel speaks it for the POSIX calls of a
 // process (bin/vm/kernel_remote.go) and walks a path as Linux does:
 // RESOLVE walks it here to the directory of its last name, and the call
 // is one on that name, which the kernel follows itself when it is a
@@ -96,7 +96,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "protocol.h"
+#include "../tools/protocol.h"
 
 using u8 = uint8_t;
 using u32 = uint32_t;

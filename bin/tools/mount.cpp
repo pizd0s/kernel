@@ -10,7 +10,7 @@
 #include <sys/mount.h>
 #include <unistd.h>
 
-int main(int argc, char** argv) {
+int mountMain(int argc, char** argv) {
     if (argc != 3) {
         dprintf(STDERR_FILENO, "usage: mount <where> <what>\n");
         return 2;

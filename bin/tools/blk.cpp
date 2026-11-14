@@ -196,7 +196,7 @@ namespace {
     }
 }
 
-int main(int argc, char** argv) {
+int blkMain(int argc, char** argv) {
     int first;
     const int ready = service::ready(argc, argv, first);
     if (argc - first != 2) {

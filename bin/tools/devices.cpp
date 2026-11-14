@@ -112,7 +112,7 @@ namespace {
     }
 }
 
-int main(int argc, char** argv) {
+int devicesMain(int argc, char** argv) {
     int first;
     const int ready = service::ready(argc, argv, first);
     if (first != argc) {

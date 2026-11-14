@@ -151,7 +151,7 @@ namespace {
     }
 }
 
-int main(int argc, char** argv) {
+int gptMain(int argc, char** argv) {
     int at;
     const int ready = service::ready(argc, argv, at);
     if (argc - at != 4) {
