@@ -557,9 +557,9 @@ fuse2fs_exe = executable("fuse2fs_exe", fuse2fs, "$(B)/bin/fuse2fs/fuse2fs")
 rootfs_image = command(
     name="rootfs_image",
     inputs=["$(S)/bin/rootfs/image.py"],
-    outputs=["$(B)/bin/rootfs/rootfs.tar"],
+    outputs=["$(B)/bin/rootfs/rootfs.img"],
     deps=[busybox, busybox_exe, python_exe, tools, fuse2fs_exe],
-    cmd=["python3", "$(S)/bin/rootfs/image.py", "$(B)/bin/rootfs/rootfs.tar",
+    cmd=["python3", "$(S)/bin/rootfs/image.py", "$(B)/bin/rootfs/rootfs.img",
          "--busybox", busybox_exe.outputs[0], busybox.outputs[1], "--python", python_exe.outputs[0],
          "--program", "tools", tools.outputs[0], *(arg for tool in TOOLS for arg in ("--link", tool, "tools")),
          "--program", "fuse2fs", fuse2fs_exe.outputs[0]],

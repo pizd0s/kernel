@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Build rootfs for the kernel: clang compiles rootfs.cpp and the protocol's
 sources for wasm32 against lib/c's headers, with no C++ library and the
-source root on the include path, the image is linked in as data, and
-wasm-ld links them with libc.a.
+source root on the include path, the image (bin/rootfs/image.py) is linked
+in as data, aligned for its tables, and wasm-ld links them with libc.a.
 
-    make.py <clang> <wasm-ld> <libc-include> <libc.a> <rootfs.tar> <rootfs.wasm> <source.cpp>...
+    make.py <clang> <wasm-ld> <libc-include> <libc.a> <rootfs.img> <rootfs.wasm> <source.cpp>...
 
 The image is the symbols rootfs_image, its bytes, and rootfs_image_size,
 which rootfs.cpp declares.
