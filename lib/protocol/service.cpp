@@ -2,14 +2,14 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <stdarg.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/uio.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
-#include <sys/uio.h>
-#include <unistd.h>
 
 namespace {
     static bool stopping = false;
@@ -152,11 +152,18 @@ void serve(int epoll, Handle handle, Gone gone) {
                 --watched;
                 continue;
             }
-            if (r.count == 0 || size_t(got) < sizeof(Header)) {
+            if (size_t(got) < sizeof(Header) || (r.count == 0 && e->channel)) {
                 for (size_t k = 0; k < r.count; ++k) {
                     close(r.fds[k]);
                 }
                 continue;
+            }
+            if (r.count == 0) {
+                // A question: its answer goes on the endpoint it came on,
+                // in the order the questions came.
+                r.fds[0] = e->fd;
+                r.count = 1;
+                r.onEndpoint = true;
             }
             memcpy(&r.h, packet, sizeof r.h);
             r.body = packet + sizeof(Header);
@@ -173,7 +180,7 @@ void serve(int epoll, Handle handle, Gone gone) {
                 handle(*e, r);
             }
             for (size_t k = 0; k < r.count; ++k) {
-                if (r.fds[k] >= 0) {
+                if (r.fds[k] >= 0 && !(r.onEndpoint && k + 1 == r.count)) {
                     close(r.fds[k]);
                 }
             }

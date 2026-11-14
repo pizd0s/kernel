@@ -1793,8 +1793,18 @@ namespace {
             closed(ep);
             return;
         }
+        const Body body{packet + sizeof(Header), packet + sizeof(Header) + n};
         if (packetFdCount == 0) {
-            return; // a request without its reply endpoint: nobody to answer
+            // A question of rootfs's, answered on its channel, in order; an
+            // open keeps an endpoint, which a question has none of.
+            if (ep->role == Role::Channel) {
+                if (h.op == fsOpen || h.op == fsCreate) {
+                    error(ep->fd, EINVAL);
+                } else {
+                    fsCall(h, body, ep->fd);
+                }
+            }
+            return;
         }
         if (h.op == opOk || h.op == opErr) {
             for (usize i = 0; i < packetFdCount; ++i) {
@@ -1803,7 +1813,6 @@ namespace {
             return;
         }
         const int fd = packetFds[packetFdCount - 1];
-        const Body body{packet + sizeof(Header), packet + sizeof(Header) + n};
         const bool kept = ep->role == Role::Channel ? fsCall(h, body, fd) : fileCall(ep, h, body, fd);
         if (!kept) {
             close(fd);

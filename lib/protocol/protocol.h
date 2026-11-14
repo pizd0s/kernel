@@ -69,9 +69,11 @@
 //   rootfs answers itself has its id after the stat.
 //
 //   A file system's, on its channel, by node: a node is its inode number,
-//   the root's in the stat its connection answered. A name is no "." or
-//   "..", has no "/" and is never followed. The file system checks who
-//   may, by the header's ids.
+//   the root's in the stat its connection answered, 1 for a file system
+//   rootfs starts itself. A name is no "." or "..", has no "/" and is
+//   never followed. The file system checks who may, by the header's ids.
+//   A call that brings no endpoint is a question of rootfs's, answered on
+//   the channel itself, in the order the questions came.
 //     LOOKUP                node u64, name    OK stat: the name's; ".." the
 //                                         parent, the root's the root
 //     GETATTR               node u64          OK stat

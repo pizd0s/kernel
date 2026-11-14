@@ -669,7 +669,9 @@ namespace {
         Server* tree = nullptr;      // ours
         Endpoint* channel = nullptr; // ours of another's channel, none once it is gone
         u64 dev = 0;
-        u32 mounts = 0; // it goes with its last
+        u32 mounts = 0;         // it goes with its last
+        Ask* waiting = nullptr; // the questions asked on its channel, to be answered in order
+        Ask* lastWaiting = nullptr;
     };
 
     // A mount: a directory of a file system, its root, as a directory of
@@ -1615,18 +1617,21 @@ namespace {
         bool await_suspend(std::coroutine_handle<void> h);
         Answer await_resume() const noexcept;
 
-        int to = -1;
+        Fs* fs = nullptr; // whose channel a question goes on
+        int to = -1;      // what a connection's request goes on
         Header head{};
         u8 body[8 + NAME_MAX];
         usize size = 0;
         bool connects = false;
         Answer answer;
         std::coroutine_handle<void> call;
+        Ask* next = nullptr; // among the file system's questions
     };
 
     // A question by node of a place's file system, another's, with a name.
     static Ask asking(const Place& p, const Header& h, u32 op, Name name) {
         Ask a;
+        a.fs = p.m->fs;
         a.to = p.m->fs->channel ? p.m->fs->channel->fd : -1;
         a.head = {op, 0, h.uid, h.gid};
         memcpy(a.body, &p.node, 8);
@@ -1702,7 +1707,25 @@ bool Ask::await_ready() const noexcept {
 // The question goes out, or it cannot: then the call goes on at once with
 // the error, EIO for a file system that is gone.
 bool Ask::await_suspend(std::coroutine_handle<void> h) {
+    const iovec parts[] = {part(&head, sizeof head), part(body, size)};
     int ends[2];
+    call = h;
+    if (!connects) {
+        // A question brings no endpoint: the file system answers it on its
+        // channel, after the questions before it.
+        Endpoint* channel = fs ? fs->channel : nullptr;
+        if (!channel || sendPacket(channel->fd, parts, 2, nullptr, 0, MSG_DONTWAIT) < 0) {
+            answer.error = channel && errno == EAGAIN ? EAGAIN : EIO;
+            return false;
+        }
+        if (fs->lastWaiting) {
+            fs->lastWaiting->next = this;
+        } else {
+            fs->waiting = this;
+        }
+        fs->lastWaiting = this;
+        return true;
+    }
     if (to < 0) {
         answer.error = EIO;
         return false;
@@ -1711,7 +1734,6 @@ bool Ask::await_suspend(std::coroutine_handle<void> h) {
         answer.error = errno;
         return false;
     }
-    const iovec parts[] = {part(&head, sizeof head), part(body, size)};
     if (sendPacket(to, parts, 2, &ends[1], 1, MSG_DONTWAIT) < 0) {
         answer.error = errno == EAGAIN ? EAGAIN : EIO;
         close(ends[0]);
@@ -1719,7 +1741,6 @@ bool Ask::await_suspend(std::coroutine_handle<void> h) {
         return false;
     }
     close(ends[1]);
-    call = h;
     listen(ends[0], Role::Pending)->ask = this;
     return true;
 }
@@ -3613,6 +3634,22 @@ namespace {
         return true;
     }
 
+    // A file system's channel closes, the file system gone or let go of:
+    // its questions are EIO, and their calls go on once it is closed.
+    static void ended(Endpoint* ep) {
+        Ask* left = nullptr;
+        if (Fs* fs = ep->fs) {
+            left = fs->waiting;
+            fs->waiting = fs->lastWaiting = nullptr;
+        }
+        closed(ep);
+        while (Ask* a = left) {
+            left = a->next;
+            a->answer.error = EIO;
+            a->call.resume();
+        }
+    }
+
     // The answer to a call's question to a file system: the call goes on.
     // A connection's endpoint stays, the channel from then on; any other
     // is done with. An answer that is no OK or ERR, or none, is EIO.
@@ -3645,6 +3682,42 @@ namespace {
         a->call.resume();
     }
 
+    // The answer to a question on a file system's channel, its first: the
+    // call goes on. What nobody asked is dropped.
+    static void answeredOn(Endpoint* ep) {
+        Fs* fs = ep->fs;
+        int fds[maxFds];
+        usize count = 0;
+        const ssize_t n = receivePacket(ep->fd, packet, sizeof packet, fds, count);
+        for (usize i = 0; i < count; ++i) {
+            close(fds[i]);
+        }
+        if (n <= 0) {
+            ended(ep);
+            return;
+        }
+        Ask* a = fs ? fs->waiting : nullptr;
+        if (!a) {
+            return;
+        }
+        fs->waiting = a->next;
+        if (!fs->waiting) {
+            fs->lastWaiting = nullptr;
+        }
+        Header h{};
+        if (n >= ssize_t(sizeof h)) {
+            memcpy(&h, packet, sizeof h);
+        }
+        if (n < ssize_t(sizeof h) || (h.op != opOk && h.op != opErr)) {
+            a->answer.error = EIO;
+        } else if (h.op == opErr) {
+            a->answer.error = h.arg != 0 ? int(h.arg) : EIO;
+        } else {
+            a->answer.body = {packet + sizeof h, packet + n};
+        }
+        a->call.resume();
+    }
+
     static void handle(Endpoint* ep) {
         if (ep->dead) {
             return;
@@ -3654,15 +3727,7 @@ namespace {
             return;
         }
         if (ep->role == Role::Fs) {
-            // Nothing comes on a file system's channel but its close; what
-            // else does is dropped.
-            const ssize_t got = receivePacket(ep->fd, packet, sizeof packet, packetFds, packetFdCount);
-            for (usize i = 0; i < packetFdCount; ++i) {
-                close(packetFds[i]);
-            }
-            if (got <= 0) {
-                closed(ep);
-            }
+            answeredOn(ep);
             return;
         }
         Header h;
@@ -3728,7 +3793,7 @@ namespace {
         for (Endpoint* ep = live; ep;) {
             Endpoint* after = ep->after;
             if (!ep->dead && ep->role == Role::Fs) {
-                closed(ep);
+                ended(ep);
             }
             ep = after;
         }

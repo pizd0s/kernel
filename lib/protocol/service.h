@@ -54,6 +54,7 @@ struct Request {
     size_t size;
     int fds[maxFds];
     size_t count;
+    bool onEndpoint; // a question with no endpoint of its own: answered on the one it came on
 
     int reply() const;
     int window() const;
