@@ -317,6 +317,10 @@ func (e *pairEnd) take(peek bool) (pk packet, eof, ok bool) {
 		return packet{}, true, true
 	}
 
+	// The other end's shutdown before the channel, as the channel's end
+	// before its messages: what it wrote before it shut its writing down
+	// is queued by then.
+	shut := e.peer.noWrite.Load()
 	pk, eof, ok, _ = e.from.take()
 
 	if ok && !eof && peek {
@@ -332,7 +336,7 @@ func (e *pairEnd) take(peek bool) (pk packet, eof, ok bool) {
 
 	// Nothing queued: the end of the data when the other end shut its
 	// writing down.
-	if e.peer.noWrite.Load() {
+	if shut {
 		return packet{}, true, true
 	}
 

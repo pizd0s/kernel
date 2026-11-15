@@ -150,11 +150,13 @@ func (c *procChannel) put(pk packet) (full bool, err error) {
 
 // take is the oldest message, ok false when there is none: eof when the
 // writer is gone too. freed says the take made room in a full channel,
-// which wakes the writer's queue.
+// which wakes the writer's queue. The end is asked before the messages: a
+// writer puts its messages before it ends, so an end seen with none held
+// is the end of the data, never a message that came in between.
 func (c *procChannel) take() (pk packet, eof, ok, freed bool) {
-	if c.held.Load() == 0 {
-		ended := c.ended.Load()
+	ended := c.ended.Load()
 
+	if c.held.Load() == 0 {
 		return packet{}, ended, ended, false
 	}
 
@@ -163,7 +165,6 @@ func (c *procChannel) take() (pk packet, eof, ok, freed bool) {
 
 	if held == 0 {
 		c.mu.Unlock()
-		ended := c.ended.Load()
 
 		return packet{}, ended, ended, false
 	}
