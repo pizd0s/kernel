@@ -67,9 +67,20 @@ type epollMember struct {
 	data   uint64
 	// last is the changes of the file when it was last reported: an
 	// edge-triggered member with the same ones, unclosed, has not changed
-	// and is not reported again. disabled is a one-shot member reported.
+	// and is not reported again. A file that counts its edges (an edger)
+	// is compared by its count instead, edges, once reported. disabled is
+	// a one-shot member reported.
 	last     []<-chan struct{}
+	edges    uint64
+	reported bool
 	disabled bool
+}
+
+// An edger counts the changes of a file whose changes are shared with
+// other files, a channel to a process's (kernel_queue.go): an
+// edge-triggered member of a set is new when its count is.
+type edger interface {
+	edges(events int16) uint64
 }
 
 var (
@@ -124,13 +135,14 @@ func (ep *epoll) poll(events int16) int16 {
 	return 0
 }
 
-// changes are the members'.
+// changes are the members', each once: the ends a process reads share
+// its queue's.
 func (ep *epoll) changes(events int16) []<-chan struct{} {
 	var all []<-chan struct{}
 
 	for _, m := range ep.snapshot() {
 		if !m.disabled {
-			all = append(all, m.key.obj.changes(int16(m.events))...)
+			all = appendChanges(all, m.key.obj.changes(int16(m.events)))
 		}
 	}
 
@@ -201,7 +213,7 @@ func (ep *epoll) ctl(op uint32, key epollKey, events uint32, data uint64) error 
 			return syscall.ENOENT
 		}
 
-		m.events, m.data, m.disabled, m.last = events, data, false, nil
+		m.events, m.data, m.disabled, m.last, m.reported = events, data, false, nil, false
 
 		return nil
 	case epollCtlDel:
@@ -282,7 +294,7 @@ func (ep *epoll) take(buf []byte, max int) int {
 
 	for i, m := range members {
 		ep.mu.Lock()
-		events, disabled, last := m.events, m.disabled, m.last
+		events, disabled, last, seen, reported := m.events, m.disabled, m.last, m.edges, m.reported
 		ep.mu.Unlock()
 
 		if disabled {
@@ -296,11 +308,16 @@ func (ep *epoll) take(buf []byte, max int) int {
 		}
 
 		var now []<-chan struct{}
+		var edges uint64
 
 		if events&epollEt != 0 {
-			now = m.key.obj.changes(int16(events))
+			if counted, ok := m.key.obj.(edger); ok {
+				edges = counted.edges(int16(events))
 
-			if !changedSince(last, now) {
+				if reported && edges == seen {
+					continue
+				}
+			} else if now = m.key.obj.changes(int16(events)); !changedSince(last, now) {
 				continue
 			}
 		}
@@ -313,7 +330,7 @@ func (ep *epoll) take(buf []byte, max int) int {
 		binary.LittleEndian.PutUint64(buf[epollEventSize*n+8:], m.data)
 		n++
 		ep.mu.Lock()
-		m.last = now
+		m.last, m.edges, m.reported = now, edges, true
 		m.disabled = events&epollOneshot != 0
 		ep.mu.Unlock()
 

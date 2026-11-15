@@ -4,6 +4,7 @@ package main
 
 import (
 	"reflect"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -401,13 +402,15 @@ type changed struct {
 // wait is the channel the next change closes.
 func (c *changed) wait() <-chan struct{} {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	if c.ch == nil {
 		c.ch = make(chan struct{})
 	}
 
-	return c.ch
+	ch := c.ch
+	c.mu.Unlock()
+
+	return ch
 }
 
 // bump is a change: the waiters wake.
@@ -532,10 +535,14 @@ func (p *Process) waitObjects(entries []pollEntry, timeout int, restart bool) (i
 			cases = append(cases, recvCase(timer.C))
 		}
 
+		var chans []<-chan struct{}
+
 		for i := range entries {
-			for _, ch := range entries[i].obj.changes(entries[i].events) {
-				cases = append(cases, recvCase(ch))
-			}
+			chans = appendChanges(chans, entries[i].obj.changes(entries[i].events))
+		}
+
+		for _, ch := range chans {
+			cases = append(cases, recvCase(ch))
 		}
 
 		if ready := pollEntries(entries); ready > 0 {
@@ -603,6 +610,19 @@ func (p *Process) waitFor(ready func() bool, change func() <-chan struct{}, rest
 		case <-ch:
 		}
 	}
+}
+
+// appendChanges adds changes to a list of them, each once: the files a
+// process reads share its queue's (kernel_queue.go), and a select needs it
+// once.
+func appendChanges(all, more []<-chan struct{}) []<-chan struct{} {
+	for _, ch := range more {
+		if !slices.Contains(all, ch) {
+			all = append(all, ch)
+		}
+	}
+
+	return all
 }
 
 // recvCase is a receive from any channel, for a select over a list.
