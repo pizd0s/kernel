@@ -41,6 +41,7 @@
 // open-addressing table, by directory and name; a directory keeps its
 // entries in the order of their positions.
 
+#include <bin/tools/lib.h>
 #include <bin/tools/tools.h>
 #include <lib/protocol/protocol.h>
 
@@ -48,228 +49,21 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <stdarg.h>
-#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/epoll.h>
-#include <sys/file.h>
 #include <sys/param.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
-#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 
-using u8 = uint8_t;
-using u32 = uint32_t;
-using u64 = uint64_t;
-using i64 = int64_t;
-using usize = size_t;
+using namespace tools;
 
-// Placement new expressions are lowered directly by Clang; no runtime
-// call uses this overload. Its declaration supplies the freestanding ABI.
-void* operator new(size_t, void*) noexcept;
-
-constexpr usize maxPacket = 65536;
-
-// The servers'.
-constexpr u64 blockSize = 4096;
-constexpr u64 past = UINT64_MAX; // the stop of a lock to the end of a file and past it
 constexpr u64 tmpCapacity = u64(1) << 30;
 
-[[noreturn, gnu::format(printf, 1, 2)]] static void fatal(const char* format, ...) {
-    va_list args;
-    va_start(args, format);
-    vdprintf(STDERR_FILENO, format, args);
-    va_end(args);
-    dprintf(STDERR_FILENO, "\n");
-    exit(1);
-}
-
-static usize checkedAdd(usize a, usize b) {
-    if (b > SIZE_MAX - a) {
-        fatal("tmpfs: size overflow");
-    }
-    return a + b;
-}
-
-static usize checkedMultiply(usize a, usize b) {
-    if (a != 0 && b > SIZE_MAX / a) {
-        fatal("tmpfs: size overflow");
-    }
-    return a * b;
-}
-
-static void* allocate(usize size) {
-    void* p = malloc(size);
-    if (!p) {
-        fatal("tmpfs: out of memory");
-    }
-    return p;
-}
-
-static void* reallocate(void* p, usize size) {
-    void* q = realloc(p, size);
-    if (!q) {
-        fatal("tmpfs: out of memory");
-    }
-    return q;
-}
-
-// ---- containers, bin/aot/aot.cpp's over malloc ------------------------------
-
-constexpr usize objectAlignment = 16;
-
-// An allocation's bytes: a power of two, from objectAlignment, as
-// aot.cpp's.
-static usize allocationBytes(usize size) {
-    usize bytes = objectAlignment;
-    while (bytes < size) {
-        bytes = checkedMultiply(bytes, 2);
-    }
-    return bytes;
-}
-
 namespace {
-    struct Buffer {
-        struct alignas(objectAlignment) Header {
-            usize used;
-            usize allocation;
-        };
-
-        constexpr Buffer();
-        ~Buffer();
-        Buffer(const Buffer&) = delete;
-        Buffer& operator=(const Buffer&) = delete;
-        void* data();
-        const void* data() const;
-        usize size() const;
-        usize capacity() const;
-        void reserve(usize size);
-        void grow(usize size);
-        void resize(usize size);
-        void append(const void* data, usize size);
-        void clear();
-        void swap(Buffer& other);
-
-        Header* header() const;
-        void* storage;
-    };
-}
-
-alignas(objectAlignment) constinit const Buffer::Header emptyBuffer{};
-
-constexpr Buffer::Buffer()
-    : storage(const_cast<Header*>(&emptyBuffer) + 1)
-{
-}
-
-Buffer::~Buffer() {
-    if (header() != &emptyBuffer) {
-        free(header());
-    }
-}
-
-Buffer::Header* Buffer::header() const {
-    return static_cast<Header*>(storage) - 1;
-}
-
-void* Buffer::data() {
-    return storage;
-}
-
-const void* Buffer::data() const {
-    return storage;
-}
-
-usize Buffer::size() const {
-    return header()->used;
-}
-
-usize Buffer::capacity() const {
-    return header()->allocation == 0 ? 0 : header()->allocation - sizeof(Header);
-}
-
-// The capacity test stays small enough to be inlined where buffers grow
-// element by element; growth itself is out of line.
-inline void Buffer::reserve(usize size) {
-    if (size > capacity()) {
-        grow(size);
-    }
-}
-
-[[gnu::noinline]] void Buffer::grow(usize size) {
-    auto* before = header();
-    const usize bytes = allocationBytes(checkedAdd(size, sizeof(Header)));
-    Header* next;
-    if (before == &emptyBuffer) {
-        next = static_cast<Header*>(allocate(bytes));
-        next->used = 0;
-    } else {
-        next = static_cast<Header*>(reallocate(before, bytes));
-    }
-    next->allocation = bytes;
-    storage = next + 1;
-}
-
-inline void Buffer::resize(usize size) {
-    reserve(size);
-    if (size != 0 || header() != &emptyBuffer) {
-        header()->used = size;
-    }
-}
-
-void Buffer::append(const void* data, usize size) {
-    const usize before = this->size();
-    resize(checkedAdd(before, size));
-    memcpy(static_cast<u8*>(storage) + before, data, size);
-}
-
-// Back to no bytes and no memory.
-void Buffer::clear() {
-    if (header() != &emptyBuffer) {
-        free(header());
-    }
-    storage = const_cast<Header*>(&emptyBuffer) + 1;
-}
-
-void Buffer::swap(Buffer& other) {
-    auto* temporary = storage;
-    storage = other.storage;
-    other.storage = temporary;
-}
-
-namespace {
-    template <typename T>
-    struct SmallVec {
-        static_assert(__is_trivially_copyable(T));
-        static_assert(__is_trivially_destructible(T));
-        static_assert(alignof(T) <= objectAlignment);
-
-        constexpr SmallVec() = default;
-        SmallVec(const SmallVec&) = delete;
-        SmallVec& operator=(const SmallVec&) = delete;
-
-        T* data();
-        const T* data() const;
-        usize size() const;
-        T& operator[](usize index);
-        const T& operator[](usize index) const;
-        void resize(usize count);
-        void clear();
-        void pushBack(T value);
-
-        // Keeps the elements keep takes, in their order.
-        template <typename F>
-        void keepIf(F keep);
-
-        Buffer buffer;
-    };
-
     // An open-addressing table of pointers, linear probing, removal by
     // shifting back what follows: each slot keeps the hash of its item,
     // which a probe compares first.
@@ -291,60 +85,6 @@ namespace {
         u32 mask = 0;
         u32 count = 0;
     };
-}
-
-template <typename T>
-inline T* SmallVec<T>::data() {
-    return static_cast<T*>(buffer.data());
-}
-
-template <typename T>
-inline const T* SmallVec<T>::data() const {
-    return static_cast<const T*>(buffer.data());
-}
-
-template <typename T>
-inline usize SmallVec<T>::size() const {
-    return buffer.size() / sizeof(T);
-}
-
-template <typename T>
-inline T& SmallVec<T>::operator[](usize index) {
-    return data()[index];
-}
-
-template <typename T>
-inline const T& SmallVec<T>::operator[](usize index) const {
-    return data()[index];
-}
-
-template <typename T>
-inline void SmallVec<T>::resize(usize count) {
-    buffer.resize(checkedMultiply(count, sizeof(T)));
-}
-
-template <typename T>
-inline void SmallVec<T>::clear() {
-    buffer.resize(0);
-}
-
-template <typename T>
-inline void SmallVec<T>::pushBack(T value) {
-    const usize at = size();
-    resize(checkedAdd(at, 1));
-    data()[at] = value;
-}
-
-template <typename T>
-template <typename F>
-inline void SmallVec<T>::keepIf(F keep) {
-    usize kept = 0;
-    for (usize i = 0; i < size(); ++i) {
-        if (keep(data()[i])) {
-            data()[kept++] = data()[i];
-        }
-    }
-    resize(kept);
 }
 
 template <typename T>
@@ -433,38 +173,11 @@ static u32 finish(u64 h) {
     return u32(h);
 }
 
-// ---- names and bodies ----------------------------------------------------------
+// ---- the tree --------------------------------------------------------------------
 
 namespace {
-    // Bytes of a packet, of the image or of a node, where they are.
-    struct Name {
-        const char* at = nullptr;
-        usize length = 0;
-
-        bool empty() const;
-        bool is(const char* text) const;
-        bool has(char c) const;
-    };
-
-    // A request's body, read from its start.
-    struct Body {
-        const u8* at;
-        const u8* end;
-
-        usize size() const;
-        template <typename T>
-        T take();
-
-        // A string up to its NUL, or the end, and past the NUL.
-        Name string();
-        Name rest();
-    };
-
-    // ---- the tree --------------------------------------------------------------------
-
     struct Node;
     struct Server;
-    struct Endpoint;
 
     enum class Kind : u8 {
         Dir,
@@ -472,21 +185,6 @@ namespace {
         Link,
         Fifo,   // a named pipe: the kernel makes the pipe
         Socket, // a socket's name: it holds the socket's listener, which CONNECT gives
-    };
-
-    // What an endpoint is to the loop.
-    enum class Role : u8 {
-        File,    // an open file: requests come on it
-        Channel, // rootfs's channel: its calls by node come on it
-    };
-
-    // A lock of fcntl: an endpoint's, on the bytes [start, stop), to read
-    // or to write.
-    struct Range {
-        int owner;
-        bool write;
-        u64 start;
-        u64 stop;
     };
 
     // A name of a directory: its bytes are the image's or follow the entry.
@@ -529,10 +227,8 @@ namespace {
         u32 holds = 0;         // what else points at it: directories under it, files opened in it by name
         bool released = false; // gone from its server, its memory kept for what holds it
         Kind kind = Kind::Dir;
-        int fd = -1;          // a socket's listener
-        int exclusive = -1;   // the endpoint that holds flock's exclusive lock, or -1
-        SmallVec<int> shared; // the endpoints that hold flock's shared lock
-        SmallVec<Range> ranges;
+        int fd = -1; // a socket's listener
+        Locks locks;
         Content content; // a file's, a link's
         // a directory's
         Node* parent = nullptr; // where ".." goes; none for the root
@@ -556,58 +252,6 @@ namespace {
 
         Node* find(u64 ino) const;
     };
-
-    struct Endpoint {
-        int fd;
-        bool reads; // what its open lets it do
-        bool writes;
-        Role role;
-        bool dead;       // closed, while a batch of events may still name it
-        Node* node;      // what a File is open on
-        Endpoint* next;  // among the free ones
-        Endpoint* after; // among the live ones
-        Endpoint* before;
-    };
-}
-
-inline bool Name::empty() const {
-    return length == 0;
-}
-
-inline bool Name::is(const char* text) const {
-    return length == strlen(text) && memcmp(at, text, length) == 0;
-}
-
-inline bool Name::has(char c) const {
-    return length != 0 && memchr(at, c, length) != nullptr;
-}
-
-inline usize Body::size() const {
-    return usize(end - at);
-}
-
-template <typename T>
-inline T Body::take() {
-    if (size() < sizeof(T)) {
-        fatal("a short packet");
-    }
-    T value;
-    memcpy(&value, at, sizeof value);
-    at += sizeof value;
-    return value;
-}
-
-inline Name Body::string() {
-    const auto* nul = static_cast<const u8*>(memchr(at, 0, size()));
-    const Name name{reinterpret_cast<const char*>(at), usize((nul ? nul : end) - at)};
-    at = nul ? nul + 1 : end;
-    return name;
-}
-
-inline Name Body::rest() {
-    const Name name{reinterpret_cast<const char*>(at), size()};
-    at = end;
-    return name;
 }
 
 inline const u8* Content::data() const {
@@ -729,7 +373,7 @@ static Node* unplace(Node* dir, Entry* e, u64 t) {
         }
     }
     if (lo == count || slots[lo].entry != e) {
-        fatal("rootfs: an entry out of its directory's order");
+        fatal("tmpfs: an entry out of its directory's order");
     }
     slots[lo].entry = nullptr;
     if (++dir->holes * 2 > count) {
@@ -747,19 +391,6 @@ static Node* unplace(Node* dir, Entry* e, u64 t) {
     free(e);
     dir->mtime = dir->ctime = n->ctime = t;
     return n;
-}
-
-// A device for a server's files: the number of a pair, which no other
-// pair in the kernel has, as it never gives a number twice.
-static u64 device() {
-    int ends[2];
-    struct stat st;
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ends) != 0 || fstat(ends[0], &st) != 0) {
-        fatal("rootfs: a pair for a device: errno %d", errno);
-    }
-    close(ends[0]);
-    close(ends[1]);
-    return u64(st.st_ino);
 }
 
 // A new node, with the permissions of its kind until they are set; the
@@ -896,21 +527,6 @@ static u8 dtype(const Node* n) {
     }
 }
 
-// Why a name is none a call takes, 0 for one it does: "." and ".." and
-// names with "/" are a walk's; a name past NAME_MAX is too long.
-static int badName(Name name) {
-    if (name.is(".") || name.is("..") || name.has('/')) {
-        return EINVAL;
-    }
-    if (name.length > NAME_MAX) {
-        return ENAMETOOLONG;
-    }
-    return 0;
-}
-
-// What a name of a directory is to a call that looks at it: the
-// directory itself for "", else the name's node, or the root of a
-
 // Whether a directory was removed: it takes no name.
 static bool gone(const Server* s, const Node* c) {
     return c->kind == Kind::Dir && c->links == 0 && c != s->root;
@@ -986,114 +602,6 @@ static Statfs statfsOf(const Server& s) {
         st.flags = ST_RDONLY;
     }
     return st;
-}
-
-// ---- packets ---------------------------------------------------------------------
-
-// The packet recv takes and the descriptors that come with it, and the
-// bytes a reply assembles: one of each for the process, whose loop
-// takes a packet and is done with it before the next, and sends each
-// reply whole.
-alignas(Header) static u8 packet[maxPacket];
-static int packetFds[maxFds];
-static usize packetFdCount;
-static u8 out[maxPacket - sizeof(Header)];
-
-// A reply: the header, then the parts where they are.
-static void reply(int fd, u32 op, u32 arg, const iovec* parts, usize count, const int* fds = nullptr, usize fdCount = 0) {
-    Header head{op, arg, 0, 0};
-    iovec iov[3] = {{&head, sizeof head}};
-    if (count > 2 || fdCount > maxFds) {
-        fatal("rootfs: a reply of %zu parts and %zu descriptors", count, fdCount);
-    }
-    for (usize i = 0; i < count; ++i) {
-        iov[1 + i] = parts[i];
-    }
-    sendPacket(fd, iov, 1 + count, fds, fdCount); // a gone reader is its own loss
-}
-
-static iovec part(const void* data, usize size) {
-    return {const_cast<void*>(data), size};
-}
-
-static void ok(int fd, const void* data = nullptr, usize size = 0) {
-    const iovec body = part(data, size);
-    reply(fd, opOk, 0, &body, size ? 1 : 0);
-}
-
-// A reply of an error: the reply's endpoint is not kept.
-static bool error(int fd, int e) {
-    reply(fd, opErr, u32(e), nullptr, 0);
-    return false;
-}
-
-// The memfd of the memory a READ fills or a WRITE takes from: the
-// first of the request's descriptors, before its reply endpoint; -1
-// when it brought none.
-static int window() {
-    return packetFdCount >= 2 ? packetFds[0] : -1;
-}
-
-// Puts count bytes into a READ's window at at: false when they do not
-// all go.
-static bool put(int w, const void* from, usize count, usize at) {
-    return count == 0 || pwrite(w, from, count, off_t(at)) == ssize_t(count);
-}
-
-// The reply of a READ: how many bytes went into its window.
-static bool readCount(int fd, usize count) {
-    const u32 n = u32(count);
-    ok(fd, &n, sizeof n);
-    return false;
-}
-
-// The reply of a call that changes something: OK, or the error.
-static bool answer(int fd, int e) {
-    if (e != 0) {
-        return error(fd, e);
-    }
-    ok(fd);
-    return false;
-}
-
-// One packet into packet, its descriptors into packetFds: the length
-// of its body, after the header, or -1 at the end of the endpoint.
-static i64 receive(int fd, Header& h) {
-    const ssize_t n = receivePacket(fd, packet, sizeof packet, packetFds, packetFdCount);
-    if (n <= 0) {
-        return -1;
-    }
-    if (usize(n) < sizeof(Header)) {
-        fatal("a packet without a header");
-    }
-    memcpy(&h, packet, sizeof h);
-    return i64(n) - i64(sizeof(Header));
-}
-
-namespace {
-    // What a reply assembles in out.
-    struct Assembly {
-        usize size = 0;
-
-        bool fits(usize n) const;
-        void add(const void* data, usize n);
-        template <typename T>
-        void add(T value);
-    };
-}
-
-inline bool Assembly::fits(usize n) const {
-    return n <= sizeof out - size;
-}
-
-inline void Assembly::add(const void* data, usize n) {
-    memcpy(out + size, data, n);
-    size += n;
-}
-
-template <typename T>
-inline void Assembly::add(T value) {
-    add(&value, sizeof value);
 }
 
 // ---- the calls of a tree of ours, by node --------------------------------------
@@ -1335,10 +843,16 @@ static int change(Server& s, Node* node, u32 op, const Header& h, Body args) {
 
 // ---- calls on a node ---------------------------------------------------------
 
+// Puts count bytes into a READ's window at at: false when they do not
+// all go.
+static bool put(int w, const void* from, usize count, usize at) {
+    return count == 0 || pwrite(w, from, count, off_t(at)) == ssize_t(count);
+}
+
 static bool readNode(Endpoint* ep, const Header& h, Body body, int fd) {
     const u64 off = body.take<u64>();
     const u32 woff = body.take<u32>();
-    const Node* node = ep->node;
+    const auto* node = static_cast<const Node*>(ep->node);
     const usize n = h.arg;
     if (off > INT64_MAX) {
         return error(fd, EINVAL);
@@ -1371,7 +885,7 @@ static bool writeNode(Endpoint* ep, const Header& h, Body body, int fd) {
     const usize length = body.take<u32>();
     const u32 woff = body.take<u32>();
     Server& s = tree;
-    Node* node = ep->node;
+    auto* node = static_cast<Node*>(ep->node);
     const int w = window();
     if (off > INT64_MAX) {
         return error(fd, EINVAL);
@@ -1456,195 +970,6 @@ static bool readdirNode(const Node* node, Body body, int fd) {
     return false;
 }
 
-// flock's lock of the endpoint's node: shared, which no other
-// endpoint's exclusive one is in the way of, exclusive, which no other
-// endpoint's lock is, or none.
-static bool flockNode(Endpoint* ep, const Header& h, int fd) {
-    Node* n = ep->node;
-    const int me = ep->fd;
-    const bool other = n->exclusive >= 0 && n->exclusive != me;
-    usize others = 0;
-    for (usize i = 0; i < n->shared.size(); ++i) {
-        others += n->shared[i] != me;
-    }
-    auto unshare = [n, me] {
-        n->shared.keepIf([me](int holder) {
-            return holder != me;
-        });
-    };
-    switch (h.arg & ~u32(LOCK_NB)) {
-        case LOCK_UN:
-            unshare();
-            if (n->exclusive == me) {
-                n->exclusive = -1;
-            }
-            break;
-        case LOCK_SH:
-            if (other) {
-                return error(fd, EAGAIN);
-            }
-            n->exclusive = -1;
-            unshare();
-            n->shared.pushBack(me);
-            break;
-        case LOCK_EX:
-            if (other || others > 0) {
-                return error(fd, EAGAIN);
-            }
-            unshare();
-            n->exclusive = me;
-            break;
-        default:
-            return error(fd, EINVAL);
-    }
-    return answer(fd, 0);
-}
-
-// The ranges a LOCK keeps, made here and swapped in: one of each for
-// the process.
-static SmallVec<Range> keptRanges;
-
-// fcntl's locks of the endpoint's node, on a range, to the end and past
-// with a length of 0. With get, the first lock of another endpoint in
-// the way of the one described, else F_UNLCK. Else that lock is set in
-// place of what the endpoint held of the range, unless another
-// endpoint's lock is in the way: EAGAIN; F_UNLCK lets the range go.
-static bool lockNode(Endpoint* ep, const Header& h, Body body, int fd) {
-    const u32 type = body.take<u32>();
-    const u64 start = body.take<u64>();
-    const u64 length = body.take<u64>();
-    const u64 stop = length == 0 || start > past - length ? past : start + length;
-    if (type > F_UNLCK) {
-        return error(fd, EINVAL);
-    }
-    Node* n = ep->node;
-    const int me = ep->fd;
-    const Range* way = nullptr;
-    for (usize i = 0; i < n->ranges.size() && !way; ++i) {
-        const Range& l = n->ranges[i];
-        if (l.owner != me && l.start < stop && start < l.stop && (l.write || type == F_WRLCK)) {
-            way = &l;
-        }
-    }
-    if (h.arg == 1) {
-        Assembly a;
-        if (way) {
-            a.add(u32(way->write ? F_WRLCK : F_RDLCK));
-            a.add(way->start);
-            a.add(way->stop == past ? 0 : way->stop - way->start);
-        } else {
-            a.add(u32(F_UNLCK));
-            a.add(start);
-            a.add(length);
-        }
-        ok(fd, out, a.size);
-        return false;
-    }
-    if (type != F_UNLCK && way) {
-        return error(fd, EAGAIN);
-    }
-    keptRanges.clear();
-    for (usize i = 0; i < n->ranges.size(); ++i) {
-        const Range l = n->ranges[i];
-        if (l.owner != me || l.stop <= start || l.start >= stop) {
-            keptRanges.pushBack(l);
-            continue;
-        }
-        if (l.start < start) {
-            keptRanges.pushBack({l.owner, l.write, l.start, start});
-        }
-        if (l.stop > stop) {
-            keptRanges.pushBack({l.owner, l.write, stop, l.stop});
-        }
-    }
-    if (type != F_UNLCK) {
-        keptRanges.pushBack({me, type == F_WRLCK, start, stop});
-    }
-    n->ranges.buffer.swap(keptRanges.buffer);
-    return answer(fd, 0);
-}
-
-// ---- the loop's endpoints -------------------------------------------------------
-
-static int watcher = -1;
-static Endpoint* freeEndpoints;
-static Endpoint* buried; // closed in this batch of events: free after it
-static Endpoint* live;   // every endpoint not closed
-static usize endpointCount;
-
-// An endpoint of a role on a descriptor of ours, an open file's open on
-// a node to read, to write or both.
-static Endpoint* listen(int fd, Role role, Node* n, bool reads, bool writes) {
-    Endpoint* ep = freeEndpoints;
-    if (ep) {
-        freeEndpoints = ep->next;
-    } else {
-        ep = static_cast<Endpoint*>(allocate(sizeof(Endpoint)));
-    }
-    *ep = {fd, reads, writes, role, false, n, nullptr, live, nullptr};
-    if (live) {
-        live->before = ep;
-    }
-    live = ep;
-    if (n) {
-        ++n->opens;
-    }
-    ++endpointCount;
-    epoll_event ev{};
-    ev.events = EPOLLIN;
-    ev.data.ptr = ep;
-    if (epoll_ctl(watcher, EPOLL_CTL_ADD, fd, &ev) != 0) {
-        fatal("tmpfs: epoll_ctl: errno %d", errno);
-    }
-    return ep;
-}
-
-// An endpoint that closes: its locks go with it, and its node when no
-// name is left of it.
-static void forget(Endpoint* ep) {
-    ep->dead = true;
-    if (Node* n = ep->node) {
-        const int fd = ep->fd;
-        n->shared.keepIf([fd](int holder) {
-            return holder != fd;
-        });
-        if (n->exclusive == fd) {
-            n->exclusive = -1;
-        }
-        n->ranges.keepIf([fd](const Range& l) {
-            return l.owner != fd;
-        });
-        --n->opens;
-        release(tree, n);
-    }
-    if (ep->before) {
-        ep->before->after = ep->after;
-    } else {
-        live = ep->after;
-    }
-    if (ep->after) {
-        ep->after->before = ep->before;
-    }
-    ep->next = buried;
-    buried = ep;
-    --endpointCount;
-}
-
-static void closed(Endpoint* ep) {
-    const int fd = ep->fd;
-    epoll_ctl(watcher, EPOLL_CTL_DEL, fd, nullptr);
-    forget(ep);
-    close(fd);
-}
-
-static void bury() {
-    while (Endpoint* ep = buried) {
-        buried = ep->next;
-        ep->next = freeEndpoints;
-        freeEndpoints = ep;
-    }
-}
-
 // ---- rootfs's calls, by node ------------------------------------------------------
 
 // The path of a directory from the tree's root, made from its end, at
@@ -1705,6 +1030,7 @@ static bool openNode(Node* n, u32 flags, bool made, const Header& h, int fd) {
     }
     const Stat now = statOf(tree, n);
     listen(fd, Role::File, n, reads, writes);
+    ++n->opens;
     ok(fd, &now, sizeof now);
     return true;
 }
@@ -1845,6 +1171,7 @@ static bool fsCall(const Header& h, Body body, int fd) {
 
 // A call on an open file, answered on fd: whether fd is kept.
 static bool fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
+    auto* node = static_cast<Node*>(ep->node);
     switch (h.op) {
         case opRead:
             return readNode(ep, h, body, fd);
@@ -1853,7 +1180,7 @@ static bool fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
         case opReaddir:
             return error(fd, ENOTDIR);
         case opFstat: {
-            const Stat st = statOf(tree, ep->node);
+            const Stat st = statOf(tree, node);
             ok(fd, &st, sizeof st);
             return false;
         }
@@ -1868,74 +1195,27 @@ static bool fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
             if (!ep->writes) {
                 return error(fd, EINVAL);
             }
-            return answer(fd, change(tree, ep->node, h.op, h, body));
+            return answer(fd, change(tree, node, h.op, h, body));
         case opFchmod:
         case opFchown:
         case opFutimes:
-            return answer(fd, change(tree, ep->node, h.op, h, body));
+            return answer(fd, change(tree, node, h.op, h, body));
         case opFlock:
-            return flockNode(ep, h, fd);
+            return flockNode(node->locks, ep->fd, h, fd);
         case opLock:
-            return lockNode(ep, h, body, fd);
+            return lockNode(node->locks, ep->fd, h, body, fd);
         default:
             return error(fd, ENOSYS);
     }
 }
 
-static void handle(Endpoint* ep) {
-    if (ep->dead) {
-        return;
-    }
-    Header h;
-    const i64 n = receive(ep->fd, h);
-    if (n < 0) {
-        closed(ep);
-        return;
-    }
-    const Body body{packet + sizeof(Header), packet + sizeof(Header) + n};
-    if (packetFdCount == 0) {
-        // A question of rootfs's, answered on its channel, in order; an
-        // open keeps an endpoint, which a question has none of.
-        if (ep->role == Role::Channel) {
-            if (h.op == fsOpen || h.op == fsCreate) {
-                error(ep->fd, EINVAL);
-            } else {
-                fsCall(h, body, ep->fd);
-            }
-        }
-        return;
-    }
-    if (h.op == opOk || h.op == opErr) {
-        for (usize i = 0; i < packetFdCount; ++i) {
-            close(packetFds[i]);
-        }
-        return;
-    }
-    const int fd = packetFds[packetFdCount - 1];
-    const bool kept = ep->role == Role::Channel ? fsCall(h, body, fd) : fileCall(ep, h, body, fd);
-    if (!kept) {
-        close(fd);
-    }
-    for (usize i = 0; i + 1 < packetFdCount; ++i) {
-        if (packetFds[i] >= 0) {
-            close(packetFds[i]);
-        }
-    }
-}
-
-// Serves the tree until its last endpoint closes: rootfs's channel, and
-// the open files after it.
-static void serve() {
-    epoll_event events[64];
-    while (endpointCount > 0) {
-        const int n = epoll_wait(watcher, events, 64, -1);
-        if (n < 0 && errno != EINTR) {
-            fatal("tmpfs: epoll_wait: errno %d", errno);
-        }
-        for (int i = 0; i < n; ++i) {
-            handle(static_cast<Endpoint*>(events[i].data.ptr));
-        }
-        bury();
+// An endpoint that closes: its locks go with it, and its node when no
+// name is left of it.
+static void closing(Endpoint* ep) {
+    if (auto* n = static_cast<Node*>(ep->node)) {
+        unlock(n->locks, ep->fd);
+        --n->opens;
+        release(tree, n);
     }
 }
 
@@ -1949,11 +1229,10 @@ int tmpfsMain(int argc, char** argv) {
     tree.capacity = tmpCapacity;
     tree.root = makeNode(tree, nullptr, {}, Kind::Dir);
     tree.root->perm = 01777;
-    watcher = epoll_create1(EPOLL_CLOEXEC);
-    if (watcher < 0 || fcntl(channel, F_SETFD, FD_CLOEXEC) != 0) {
+    if (fcntl(channel, F_SETFD, FD_CLOEXEC) != 0) {
         fatal("tmpfs: errno %d", errno);
     }
     listen(channel, Role::Channel, nullptr, true, true);
-    serve();
+    serve(fsCall, fileCall, closing);
     return 0;
 }

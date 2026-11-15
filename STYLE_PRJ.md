@@ -16,7 +16,10 @@ Per-project settings that the shared [STYLE.md](STYLE.md) delegates here.
   it closes. A file's own functions and variables are `static` at file
   scope, outside any namespace. An operator or a hash of such a type that a
   template finds by argument-dependent lookup is the type's method: at file
-  scope that lookup does not find it.
+  scope that lookup does not find it. What a program's files share may live
+  in a namespace of its own, as bin/tools/lib.h's `tools`: the header
+  declares in it, its .cpp defines the members qualified, and the files
+  that use it say `using namespace tools;`.
 - **Kernel imports.** A libc function the kernel implements is lib/c's own
   function calling the import, declared `__KERNEL(name)` under the C name
   `__kernel_<name>` (`src/kernel.c`, or `__INLINE` in its header); the
