@@ -100,13 +100,16 @@ touch -d @1000000000 /tmp/c && [ "$(stat -c %Z /tmp/c)" != 1000000000 ] && echo 
 python3 -c 'import os; t, r = os.statvfs("/tmp"), os.statvfs("/"); print(t.f_blocks, t.f_bsize, t.f_bfree < t.f_blocks, t.f_ffree < t.f_files, t.f_flag & 1, r.f_flag & 1, r.f_bfree, r.f_blocks > 1000)'
 """
 
-# Who is not root may do no more than the modes say.
+# Who is not root may do no more than the modes say, as they are now: a
+# directory's mode changed holds for what was looked up in it before.
 PERMISSIONS = """\
 echo a > /tmp/ro && chmod 400 /tmp/ro && (echo b >> /tmp/ro) 2>&1; cat /tmp/ro
 mkdir /tmp/ns && touch /tmp/ns/f && chmod 600 /tmp/ns && ls /tmp/ns/f 2>&1; chmod 700 /tmp/ns
 chmod 777 /tmp 2>&1
 python3 -c 'import os; os.chown("/tmp/ro", 0, 0)' 2>&1 | tail -1
 printf '#!/bin/sh\\necho ran\\n' > /tmp/s.sh && /tmp/s.sh 2>&1; chmod +x /tmp/s.sh && /tmp/s.sh
+mkdir /tmp/cw && touch /tmp/cw/y && cd /tmp/cw && ls y && chmod 0 . && ls y 2>&1; chmod 700 . && ls y && cd /
+mkdir /tmp/sd && touch /tmp/sd/z && ls /tmp/sd/z && chmod 600 /tmp/sd && ls /tmp/sd/z 2>&1; chmod 700 /tmp/sd && ls /tmp/sd/z
 """
 
 PERMITTED = """\
@@ -117,6 +120,12 @@ chmod: /tmp: Operation not permitted
 PermissionError: [Errno 1] Operation not permitted: '/tmp/ro'
 sh: /tmp/s.sh: Permission denied
 ran
+y
+ls: y: Permission denied
+y
+/tmp/sd/z
+ls: /tmp/sd/z: Permission denied
+/tmp/sd/z
 """
 
 WANT = """\

@@ -19,8 +19,10 @@ followed, an absolute one from the root of the process; ".." out of the
 root goes to where it is mounted, and so does the path of a directory.
 Names are made, moved, linked and removed, modes, times and bytes
 written, and all of it is there when the system starts again: it writes
-what it holds as it goes down. A file system of features fuse2fs does
-not know is refused.
+what it holds as it goes down. A directory made after one was removed
+gets its inode, and nothing of the removed one's: not its names, not
+its "..". A file system of
+features fuse2fs does not know is refused.
 
     test_mounts.py <vm> <rootfs>
 """
@@ -336,6 +338,7 @@ stat -c '%F %s %h' /tmp/two/sub /tmp/four/big /tmp/two/link
 python3 -c 'import os; s = os.statvfs("/tmp/four"); print(s.f_bsize, s.f_flag & 1, s.f_blocks)'
 for root in /tmp/two /tmp/four; do echo new > $root/new.txt && mkdir $root/dir && mv $root/new.txt $root/dir/moved.txt && ln -s hello.txt $root/sym && chmod 600 $root/hello.txt && touch -d @1500000000 $root/hello.txt && rm $root/filler && ls $root/dir; done
 rmdir /tmp/two/dir
+for root in /tmp/two /tmp/four; do mkdir $root/up $root/up/gone && touch $root/up/gone/x && a=$(stat -c %i $root/up/gone) && stat -c %i $root/up/gone/.. > /dev/null && rm $root/up/gone/x && rmdir $root/up/gone && mkdir $root/back && [ "$(stat -c %i $root/back)" = "$a" ] && test ! -e $root/back/x && [ "$(stat -c %i $root/back/..)" = "$(stat -c %i $root)" ] && echo nothing of gone in back; done
 python3 -c '
 import os
 p = bytes(i * 13 % 256 for i in range(1 << 20))
@@ -384,6 +387,8 @@ symbolic link 9 1
 4096 0 2043
 moved.txt
 moved.txt
+nothing of gone in back
+nothing of gone in back
 1048576 True
 1004 b'tail'
 """

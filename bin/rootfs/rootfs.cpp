@@ -8,7 +8,8 @@
 // the image linked into it at the root, which erofs serves (bin/tools),
 // /tmp and /dev, which it starts itself (tmpfs and devfs), and those a
 // MOUNT names. A walk waits for the file systems' answers, as a coroutine,
-// while the loop goes on with other calls.
+// while the loop goes on with other calls, and rootfs keeps what they
+// answer, a cache of names as Linux's dcache, for the walks after.
 //
 // It starts erofs first, from the image itself: a memfd of the image, a
 // memfd of erofs's program in it, which it executes (fexecve), and the
@@ -491,6 +492,8 @@ namespace {
     struct Fs {
         Endpoint* channel = nullptr; // none once it is gone
         u32 mounts = 0;              // it goes with its last
+        bool cached = false;         // what it answers is kept: its ROOT did not say fsNocache
+        u64 changes = 0;             // the calls handed on to it that may change it
         Ask* waiting = nullptr;      // the questions asked on its channel, to be answered in order
         Ask* lastWaiting = nullptr;
     };
@@ -673,6 +676,7 @@ namespace {
     static Endpoint* listenHandle(int fd, const Place& p, bool opath) {
         Endpoint* ep = listen(fd, Role::Handle);
         ep->at = p;
+        ep->at.fresh = false; // the stat is the open's, not a later call's
         ep->reads = !opath;
         ep->writes = !opath;
         ep->id = ++handleIds;
@@ -855,8 +859,11 @@ namespace {
         to = from;
     }
 
+    static void forgetAll(const Fs* fs);
+
     // A mount nothing is at any more, unmounted: its memory goes, and its
-    // file system's with its last mount, which closes its channel.
+    // file system's with its last mount, which closes its channel, and what
+    // rootfs kept of it.
     static void letGo(Mount* m) {
         if (--m->refs != 0) {
             return;
@@ -867,6 +874,7 @@ namespace {
             if (fs->channel) {
                 closed(fs->channel);
             }
+            forgetAll(fs);
             free(fs);
         }
     }
@@ -897,7 +905,7 @@ namespace {
 
     // Mounts a directory of a file system, its root, on a place of the
     // VFS's, point, the name pointName of the directory dir.
-    static void mountAt(Fs* fs, const Place& root, const Place& point, const Place& dir, Name pointName) {
+    static Mount* mountAt(Fs* fs, const Place& root, const Place& point, const Place& dir, Name pointName) {
         auto* m = new (allocate(sizeof(Mount))) Mount();
         m->fs = fs;
         ++fs->mounts;
@@ -913,12 +921,15 @@ namespace {
         memcpy(m->pointName, pointName.at, pointName.length);
         m->next = mounts;
         mounts = m;
+        return m;
     }
 
     // A file system is gone, its channel closed: it is unmounted wherever
-    // it is mounted, the root's too, whose walks are EIO from then on.
+    // it is mounted, the root's too, whose walks are EIO from then on, and
+    // nothing of it is kept.
     static void gone(Fs* fs) {
         fs->channel = nullptr;
+        forgetAll(fs);
         for (Mount* m = mounts; m;) {
             Mount* next = m->next;
             if (m->fs == fs && !m->gone) {
@@ -926,6 +937,288 @@ namespace {
                 next = mounts;
             }
             m = next;
+        }
+    }
+
+    // ---- the cache --------------------------------------------------------------------
+    //
+    // What the file systems answered, kept, as Linux's dcache keeps it: the
+    // names of directories, what each names or that it is not there
+    // (ENOENT), and of a node its stat and a link's target. A file system
+    // changes by the calls rootfs hands on to it, and by its open files,
+    // which the kernel calls itself; one that changes otherwise says
+    // fsNocache in its ROOT, and nothing of it is kept. So a name holds until
+    // rootfs hands on a call that may change it, and so does the stat of a
+    // directory or a link, which no open file changes: a directory's
+    // descriptor is a handle of rootfs's, a link opens as none. Of another
+    // node only the type holds, its open files change the rest. atime is
+    // none of rootfs's: the system is noatime.
+    //
+    // rootfs sees no reply to a call it hands on, only that the call may
+    // change something: it forgets what may change before it hands the call
+    // on, and keeps no answer to a question asked before a call handed on
+    // since, as a file system answers its channel in order. Of errors only
+    // ENOENT is kept: the others are who asks's, and rootfs checks the
+    // search of a directory itself. A node's number may be its file
+    // system's again for another node once the node is gone, as ext4's are:
+    // what is kept of a directory goes with it, and rootfs learns what a
+    // call removes before it hands it on. The names kept are the newest
+    // maxEntries, and a node is kept while a name of it or in it is.
+
+    constexpr usize maxEntries = usize(1) << 15;
+
+    struct Known;
+
+    // A name of a directory kept: what it names, none when it is not there.
+    // Its bytes follow it.
+    struct Entry {
+        Known* dir;
+        Known* node;
+        Entry* next; // among the names of dir kept
+        Entry* previous;
+        Entry* newer; // among all the names kept, by when they were last used
+        Entry* older;
+        u32 hash;
+        u32 length;
+    };
+
+    // A node kept: its stat as its file system last told it and what of it
+    // holds, a link's target, the names kept of a directory.
+    struct Known {
+        Fs* fs = nullptr;
+        u64 ino = 0;
+        Stat st{};
+        bool modes = false;  // its mode and owners hold
+        bool whole = false;  // all of it holds, but atime
+        bool linked = false; // target is the link's
+        Buffer target;
+        Entry* inside = nullptr;
+        u32 refs = 0; // the names kept of it and in it
+    };
+
+    OpenTable<Known> knowns;  // by file system and node
+    OpenTable<Entry> entries; // by directory and name
+    Entry* newest;
+    Entry* oldest;
+    usize entryCount;
+
+    static u32 hashKnown(const Fs* fs, u64 ino) {
+        return finish(u64(uintptr_t(fs)) * 0x9e3779b97f4a7c15ull ^ ino);
+    }
+
+    static u32 hashEntry(const Known* dir, Name name) {
+        u64 h = u64(uintptr_t(dir)) * 0x9e3779b97f4a7c15ull;
+        for (usize i = 0; i < name.length; ++i) {
+            h = (h ^ u8(name.at[i])) * 0x100000001b3ull;
+        }
+        return finish(h);
+    }
+
+    // Whether a stat holds while rootfs hands on nothing that changes it:
+    // a directory's and a link's.
+    static bool lasting(const Stat& st) {
+        return S_ISDIR(st.mode) || S_ISLNK(st.mode);
+    }
+
+    static Known* knownOf(const Fs* fs, u64 ino) {
+        return knowns.find(hashKnown(fs, ino), [fs, ino](const Known* k) {
+            return k->fs == fs && k->ino == ino;
+        });
+    }
+
+    // The node of a place, kept, or none.
+    static Known* knownAt(const Place& p) {
+        const Fs* fs = p.m->fs;
+        return fs->cached ? knownOf(fs, p.node) : nullptr;
+    }
+
+    static Known* knownFor(Fs* fs, u64 ino) {
+        Known* k = knownOf(fs, ino);
+        if (!k) {
+            k = new (allocate(sizeof(Known))) Known();
+            k->fs = fs;
+            k->ino = ino;
+            knowns.insert(hashKnown(fs, ino), k);
+        }
+        return k;
+    }
+
+    static void release(Known* k) {
+        if (--k->refs == 0) {
+            knowns.erase(hashKnown(k->fs, k->ino), k);
+            k->~Known();
+            free(k);
+        }
+    }
+
+    // A name kept goes, and a node kept for it alone.
+    static void drop(Entry* e) {
+        entries.erase(e->hash, e);
+        (e->previous ? e->previous->next : e->dir->inside) = e->next;
+        if (e->next) {
+            e->next->previous = e->previous;
+        }
+        (e->newer ? e->newer->older : newest) = e->older;
+        (e->older ? e->older->newer : oldest) = e->newer;
+        --entryCount;
+        Known* dir = e->dir;
+        Known* node = e->node;
+        free(e);
+        if (node) {
+            release(node);
+        }
+        release(dir);
+    }
+
+    // A name of a directory kept, the newest used now.
+    static Entry* entryOf(Known* dir, Name name) {
+        Entry* e = entries.find(hashEntry(dir, name), [dir, name](const Entry* x) {
+            return x->dir == dir && x->length == name.length && memcmp(x + 1, name.at, name.length) == 0;
+        });
+        if (e && e != newest) {
+            e->newer->older = e->older;
+            (e->older ? e->older->newer : oldest) = e->newer;
+            e->older = newest;
+            e->newer = nullptr;
+            newest->newer = e;
+            newest = e;
+        }
+        return e;
+    }
+
+    // A name of a place's directory kept, or none.
+    static Entry* keptAt(const Place& dir, Name name) {
+        Known* d = knownAt(dir);
+        return d ? entryOf(d, name) : nullptr;
+    }
+
+    // A place of a node kept.
+    static Place keptPlace(Mount* m, const Known* k) {
+        Place p;
+        p.m = m;
+        p.node = k->ino;
+        p.st = k->st;
+        return p;
+    }
+
+    // The names kept of a directory go: it goes, or another node may have
+    // its number.
+    static void forgetInside(Known* k) {
+        ++k->refs;
+        while (k->inside) {
+            drop(k->inside);
+        }
+        release(k);
+    }
+
+    // A node's stat as an answer told it. A node of another kind than the
+    // one kept is another of the number: what was kept of the old goes.
+    static void learnInto(Known* k, const Stat& st) {
+        if ((k->st.mode & S_IFMT) != 0 && (k->st.mode & S_IFMT) != (st.mode & S_IFMT)) {
+            forgetInside(k);
+            k->linked = false;
+            k->target.clear();
+        }
+        k->st = st;
+        k->modes = k->whole = lasting(st);
+    }
+
+    // The stat of a place's node, as an answer to a question asked since
+    // the last call handed on, current, told it.
+    static void learn(const Place& p, const Stat& st, bool current) {
+        Known* k = current ? knownAt(p) : nullptr;
+        if (k) {
+            ++k->refs;
+            learnInto(k, st);
+            release(k);
+        }
+    }
+
+    // Keeps what a name of a directory names, as an answer to a question
+    // asked since the last call handed on, current, told: its stat, or none
+    // when the name is not there.
+    static void remember(const Place& dir, Name name, const Stat* st, bool current) {
+        Fs* fs = dir.m->fs;
+        if (!fs->cached || !current || name.length > NAME_MAX) {
+            return;
+        }
+        Known* d = knownFor(fs, dir.node);
+        if ((d->st.mode & S_IFMT) == 0) {
+            d->st = dir.st; // its kind, and nothing of it that holds yet
+        }
+        ++d->refs;
+        Known* n = nullptr;
+        if (st) {
+            n = knownFor(fs, st->ino);
+            ++n->refs;
+            learnInto(n, *st);
+        }
+        if (Entry* old = entryOf(d, name)) {
+            drop(old);
+        }
+        auto* e = static_cast<Entry*>(allocate(sizeof(Entry) + name.length));
+        memcpy(e + 1, name.at, name.length);
+        e->dir = d;
+        e->node = n;
+        e->hash = hashEntry(d, name);
+        e->length = u32(name.length);
+        e->previous = nullptr;
+        e->next = d->inside;
+        if (d->inside) {
+            d->inside->previous = e;
+        }
+        d->inside = e;
+        e->newer = nullptr;
+        e->older = newest;
+        (newest ? newest->newer : oldest) = e;
+        newest = e;
+        entries.insert(e->hash, e);
+        if (++entryCount > maxEntries) {
+            drop(oldest);
+        }
+    }
+
+    // A link's target, as an answer to a question asked since the last
+    // call handed on, current, told it.
+    static void rememberTarget(const Place& link, Name target, bool current) {
+        Known* k = current ? knownAt(link) : nullptr;
+        if (k && S_ISLNK(k->st.mode)) {
+            k->target.clear();
+            k->target.append(target.at, target.length);
+            k->linked = true;
+        }
+    }
+
+    // A call handed on to a place's file system may change it: no answer
+    // to a question asked before is kept.
+    static void changing(const Place& p) {
+        ++p.m->fs->changes;
+    }
+
+    // A name kept, forgotten.
+    static void forgetName(const Place& dir, Name name) {
+        if (Entry* e = keptAt(dir, name)) {
+            drop(e);
+        }
+    }
+
+    // What of a node's stat a call may change: all but its mode and
+    // owners, or with modes those too.
+    static void forgetStat(Known* k, bool modes) {
+        if (k) {
+            k->whole = false;
+            k->modes = k->modes && !modes;
+        }
+    }
+
+    // A file system's names kept go: it is gone, or let go of.
+    static void forgetAll(const Fs* fs) {
+        for (Entry* e = oldest; e;) {
+            Entry* next = e->newer;
+            if (e->dir->fs == fs) {
+                drop(e);
+            }
+            e = next;
         }
     }
 
@@ -960,6 +1253,7 @@ namespace {
     struct Answer {
         int error = 0;
         Body body{nullptr, nullptr};
+        bool current = false; // no call that may change the file system was handed on after the question
     };
 
     // A question of a call's to a file system, which the call waits for: it
@@ -975,6 +1269,7 @@ namespace {
         u8 body[8 + NAME_MAX];
         usize size = 0;
         Answer answer;
+        u64 changes = 0; // the file system's changes when the question went
         std::coroutine_handle<void> call;
         Ask* next = nullptr; // among the file system's questions
     };
@@ -1020,6 +1315,49 @@ namespace {
         }
         memcpy(&st, b.at, sizeof st);
         return true;
+    }
+
+    // Whether a ROOT's answer says its file system is not to be kept.
+    static bool nocacheIn(const Answer& a) {
+        u32 flags = 0;
+        if (a.body.size() >= sizeof(Stat) + sizeof flags) {
+            memcpy(&flags, a.body.at + sizeof(Stat), sizeof flags);
+        }
+        return (flags & fsNocache) != 0;
+    }
+
+    // What a name of a directory names as rootfs keeps it: whether it
+    // keeps the name, and then whether the name is there, and its stat.
+    static bool keptStat(const Place& dir, Name name, Stat& st, bool& there) {
+        const Entry* e = keptAt(dir, name);
+        if (!e) {
+            return false;
+        }
+        there = e->node != nullptr;
+        if (there) {
+            st = e->node->st;
+        }
+        return true;
+    }
+
+    // A node of a stat a call removes or moves, forgotten before the call
+    // goes: its stat, and when it goes, a link's target, a directory's
+    // names kept, or a directory's ".." when it moves.
+    static void forgetNode(Fs* fs, const Stat& st, bool moves) {
+        Known* k = fs->cached ? knownOf(fs, st.ino) : nullptr;
+        if (!k) {
+            return;
+        }
+        forgetStat(k, false);
+        if (!S_ISDIR(st.mode)) {
+            k->linked = k->linked && moves;
+            return;
+        }
+        if (!moves) {
+            forgetInside(k);
+        } else if (Entry* e = entryOf(k, literal(".."))) {
+            drop(e);
+        }
     }
 
     // Whether a STATFS answer says its file system is read-only.
@@ -1074,6 +1412,7 @@ bool Ask::await_suspend(std::coroutine_handle<void> h) {
         answer.error = channel && errno == EAGAIN ? EAGAIN : EIO;
         return false;
     }
+    changes = fs->changes;
     if (fs->lastWaiting) {
         fs->lastWaiting->next = this;
     } else {
@@ -1164,7 +1503,8 @@ namespace {
     // and the root alone is the directory itself. A path of "." alone
     // names where it starts, which nobody is asked about. A step its file
     // system answers is a question (Step::Ask), which the call asks, and
-    // the walk goes on with the answer.
+    // the walk goes on with the answer, which rootfs keeps; a step it kept
+    // the answer of asks nobody.
     struct Walk {
         enum class Step : u8 {
             Done,
@@ -1180,6 +1520,7 @@ namespace {
             Target,     // the target of a link the walk goes through
             Last,       // the last name
             LastTarget, // the target of a last link
+            Here,       // here's stat, which a call handed on may have changed since it was kept
         };
 
         Walk() = default;
@@ -1195,6 +1536,8 @@ namespace {
         Step settle(Place next);
         Step finish();
         Step settleLast(Place t);
+        Step current();
+        Step through(const Known* link, bool lastOne);
         bool take(Name& name);
         bool more() const;
         bool onlyDots() const;
@@ -1252,6 +1595,7 @@ void Walk::start(const Header& head, const Place& from, const Place& top, Name p
     missing = misses;
     moveTo(root, top);
     moveTo(here, p.length != 0 && p.at[0] == '/' ? top : from);
+    root.fresh = here.fresh = false; // their stats are older calls'
     path.clear();
     path.append(p.at, p.length);
     at = 0;
@@ -1370,7 +1714,45 @@ Walk::Step Walk::up() {
         moveTo(here, out);
         return Step::Go;
     }
+    if (const Entry* e = keptAt(here, literal("..")); e && e->node) {
+        moveTo(here, keptPlace(here.m, e->node));
+        return Step::Go;
+    }
     ask(fsLookup, here, literal(".."), Wait::Parent);
+    return Step::Ask;
+}
+
+// A link the walk goes through, its target kept: the target takes its
+// place.
+Walk::Step Walk::through(const Known* link, bool lastOne) {
+    const Name to{static_cast<const char*>(link->target.data()), link->target.size()};
+    if (to.empty()) {
+        return fail(ENOENT);
+    }
+    ++links;
+    if (!follow(to, lastOne)) {
+        return fail(ENAMETOOLONG);
+    }
+    return lastOne ? run() : Step::Go;
+}
+
+// Here as its file system has it: a directory's stat kept holds until a
+// call handed on may have changed its mode or owners, then it is asked
+// again. A directory nothing is kept of has nothing kept in it, and its
+// file system answers every name of it, as it checks the search itself.
+Walk::Step Walk::current() {
+    if (here.fresh || !S_ISDIR(here.st.mode)) {
+        return Step::Go;
+    }
+    const Known* k = knownAt(here);
+    if (!k) {
+        return Step::Go;
+    }
+    if (k->modes) {
+        here.st = k->st;
+        return Step::Go;
+    }
+    ask(fsGetattr, here, {}, Wait::Here);
     return Step::Ask;
 }
 
@@ -1384,6 +1766,9 @@ Walk::Step Walk::settle(Place next) {
     }
     if (links >= maxLinks) {
         return fail(ELOOP);
+    }
+    if (const Known* k = knownAt(next); k && k->linked) {
+        return through(k, false);
     }
     ask(fsReadlink, next, {}, Wait::Target);
     return Step::Ask;
@@ -1403,6 +1788,16 @@ Walk::Step Walk::finish() {
     if (Mount* m = mountNamed(here, last)) {
         return settleLast(rootOf(m));
     }
+    if (const Entry* e = keptAt(here, last)) {
+        if (e->node) {
+            return settleLast(keptPlace(here.m, e->node));
+        }
+        if (!missing) {
+            return fail(ENOENT);
+        }
+        found = false;
+        return Step::Done;
+    }
     ask(fsLookup, here, last, Wait::Last);
     return Step::Ask;
 }
@@ -1414,6 +1809,9 @@ Walk::Step Walk::settleLast(Place t) {
     if (isLink(t) && (followLast || slash)) {
         if (links >= maxLinks) {
             return fail(ELOOP);
+        }
+        if (const Known* k = knownAt(t); k && k->linked) {
+            return through(k, true);
         }
         ask(fsReadlink, t, {}, Wait::LastTarget);
         return Step::Ask;
@@ -1427,6 +1825,9 @@ Walk::Step Walk::settleLast(Place t) {
 }
 
 Walk::Step Walk::run() {
+    if (const Step s = current(); s != Step::Go) {
+        return s;
+    }
     if (fresh) {
         fresh = false;
         if (onlyDots()) {
@@ -1439,6 +1840,9 @@ Walk::Step Walk::run() {
         }
     }
     for (;;) {
+        if (const Step s = current(); s != Step::Go) {
+            return s;
+        }
         Name n;
         if (!take(n)) {
             kind = lastNone;
@@ -1483,6 +1887,15 @@ Walk::Step Walk::run() {
             }
             continue;
         }
+        if (const Entry* e = keptAt(here, n)) {
+            if (!e->node) {
+                return fail(ENOENT);
+            }
+            if (const Step s = settle(keptPlace(here.m, e->node)); s != Step::Go) {
+                return s;
+            }
+            continue;
+        }
         ask(fsLookup, here, n, Wait::Child);
         return Step::Ask;
     }
@@ -1493,6 +1906,9 @@ Walk::Step Walk::answered(const Answer& a) {
     const Wait w = wait;
     wait = Wait::None;
     if (a.error != 0) {
+        if (a.error == ENOENT && (w == Wait::Child || w == Wait::Last)) {
+            remember(here, name, nullptr, a.current);
+        }
         if (w == Wait::Last && a.error == ENOENT && missing) {
             found = false;
             return Step::Done;
@@ -1505,6 +1921,7 @@ Walk::Step Walk::answered(const Answer& a) {
             if (!statIn(a.body, st)) {
                 return fail(EIO);
             }
+            remember(here, name, &st, a.current);
             if (const Step s = settle(theirPlace(here.m, st)); s != Step::Go) {
                 return s;
             }
@@ -1513,6 +1930,7 @@ Walk::Step Walk::answered(const Answer& a) {
             if (!statIn(a.body, st)) {
                 return fail(EIO);
             }
+            remember(here, literal(".."), &st, a.current);
             moveTo(here, theirPlace(here.m, st));
             if (ending) {
                 kind = lastDotdot;
@@ -1523,6 +1941,7 @@ Walk::Step Walk::answered(const Answer& a) {
             if (!statIn(a.body, st)) {
                 return fail(EIO);
             }
+            remember(here, name, &st, a.current);
             return settleLast(theirPlace(here.m, st));
         case Wait::Target:
         case Wait::LastTarget: {
@@ -1531,12 +1950,21 @@ Walk::Step Walk::answered(const Answer& a) {
             if (to.empty()) {
                 return fail(ENOENT);
             }
+            rememberTarget(asked, to, a.current);
             ++links;
             if (!follow(to, w == Wait::LastTarget)) {
                 return fail(ENAMETOOLONG);
             }
             return run();
         }
+        case Wait::Here:
+            if (!statIn(a.body, st)) {
+                return fail(EIO);
+            }
+            learn(here, st, a.current);
+            here.st = st;
+            here.fresh = true;
+            return run();
         case Wait::None:
             break;
     }
@@ -1631,6 +2059,9 @@ namespace {
             fl |= O_DIRECTORY;
         }
         if (!w.found) {
+            changing(w.here);
+            forgetName(w.here, w.last);
+            forgetStat(knownAt(w.here), false);
             hand(w.here, h, fsCreate, u32(fl), &mode, sizeof mode, w.last, fd);
             co_return;
         }
@@ -1663,10 +2094,18 @@ namespace {
             ok(fd, &t.st, sizeof t.st);
             co_return;
         }
+        if (const Known* k = knownAt(t); k && k->whole) {
+            ok(fd, &k->st, sizeof k->st);
+            co_return;
+        }
         const Answer a = co_await asking(t, h, fsGetattr, {});
+        Stat st;
         if (a.error != 0) {
             error(fd, a.error);
         } else {
+            if (statIn(a.body, st)) {
+                learn(t, st, a.current);
+            }
             ok(fd, a.body.at, a.body.size());
         }
     }
@@ -1686,6 +2125,8 @@ namespace {
         const Place& t = w.target;
         if (w.kind != lastName || !isLink(t)) {
             error(fd, EINVAL);
+        } else if (const Known* k = knownAt(t); k && k->linked) {
+            ok(fd, k->target.data(), k->target.size());
         } else {
             hand(t, h, fsReadlink, 0, nullptr, 0, {}, fd);
         }
@@ -1710,12 +2151,26 @@ namespace {
             error(fd, EEXIST);
             co_return;
         }
+        Stat st;
+        bool there = false;
+        const bool kept = keptStat(w.here, w.last, st, there);
+        if (there) {
+            error(fd, EEXIST);
+            co_return;
+        }
         if (w.slash && h.op != vfsMkdir) {
+            if (kept) {
+                error(fd, ENOENT);
+                co_return;
+            }
             const Answer a = co_await asking(w.here, h, fsLookup, w.last);
             error(fd, a.error == 0 ? EEXIST : ENOENT);
             co_return;
         }
         const Name to{static_cast<const char*>(link.data()), link.size()};
+        changing(w.here);
+        forgetName(w.here, w.last);
+        forgetStat(knownAt(w.here), false);
         if (h.op == vfsSymlink) {
             Buffer names;
             names.append(to.at, to.length);
@@ -1757,6 +2212,19 @@ namespace {
             error(fd, EBUSY);
             co_return;
         }
+        // What goes, which rootfs forgets first: kept, or asked.
+        Stat st;
+        bool there = false;
+        if (w.here.m->fs->cached && !keptStat(w.here, w.last, st, there)) {
+            const Answer got = co_await asking(w.here, h, fsLookup, w.last);
+            there = got.error == 0 && statIn(got.body, st);
+        }
+        changing(w.here);
+        if (there) {
+            forgetNode(w.here.m->fs, st, false);
+        }
+        forgetName(w.here, w.last);
+        forgetStat(knownAt(w.here), false);
         hand(w.here, h, fsUnlink, h.arg, nullptr, 0, w.last, fd);
     }
 
@@ -1810,6 +2278,26 @@ namespace {
             error(fd, EBUSY);
             co_return;
         }
+        // What moves and what it replaces, which rootfs forgets first: kept,
+        // or asked.
+        Stat st[2];
+        bool there[2] = {false, false};
+        const Place* dirs[] = {&a.here, &b.here};
+        const Name lasts[] = {a.last, b.last};
+        for (int i = 0; i < 2 && a.here.m->fs->cached; ++i) {
+            if (!keptStat(*dirs[i], lasts[i], st[i], there[i])) {
+                const Answer got = co_await asking(*dirs[i], h, fsLookup, lasts[i]);
+                there[i] = got.error == 0 && statIn(got.body, st[i]);
+            }
+        }
+        changing(a.here);
+        for (int i = 0; i < 2; ++i) {
+            if (there[i]) {
+                forgetNode(a.here.m->fs, st[i], i == 0);
+            }
+            forgetName(*dirs[i], lasts[i]);
+            forgetStat(knownAt(*dirs[i]), false);
+        }
         Buffer names;
         names.append(a.last.at, a.last.length);
         names.append("", 1);
@@ -1860,6 +2348,10 @@ namespace {
             error(fd, readOnlyIn(co_await asking(b.here, h, fsStatfs, {})) ? EROFS : EXDEV);
             co_return;
         }
+        changing(b.here);
+        forgetName(b.here, b.last);
+        forgetStat(knownAt(b.here), false);
+        forgetStat(knownAt(a.target), false);
         hand(a.target, h, fsLink, 0, &b.here.node, 8, b.last, fd);
     }
 
@@ -1879,6 +2371,8 @@ namespace {
         if (op == fsChmod && isLink(w.target)) {
             error(fd, EOPNOTSUPP);
         } else {
+            changing(w.target);
+            forgetStat(knownAt(w.target), op == fsChmod || op == fsChown);
             hand(w.target, h, op, h.arg, args.bytes, args.size, {}, fd);
         }
     }
@@ -2017,6 +2511,7 @@ namespace {
                 error(fd, got.error != 0 ? got.error : EIO);
                 co_return;
             }
+            fs->cached = !nocacheIn(got);
             Place top;
             top.node = st.ino;
             top.st = st;
@@ -2065,6 +2560,9 @@ namespace {
             error(fd, a.error == 0 ? EEXIST : ENOENT);
             co_return;
         }
+        changing(w.here);
+        forgetName(w.here, w.last);
+        forgetStat(knownAt(w.here), false);
         hand(w.here, h, fsBind, h.arg, nullptr, 0, w.last, fd, listener);
     }
 
@@ -2093,11 +2591,16 @@ namespace {
     static Task fstatCall(Header h, int fd, Place at, u64 id) {
         Reply r{fd};
         Held here(at);
+        if (const Known* k = knownAt(here.at); k && k->whole) {
+            handleReply(fd, k->st, id);
+            co_return;
+        }
         const Answer a = co_await asking(here.at, h, fsGetattr, {});
         Stat st;
         if (a.error != 0 || !statIn(a.body, st)) {
             error(fd, a.error != 0 ? a.error : EIO);
         } else {
+            learn(here.at, st, a.current);
             handleReply(fd, st, id);
         }
     }
@@ -2208,6 +2711,8 @@ namespace {
                 if (opath) {
                     return error(fd, EBADF);
                 }
+                changing(at);
+                forgetStat(knownAt(at), h.op != opFutimes);
                 return hand(at, h, h.op == opFchmod ? fsChmod : h.op == opFchown ? fsChown : fsUtimes, h.arg, body.at, body.size(), {}, fd);
             case opFlock:
             case opLock:
@@ -2364,6 +2869,7 @@ namespace {
         if (n >= ssize_t(sizeof h)) {
             memcpy(&h, packet, sizeof h);
         }
+        a->answer.current = fs->changes == a->changes;
         if (n < ssize_t(sizeof h) || (h.op != opOk && h.op != opErr)) {
             a->answer.error = EIO;
         } else if (h.op == opErr) {
@@ -2581,13 +3087,13 @@ namespace {
     // root's, point, named name there: the file system's channel ours, its
     // root its node 1, a directory of root's of mode perm as it starts,
     // until its own stat says more.
-    static void mountStarted(int channel, const Stat& point, Name name, u32 perm) {
+    static Mount* mountStarted(int channel, const Stat& point, Name name, u32 perm) {
         Place top;
         top.node = 1;
         top.st.ino = 1;
         top.st.mode = S_IFDIR | perm;
         top.st.nlink = 2;
-        mountAt(started(channel), top, theirPlace(rootMount, point), rootOf(rootMount), name);
+        return mountAt(started(channel), top, theirPlace(rootMount, point), rootOf(rootMount), name);
     }
 
     // The image's header: where erofs's program is in it, the file of
@@ -2678,10 +3184,14 @@ namespace {
         mounts = rootMount;
         const Header h{};
         {
-            const Answer a = co_await asking(rootOf(rootMount), h, fsGetattr, {});
+            Ask ask;
+            ask.fs = rootMount->fs;
+            ask.head = {fsRoot, 0, 0, 0};
+            const Answer a = co_await ask;
             if (a.error != 0 || !statIn(a.body, rootMount->rootStat)) {
                 fatal("rootfs: erofs serves no root: errno %d", a.error);
             }
+            rootMount->fs->cached = !nocacheIn(a);
         }
         listenHandle(roots[0], rootOf(rootMount), false);
         rootEnd = roots[1];
@@ -2692,13 +3202,15 @@ namespace {
             u32 perm;
         } points[] = {{"tmp", tmp[0], 01777}, {"dev", dev[0], 0755}};
 
+        Mount* begun[2];
+        int begins = 0;
         for (const auto& p : points) {
             const Answer a = co_await asking(rootOf(rootMount), h, fsLookup, literal(p.name));
             Stat st;
             if (a.error != 0 || !statIn(a.body, st) || !S_ISDIR(st.mode)) {
                 fatal("rootfs: mount on /%s: errno %d", p.name, a.error);
             }
-            mountStarted(p.channel, st, literal(p.name), p.perm);
+            begun[begins++] = mountStarted(p.channel, st, literal(p.name), p.perm);
         }
         char tmpfsName[] = "tmpfs";
         char* const tmpfsArgv[] = {tmpfsName, three, nullptr};
@@ -2716,6 +3228,20 @@ namespace {
         ev.data.ptr = &bootMarker;
         if (epoll_ctl(watcher, EPOLL_CTL_ADD, bootEnd, &ev) != 0) {
             fatal("rootfs: epoll_ctl: errno %d", errno);
+        }
+        // Each file system started tells its root once it serves, and
+        // whether rootfs keeps its answers: until then it keeps none.
+        for (Mount* m : begun) {
+            Held held(rootOf(m));
+            Ask ask;
+            ask.fs = m->fs;
+            ask.head = {fsRoot, 0, 0, 0};
+            const Answer a = co_await ask;
+            Stat st;
+            if (!m->gone && a.error == 0 && statIn(a.body, st)) {
+                m->rootStat = st;
+                m->fs->cached = !nocacheIn(a);
+            }
         }
     }
 

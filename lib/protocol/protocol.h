@@ -111,7 +111,9 @@
 //     CONNECT               node u64          OK, fds[0] the listener a
 //                                         socket node holds: who asks may
 //                                         write it
-//     ROOT                                    OK stat: the root's
+//     ROOT                                    OK stat: the root's, then
+//                                         flags u32: fsNocache, of a file
+//                                         system that changes by itself
 //
 //   An open file's, on its endpoint:
 //     READ      arg len     off u64 woff u32
@@ -153,6 +155,12 @@
 //   A file system is a socket of its own, SOCK_SEQPACKET, bound to a path
 //   (BIND): mount(2) connects to it and mounts the connection, and every
 //   connection the file system accepts is a channel of its calls.
+//
+//   rootfs keeps what a file system answers, a cache of names, as Linux's
+//   dcache is, so a file system changes by the calls rootfs hands on to it
+//   and by its open files, and nothing else, but for one whose ROOT says
+//   fsNocache: rootfs keeps nothing of its answers. Its atime is none of
+//   rootfs's: the system is noatime.
 //
 //   replies: OK, ERR with arg the errno
 //   stat { ino u64, size u64, mtime u64 nanoseconds, mode u32, nlink u32,
@@ -235,6 +243,7 @@ enum : uint32_t {
 // endpoint, a REGISTER's end and its endpoint.
 constexpr size_t maxFds = 4;
 constexpr uint32_t noId = 0xffffffff; // a uid or gid CHOWN keeps
+constexpr uint32_t fsNocache = 1;     // ROOT's flags: the file system changes by itself
 // UTIMES's when.
 constexpr uint32_t whenAtimeNow = 2;
 constexpr uint32_t whenMtimeNow = 4;

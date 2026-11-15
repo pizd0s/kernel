@@ -5,8 +5,10 @@ slashes at the end, symbolic links (followed, not, created through, too
 many), "." and ".." (at a mount's root, past the root, after a link),
 names that are mounts, the working directory and directory descriptors
 as directories through renames and removals, the length of names and
-paths, the names a call refuses, open's flags, and calls on a link
-itself. Every case starts in a directory of its own under /tmp.
+paths, the names a call refuses, open's flags, calls on a link itself,
+and what the VFS keeps, which holds no longer than its name, its node
+and its directory do. Every case starts in a directory of its own under
+/tmp.
 
     test_vfs.py <vm> <rootfs> <python3>
     test_vfs.py --linux
@@ -259,6 +261,50 @@ case("H03 chmod lf 600, not following ; f's mode")(lambda: (err(lambda: os.chmod
 case("H04 utime lf, not following ; lf's mtime, f's is 1")(lambda: (os.utime("lf", (1, 1), follow_symlinks=False), int(os.lstat("lf").st_mtime), int(os.stat("f").st_mtime) == 1)[1:])
 case("H05 lchown lf")(lambda: os.chown("lf", -1, -1, follow_symlinks=False))
 
+# I: what the VFS keeps holds no longer than its name, its node or its directory
+case("I01 stat d/x ; unlink d/x ; stat d/x")(lambda: (kind("d/x"), os.unlink("d/x"), err(lambda: kind("d/x")))[2])
+case("I02 stat n ; create n ; stat n")(lambda: (err(lambda: kind("n")), create("n"), kind("n"))[0::2])
+case("I03 stat d/x ; empty d, rmdir d, mkdir d ; stat d/x")(lambda: (kind("d/x"), os.unlink("d/x"), os.rmdir("d"), os.mkdir("d"), err(lambda: kind("d/x")))[4])
+case("I04 stat d/x ; rename d e ; stat d/x, e/x")(lambda: (kind("d/x"), os.rename("d", "e"), err(lambda: kind("d/x")), kind("e/x"))[2:])
+case("I05 stat d ; rename e over an emptied d ; stat d/y, e")(lambda: (kind("d/x"), os.unlink("d/x"), os.mkdir("e"), create("e/y"), kind("d"), os.rename("e", "d"), kind("d/y"), err(lambda: kind("e")))[6:])
+case("I06 readlink ld ; ld made a link to f ; stat ld, readlink ld")(lambda: (kind("ld"), os.readlink("ld"), os.unlink("ld"), os.symlink("f", "ld"), kind("ld"), os.readlink("ld"))[4:])
+def i07():
+    t = os.getcwd()
+    os.chdir("d")
+    kind("x")
+    os.rename(t + "/d", t + "/e")
+    return (kind("x"), os.getcwd() == t + "/e")
+case("I07 chdir d, stat x ; rename d e ; stat x, getcwd")(i07)
+def i08():
+    t = os.getcwd()
+    os.mkdir("d/s")
+    os.chdir("d/s")
+    kind("..")
+    os.rename(t + "/d/s", t + "/s")
+    return same("..", t)
+case("I08 chdir d/s, stat .. ; rename d/s s ; .. is the case's")(i08)
+case("I09 link lf lf2, not following ; lstat lf ; unlink lf2 ; lstat lf")(lambda: (os.link("lf", "lf2", follow_symlinks=False), os.lstat("lf").st_nlink, os.unlink("lf2"), os.lstat("lf").st_nlink)[1::2])
+case("I10 stat d ; chmod d 700 ; stat d")(lambda: (os.stat("d"), os.chmod("d", 0o700), oct(os.stat("d").st_mode & 0o777))[2])
+def i11():
+    fd = os.open("d", os.O_RDONLY)
+    os.stat("d")
+    os.fchmod(fd, 0o711)
+    mode = oct(os.stat("d").st_mode & 0o777)
+    os.close(fd)
+    return mode
+case("I11 stat d ; fchmod of d's descriptor 711 ; stat d")(i11)
+case("I12 stat d ; utime d ; stat d")(lambda: (os.stat("d"), os.utime("d", (1, 2)), int(os.stat("d").st_mtime))[2])
+case("I13 utime d 1 ; stat d ; mkdir d/s ; d's mtime moved")(lambda: (os.utime("d", (1, 1)), int(os.stat("d").st_mtime), os.mkdir("d/s"), int(os.stat("d").st_mtime) != 1)[1::2])
+case("I14 stat m ; create m excl ; again")(lambda: (err(lambda: kind("m")), create("m", os.O_EXCL), err(lambda: create("m", os.O_EXCL)))[0::2])
+case("I15 stat d ; mkdir d")(lambda: (kind("d"), os.mkdir("d"))[1])
+def i16():
+    size = os.stat("f").st_size
+    fd = os.open("f", os.O_WRONLY | os.O_APPEND)
+    os.write(fd, b"gg")
+    os.close(fd)
+    return (size, os.stat("f").st_size)
+case("I16 stat f ; append to f ; stat f")(i16)
+
 for i, (name, f) in enumerate(CASES):
     t = "/tmp/p%03d" % i
     try:
@@ -380,6 +426,22 @@ H02 access dl F_OK, not following: ok True
 H03 chmod lf 600, not following ; f's mode: n/a
 H04 utime lf, not following ; lf's mtime, f's is 1: ok (1, False)
 H05 lchown lf: ok
+I01 stat d/x ; unlink d/x ; stat d/x: ok ENOENT
+I02 stat n ; create n ; stat n: ok ('ENOENT', '-')
+I03 stat d/x ; empty d, rmdir d, mkdir d ; stat d/x: ok ENOENT
+I04 stat d/x ; rename d e ; stat d/x, e/x: ok ('ENOENT', '-')
+I05 stat d ; rename e over an emptied d ; stat d/y, e: ok ('-', 'ENOENT')
+I06 readlink ld ; ld made a link to f ; stat ld, readlink ld: ok ('-', 'f')
+I07 chdir d, stat x ; rename d e ; stat x, getcwd: ok ('-', True)
+I08 chdir d/s, stat .. ; rename d/s s ; .. is the case's: ok True
+I09 link lf lf2, not following ; lstat lf ; unlink lf2 ; lstat lf: ok (2, 1)
+I10 stat d ; chmod d 700 ; stat d: ok 0o700
+I11 stat d ; fchmod of d's descriptor 711 ; stat d: ok 0o711
+I12 stat d ; utime d ; stat d: ok 2
+I13 utime d 1 ; stat d ; mkdir d/s ; d's mtime moved: ok (1, True)
+I14 stat m ; create m excl ; again: ok ('ENOENT', 'EEXIST')
+I15 stat d ; mkdir d: EEXIST
+I16 stat f ; append to f ; stat f: ok (1, 3)
 """
 
 # The cases a root of the host answers otherwise, for what it is: /tmp is

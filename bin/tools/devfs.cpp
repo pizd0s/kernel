@@ -273,7 +273,14 @@ namespace {
     static void fsCall(Request& r) {
         uint64_t ino;
         if (r.h.op == fsRoot) {
-            return answerStat(r.reply(), root);
+            // Names come and go here by REGISTER, which rootfs does not see:
+            // it keeps nothing of /dev's.
+            struct [[gnu::packed]] {
+                Stat st;
+                uint32_t flags;
+            } reply{statOf(root), fsNocache};
+
+            return answer(r.reply(), opOk, 0, &reply, sizeof reply);
         }
         if (!r.at(0, ino)) {
             return fail(r.reply(), EINVAL);
