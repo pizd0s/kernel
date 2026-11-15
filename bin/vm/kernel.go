@@ -281,7 +281,8 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 	defer k.mu.Unlock()
 
 	k.lastPid++
-	p := &Process{k: k, pid: k.lastPid, umask: 0o022, regexes: map[uint32]*posixRegex{}, seed: 0, wake: make(chan struct{}, 1), queue: &procQueue{}}
+	p := &Process{k: k, pid: k.lastPid, umask: 0o022, regexes: map[uint32]*posixRegex{}, seed: 0, wake: make(chan struct{}, 1),
+		queue: &procQueue{process: true}}
 
 	if parent == nil {
 		p.pgid, p.sid = p.pid, p.pid

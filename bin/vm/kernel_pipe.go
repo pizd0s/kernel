@@ -67,7 +67,21 @@ type pipeEnd struct {
 var (
 	_ Transfer = (*pipeEnd)(nil)
 	_ Ioctl    = (*pipeEnd)(nil)
+	_ claimer  = (*pipeEnd)(nil)
 )
+
+// claim makes the pipe's channel q's, for what the end does of it.
+func (e *pipeEnd) claim(q *procQueue) {
+	ch := e.pipe.channel()
+
+	if e.reads {
+		ch.moveTo(q)
+	}
+
+	if e.writes {
+		ch.moveWriter(q)
+	}
+}
 
 var pipeInodes atomic.Uint64
 

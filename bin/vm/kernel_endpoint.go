@@ -144,6 +144,13 @@ func (e *pairEnd) changes(events int16) []<-chan struct{} {
 	return e.appendChanges(events, nil)
 }
 
+// claim makes the end's channels q's: what comes to it, and room for what
+// it sends.
+func (e *pairEnd) claim(q *procQueue) {
+	e.from.moveTo(q)
+	e.to.moveWriter(q)
+}
+
 func (e *pairEnd) appendChanges(events int16, all []<-chan struct{}) []<-chan struct{} {
 	in, out := events&(pollIn|pollRdnorm|pollPri) != 0, events&(pollOut|pollWrnorm) != 0
 

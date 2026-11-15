@@ -318,8 +318,23 @@ func (s *unixSocket) connect(p *Process, at, n uint32) error {
 	s.mu.Lock()
 	s.conn, s.peer = conn, path
 	s.mu.Unlock()
+	conn.claim(p.queue)
 
 	return nil
+}
+
+// claim makes the socket's channels q's: its connection's, or those of
+// what it listens for.
+func (s *unixSocket) claim(q *procQueue) {
+	l, c := s.state()
+
+	if c != nil {
+		c.claim(q)
+	}
+
+	if l != nil {
+		l.conns.moveTo(q)
+	}
 }
 
 // connectUnix makes a connection to the socket a path of the VFS's names:

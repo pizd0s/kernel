@@ -337,6 +337,7 @@ func (p *Process) install(obj File, min int, cloexec bool) (int, error) {
 
 		if p.files[fd] == nil {
 			p.files[fd] = &Descriptor{obj: obj, cloexec: cloexec}
+			p.claim(obj)
 
 			return fd, nil
 		}
@@ -389,6 +390,14 @@ func (p *Process) placeAt(obj File, fd uint32, cloexec bool) {
 	obj.ref()
 	p.closeFd(int(fd))
 	p.files[fd] = &Descriptor{obj: obj, cloexec: cloexec}
+	p.claim(obj)
+}
+
+// claim makes the channels of a file the process gets its own.
+func (p *Process) claim(obj File) {
+	if c, ok := obj.(claimer); ok {
+		c.claim(p.queue)
+	}
 }
 
 // A changed is the one wake a change gives everyone waiting on an object:

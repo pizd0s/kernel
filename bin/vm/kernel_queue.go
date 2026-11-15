@@ -15,14 +15,24 @@ import (
 // changes, selects on one. A channel is its reader's and its writer's: a
 // message and the writer's going wake the queue of the process that read
 // it last, room and the reader's going the queue of the one that wrote it
-// last. A read or a write by another process moves the channel to that
-// one's queue, which is cheap, as the messages stay where they are, and
-// wakes who waited on the old one, who ask again. A channel no process
-// read or wrote yet wakes the queue it was made with: a pair's, a pipe's
-// or a listener's own, or a goroutine's of the host layer, which writes an
-// inbox.
+// last. A process that gets an end as a descriptor makes its channels its
+// own (claimer), and a read or a write by another process moves the
+// channel to that one's queue, which is cheap, as the messages stay where
+// they are, and wakes who waited on the old one, a process's, who ask
+// again. A channel no process has yet wakes the queue it was made with: a
+// pair's, a pipe's or a listener's own, or a goroutine's of the host
+// layer, which writes an inbox. Only the kernel waits on such a queue, for
+// the channels of ends it keeps, which no process moves: a channel that
+// leaves it does not wake it.
 type procQueue struct {
 	changed changed
+	process bool // a process's queue
+}
+
+// A claimer is a file on channels to processes: the process that gets it
+// as a descriptor makes them its own, for its reads and its writes.
+type claimer interface {
+	claim(q *procQueue)
 }
 
 // procChannel is a channel to a process: the queues it wakes, its messages,
@@ -93,7 +103,7 @@ func move(at *atomic.Pointer[procQueue], q *procQueue) {
 		return
 	}
 
-	if old := at.Swap(q); old != q {
+	if old := at.Swap(q); old != q && old.process {
 		old.changed.bump()
 	}
 }
