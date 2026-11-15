@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"maps"
 	"os"
+	"slices"
 	"syscall"
 )
 
@@ -165,12 +166,11 @@ func (p *Process) fork(setup func(c *Process)) (int32, error) {
 // inherit gives a child its parent's descriptors, signal actions, mask and
 // alternate stack.
 func (c *Process) inherit(p *Process) {
-	c.files = make([]*Descriptor, len(p.files))
+	c.files = fdTable{slots: slices.Clone(p.files.slots), used: p.files.used.clone()}
 
-	for fd, d := range p.files {
-		if d != nil {
+	for _, d := range c.files.slots {
+		if d.obj != nil {
 			d.obj.ref()
-			c.files[fd] = &Descriptor{obj: d.obj, cloexec: d.cloexec}
 		}
 	}
 

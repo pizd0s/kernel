@@ -202,11 +202,13 @@ const (
 
 // fd is the object of a descriptor.
 func (p *Process) fd(fd uint32) (File, error) {
-	if int(fd) >= len(p.files) || p.files[fd] == nil {
+	d, ok := p.files.at(int(fd))
+
+	if !ok {
 		return nil, syscall.EBADF
 	}
 
-	return p.files[fd].obj, nil
+	return d.obj, nil
 }
 
 // transferAt is the Transfer of a descriptor: read on a directory is
@@ -332,16 +334,10 @@ func (p *Process) lockerAt(fd uint32) (Locker, error) {
 func (p *Process) install(obj File, min int, cloexec bool) (int, error) {
 	limit := int(min64(p.limits[rlimitNofile].cur, 1<<20))
 
-	for fd := min; fd < limit; fd++ {
-		if fd >= len(p.files) {
-			p.files = append(p.files, make([]*Descriptor, fd+1-len(p.files))...)
-		}
+	if fd := p.files.lowest(min); fd < limit {
+		p.files.put(fd, obj, cloexec)
 
-		if p.files[fd] == nil {
-			p.files[fd] = &Descriptor{obj: obj, cloexec: cloexec}
-
-			return fd, nil
-		}
+		return fd, nil
 	}
 
 	obj.unref()
@@ -354,12 +350,13 @@ func min64(a, b uint64) uint64 {
 }
 
 func (p *Process) closeFd(fd int) bool {
-	if fd < 0 || fd >= len(p.files) || p.files[fd] == nil {
+	obj := p.files.take(fd)
+
+	if obj == nil {
 		return false
 	}
 
-	p.files[fd].obj.unref()
-	p.files[fd] = nil
+	obj.unref()
 
 	return true
 }
@@ -384,13 +381,9 @@ func (p *Process) dupTo(old, new uint32, cloexec bool) (int, error) {
 // placeAt makes a descriptor refer to an object, closing what it referred
 // to; the descriptor is below the process's limit.
 func (p *Process) placeAt(obj File, fd uint32, cloexec bool) {
-	if int(fd) >= len(p.files) {
-		p.files = append(p.files, make([]*Descriptor, int(fd)+1-len(p.files))...)
-	}
-
 	obj.ref()
 	p.closeFd(int(fd))
-	p.files[fd] = &Descriptor{obj: obj, cloexec: cloexec}
+	p.files.put(int(fd), obj, cloexec)
 }
 
 // A changed is the one wake a change gives everyone waiting on an object:

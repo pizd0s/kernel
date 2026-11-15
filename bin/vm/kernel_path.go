@@ -1783,7 +1783,7 @@ func (p *Process) libcFdopendir(fd uint32) uint32 {
 		return p.pointer(0, syscall.ENOMEM)
 	}
 
-	p.files[fd].cloexec = true
+	p.files.slots[fd].cloexec = true
 
 	return p.pointer(dir, nil)
 }

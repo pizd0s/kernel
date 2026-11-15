@@ -401,8 +401,8 @@ func (p *Process) execPath(file string, argv, envp []string) error {
 // close-on-exec are closed, handled signals are back to their defaults and
 // there is no alternate signal stack.
 func (p *Process) execReset() {
-	for fd, d := range p.files {
-		if d != nil && d.cloexec {
+	for fd, d := range p.files.slots {
+		if d.obj != nil && d.cloexec {
 			p.closeFd(fd)
 		}
 	}

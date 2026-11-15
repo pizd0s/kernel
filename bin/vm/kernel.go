@@ -77,7 +77,7 @@ type Process struct {
 	inst       *Instance
 	// image is what the instance runs: its code, arguments and environment.
 	image *execImage
-	files []*Descriptor
+	files fdTable
 	// root is the directory absolute paths start at and ".." stops at,
 	// rootPath its host path for a root of the host; cwd is the working
 	// directory, which relative paths start at. Both are directories the
@@ -241,11 +241,9 @@ func runKernel(f File, path, root string, argv []string, options CompileOptions,
 		}
 	}
 
-	for _, f := range hostStdio() {
-		if f == nil {
-			p.files = append(p.files, nil)
-		} else {
-			p.files = append(p.files, &Descriptor{obj: f})
+	for fd, f := range hostStdio() {
+		if f != nil {
+			p.files.put(fd, f, false)
 		}
 	}
 
@@ -259,7 +257,7 @@ func runKernel(f File, path, root string, argv []string, options CompileOptions,
 				throwFmt("--disk %s: %v", d.path, err)
 			}
 
-			p.files = append(p.files, &Descriptor{obj: newHostObject(fd, true)})
+			p.files.put(max(p.files.size(), 3), newHostObject(fd, true), false)
 			names[i] = d.name
 		}
 
@@ -493,7 +491,7 @@ func trapSignal(code uint32) int {
 func (p *Process) terminate(status int) {
 	p.stopTimers()
 
-	for fd := range p.files {
+	for fd := range p.files.size() {
 		p.closeFd(fd)
 	}
 

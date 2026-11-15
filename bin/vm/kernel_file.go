@@ -727,13 +727,13 @@ func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
 
 		return p.result(p.install(obj, int(min), cmd == fDupfdCloexec))
 	case fGetfd:
-		if p.files[fd].cloexec {
+		if p.files.slots[fd].cloexec {
 			return p.result(1, nil)
 		}
 
 		return p.result(0, nil)
 	case fSetfd:
-		p.files[fd].cloexec = p.varArg(va, 0)&1 != 0
+		p.files.slots[fd].cloexec = p.varArg(va, 0)&1 != 0
 
 		return p.result(0, nil)
 	case fGetfl:
@@ -817,7 +817,7 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 
 		return p.result(0, obj.setFlags(fl))
 	case fioclex, fionclex:
-		p.files[fd].cloexec = req == fioclex
+		p.files.slots[fd].cloexec = req == fioclex
 
 		return p.result(0, nil)
 	}

@@ -138,7 +138,7 @@ func (p *Process) forkpty(amaster, name, termp, winp uint32) uint32 {
 				f.ref()
 			}
 
-			c.files[fd] = &Descriptor{obj: f}
+			c.files.put(fd, f, false)
 		}
 
 		c.k.mu.Lock()
