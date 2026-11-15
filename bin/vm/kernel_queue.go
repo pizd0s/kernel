@@ -12,17 +12,21 @@ import (
 // keeps its messages by itself, under its own name, and wakes the process
 // by one change, the queue's: the queue multiplexes the channels to one
 // process, so a wait on any number of them, which selects on their
-// changes, selects on one. A channel is its reader's: it wakes the queue
-// of the process that took from it last. A take by another process moves
-// it to that one's queue, which is cheap, as the messages stay where they
-// are, and wakes who waited on the old one, who ask again. One that no
-// process took from yet wakes the queue it was made with, a pair's own.
+// changes, selects on one. A channel is its reader's and its writer's: a
+// message and the writer's going wake the queue of the process that read
+// it last, room and the reader's going the queue of the one that wrote it
+// last. A read or a write by another process moves the channel to that
+// one's queue, which is cheap, as the messages stay where they are, and
+// wakes who waited on the old one, who ask again. A channel no process
+// read or wrote yet wakes the queue it was made with: a pair's, a pipe's
+// or a listener's own, or a goroutine's of the host layer, which writes an
+// inbox.
 type procQueue struct {
 	changed changed
 }
 
-// procChannel is a channel to a process: the queue it wakes, its messages,
-// the oldest first, at most queueMax of them, and its ends. ended says its
+// procChannel is a channel to a process: the queues it wakes, its messages,
+// the oldest first, at most limit of them, and its ends. ended says its
 // writer is gone, the end of the data after the messages; finished that
 // its reader is, and a write is EPIPE. fills counts what may make it
 // readable, a message or its writer's going; frees what may make it
@@ -31,7 +35,9 @@ type procQueue struct {
 // poll asks without taking it.
 type procChannel struct {
 	mu       sync.Mutex
-	queue    atomic.Pointer[procQueue]
+	reader   atomic.Pointer[procQueue]
+	writer   atomic.Pointer[procQueue]
+	limit    atomic.Int32
 	messages []packet
 	head     int
 	held     atomic.Int32
@@ -41,39 +47,74 @@ type procChannel struct {
 	frees    atomic.Uint64
 }
 
-func newProcChannel(q *procQueue) *procChannel {
+// newProcChannel is a channel of limit messages that wakes q until a
+// process reads or writes it.
+func newProcChannel(q *procQueue, limit int) *procChannel {
 	c := &procChannel{}
-	c.queue.Store(q)
+	c.reader.Store(q)
+	c.writer.Store(q)
+	c.limit.Store(int32(limit))
 
 	return c
 }
 
-// wait is the change of the channel's queue, to select on.
+// wait is the change of the reader's queue, to select on for input;
+// writerWait the writer's, for room.
 func (c *procChannel) wait() <-chan struct{} {
-	return c.queue.Load().changed.wait()
+	return c.reader.Load().changed.wait()
 }
 
-// nudge wakes the channel's queue: something of the channel changed for
-// its reader, or for the writer whose queue it is.
+func (c *procChannel) writerWait() <-chan struct{} {
+	return c.writer.Load().changed.wait()
+}
+
+// nudge wakes the reader's queue, nudgeWriter the writer's: something of
+// the channel changed for them.
 func (c *procChannel) nudge() {
-	c.queue.Load().changed.bump()
+	c.reader.Load().changed.bump()
 }
 
-// moveTo makes the channel wake q from now on; who waited on the old
-// queue wakes and asks again.
+func (c *procChannel) nudgeWriter() {
+	c.writer.Load().changed.bump()
+}
+
+// moveTo makes the channel wake q for its reader from now on, moveWriter
+// for its writer; who waited on the old queue wakes and asks again.
 func (c *procChannel) moveTo(q *procQueue) {
-	if q == nil || c.queue.Load() == q {
+	move(&c.reader, q)
+}
+
+func (c *procChannel) moveWriter(q *procQueue) {
+	move(&c.writer, q)
+}
+
+func move(at *atomic.Pointer[procQueue], q *procQueue) {
+	if q == nil || at.Load() == q {
 		return
 	}
 
-	if old := c.queue.Swap(q); old != q {
+	if old := at.Swap(q); old != q {
 		old.changed.bump()
 	}
 }
 
-// count is how many messages the channel holds.
+// setLimit is the most messages the channel holds from now on: more room
+// is a change to its writer.
+func (c *procChannel) setLimit(limit int) {
+	if int(c.limit.Swap(int32(limit))) < limit {
+		c.frees.Add(1)
+		c.nudgeWriter()
+	}
+}
+
+// count is how many messages the channel holds; room tells whether it
+// takes another.
 func (c *procChannel) count() int {
 	return int(c.held.Load())
+}
+
+func (c *procChannel) room() bool {
+	return c.held.Load() < c.limit.Load()
 }
 
 // gone tells whether the channel's reader is gone.
@@ -92,7 +133,7 @@ func (c *procChannel) put(pk packet) (full bool, err error) {
 		return false, syscall.EPIPE
 	}
 
-	if c.held.Load() >= queueMax {
+	if c.held.Load() >= c.limit.Load() {
 		c.mu.Unlock()
 
 		return true, nil
@@ -109,7 +150,7 @@ func (c *procChannel) put(pk packet) (full bool, err error) {
 
 // take is the oldest message, ok false when there is none: eof when the
 // writer is gone too. freed says the take made room in a full channel,
-// for the writer to learn of.
+// which wakes the writer's queue.
 func (c *procChannel) take() (pk packet, eof, ok, freed bool) {
 	if c.held.Load() == 0 {
 		ended := c.ended.Load()
@@ -136,14 +177,42 @@ func (c *procChannel) take() (pk packet, eof, ok, freed bool) {
 	}
 
 	c.held.Add(-1)
-	freed = held == queueMax
+	freed = held >= int(c.limit.Load())
 	c.mu.Unlock()
 
 	if freed {
 		c.frees.Add(1)
+		c.nudgeWriter()
 	}
 
 	return pk, false, true, freed
+}
+
+// renew is a channel in place of c, a FIFO's that starts again: with c's
+// queues, limit and counts, and what c holds unless its reader is gone.
+func (c *procChannel) renew() *procChannel {
+	n := newProcChannel(c.reader.Load(), int(c.limit.Load()))
+	n.writer.Store(c.writer.Load())
+	n.fills.Store(c.fills.Load() + 1)
+	n.frees.Store(c.frees.Load() + 1)
+
+	if !c.gone() {
+		n.messages = c.takeAll()
+		n.held.Store(int32(len(n.messages)))
+	}
+
+	return n
+}
+
+// takeAll takes every message the channel holds, the oldest first.
+func (c *procChannel) takeAll() []packet {
+	c.mu.Lock()
+	all := c.messages[c.head:]
+	c.messages, c.head = nil, 0
+	c.held.Store(0)
+	c.mu.Unlock()
+
+	return all
 }
 
 // end is the writer's going: the end of the data, after the messages.
@@ -154,7 +223,7 @@ func (c *procChannel) end() {
 }
 
 // finish is the reader's going: what is queued goes, files and all, and a
-// write is EPIPE from now on.
+// write is EPIPE from now on, which wakes the writer's queue.
 func (c *procChannel) finish() {
 	c.mu.Lock()
 	dropped := c.messages[c.head:]
@@ -167,17 +236,21 @@ func (c *procChannel) finish() {
 	for _, pk := range dropped {
 		dropFiles(pk.files)
 	}
+
+	c.nudgeWriter()
 }
 
-// edge counts a change of the channel's ends for an edge-triggered wait:
-// fill for its reader, free for its writer.
+// edge counts a change of the channel's ends for an edge-triggered wait,
+// fill for its reader, free for its writer, and wakes them.
 func (c *procChannel) edge(fill, free bool) {
 	if fill {
 		c.fills.Add(1)
+		c.nudge()
 	}
 
 	if free {
 		c.frees.Add(1)
+		c.nudgeWriter()
 	}
 }
 

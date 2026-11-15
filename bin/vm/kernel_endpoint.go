@@ -52,50 +52,7 @@ type packet struct {
 	err     error
 }
 
-// A channel carries packets one way. done is closed with its reader, so
-// a writer learns of it; ch is closed by its writer. Its two changes are
-// what a wait selects on: filled changes with what the reader sees, a
-// packet sent, the writer gone; drained with what the writer sees, a
-// packet taken, the reader gone. Each side waits on its own, so a change
-// of the other's is no edge to it.
-type channel struct {
-	ch      chan packet
-	done    chan struct{}
-	filled  changed
-	drained changed
-}
-
-func newChannel() *channel {
-	return &channel{ch: make(chan packet, queueMax), done: make(chan struct{})}
-}
-
-// finished tells whether the channel's reader is gone.
-func (c *channel) finished() bool {
-	select {
-	case <-c.done:
-		return true
-	default:
-		return false
-	}
-}
-
-// drain drops what the channel holds, files and all, when nobody reads it
-// any more.
-func (c *channel) drain() {
-	for {
-		select {
-		case pk, ok := <-c.ch:
-			if !ok {
-				return
-			}
-
-			dropFiles(pk.files)
-		default:
-			return
-		}
-	}
-}
-
+// dropFiles lets go of the files of packets nobody takes.
 func dropFiles(files []File) {
 	for _, f := range files {
 		f.unref()
@@ -135,7 +92,7 @@ var pairInodes atomic.Uint64
 func newPair(nonblock bool) (*pairEnd, *pairEnd) {
 	s := &pairState{ino: pairInodes.Add(1), made: time.Now()}
 	q := &procQueue{} // the pair's own, until a process reads an end
-	ab, ba := newProcChannel(q), newProcChannel(q)
+	ab, ba := newProcChannel(q, queueMax), newProcChannel(q, queueMax)
 	a, b := &pairEnd{shared: s, to: ab, from: ba}, &pairEnd{shared: s, to: ba, from: ab}
 	a.peer, b.peer = b, a
 
@@ -180,10 +137,27 @@ func (e *pairEnd) unref() {
 	e.to.end()
 }
 
-// changes are the queue of the process that reads the end: what comes to
-// it and the room its writes wait for both change that.
+// changes are those of the queues of the processes that read the end, for
+// input, and that write it, for output; both when neither is asked. Most
+// often they are one process's, and so one change.
 func (e *pairEnd) changes(events int16) []<-chan struct{} {
-	return []<-chan struct{}{e.from.wait()}
+	in, out := events&(pollIn|pollRdnorm|pollPri) != 0, events&(pollOut|pollWrnorm) != 0
+
+	if !in && !out {
+		in, out = true, true
+	}
+
+	var chans []<-chan struct{}
+
+	if in {
+		chans = append(chans, e.from.wait())
+	}
+
+	if out {
+		chans = appendChanges(chans, []<-chan struct{}{e.to.writerWait()})
+	}
+
+	return chans
 }
 
 // edges count the changes of the end's sides, for an edge-triggered wait:
@@ -229,7 +203,7 @@ func (e *pairEnd) poll(events int16) int16 {
 
 	if e.peer.dead.Load() || e.to.gone() {
 		mask |= pollHup | pollOut | pollWrnorm
-	} else if e.to.count() < queueMax {
+	} else if e.to.room() {
 		mask |= pollOut | pollWrnorm
 	}
 
@@ -267,6 +241,10 @@ func (e *pairEnd) send(p *Process, data []byte, files []File, mode ioMode) error
 		f.ref()
 	}
 
+	if p != nil {
+		e.to.moveWriter(p.queue)
+	}
+
 	err := e.queue(p, packet{data: append([]byte(nil), data...), files: files}, mode)
 
 	if err != nil {
@@ -295,11 +273,11 @@ func (e *pairEnd) queue(p *Process, pk packet, mode ioMode) error {
 		}
 
 		if p == nil {
-			// Room comes to this end's queue: a take from the full channel
+			// Room comes to the writer's queue: a take from the full channel
 			// wakes it.
-			ch := e.from.wait()
+			ch := e.to.writerWait()
 
-			if e.to.count() < queueMax || e.to.gone() {
+			if e.to.room() || e.to.gone() {
 				continue
 			}
 
@@ -316,8 +294,7 @@ func (e *pairEnd) queue(p *Process, pk packet, mode ioMode) error {
 
 // take is the next packet without waiting: the one peeked, else the
 // channel's; eof when the writer is gone, ok false when there is none
-// yet. A take that makes room in a full channel wakes the writer's queue,
-// the other end's.
+// yet. A take that makes room in a full channel wakes the writer's queue.
 func (e *pairEnd) take(peek bool) (pk packet, eof, ok bool) {
 	e.mu.Lock()
 
@@ -340,7 +317,7 @@ func (e *pairEnd) take(peek bool) (pk packet, eof, ok bool) {
 		return packet{}, true, true
 	}
 
-	pk, eof, ok, freed := e.from.take()
+	pk, eof, ok, _ = e.from.take()
 
 	if ok && !eof && peek {
 		e.front = &pk
@@ -348,10 +325,6 @@ func (e *pairEnd) take(peek bool) (pk packet, eof, ok bool) {
 	}
 
 	e.mu.Unlock()
-
-	if freed {
-		e.peer.from.nudge()
-	}
 
 	if ok {
 		return pk, eof, true
@@ -503,7 +476,7 @@ func (e *pairEnd) shutdown(how int) error {
 
 	// No more reading ends the data for this end and the other end's
 	// writes; no more writing ends the data for the other end and this
-	// end's writes. Both ends' queues wake.
+	// end's writes. The queues of both wake.
 	if how != shutWr {
 		e.noRead.Store(true)
 		e.from.edge(true, true)
@@ -513,9 +486,6 @@ func (e *pairEnd) shutdown(how int) error {
 		e.noWrite.Store(true)
 		e.to.edge(true, true)
 	}
-
-	e.from.nudge()
-	e.to.nudge()
 
 	return nil
 }

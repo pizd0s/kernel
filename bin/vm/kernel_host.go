@@ -34,9 +34,11 @@ type hostObject struct {
 	slot inboxSlot
 	term *terminal
 	// changed wakes the waits for output; telling says a goroutine is
-	// waiting on the host for it.
+	// waiting on the host for it; told counts its changes, an
+	// edge-triggered wait's edges.
 	changed changed
 	telling atomic.Bool
+	told    atomic.Uint64
 }
 
 // hostStream is a host object that transfers: a file or a socket. A
@@ -241,7 +243,7 @@ func (o *hostObject) changes(events int16) []<-chan struct{} {
 
 	if events&(pollIn|pollRdnorm) != 0 {
 		if b, err := o.inbox(); err == nil {
-			chans = append(chans, b.changed.wait())
+			chans = append(chans, b.ch.wait())
 		} else {
 			host |= events & (pollIn | pollRdnorm)
 		}
@@ -253,6 +255,24 @@ func (o *hostObject) changes(events int16) []<-chan struct{} {
 	}
 
 	return chans
+}
+
+// edges count the changes of the object for an edge-triggered wait: the
+// packets its inbox got, for input, and what the host's readiness told,
+// for output and for input without an inbox. The inbox's change is shared
+// with the other files its reader reads (kernel_queue.go), so a wait tells
+// its edges by these counts.
+func (o *hostObject) edges(events int16) uint64 {
+	n := o.told.Load()
+
+	if events&(pollIn|pollRdnorm) != 0 {
+		if b := o.current(); b != nil {
+			fills, _ := b.ch.edges()
+			n += fills
+		}
+	}
+
+	return n
 }
 
 // tell has a goroutine sleep in the host's poll for events and bump the
@@ -270,6 +290,7 @@ func (o *hostObject) tell(events int16) {
 	go func() {
 		pollWait(o.fd, events)
 		o.telling.Store(false)
+		o.told.Add(1)
 		o.changed.bump()
 	}()
 }
@@ -700,6 +721,10 @@ func (s *hostStream) receive(p *Process, bufs [][]byte, flags uint32, mode ioMod
 
 		if err != nil {
 			return 0, packet{}, err
+		}
+
+		if p != nil {
+			b.ch.moveTo(p.queue)
 		}
 
 		pk, n, ok := b.take(advance(bufs, total), peek, total == 0)

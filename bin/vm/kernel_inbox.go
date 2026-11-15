@@ -11,9 +11,11 @@ import (
 )
 
 // The input of a host stream that can block, a terminal, a FIFO, a socket,
-// is its inbox: a channel of packets a goroutine of the host layer fills by
-// reading the host descriptor, so that to the kernel the stream is a
-// channel as a pipe or a pair is, and a wait on it a select. A read of a
+// is its inbox: a channel to processes (kernel_queue.go) of packets a
+// goroutine of the host layer fills by reading the host descriptor, so
+// that to the kernel the stream is a channel as a pipe or a pair is, and a
+// wait on it a select on the queue of the process that reads it; the
+// goroutine waits for room on its own. A read of a
 // file is a packet of bytes; a message of a socket is one with the
 // sender's address, its control messages and the files of its SCM_RIGHTS;
 // a connection a listening socket accepts is a packet whose file is the
@@ -69,16 +71,14 @@ type inbox struct {
 	kind inboxKind
 	// own says fd is the inbox's own description, closed with it.
 	own bool
-	ch  chan packet
-	// changed wakes the waits on the inbox with every packet; stop tells
-	// the goroutine to end, with a write to event, and done says it did;
-	// final is set by the read that took the last packet.
-	changed changed
-	stop    chan struct{}
-	done    chan struct{}
-	event   int
-	final   atomic.Bool
-	once    sync.Once
+	ch  *procChannel
+	// stop tells the goroutine to end, with a write to event, and done
+	// says it did; final is set by the read that took the last packet.
+	stop  chan struct{}
+	done  chan struct{}
+	event int
+	final atomic.Bool
+	once  sync.Once
 	// io is held, a token in it, by whoever reads the host into the
 	// channel, the goroutine or a helping read, with the buffers they read
 	// into; ended says the last packet is queued.
@@ -130,8 +130,8 @@ func startInbox(fd int, own bool, kind inboxKind) (*inbox, error) {
 		return nil, err
 	}
 
-	b := &inbox{fd: fd, kind: kind, own: own, ch: make(chan packet, queueMax), stop: make(chan struct{}), done: make(chan struct{}), event: event,
-		io: make(chan struct{}, 1)}
+	b := &inbox{fd: fd, kind: kind, own: own, ch: newProcChannel(&procQueue{}, queueMax), stop: make(chan struct{}), done: make(chan struct{}),
+		event: event, io: make(chan struct{}, 1)}
 	size := inboxRead
 
 	if kind == inboxMessage {
@@ -153,14 +153,9 @@ func startInbox(fd int, own bool, kind inboxKind) (*inbox, error) {
 // packet.
 func (b *inbox) run() {
 	defer func() {
-		close(b.ch)
-
-		// Stopped, the goroutine leaves no packet behind to wake a wait:
-		// the change does; ended by its last packet, that packet did.
-		if closed(b.stop) {
-			b.changed.bump()
-		}
-
+		// The end of the channel wakes its reader: stopped, the goroutine
+		// leaves no packet behind to.
+		b.ch.end()
 		close(b.done)
 	}()
 
@@ -215,7 +210,7 @@ func (b *inbox) step(revents int16) bool {
 // waits for the token or a change, whichever comes first, so a goroutine
 // waiting for room in the channel never holds it up.
 func (b *inbox) help() bool {
-	changed := b.changed.wait()
+	changed := b.ch.wait()
 
 	if b.ready() {
 		return true
@@ -320,18 +315,32 @@ func (b *inbox) fetch(buf, control []byte, revents int16) (packet, error) {
 	return packet{data: append([]byte(nil), buf[:n]...)}, nil
 }
 
-// put queues a packet, waiting for room unless stopped meanwhile.
+// put queues a packet, waiting for room unless stopped meanwhile: a take
+// from the full channel wakes the writer's queue, the inbox's own.
 func (b *inbox) put(pk packet) bool {
-	select {
-	case b.ch <- pk:
-		b.bytes.Add(int64(len(pk.data)))
-		b.changed.bump()
+	for {
+		room := b.ch.writerWait()
+		full, err := b.ch.put(pk)
 
-		return true
-	case <-b.stop:
-		dropFiles(pk.files)
+		if err == nil && !full {
+			b.bytes.Add(int64(len(pk.data)))
 
-		return false
+			return true
+		}
+
+		if err != nil {
+			dropFiles(pk.files)
+
+			return false
+		}
+
+		select {
+		case <-room:
+		case <-b.stop:
+			dropFiles(pk.files)
+
+			return false
+		}
 	}
 }
 
@@ -344,7 +353,7 @@ func (b *inbox) halt() {
 		syscall.Write(b.event, one[:])
 		<-b.done
 
-		for pk := range b.ch {
+		for _, pk := range b.ch.takeAll() {
 			dropFiles(pk.files)
 		}
 
@@ -371,22 +380,19 @@ func (b *inbox) flush() {
 	b.front = nil
 }
 
-// drain drops what is queued, in front and in the channel: TCIFLUSH.
+// drain drops what is queued, in front and in the channel: TCIFLUSH. A
+// goroutine that waited for room has it.
 func (b *inbox) drain() {
 	b.flush()
+	all := b.ch.takeAll()
 
-	for {
-		select {
-		case pk, live := <-b.ch:
-			if !live {
-				return
-			}
+	for _, pk := range all {
+		dropFiles(pk.files)
+		b.bytes.Add(-int64(len(pk.data)))
+	}
 
-			dropFiles(pk.files)
-			b.bytes.Add(-int64(len(pk.data)))
-		default:
-			return
-		}
+	if len(all) > 0 {
+		b.ch.nudgeWriter()
 	}
 }
 
@@ -396,23 +402,20 @@ func (b *inbox) ready() bool {
 	front := len(b.front) > 0
 	b.mu.Unlock()
 
-	return front || len(b.ch) > 0
+	return front || b.ch.count() > 0
 }
 
 // pull makes sure front holds i+1 packets, taking them out of the
 // channel; false when the channel has no more.
 func (b *inbox) pull(i int) bool {
 	for i >= len(b.front) {
-		select {
-		case pk, live := <-b.ch:
-			if !live {
-				return false
-			}
+		pk, eof, ok, _ := b.ch.take()
 
-			b.front = append(b.front, pk)
-		default:
+		if !ok || eof {
 			return false
 		}
+
+		b.front = append(b.front, pk)
 	}
 
 	return true

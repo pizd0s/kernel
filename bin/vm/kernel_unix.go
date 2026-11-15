@@ -34,17 +34,18 @@ type unixSocket struct {
 }
 
 // unixListener is a bound socket's: the connections that wait for accept,
-// as many as listen's backlog lets, while its socket is open and listens.
-// The socket node of its name holds it too.
+// as many as listen's backlog lets, while its socket is open and listens,
+// in a channel to processes (kernel_queue.go) whose messages are the
+// connections' ends: accept waits on the queue of the process that
+// accepts, connect on that of the one that connects. The socket node of
+// its name holds it too.
 type unixListener struct {
 	refs      atomic.Int32
 	mu        sync.Mutex
-	queue     []*pairEnd
-	backlog   int
+	conns     *procChannel
 	listening bool
 	closed    bool
 	ino       uint64
-	changes_  changed
 }
 
 var (
@@ -165,6 +166,21 @@ func (s *unixSocket) changes(events int16) []<-chan struct{} {
 	return nil
 }
 
+// edges are those of the connection or the listener, for an
+// edge-triggered wait.
+func (s *unixSocket) edges(events int16) uint64 {
+	l, c := s.state()
+
+	switch {
+	case c != nil:
+		return c.edges(events)
+	case l != nil:
+		return l.edges(events)
+	}
+
+	return 0
+}
+
 func (s *unixSocket) flags() (int, error) {
 	fl := syscall.O_RDWR
 
@@ -198,7 +214,7 @@ func (s *unixSocket) bind(p *Process, at, n uint32) error {
 		return syscall.EINVAL
 	}
 
-	l := &unixListener{ino: pairInodes.Add(1)}
+	l := &unixListener{ino: pairInodes.Add(1), conns: newProcChannel(&procQueue{}, 1)}
 	l.refs.Store(1)
 	handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
 		return v.bindPath(p, path, 0o777&^p.umask, l)
@@ -234,9 +250,10 @@ func (s *unixSocket) listen(backlog int) error {
 
 	l.mu.Lock()
 	l.listening = true
-	l.backlog = min(max(backlog, 1), somaxconn)
 	l.mu.Unlock()
-	l.changes_.bump()
+	l.conns.setLimit(min(max(backlog, 1), somaxconn))
+	l.conns.nudge()
+	l.conns.nudgeWriter()
 
 	return nil
 }
@@ -248,6 +265,8 @@ func (s *unixSocket) accept(p *Process, flags uint32) (File, []byte, error) {
 	if l == nil || !l.listens() {
 		return nil, nil, syscall.EINVAL
 	}
+
+	l.conns.moveTo(p.queue)
 
 	for {
 		if e := l.pop(); e != nil {
@@ -324,6 +343,7 @@ func (p *Process) connectUnix(v *remoteDir, path string, nonblock bool) (*pairEn
 
 	defer l.unref()
 	mine, theirs := newPair(nonblock)
+	l.conns.moveWriter(p.queue)
 
 	for {
 		queued, refused := l.push(theirs)
@@ -509,15 +529,10 @@ func (l *unixListener) unref() {
 // that waited are reset.
 func (l *unixListener) shut() {
 	l.mu.Lock()
-	queue := l.queue
-	l.queue, l.closed = nil, true
+	l.closed = true
 	l.mu.Unlock()
-
-	for _, e := range queue {
-		e.unref()
-	}
-
-	l.changes_.bump()
+	l.conns.finish()
+	l.conns.nudge()
 }
 
 func (l *unixListener) listens() bool {
@@ -529,44 +544,33 @@ func (l *unixListener) listens() bool {
 
 // pop is the first connection that waits, or none.
 func (l *unixListener) pop() *pairEnd {
-	l.mu.Lock()
+	pk, _, ok, _ := l.conns.take()
 
-	if len(l.queue) == 0 {
-		l.mu.Unlock()
-
+	if !ok || len(pk.files) == 0 {
 		return nil
 	}
 
-	e := l.queue[0]
-	l.queue = l.queue[1:]
-	l.mu.Unlock()
-	l.changes_.bump()
-
-	return e
+	return pk.files[0].(*pairEnd)
 }
 
 // push queues a connection: refused when the listener is shut or does
 // not listen, not queued when its backlog is full.
 func (l *unixListener) push(e *pairEnd) (queued, refused bool) {
 	l.mu.Lock()
+	listens := l.listening && !l.closed
+	l.mu.Unlock()
 
-	if l.closed || !l.listening {
-		l.mu.Unlock()
-
+	if !listens {
 		return false, true
 	}
 
-	if len(l.queue) >= l.backlog {
-		l.mu.Unlock()
+	full, err := l.conns.put(packet{files: []File{e}})
 
-		return false, false
+	if err != nil {
+		return false, true
 	}
 
-	l.queue = append(l.queue, e)
-	l.mu.Unlock()
-	l.changes_.bump()
-
-	return true, false
+	return !full, false
 }
 
 func (l *unixListener) stat(st *syscall.Stat_t) error {
@@ -579,8 +583,9 @@ func (l *unixListener) stat(st *syscall.Stat_t) error {
 // queue has room.
 func (l *unixListener) poll(events int16) int16 {
 	l.mu.Lock()
-	n, room, shut := len(l.queue), len(l.queue) < l.backlog, l.closed
+	shut := l.closed
 	l.mu.Unlock()
+	n, room := l.conns.count(), l.conns.room()
 	mask := int16(0)
 
 	if n > 0 {
@@ -598,8 +603,52 @@ func (l *unixListener) poll(events int16) int16 {
 	return mask & (events | pollErr | pollHup)
 }
 
+// changes are those of the queue of the process that accepts, for input,
+// and of the one that connects, for output; both when neither is asked.
 func (l *unixListener) changes(events int16) []<-chan struct{} {
-	return []<-chan struct{}{l.changes_.wait()}
+	in, out := l.sides(events)
+	var chans []<-chan struct{}
+
+	if in {
+		chans = append(chans, l.conns.wait())
+	}
+
+	if out {
+		chans = appendChanges(chans, []<-chan struct{}{l.conns.writerWait()})
+	}
+
+	return chans
+}
+
+// edges count the changes of the listener's sides, for an edge-triggered
+// wait: the connections that came, for input, the room for them, for
+// output.
+func (l *unixListener) edges(events int16) uint64 {
+	fills, frees := l.conns.edges()
+	in, out := l.sides(events)
+	var n uint64
+
+	if in {
+		n += fills
+	}
+
+	if out {
+		n += frees
+	}
+
+	return n
+}
+
+// sides are what of the listener a wait for events is on: accept's input,
+// connect's output, both when neither is asked.
+func (l *unixListener) sides(events int16) (in, out bool) {
+	in, out = events&(pollIn|pollRdnorm) != 0, events&(pollOut|pollWrnorm) != 0
+
+	if !in && !out {
+		in, out = true, true
+	}
+
+	return in, out
 }
 
 func (l *unixListener) flags() (int, error) {
