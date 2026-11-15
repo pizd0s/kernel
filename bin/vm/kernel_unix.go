@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -31,18 +32,25 @@ type unixSocket struct {
 	listener *unixListener
 	conn     *pairEnd
 	peer     string
+	// subs are the socket's subscriptions, which go on to its connection
+	// or its listener as it gets one.
+	subs []socketSub
+}
+
+type socketSub struct {
+	to     waker
+	id     uint64
+	events int16
 }
 
 // unixListener is a bound socket's: the connections that wait for accept,
 // as many as listen's backlog lets, while its socket is open and listens,
-// in a channel to processes (kernel_queue.go) whose messages are the
-// connections' ends: accept waits on the queue of the process that
-// accepts, connect on that of the one that connects. The socket node of
-// its name holds it too.
+// in a channel (kernel_queue.go) whose messages are the connections' ends.
+// The socket node of its name holds it too.
 type unixListener struct {
 	refs      atomic.Int32
 	mu        sync.Mutex
-	conns     *procChannel
+	conns     *msgChannel
 	listening bool
 	closed    bool
 	ino       uint64
@@ -153,32 +161,46 @@ func (s *unixSocket) poll(events int16) int16 {
 	return 0
 }
 
-func (s *unixSocket) changes(events int16) []<-chan struct{} {
-	l, c := s.state()
+// subscribe is to the connection or the listener, and to the one the
+// socket gets when it has neither yet.
+func (s *unixSocket) subscribe(to waker, id uint64, events int16) bool {
+	s.mu.Lock()
+	s.subs = append(s.subs, socketSub{to, id, events})
+	l, c := s.listener, s.conn
+	s.mu.Unlock()
 
 	switch {
 	case c != nil:
-		return c.changes(events)
+		c.subscribe(to, id, events)
 	case l != nil:
-		return l.changes(events)
+		l.subscribe(to, id, events)
 	}
 
-	return nil
+	return true
 }
 
-// edges are those of the connection or the listener, for an
-// edge-triggered wait.
-func (s *unixSocket) edges(events int16) uint64 {
-	l, c := s.state()
+func (s *unixSocket) unsubscribe(to waker, id uint64) {
+	s.mu.Lock()
+	s.subs = slices.DeleteFunc(s.subs, func(sub socketSub) bool { return sub.to == to && sub.id == id })
+	l, c := s.listener, s.conn
+	s.mu.Unlock()
 
-	switch {
-	case c != nil:
-		return c.edges(events)
-	case l != nil:
-		return l.edges(events)
+	if c != nil {
+		c.unsubscribe(to, id)
 	}
 
-	return 0
+	if l != nil {
+		l.unsubscribe(to, id)
+	}
+}
+
+// attach gives the subscriptions of the socket to what it now is, which
+// it took in the same hold of its lock, and wakes them.
+func attach(subs []socketSub, f File) {
+	for _, sub := range subs {
+		f.subscribe(sub.to, sub.id, sub.events)
+		sub.to.wake(sub.id)
+	}
 }
 
 func (s *unixSocket) flags() (int, error) {
@@ -214,7 +236,7 @@ func (s *unixSocket) bind(p *Process, at, n uint32) error {
 		return syscall.EINVAL
 	}
 
-	l := &unixListener{ino: pairInodes.Add(1), conns: newProcChannel(&procQueue{}, 1)}
+	l := &unixListener{ino: pairInodes.Add(1), conns: newMsgChannel(1)}
 	l.refs.Store(1)
 	handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
 		return v.bindPath(p, path, 0o777&^p.umask, l)
@@ -236,7 +258,9 @@ func (s *unixSocket) bind(p *Process, at, n uint32) error {
 
 	s.mu.Lock()
 	s.name, s.listener = path, l
+	subs := slices.Clone(s.subs)
 	s.mu.Unlock()
+	attach(subs, l)
 
 	return nil
 }
@@ -265,8 +289,6 @@ func (s *unixSocket) accept(p *Process, flags uint32) (File, []byte, error) {
 	if l == nil || !l.listens() {
 		return nil, nil, syscall.EINVAL
 	}
-
-	l.conns.moveTo(p.queue)
 
 	for {
 		if e := l.pop(); e != nil {
@@ -317,24 +339,11 @@ func (s *unixSocket) connect(p *Process, at, n uint32) error {
 
 	s.mu.Lock()
 	s.conn, s.peer = conn, path
+	subs := slices.Clone(s.subs)
 	s.mu.Unlock()
-	conn.claim(p.queue)
+	attach(subs, conn)
 
 	return nil
-}
-
-// claim makes the socket's channels q's: its connection's, or those of
-// what it listens for.
-func (s *unixSocket) claim(q *procQueue) {
-	l, c := s.state()
-
-	if c != nil {
-		c.claim(q)
-	}
-
-	if l != nil {
-		l.conns.moveTo(q)
-	}
 }
 
 // connectUnix makes a connection to the socket a path of the VFS's names:
@@ -358,7 +367,6 @@ func (p *Process) connectUnix(v *remoteDir, path string, nonblock bool) (*pairEn
 
 	defer l.unref()
 	mine, theirs := newPair(nonblock)
-	l.conns.moveWriter(p.queue)
 
 	for {
 		queued, refused := l.push(theirs)
@@ -618,40 +626,25 @@ func (l *unixListener) poll(events int16) int16 {
 	return mask & (events | pollErr | pollHup)
 }
 
-// changes are those of the queue of the process that accepts, for input,
-// and of the one that connects, for output; both when neither is asked.
-func (l *unixListener) changes(events int16) []<-chan struct{} {
+// subscribe makes to learn of the connections that come, for accept's
+// input, and of the room for them, for connect's output.
+func (l *unixListener) subscribe(to waker, id uint64, events int16) bool {
 	in, out := l.sides(events)
-	var chans []<-chan struct{}
 
 	if in {
-		chans = append(chans, l.conns.wait())
+		l.conns.readers.add(to, id)
 	}
 
 	if out {
-		chans = appendChanges(chans, []<-chan struct{}{l.conns.writerWait()})
+		l.conns.writers.add(to, id)
 	}
 
-	return chans
+	return true
 }
 
-// edges count the changes of the listener's sides, for an edge-triggered
-// wait: the connections that came, for input, the room for them, for
-// output.
-func (l *unixListener) edges(events int16) uint64 {
-	fills, frees := l.conns.edges()
-	in, out := l.sides(events)
-	var n uint64
-
-	if in {
-		n += fills
-	}
-
-	if out {
-		n += frees
-	}
-
-	return n
+func (l *unixListener) unsubscribe(to waker, id uint64) {
+	l.conns.readers.remove(to, id)
+	l.conns.writers.remove(to, id)
 }
 
 // sides are what of the listener a wait for events is on: accept's input,

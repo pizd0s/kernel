@@ -10,17 +10,16 @@ import (
 	"unsafe"
 )
 
-// A pipe is one direction of a pair (kernel_endpoint.go): a channel to
-// processes (kernel_queue.go) of packets, each a write, read as a stream
+// A pipe is one direction of a pair (kernel_endpoint.go): a channel
+// (kernel_queue.go) of packets, each a write, read as a stream
 // of bytes. A write of at most pipeChunk bytes is one packet, whole or not
 // at all, as POSIX asks of a write of at most PIPE_BUF; a larger one goes
 // as several, which POSIX allows of a larger write. The pipe holds
 // queueMax packets: a capacity in writes, where POSIX asks only that an
 // empty pipe take PIPE_BUF. The last writer's close ends the data, the
 // last reader's makes a write EPIPE and SIGPIPE. A blocking end waits as
-// every file of the kernel does: the reader on the queue of the process
-// that reads the pipe, which what fills it wakes, the writer on the queue
-// of the one that writes it, which what drains it wakes.
+// every file of the kernel does: subscribed to the pipe's channel, which
+// what fills it wakes for the reader, what drains it for the writer.
 //
 // The pipe of a FIFO (kernel_fifo.go) has a name, and ends join it as the
 // FIFO is opened: a reader that joins after the readers have gone, or a
@@ -38,7 +37,7 @@ type pipe struct {
 	// channel's sends and takes, so a take knows whether it made room in a
 	// full pipe.
 	mu          sync.Mutex
-	ch          *procChannel
+	ch          *msgChannel
 	eof         bool
 	front       []byte
 	bytes       atomic.Int64
@@ -67,27 +66,13 @@ type pipeEnd struct {
 var (
 	_ Transfer = (*pipeEnd)(nil)
 	_ Ioctl    = (*pipeEnd)(nil)
-	_ claimer  = (*pipeEnd)(nil)
 )
-
-// claim makes the pipe's channel q's, for what the end does of it.
-func (e *pipeEnd) claim(q *procQueue) {
-	ch := e.pipe.channel()
-
-	if e.reads {
-		ch.moveTo(q)
-	}
-
-	if e.writes {
-		ch.moveWriter(q)
-	}
-}
 
 var pipeInodes atomic.Uint64
 
 // newPipe is a pipe without an end.
 func newPipe() *pipe {
-	return &pipe{ch: newProcChannel(&procQueue{}, queueMax), ino: pipeInodes.Add(1), made: time.Now()}
+	return &pipe{ch: newMsgChannel(queueMax), ino: pipeInodes.Add(1), made: time.Now()}
 }
 
 // pipe makes a pipe and installs its ends at the lowest descriptors.
@@ -127,7 +112,7 @@ func (p *Process) pipe(at, flags uint32) uint32 {
 }
 
 // channel is the pipe's channel now.
-func (pp *pipe) channel() *procChannel {
+func (pp *pipe) channel() *msgChannel {
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
 
@@ -239,40 +224,32 @@ func (e *pipeEnd) sides(events int16) (in, out bool) {
 	return in, out
 }
 
-// changes are the queues' of the end's sides: the reader's, which what
-// fills the pipe wakes, the writer's, which what drains it wakes.
-func (e *pipeEnd) changes(events int16) []<-chan struct{} {
-	ch := e.pipe.channel()
+// subscribe makes to learn of what fills the pipe, for the end's reading,
+// and of what drains it, for its writing: on the pipe's channel, which a
+// FIFO's that starts again gives on (renew), under the pipe's lock.
+func (e *pipeEnd) subscribe(to waker, id uint64, events int16) bool {
+	pp := e.pipe
 	in, out := e.sides(events)
-	var chans []<-chan struct{}
+	pp.mu.Lock()
+	defer pp.mu.Unlock()
 
 	if in {
-		chans = append(chans, ch.wait())
+		pp.ch.readers.add(to, id)
 	}
 
 	if out {
-		chans = appendChanges(chans, []<-chan struct{}{ch.writerWait()})
+		pp.ch.writers.add(to, id)
 	}
 
-	return chans
+	return true
 }
 
-// edges count the changes of the end's sides, for an edge-triggered wait:
-// what filled the pipe, for its reading, what drained it, for its writing.
-func (e *pipeEnd) edges(events int16) uint64 {
-	fills, frees := e.pipe.channel().edges()
-	in, out := e.sides(events)
-	var n uint64
-
-	if in {
-		n += fills
-	}
-
-	if out {
-		n += frees
-	}
-
-	return n
+func (e *pipeEnd) unsubscribe(to waker, id uint64) {
+	pp := e.pipe
+	pp.mu.Lock()
+	defer pp.mu.Unlock()
+	pp.ch.readers.remove(to, id)
+	pp.ch.writers.remove(to, id)
 }
 
 // stat is a FIFO's: the ends of a pipe share an inode of the kernel's, the
@@ -410,10 +387,6 @@ func (e *pipeEnd) read(p *Process, b []byte, mode ioMode) (int, error) {
 
 	pp := e.pipe
 
-	if p != nil {
-		pp.channel().moveTo(p.queue)
-	}
-
 	for {
 		n, _, ok := pp.take(b)
 
@@ -444,10 +417,6 @@ func (e *pipeEnd) write(p *Process, b []byte, mode ioMode) (int, error) {
 	}
 
 	pp := e.pipe
-
-	if p != nil {
-		pp.channel().moveWriter(p.queue)
-	}
 	total := 0
 
 	for total < len(b) {

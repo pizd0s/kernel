@@ -10,18 +10,17 @@ import (
 	"time"
 )
 
-// A seqpacket pair is the kernel's: two channels to processes
+// A seqpacket pair is the kernel's: two channels of messages
 // (kernel_queue.go), one each way, and an end of the pair reads one and
-// writes the other. A channel wakes the queue of the process that reads
-// it, so the ends a process reads all wake it by its queue's one change.
-// A packet is bytes and the files sent with them, SCM_RIGHTS: files of the
+// writes the other; a wait for an end subscribes to the channel it reads,
+// for input, and to the one it writes, for room. A packet is bytes and the files sent with them, SCM_RIGHTS: files of the
 // kernel pass as well as files of the host, and the receiver's table
 // takes them. A read takes one packet, as much of it as fits, and its
 // files only when a control buffer asks for them. The last close of an end
 // ends the channel it wrote, EOF to the other end, and finishes the one it
 // read, EPIPE to the other end's writes. These pairs carry the file
 // protocol (kernel_remote.go): the kernel itself, calling a server for a
-// process, waits on the channels' queues as any goroutine does.
+// process, waits for its reply on a wait queue of the end's.
 const (
 	sockSeqpacket = 5
 	packetMax     = 65536
@@ -69,7 +68,7 @@ type pairEnd struct {
 	shared *pairState
 	peer   *pairEnd
 	// to is what the end writes, from what it reads.
-	to, from *procChannel
+	to, from *msgChannel
 	refs     atomic.Int32
 	nonblock atomic.Bool
 	// dead is set once the end closed its channels; noWrite and noRead
@@ -82,6 +81,8 @@ type pairEnd struct {
 	mu     sync.Mutex
 	front  *packet
 	peeked atomic.Bool
+	// kernel is the wait queue of the kernel's own reads of the end.
+	kernel waitQueue
 }
 
 var _ Socket = (*pairEnd)(nil)
@@ -91,8 +92,7 @@ var pairInodes atomic.Uint64
 // newPair makes a seqpacket pair, each end with one reference.
 func newPair(nonblock bool) (*pairEnd, *pairEnd) {
 	s := &pairState{ino: pairInodes.Add(1), made: time.Now()}
-	q := &procQueue{} // the pair's own, until a process reads an end
-	ab, ba := newProcChannel(q, queueMax), newProcChannel(q, queueMax)
+	ab, ba := newMsgChannel(queueMax), newMsgChannel(queueMax)
 	a, b := &pairEnd{shared: s, to: ab, from: ba}, &pairEnd{shared: s, to: ba, from: ab}
 	a.peer, b.peer = b, a
 
@@ -137,61 +137,37 @@ func (e *pairEnd) unref() {
 	e.to.end()
 }
 
-// changes are those of the queues of the processes that read the end, for
-// input, and that write it, for output; both when neither is asked. Most
-// often they are one process's, and so one change.
-func (e *pairEnd) changes(events int16) []<-chan struct{} {
-	return e.appendChanges(events, nil)
+// subscribe makes to learn of what may make the end readable, for input,
+// and writable, for output; of both when neither is asked.
+func (e *pairEnd) subscribe(to waker, id uint64, events int16) bool {
+	in, out := ioSides(events)
+
+	if in {
+		e.from.readers.add(to, id)
+	}
+
+	if out {
+		e.to.writers.add(to, id)
+	}
+
+	return true
 }
 
-// claim makes the end's channels q's: what comes to it, and room for what
-// it sends.
-func (e *pairEnd) claim(q *procQueue) {
-	e.from.moveTo(q)
-	e.to.moveWriter(q)
+func (e *pairEnd) unsubscribe(to waker, id uint64) {
+	e.from.readers.remove(to, id)
+	e.to.writers.remove(to, id)
 }
 
-func (e *pairEnd) appendChanges(events int16, all []<-chan struct{}) []<-chan struct{} {
-	in, out := events&(pollIn|pollRdnorm|pollPri) != 0, events&(pollOut|pollWrnorm) != 0
+// ioSides tells whether events ask for input, for output; both when they
+// ask for neither, for a wait that is for the hangup.
+func ioSides(events int16) (in, out bool) {
+	in, out = events&(pollIn|pollRdnorm|pollPri) != 0, events&(pollOut|pollWrnorm) != 0
 
 	if !in && !out {
 		in, out = true, true
 	}
 
-	if in {
-		all = appendChange(all, e.from.wait())
-	}
-
-	if out {
-		all = appendChange(all, e.to.writerWait())
-	}
-
-	return all
-}
-
-// edges count the changes of the end's sides, for an edge-triggered wait:
-// what came to it, for input, what made room for its writes or ended
-// them, for output; both when neither is asked.
-func (e *pairEnd) edges(events int16) uint64 {
-	in, out := events&(pollIn|pollRdnorm|pollPri) != 0, events&(pollOut|pollWrnorm) != 0
-
-	if !in && !out {
-		in, out = true, true
-	}
-
-	var n uint64
-
-	if in {
-		fills, _ := e.from.edges()
-		n += fills
-	}
-
-	if out {
-		_, frees := e.to.edges()
-		n += frees
-	}
-
-	return n
+	return in, out
 }
 
 func (e *pairEnd) stat(st *syscall.Stat_t) error {
@@ -250,10 +226,6 @@ func (e *pairEnd) send(p *Process, data []byte, files []File, mode ioMode) error
 		f.ref()
 	}
 
-	if p != nil {
-		e.to.moveWriter(p.queue)
-	}
-
 	err := e.queue(p, packet{data: append([]byte(nil), data...), files: files}, mode)
 
 	if err != nil {
@@ -282,15 +254,8 @@ func (e *pairEnd) queue(p *Process, pk packet, mode ioMode) error {
 		}
 
 		if p == nil {
-			// Room comes to the writer's queue: a take from the full channel
-			// wakes it.
-			ch := e.to.writerWait()
-
-			if e.to.room() || e.to.gone() {
-				continue
-			}
-
-			<-ch
+			// A take from the full channel wakes its writers.
+			kernelWait(&e.to.writers, func() bool { return e.to.room() || e.to.gone() })
 
 			continue
 		}
@@ -353,15 +318,11 @@ func (e *pairEnd) take(peek bool) (pk packet, eof, ok bool) {
 }
 
 // recv takes the next packet, or looks at it with peek: EOF is an empty
-// packet with eof set. A process that reads the end makes the channel it
-// reads wake its queue. Without a process the wait is the kernel's own,
-// on the channel's queue.
+// packet with eof set. Without a process the wait is the kernel's own, on
+// the end's wait queue: the kernel reads an end of its own so, one at a
+// time.
 func (e *pairEnd) recv(p *Process, mode ioMode, peek bool) (packet, bool, error) {
 	nonblock := mode.nonblock || e.nonblock.Load()
-
-	if p != nil {
-		e.from.moveTo(p.queue)
-	}
 
 	for {
 		pk, eof, ok := e.take(peek)
@@ -375,20 +336,29 @@ func (e *pairEnd) recv(p *Process, mode ioMode, peek bool) (packet, bool, error)
 		}
 
 		if p == nil {
-			ch := e.from.wait()
-
-			if pk, eof, ok := e.take(peek); ok {
-				return pk, eof, nil
-			}
-
-			<-ch
-
-			continue
+			return e.kernelRecv(peek)
 		}
 
 		if _, err := p.waitObject(e, pollIn, -1, true); err != nil {
 			return packet{}, false, err
 		}
+	}
+}
+
+// kernelRecv waits for the next packet on the end's wait queue, which
+// what comes to it wakes.
+func (e *pairEnd) kernelRecv(peek bool) (packet, bool, error) {
+	q := &e.kernel
+	e.from.readers.add(q, 0)
+	defer e.from.readers.remove(q, 0)
+
+	for {
+		if pk, eof, ok := e.take(peek); ok {
+			return pk, eof, nil
+		}
+
+		<-q.sleep()
+		q.reset()
 	}
 }
 

@@ -111,8 +111,11 @@ func (f *memfdFile) poll(events int16) int16 {
 	return events & (pollIn | pollRdnorm | pollOut | pollWrnorm)
 }
 
-func (f *memfdFile) changes(events int16) []<-chan struct{} {
-	return nil
+func (f *memfdFile) subscribe(to waker, id uint64, events int16) bool {
+	return false
+}
+
+func (f *memfdFile) unsubscribe(to waker, id uint64) {
 }
 
 func (f *memfdFile) flags() (int, error) {

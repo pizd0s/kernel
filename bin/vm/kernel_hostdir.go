@@ -526,10 +526,11 @@ func (d *deviceDir) poll(events int16) int16 {
 	return events & (pollIn | pollOut | pollRdnorm | pollWrnorm)
 }
 
-func (d *deviceDir) changes(events int16) []<-chan struct{} { return nil }
-func (d *deviceDir) flags() (int, error)                    { return syscall.O_RDONLY, nil }
-func (d *deviceDir) setFlags(fl int) error                  { return nil }
-func (d *deviceDir) readdir(b []byte) (int, error)          { return 0, nil }
+func (d *deviceDir) subscribe(to waker, id uint64, events int16) bool { return false }
+func (d *deviceDir) unsubscribe(to waker, id uint64)                  {}
+func (d *deviceDir) flags() (int, error)                              { return syscall.O_RDONLY, nil }
+func (d *deviceDir) setFlags(fl int) error                            { return nil }
+func (d *deviceDir) readdir(b []byte) (int, error)                    { return 0, nil }
 
 func (d *deviceDir) resolve(p *Process, path string, w *walk) (step, error) {
 	return step{}, syscall.ENOTDIR
@@ -566,12 +567,16 @@ func (d *deviceDir) openName(p *Process, name string, flags int, mode uint32) (F
 	return newHostObject(fd, true), nil
 }
 
-func (d *deviceDir) mkdir(p *Process, name string, mode uint32) error             { return syscall.EEXIST }
-func (d *deviceDir) mknod(p *Process, name string, mode uint32, dev uint64) error { return syscall.EEXIST }
-func (d *deviceDir) symlink(p *Process, target, name string) error                { return syscall.EEXIST }
-func (d *deviceDir) unlink(p *Process, name string, dir bool) error               { return syscall.EPERM }
-func (d *deviceDir) rename(p *Process, name string, to Dir, toName string) error  { return syscall.EXDEV }
-func (d *deviceDir) link(p *Process, name string, to Dir, toName string) error    { return syscall.EXDEV }
+func (d *deviceDir) mkdir(p *Process, name string, mode uint32) error { return syscall.EEXIST }
+func (d *deviceDir) mknod(p *Process, name string, mode uint32, dev uint64) error {
+	return syscall.EEXIST
+}
+func (d *deviceDir) symlink(p *Process, target, name string) error  { return syscall.EEXIST }
+func (d *deviceDir) unlink(p *Process, name string, dir bool) error { return syscall.EPERM }
+func (d *deviceDir) rename(p *Process, name string, to Dir, toName string) error {
+	return syscall.EXDEV
+}
+func (d *deviceDir) link(p *Process, name string, to Dir, toName string) error { return syscall.EXDEV }
 
 func (d *deviceDir) accessName(p *Process, name string, mode, flags uint32) error {
 	return atCall(sysFaccessat2, atFdcwd, d.at(name), uintptr(mode), uintptr(flags&atEaccess)|atSymlinkNofollow)

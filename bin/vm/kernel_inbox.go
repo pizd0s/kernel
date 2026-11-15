@@ -11,11 +11,11 @@ import (
 )
 
 // The input of a host stream that can block, a terminal, a FIFO, a socket,
-// is its inbox: a channel to processes (kernel_queue.go) of packets a
+// is its inbox: a channel of messages (kernel_queue.go), packets a
 // goroutine of the host layer fills by reading the host descriptor, so
-// that to the kernel the stream is a channel as a pipe or a pair is, and a
-// wait on it a select on the queue of the process that reads it; the
-// goroutine waits for room on its own. A read of a
+// that to the kernel the stream is a channel as a pipe or a pair is, a
+// wait for its input a subscription to it; the goroutine waits for room
+// on a wait queue of its own. A read of a
 // file is a packet of bytes; a message of a socket is one with the
 // sender's address, its control messages and the files of its SCM_RIGHTS;
 // a connection a listening socket accepts is a packet whose file is the
@@ -69,9 +69,11 @@ func (k inboxKind) socket() bool {
 type inbox struct {
 	fd   int
 	kind inboxKind
-	// own says fd is the inbox's own description, closed with it.
-	own bool
-	ch  *procChannel
+	// own says fd is the inbox's own description, closed with it; room is
+	// what the goroutine waits on for room in the channel.
+	own  bool
+	ch   *msgChannel
+	room waitQueue
 	// stop tells the goroutine to end, with a write to event, and done
 	// says it did; final is set by the read that took the last packet.
 	stop  chan struct{}
@@ -130,8 +132,9 @@ func startInbox(fd int, own bool, kind inboxKind) (*inbox, error) {
 		return nil, err
 	}
 
-	b := &inbox{fd: fd, kind: kind, own: own, ch: newProcChannel(&procQueue{}, queueMax), stop: make(chan struct{}), done: make(chan struct{}),
+	b := &inbox{fd: fd, kind: kind, own: own, ch: newMsgChannel(queueMax), stop: make(chan struct{}), done: make(chan struct{}),
 		event: event, io: make(chan struct{}, 1)}
+	b.ch.writers.add(&b.room, 0)
 	size := inboxRead
 
 	if kind == inboxMessage {
@@ -210,7 +213,10 @@ func (b *inbox) step(revents int16) bool {
 // waits for the token or a change, whichever comes first, so a goroutine
 // waiting for room in the channel never holds it up.
 func (b *inbox) help() bool {
-	changed := b.ch.wait()
+	q := &waitQueue{}
+	b.ch.readers.add(q, 0)
+	defer b.ch.readers.remove(q, 0)
+	changed := q.sleep()
 
 	if b.ready() {
 		return true
@@ -316,10 +322,11 @@ func (b *inbox) fetch(buf, control []byte, revents int16) (packet, error) {
 }
 
 // put queues a packet, waiting for room unless stopped meanwhile: a take
-// from the full channel wakes the writer's queue, the inbox's own.
+// from the full channel wakes room.
 func (b *inbox) put(pk packet) bool {
 	for {
-		room := b.ch.writerWait()
+		b.room.reset()
+		room := b.room.sleep()
 		full, err := b.ch.put(pk)
 
 		if err == nil && !full {
@@ -586,7 +593,10 @@ func (s *inboxSlot) get(start func() (*inbox, error)) (*inbox, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	var last *inbox
+
 	if s.in != nil && s.in.final.Load() {
+		last = s.in
 		s.in.halt()
 		s.in = nil
 	}
@@ -596,6 +606,11 @@ func (s *inboxSlot) get(start func() (*inbox, error)) (*inbox, error) {
 
 		if err != nil {
 			return nil, err
+		}
+
+		// The subscriptions to the input go on to the next inbox.
+		if last != nil {
+			in.ch.readers.takeOver(&last.ch.readers)
 		}
 
 		s.in = in

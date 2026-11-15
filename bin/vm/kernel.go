@@ -141,11 +141,11 @@ type Process struct {
 	// process, a change of a file it waits for, of its children, of its
 	// own state, each put the wake in it, and the call looks again.
 	wake chan struct{}
-	// queue is the process's queue (kernel_queue.go): every channel it
-	// reads wakes it by the queue's one change. waitChans is what its
-	// epoll_wait sleeps on, kept for the next.
-	queue     *procQueue
-	waitChans []<-chan struct{}
+	// waitQueues are the queues of its waits (kernel_queue.go), as deep as
+	// they go, a wait in a signal handler's under another; waitDepth is how
+	// many are taken.
+	waitQueues []*waitQueue
+	waitDepth  int
 }
 
 // execImage is a program a process runs; panicked by exec, it unwinds the
@@ -281,8 +281,7 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 	defer k.mu.Unlock()
 
 	k.lastPid++
-	p := &Process{k: k, pid: k.lastPid, umask: 0o022, regexes: map[uint32]*posixRegex{}, seed: 0, wake: make(chan struct{}, 1),
-		queue: &procQueue{process: true}}
+	p := &Process{k: k, pid: k.lastPid, umask: 0o022, regexes: map[uint32]*posixRegex{}, seed: 0, wake: make(chan struct{}, 1)}
 
 	if parent == nil {
 		p.pgid, p.sid = p.pid, p.pid

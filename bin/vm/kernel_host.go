@@ -33,12 +33,10 @@ type hostObject struct {
 	kind atomic.Int32
 	slot inboxSlot
 	term *terminal
-	// changed wakes the waits for output; telling says a goroutine is
-	// waiting on the host for it; told counts its changes, an
-	// edge-triggered wait's edges.
-	changed changed
+	// outs are the subscriptions to the host's readiness for output, which
+	// a goroutine waits for, telling set while it does.
+	outs    subscribers
 	telling atomic.Bool
-	told    atomic.Uint64
 }
 
 // hostStream is a host object that transfers: a file or a socket. A
@@ -229,59 +227,47 @@ func (o *hostObject) hostFd() int {
 	return o.fd
 }
 
-// changes are the inbox's change for input, started for the wait, and
-// for output the change the host's readiness bumps; an object that cannot
-// block is ready whenever asked. Without an inbox, the host out of
-// descriptors for one, the input's wait is the host's poll too.
-func (o *hostObject) changes(events int16) []<-chan struct{} {
+// subscribe makes to learn of the input its inbox gets, which starts for
+// it, and of the host's readiness for output, which a goroutine waits for
+// while the object is not ready (tell); without an inbox, the host out of
+// descriptors for one, of the host's readiness for input too. An object
+// that cannot block is ready whenever asked.
+func (o *hostObject) subscribe(to waker, id uint64, events int16) bool {
 	if !o.pollable {
-		return nil
+		return false
 	}
 
-	var chans []<-chan struct{}
 	host := events & (pollOut | pollWrnorm | pollPri)
 
 	if events&(pollIn|pollRdnorm) != 0 {
 		if b, err := o.inbox(); err == nil {
-			chans = append(chans, b.ch.wait())
+			b.ch.readers.add(to, id)
 		} else {
 			host |= events & (pollIn | pollRdnorm)
 		}
 	}
 
 	if host != 0 {
-		chans = append(chans, o.changed.wait())
+		o.outs.add(to, id)
 		o.tell(host)
 	}
 
-	return chans
+	return true
 }
 
-// edges count the changes of the object for an edge-triggered wait: the
-// packets its inbox got, for input, and what the host's readiness told,
-// for output and for input without an inbox. The inbox's change is shared
-// with the other files its reader reads (kernel_queue.go), so a wait tells
-// its edges by these counts.
-func (o *hostObject) edges(events int16) uint64 {
-	n := o.told.Load()
-
-	if events&(pollIn|pollRdnorm) != 0 {
-		if b := o.current(); b != nil {
-			fills, _ := b.ch.edges()
-			n += fills
-		}
+func (o *hostObject) unsubscribe(to waker, id uint64) {
+	if b := o.current(); b != nil {
+		b.ch.readers.remove(to, id)
 	}
 
-	return n
+	o.outs.remove(to, id)
 }
 
-// tell has a goroutine sleep in the host's poll for events and bump the
-// change once, when the object is not ready for them now: one goroutine
-// at a time, as a change wakes every wait. A wait asks again after it
-// told (waitObjects), so readiness that came in between is seen; an
-// edge-triggered set asking for the change of a ready object gets no
-// edge, as there is none. A goroutine that outlives the waits wakes
-// nobody.
+// tell has a goroutine sleep in the host's poll for events and wake the
+// subscriptions once, when the object is not ready for them now: one
+// goroutine at a time. A poll that finds the object not ready tells again
+// while there are subscriptions, so readiness after the goroutine woke
+// them is seen. A goroutine that outlives the waits wakes nobody.
 func (o *hostObject) tell(events int16) {
 	if pollNow(o.fd, events) != 0 || !o.telling.CompareAndSwap(false, true) {
 		return
@@ -290,8 +276,7 @@ func (o *hostObject) tell(events int16) {
 	go func() {
 		pollWait(o.fd, events)
 		o.telling.Store(false)
-		o.told.Add(1)
-		o.changed.bump()
+		o.outs.tell()
 	}()
 }
 
@@ -305,6 +290,16 @@ func (o *hostObject) stat(st *syscall.Stat_t) error {
 func (o *hostObject) poll(events int16) int16 {
 	mask := pollNow(o.fd, events)
 	b := o.current()
+	host := events & (pollOut | pollWrnorm | pollPri)
+
+	if b == nil {
+		host |= events & (pollIn | pollRdnorm)
+	}
+
+	// What the host is not ready for, a subscription waits for again.
+	if want := host &^ mask; want != 0 && o.outs.any() {
+		o.tell(want)
+	}
 
 	if b == nil {
 		return mask
@@ -721,10 +716,6 @@ func (s *hostStream) receive(p *Process, bufs [][]byte, flags uint32, mode ioMod
 
 		if err != nil {
 			return 0, packet{}, err
-		}
-
-		if p != nil {
-			b.ch.moveTo(p.queue)
 		}
 
 		pk, n, ok := b.take(advance(bufs, total), peek, total == 0)

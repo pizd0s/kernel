@@ -175,8 +175,11 @@ func (n *remoteNode) unref() {
 	}
 }
 
-func (n *remoteNode) changes(events int16) []<-chan struct{} {
-	return nil
+func (n *remoteNode) subscribe(to waker, id uint64, events int16) bool {
+	return false
+}
+
+func (n *remoteNode) unsubscribe(to waker, id uint64) {
 }
 
 func (n *remoteNode) poll(events int16) int16 {
@@ -843,11 +846,12 @@ func (r *noRoot) poll(events int16) int16 {
 	return events & (pollIn | pollOut | pollRdnorm | pollWrnorm)
 }
 
-func (r *noRoot) changes(events int16) []<-chan struct{} { return nil }
-func (r *noRoot) flags() (int, error)                    { return syscall.O_RDONLY, nil }
-func (r *noRoot) setFlags(fl int) error                  { return nil }
-func (r *noRoot) readdir(b []byte) (int, error)          { return 0, nil }
-func (r *noRoot) path(p *Process) (string, error)        { return "/", nil }
+func (r *noRoot) subscribe(to waker, id uint64, events int16) bool { return false }
+func (r *noRoot) unsubscribe(to waker, id uint64)                  {}
+func (r *noRoot) flags() (int, error)                              { return syscall.O_RDONLY, nil }
+func (r *noRoot) setFlags(fl int) error                            { return nil }
+func (r *noRoot) readdir(b []byte) (int, error)                    { return 0, nil }
+func (r *noRoot) path(p *Process) (string, error)                  { return "/", nil }
 
 // resolve walks a path in the one directory there is: a name in it is
 // none, but ".", ".." and the last name, which the calls find missing.

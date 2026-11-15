@@ -3,8 +3,6 @@
 package main
 
 import (
-	"reflect"
-	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -27,11 +25,15 @@ type File interface {
 	unref()
 	// stat is fstat.
 	stat(st *syscall.Stat_t) error
-	// poll is the events ready now of those asked; changes are the
-	// channels that close when the file may become ready for events, a
-	// wait selects on them (changed): none for a file ready whenever asked.
+	// poll is the events ready now of those asked. subscribe makes the
+	// file wake to, with id, as it may become ready for events, and tells
+	// whether it ever changes: a file ready whenever asked does not, and
+	// takes no subscription; unsubscribe takes one back. A file poll found
+	// not ready for events wakes its subscriptions for them as it may
+	// become ready (kernel_queue.go).
 	poll(events int16) int16
-	changes(events int16) []<-chan struct{}
+	subscribe(to waker, id uint64, events int16) bool
+	unsubscribe(to waker, id uint64)
 	// flags are the status flags of fcntl: the access mode, O_NONBLOCK and
 	// what else the object keeps; setFlags sets those F_SETFL may.
 	flags() (int, error)
@@ -337,7 +339,6 @@ func (p *Process) install(obj File, min int, cloexec bool) (int, error) {
 
 		if p.files[fd] == nil {
 			p.files[fd] = &Descriptor{obj: obj, cloexec: cloexec}
-			p.claim(obj)
 
 			return fd, nil
 		}
@@ -390,14 +391,6 @@ func (p *Process) placeAt(obj File, fd uint32, cloexec bool) {
 	obj.ref()
 	p.closeFd(int(fd))
 	p.files[fd] = &Descriptor{obj: obj, cloexec: cloexec}
-	p.claim(obj)
-}
-
-// claim makes the channels of a file the process gets its own.
-func (p *Process) claim(obj File) {
-	if c, ok := obj.(claimer); ok {
-		c.claim(p.queue)
-	}
 }
 
 // A changed is the one wake a change gives everyone waiting on an object:
@@ -507,31 +500,51 @@ type pollEntry struct {
 	revents int16
 }
 
-// waitObjects waits until an object is ready for its events: it asks them
-// all, and when none is, takes their changes, asks once more, as a change
-// before the wait was armed is not waited for, then selects on the
-// changes, the process's wake and the deadline of timeout milliseconds,
-// and asks again. A signal interrupts it: then the error is EINTR, after
-// the handlers ran when all of them restart calls and restart is set. It
-// returns how many are ready.
+// waitObjects waits until an object is ready for its events: it
+// subscribes to them all, on a wait queue of the process's, asks them,
+// and sleeps on the queue's one channel, the process's wake and the
+// deadline of timeout milliseconds; woken, it asks the objects whose
+// subscriptions woke it, and no other. A signal interrupts it: then the
+// error is EINTR, after the handlers ran when all of them restart calls
+// and restart is set. It returns how many are ready.
 func (p *Process) waitObjects(entries []pollEntry, timeout int, restart bool) (int, error) {
 	end := deadline(timeout)
+	q := p.pushWait()
+	defer p.popWait(q, entries)
+
+	for i := range entries {
+		entries[i].obj.subscribe(q, uint64(i), entries[i].events)
+	}
+
+	asked := false
+	var ids []uint64
 
 	for {
 		if p.wakeSignal() {
 			if restart && p.interrupted() {
+				asked = false
+
 				continue
 			}
 
 			return 0, syscall.EINTR
 		}
 
-		if ready := pollEntries(entries); ready > 0 {
+		var ready int
+
+		if asked {
+			ids = q.take(ids[:0])
+			ready = pollSome(entries, ids)
+		} else {
+			ready, asked = pollEntries(entries), true
+		}
+
+		if ready > 0 {
 			return ready, nil
 		}
 
-		cases := []reflect.SelectCase{recvCase(p.wake)}
 		var timer *time.Timer
+		var expired <-chan time.Time
 
 		if !end.IsZero() {
 			d := time.Until(end)
@@ -541,37 +554,66 @@ func (p *Process) waitObjects(entries []pollEntry, timeout int, restart bool) (i
 			}
 
 			timer = time.NewTimer(d)
-			cases = append(cases, recvCase(timer.C))
+			expired = timer.C
 		}
 
-		var chans []<-chan struct{}
+		fired := false
 
-		for i := range entries {
-			chans = appendChanges(chans, entries[i].obj.changes(entries[i].events))
+		select {
+		case <-p.wake:
+		case <-q.sleep():
+		case <-expired:
+			fired = true
 		}
-
-		for _, ch := range chans {
-			cases = append(cases, recvCase(ch))
-		}
-
-		if ready := pollEntries(entries); ready > 0 {
-			if timer != nil {
-				timer.Stop()
-			}
-
-			return ready, nil
-		}
-
-		chosen, _, _ := reflect.Select(cases)
 
 		if timer != nil {
 			timer.Stop()
+		}
 
-			if chosen == 1 {
-				return 0, nil
-			}
+		if fired {
+			return 0, nil
 		}
 	}
+}
+
+// pushWait is a wait queue of the process's for one wait, as a wait can
+// run inside another's signal handler; popWait gives it back, its
+// subscriptions taken back.
+func (p *Process) pushWait() *waitQueue {
+	if p.waitDepth == len(p.waitQueues) {
+		p.waitQueues = append(p.waitQueues, &waitQueue{})
+	}
+
+	q := p.waitQueues[p.waitDepth]
+	p.waitDepth++
+	q.reset()
+
+	return q
+}
+
+func (p *Process) popWait(q *waitQueue, entries []pollEntry) {
+	for i := range entries {
+		entries[i].obj.unsubscribe(q, uint64(i))
+	}
+
+	p.waitDepth--
+}
+
+// pollSome asks the entries of ids again, the others not ready as they
+// were, and counts the ready ones.
+func pollSome(entries []pollEntry, ids []uint64) int {
+	ready := 0
+
+	for _, id := range ids {
+		e := &entries[id]
+		e.revents = e.obj.poll(e.events)
+
+		if e.revents != 0 {
+			ready++
+		}
+	}
+
+	return ready
 }
 
 // pollEntries asks every entry's object for its events and counts the
@@ -619,33 +661,6 @@ func (p *Process) waitFor(ready func() bool, change func() <-chan struct{}, rest
 		case <-ch:
 		}
 	}
-}
-
-// appendChanges adds changes to a list of them, each once: the files a
-// process reads share its queue's (kernel_queue.go), and a select needs it
-// once.
-func appendChanges(all, more []<-chan struct{}) []<-chan struct{} {
-	for _, ch := range more {
-		if !slices.Contains(all, ch) {
-			all = append(all, ch)
-		}
-	}
-
-	return all
-}
-
-// appendChange adds one change to a list, unless it is in it.
-func appendChange(all []<-chan struct{}, ch <-chan struct{}) []<-chan struct{} {
-	if slices.Contains(all, ch) {
-		return all
-	}
-
-	return append(all, ch)
-}
-
-// recvCase is a receive from any channel, for a select over a list.
-func recvCase[T any](ch <-chan T) reflect.SelectCase {
-	return reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch)}
 }
 
 // waitObject waits until one object is ready for events.

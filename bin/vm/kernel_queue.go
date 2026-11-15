@@ -3,138 +3,215 @@
 package main
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 	"syscall"
 )
 
-// A process's queue and the channels to it. Every channel to a process
-// keeps its messages by itself, under its own name, and wakes the process
-// by one change, the queue's: the queue multiplexes the channels to one
-// process, so a wait on any number of them, which selects on their
-// changes, selects on one. A channel is its reader's and its writer's: a
-// message and the writer's going wake the queue of the process that read
-// it last, room and the reader's going the queue of the one that wrote it
-// last. A process that gets an end as a descriptor makes its channels its
-// own (claimer), and a read or a write by another process moves the
-// channel to that one's queue, which is cheap, as the messages stay where
-// they are, and wakes who waited on the old one, a process's, who ask
-// again. A channel no process has yet wakes the queue it was made with: a
-// pair's, a pipe's or a listener's own, or a goroutine's of the host
-// layer, which writes an inbox. Only the kernel waits on such a queue, for
-// the channels of ends it keeps, which no process moves: a channel that
-// leaves it does not wake it.
-type procQueue struct {
-	changed changed
-	process bool // a process's queue
+// Waits. An object tells of its changes whoever subscribed to it, a wait
+// or a set of epoll: it wakes each subscription's waker with the id the
+// subscription named. A wait subscribes to the objects it waits for, asks
+// them, and sleeps on its one channel until an id comes, then asks the
+// objects of the ids that came and no other (kernel_object.go
+// waitObjects, kernel_epoll.go). An object that poll finds not ready for
+// events wakes the subscriptions for them as it may become ready.
+
+// A waker is what an object wakes as it changes.
+type waker interface {
+	wake(id uint64)
 }
 
-// A claimer is a file on channels to processes: the process that gets it
-// as a descriptor makes them its own, for its reads and its writes.
-type claimer interface {
-	claim(q *procQueue)
+type subscription struct {
+	to waker
+	id uint64
 }
 
-// procChannel is a channel to a process: the queues it wakes, its messages,
-// the oldest first, at most limit of them, and its ends. ended says its
-// writer is gone, the end of the data after the messages; finished that
-// its reader is, and a write is EPIPE. fills counts what may make it
-// readable, a message or its writer's going; frees what may make it
-// writable, a take from a full channel or its reader's going: the edges of
-// an edge-triggered wait. mu guards the messages; held counts them, so a
-// poll asks without taking it.
-type procChannel struct {
+// subscribers are the subscriptions an object wakes for one kind of its
+// changes.
+type subscribers struct {
+	mu   sync.Mutex
+	list []subscription
+}
+
+func (s *subscribers) add(to waker, id uint64) {
+	s.mu.Lock()
+	s.list = append(s.list, subscription{to, id})
+	s.mu.Unlock()
+}
+
+func (s *subscribers) remove(to waker, id uint64) {
+	s.mu.Lock()
+
+	for i, sub := range s.list {
+		if sub.to == to && sub.id == id {
+			last := len(s.list) - 1
+			s.list[i], s.list[last] = s.list[last], subscription{}
+			s.list = s.list[:last]
+
+			break
+		}
+	}
+
+	s.mu.Unlock()
+}
+
+// tell wakes every subscription.
+func (s *subscribers) tell() {
+	s.mu.Lock()
+
+	for _, sub := range s.list {
+		sub.to.wake(sub.id)
+	}
+
+	s.mu.Unlock()
+}
+
+// any tells whether there is a subscription.
+func (s *subscribers) any() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return len(s.list) > 0
+}
+
+// takeOver gives the subscriptions of from to s: a channel in place of
+// another one.
+func (s *subscribers) takeOver(from *subscribers) {
+	from.mu.Lock()
+	list := slices.Clone(from.list)
+	from.mu.Unlock()
+	s.mu.Lock()
+	s.list = append(s.list, list...)
+	s.mu.Unlock()
+}
+
+// A waitQueue is a wait's: the ids that came since the waiter took them
+// last, and the channel the first of them closes for the waiter asleep.
+type waitQueue struct {
+	mu  sync.Mutex
+	ids []uint64
+	ch  chan struct{}
+}
+
+func (q *waitQueue) wake(id uint64) {
+	q.mu.Lock()
+
+	if !slices.Contains(q.ids, id) {
+		q.ids = append(q.ids, id)
+	}
+
+	if q.ch != nil {
+		close(q.ch)
+		q.ch = nil
+	}
+
+	q.mu.Unlock()
+}
+
+// sleep is the channel a waiter sleeps on: closed once an id came.
+func (q *waitQueue) sleep() <-chan struct{} {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if len(q.ids) > 0 {
+		return closedChannel
+	}
+
+	if q.ch == nil {
+		q.ch = make(chan struct{})
+	}
+
+	return q.ch
+}
+
+// take moves the ids that came into into.
+func (q *waitQueue) take(into []uint64) []uint64 {
+	q.mu.Lock()
+	into = append(into, q.ids...)
+	q.ids = q.ids[:0]
+	q.mu.Unlock()
+
+	return into
+}
+
+// reset forgets the ids that came.
+func (q *waitQueue) reset() {
+	q.mu.Lock()
+	q.ids = q.ids[:0]
+	q.mu.Unlock()
+}
+
+var closedChannel = func() chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+
+	return ch
+}()
+
+// msgChannel is a channel of messages: the oldest first, at most limit of
+// them, its ends, and the subscriptions it wakes, readers as it may
+// become readable, a message or its writer's going, writers as it may
+// become writable, a take from a full channel or its reader's going.
+// ended says its writer is gone, the end of the data after the messages;
+// finished that its reader is, and a write is EPIPE. mu guards the
+// messages; held counts them, so a poll asks without taking it.
+type msgChannel struct {
 	mu       sync.Mutex
-	reader   atomic.Pointer[procQueue]
-	writer   atomic.Pointer[procQueue]
 	limit    atomic.Int32
 	messages []packet
 	head     int
 	held     atomic.Int32
 	ended    atomic.Bool
 	finished atomic.Bool
-	fills    atomic.Uint64
-	frees    atomic.Uint64
+	readers  subscribers
+	writers  subscribers
 }
 
-// newProcChannel is a channel of limit messages that wakes q until a
-// process reads or writes it.
-func newProcChannel(q *procQueue, limit int) *procChannel {
-	c := &procChannel{}
-	c.reader.Store(q)
-	c.writer.Store(q)
+// newMsgChannel is a channel of limit messages.
+func newMsgChannel(limit int) *msgChannel {
+	c := &msgChannel{}
 	c.limit.Store(int32(limit))
 
 	return c
 }
 
-// wait is the change of the reader's queue, to select on for input;
-// writerWait the writer's, for room.
-func (c *procChannel) wait() <-chan struct{} {
-	return c.reader.Load().changed.wait()
+// nudge wakes the readers, nudgeWriter the writers: something of the
+// channel changed for them.
+func (c *msgChannel) nudge() {
+	c.readers.tell()
 }
 
-func (c *procChannel) writerWait() <-chan struct{} {
-	return c.writer.Load().changed.wait()
-}
-
-// nudge wakes the reader's queue, nudgeWriter the writer's: something of
-// the channel changed for them.
-func (c *procChannel) nudge() {
-	c.reader.Load().changed.bump()
-}
-
-func (c *procChannel) nudgeWriter() {
-	c.writer.Load().changed.bump()
-}
-
-// moveTo makes the channel wake q for its reader from now on, moveWriter
-// for its writer; who waited on the old queue wakes and asks again.
-func (c *procChannel) moveTo(q *procQueue) {
-	move(&c.reader, q)
-}
-
-func (c *procChannel) moveWriter(q *procQueue) {
-	move(&c.writer, q)
-}
-
-func move(at *atomic.Pointer[procQueue], q *procQueue) {
-	if q == nil || at.Load() == q {
-		return
-	}
-
-	if old := at.Swap(q); old != q && old.process {
-		old.changed.bump()
-	}
+func (c *msgChannel) nudgeWriter() {
+	c.writers.tell()
 }
 
 // setLimit is the most messages the channel holds from now on: more room
 // is a change to its writer.
-func (c *procChannel) setLimit(limit int) {
+func (c *msgChannel) setLimit(limit int) {
 	if int(c.limit.Swap(int32(limit))) < limit {
-		c.frees.Add(1)
 		c.nudgeWriter()
 	}
 }
 
 // count is how many messages the channel holds; room tells whether it
 // takes another.
-func (c *procChannel) count() int {
+func (c *msgChannel) count() int {
 	return int(c.held.Load())
 }
 
-func (c *procChannel) room() bool {
+func (c *msgChannel) room() bool {
 	return c.held.Load() < c.limit.Load()
 }
 
 // gone tells whether the channel's reader is gone.
-func (c *procChannel) gone() bool {
+func (c *msgChannel) gone() bool {
 	return c.finished.Load()
 }
 
 // put queues a message: EPIPE when the reader is gone, full when there is
-// no room, else it wakes the reader's queue.
-func (c *procChannel) put(pk packet) (full bool, err error) {
+// no room, else it wakes the readers.
+func (c *msgChannel) put(pk packet) (full bool, err error) {
 	c.mu.Lock()
 
 	if c.finished.Load() {
@@ -151,7 +228,6 @@ func (c *procChannel) put(pk packet) (full bool, err error) {
 
 	c.messages = append(c.messages, pk)
 	c.held.Add(1)
-	c.fills.Add(1)
 	c.mu.Unlock()
 	c.nudge()
 
@@ -160,10 +236,10 @@ func (c *procChannel) put(pk packet) (full bool, err error) {
 
 // take is the oldest message, ok false when there is none: eof when the
 // writer is gone too. freed says the take made room in a full channel,
-// which wakes the writer's queue. The end is asked before the messages: a
-// writer puts its messages before it ends, so an end seen with none held
-// is the end of the data, never a message that came in between.
-func (c *procChannel) take() (pk packet, eof, ok, freed bool) {
+// which wakes the writers. The end is asked before the messages: a writer
+// puts its messages before it ends, so an end seen with none held is the
+// end of the data, never a message that came in between.
+func (c *msgChannel) take() (pk packet, eof, ok, freed bool) {
 	ended := c.ended.Load()
 
 	if c.held.Load() == 0 {
@@ -192,7 +268,6 @@ func (c *procChannel) take() (pk packet, eof, ok, freed bool) {
 	c.mu.Unlock()
 
 	if freed {
-		c.frees.Add(1)
 		c.nudgeWriter()
 	}
 
@@ -200,12 +275,11 @@ func (c *procChannel) take() (pk packet, eof, ok, freed bool) {
 }
 
 // renew is a channel in place of c, a FIFO's that starts again: with c's
-// queues, limit and counts, and what c holds unless its reader is gone.
-func (c *procChannel) renew() *procChannel {
-	n := newProcChannel(c.reader.Load(), int(c.limit.Load()))
-	n.writer.Store(c.writer.Load())
-	n.fills.Store(c.fills.Load() + 1)
-	n.frees.Store(c.frees.Load() + 1)
+// limit and subscriptions, and what c holds unless its reader is gone.
+func (c *msgChannel) renew() *msgChannel {
+	n := newMsgChannel(int(c.limit.Load()))
+	n.readers.takeOver(&c.readers)
+	n.writers.takeOver(&c.writers)
 
 	if !c.gone() {
 		n.messages = c.takeAll()
@@ -216,7 +290,7 @@ func (c *procChannel) renew() *procChannel {
 }
 
 // takeAll takes every message the channel holds, the oldest first.
-func (c *procChannel) takeAll() []packet {
+func (c *msgChannel) takeAll() []packet {
 	c.mu.Lock()
 	all := c.messages[c.head:]
 	c.messages, c.head = nil, 0
@@ -227,22 +301,20 @@ func (c *procChannel) takeAll() []packet {
 }
 
 // end is the writer's going: the end of the data, after the messages.
-func (c *procChannel) end() {
+func (c *msgChannel) end() {
 	c.ended.Store(true)
-	c.fills.Add(1)
 	c.nudge()
 }
 
 // finish is the reader's going: what is queued goes, files and all, and a
-// write is EPIPE from now on, which wakes the writer's queue.
-func (c *procChannel) finish() {
+// write is EPIPE from now on, which wakes the writers.
+func (c *msgChannel) finish() {
 	c.mu.Lock()
 	dropped := c.messages[c.head:]
 	c.messages, c.head = nil, 0
 	c.held.Store(0)
 	c.finished.Store(true)
 	c.mu.Unlock()
-	c.frees.Add(1)
 
 	for _, pk := range dropped {
 		dropFiles(pk.files)
@@ -251,21 +323,27 @@ func (c *procChannel) finish() {
 	c.nudgeWriter()
 }
 
-// edge counts a change of the channel's ends for an edge-triggered wait,
-// fill for its reader, free for its writer, and wakes them.
-func (c *procChannel) edge(fill, free bool) {
+// edge wakes the readers, the writers, or both: a change of the channel's
+// ends, a shutdown's.
+func (c *msgChannel) edge(fill, free bool) {
 	if fill {
-		c.fills.Add(1)
 		c.nudge()
 	}
 
 	if free {
-		c.frees.Add(1)
 		c.nudgeWriter()
 	}
 }
 
-// edges are the channel's counts: what filled it, what freed it.
-func (c *procChannel) edges() (fills, frees uint64) {
-	return c.fills.Load(), c.frees.Load()
+// kernelWait is a wait of the kernel's own, with no process, until ready
+// holds: on subscribers of a channel, which wake it.
+func kernelWait(list *subscribers, ready func() bool) {
+	q := &waitQueue{}
+	list.add(q, 0)
+	defer list.remove(q, 0)
+
+	for !ready() {
+		<-q.sleep()
+		q.reset()
+	}
 }
