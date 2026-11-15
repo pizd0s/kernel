@@ -496,9 +496,12 @@ namespace {
     };
 
     // A mount: a directory of a file system, its root, as a directory of
-    // the VFS's tree on a node of another mount, the point; the VFS's own
-    // root is on none. The stats of the root and the point are as they
-    // were when it was mounted.
+    // the VFS's tree on a node of another mount, the point, a name of a
+    // directory there; the VFS's own root is on none. The point is the
+    // VFS's: a walk takes its name into the root, and ".." out of the root
+    // to the point's directory, without asking the file system under it.
+    // The stats of the root, the point and its directory are as they were
+    // when it was mounted.
     struct Mount {
         Fs* fs = nullptr;
         u64 root = 0;
@@ -507,6 +510,7 @@ namespace {
         u64 point = 0;
         Stat pointStat{};
         u64 pointDir = 0; // the directory of the point, and its name there
+        Stat pointDirStat{};
         u8 pointLength = 0;
         char pointName[NAME_MAX];
         u32 refs = 1;          // the mount itself, and the handles and calls at it
@@ -788,6 +792,16 @@ namespace {
         return p;
     }
 
+    // The directory of a mount's point, in its parent: where ".." goes out
+    // of the mount's root.
+    static Place dirOf(Mount* m) {
+        Place p;
+        p.m = m->parent;
+        p.node = m->pointDir;
+        p.st = m->pointDirStat;
+        return p;
+    }
+
     static bool isMountRoot(const Place& p) {
         return p.node == p.m->root;
     }
@@ -811,15 +825,16 @@ namespace {
         return p;
     }
 
-    // Whether a name of a directory of a mount's is a mount point: a call
-    // on the name, which would take it away, is EBUSY.
-    static bool pointNamed(const Place& dir, Name name) {
+    // The mount whose point is a name of a directory of a mount's, or none:
+    // a walk goes into its root, and a call on the name, which would take
+    // it away, is EBUSY.
+    static Mount* mountNamed(const Place& dir, Name name) {
         for (Mount* m = mounts; m; m = m->next) {
             if (!m->gone && m->parent == dir.m && m->pointDir == dir.node && m->pointLength == name.length && memcmp(m->pointName, name.at, name.length) == 0) {
-                return true;
+                return m;
             }
         }
-        return false;
+        return nullptr;
     }
 
     // A call or a handle at a place keeps its mount.
@@ -881,8 +896,8 @@ namespace {
     }
 
     // Mounts a directory of a file system, its root, on a place of the
-    // VFS's: the name of the place in its directory is dirName.
-    static void mountAt(Fs* fs, const Place& root, const Place& point, u64 pointDir, Name pointName) {
+    // VFS's, point, the name pointName of the directory dir.
+    static void mountAt(Fs* fs, const Place& root, const Place& point, const Place& dir, Name pointName) {
         auto* m = new (allocate(sizeof(Mount))) Mount();
         m->fs = fs;
         ++fs->mounts;
@@ -892,7 +907,8 @@ namespace {
         ++point.m->refs;
         m->point = point.node;
         m->pointStat = point.st;
-        m->pointDir = pointDir;
+        m->pointDir = dir.node;
+        m->pointDirStat = dir.st;
         m->pointLength = u8(pointName.length);
         memcpy(m->pointName, pointName.at, pointName.length);
         m->next = mounts;
@@ -1140,15 +1156,15 @@ namespace {
     // name, here: every name but the last a directory who asks may search,
     // or a symbolic link, whose target takes its place, from the root of
     // the process when absolute, no more than maxLinks of them in all; "."
-    // and ".."; the root of what is mounted on a name for the name. With
-    // look, the last name is looked at too, target, a link there followed
-    // when follow says or a slash ends the path, which then wants a
-    // directory; with missing, a last name that is not there is no error:
-    // found says. The target of ".", ".." and the root alone is the
-    // directory itself. A path of "." alone names where it starts, which
-    // nobody is asked about. A step its file system answers is a question
-    // (Step::Ask), which the call asks, and the walk goes on with the
-    // answer.
+    // and ".."; the root of what is mounted on a name for the name, which
+    // the mount knows by its name. With look, the last name is looked at
+    // too, target, a link there followed when follow says or a slash ends
+    // the path, which then wants a directory; with missing, a last name
+    // that is not there is no error: found says. The target of ".", ".."
+    // and the root alone is the directory itself. A path of "." alone
+    // names where it starts, which nobody is asked about. A step its file
+    // system answers is a question (Step::Ask), which the call asks, and
+    // the walk goes on with the answer.
     struct Walk {
         enum class Step : u8 {
             Done,
@@ -1332,9 +1348,11 @@ Ask Walk::question() const {
 }
 
 // ".." from here: nowhere from the root of the process; out of a mount's
-// root to where it is mounted, and on from there; else the parent, which
-// the file system tells.
+// root to where it is mounted, and on from there to the point's
+// directory, which the mount keeps; else the parent, which the file
+// system tells.
 Walk::Step Walk::up() {
+    Place out; // the directory of the point the walk went up to
     for (;;) {
         if (same(here, root)) {
             return Step::Go;
@@ -1342,9 +1360,14 @@ Walk::Step Walk::up() {
         if (!isMountRoot(here) || !here.m->parent) {
             break;
         }
+        out = dirOf(here.m);
         moveTo(here, pointOf(here.m));
     }
     if (isMountRoot(here)) {
+        return Step::Go;
+    }
+    if (out.m) {
+        moveTo(here, out);
         return Step::Go;
     }
     ask(fsLookup, here, literal(".."), Wait::Parent);
@@ -1376,6 +1399,9 @@ Walk::Step Walk::finish() {
         moveTo(target, here);
         found = true;
         return Step::Done;
+    }
+    if (Mount* m = mountNamed(here, last)) {
+        return settleLast(rootOf(m));
     }
     ask(fsLookup, here, last, Wait::Last);
     return Step::Ask;
@@ -1450,6 +1476,12 @@ Walk::Step Walk::run() {
             kind = lastName;
             last = n;
             return finish();
+        }
+        if (Mount* m = mountNamed(here, n)) {
+            if (const Step s = settle(rootOf(m)); s != Step::Go) {
+                return s;
+            }
+            continue;
         }
         ask(fsLookup, here, n, Wait::Child);
         return Step::Ask;
@@ -1721,7 +1753,7 @@ namespace {
             error(fd, a.error != 0 ? a.error : !statIn(a.body, st) ? EIO : S_ISDIR(st.mode) ? EISDIR : ENOTDIR);
             co_return;
         }
-        if (dir && pointNamed(w.here, w.last) && !readOnlyIn(co_await asking(w.here, h, fsStatfs, {}))) {
+        if (dir && mountNamed(w.here, w.last) && !readOnlyIn(co_await asking(w.here, h, fsStatfs, {}))) {
             error(fd, EBUSY);
             co_return;
         }
@@ -1774,7 +1806,7 @@ namespace {
             error(fd, EXDEV);
             co_return;
         }
-        if ((pointNamed(a.here, a.last) || pointNamed(b.here, b.last)) && !readOnlyIn(co_await asking(a.here, h, fsStatfs, {}))) {
+        if ((mountNamed(a.here, a.last) || mountNamed(b.here, b.last)) && !readOnlyIn(co_await asking(a.here, h, fsStatfs, {}))) {
             error(fd, EBUSY);
             co_return;
         }
@@ -1988,7 +2020,7 @@ namespace {
             Place top;
             top.node = st.ino;
             top.st = st;
-            mountAt(fs, top, t.target, t.here.node, t.last);
+            mountAt(fs, top, t.target, t.here, t.last);
             ok(fd);
             co_return;
         }
@@ -2005,7 +2037,7 @@ namespace {
             error(fd, ENOTDIR);
             co_return;
         }
-        mountAt(src.m->fs, src, t.target, t.here.node, t.last);
+        mountAt(src.m->fs, src, t.target, t.here, t.last);
         ok(fd);
     }
 
@@ -2555,7 +2587,7 @@ namespace {
         top.st.ino = 1;
         top.st.mode = S_IFDIR | perm;
         top.st.nlink = 2;
-        mountAt(started(channel), top, theirPlace(rootMount, point), rootMount->root, name);
+        mountAt(started(channel), top, theirPlace(rootMount, point), rootOf(rootMount), name);
     }
 
     // The image's header: where erofs's program is in it, the file of
