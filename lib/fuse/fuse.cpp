@@ -76,739 +76,739 @@ namespace {
         Open* next;
         Open* previous;
     };
+}
 
-    static fuse_operations operations;
-    static fuse_context context;
-    static uint64_t device;
-    static int epoll = -1;
-    static Open* opens;
-    static size_t channels;
-    static char bytes[128 * 1024];
-    static Node* nodes[1024];
-    static Listing* listings;
+static fuse_operations operations;
+static fuse_context context;
+static uint64_t device;
+static int epoll = -1;
+static Open* opens;
+static size_t channels;
+static char bytes[128 * 1024];
+static Node* nodes[1024];
+static Listing* listings;
 
-    static void* allocate(size_t size) {
-        void* p = calloc(1, size);
-        if (!p) {
-            fatal("fuse: out of memory");
+static void* allocate(size_t size) {
+    void* p = calloc(1, size);
+    if (!p) {
+        fatal("fuse: out of memory");
+    }
+    return p;
+}
+
+static char* copied(const char* s, size_t length) {
+    auto* copy = static_cast<char*>(allocate(length + 1));
+    memcpy(copy, s, length);
+    return copy;
+}
+
+// A name of a directory's path: its path and the name.
+static char* joined(const char* directory, const char* name, size_t length) {
+    const size_t base = strcmp(directory, "/") == 0 ? 0 : strlen(directory);
+    auto* path = static_cast<char*>(allocate(base + 1 + length + 1));
+    memcpy(path, directory, base);
+    path[base] = '/';
+    memcpy(path + base + 1, name, length);
+    return path;
+}
+
+// The directory of a path: "/" for the root and what is in it.
+static char* parentOf(const char* path) {
+    const char* slash = strrchr(path, '/');
+    if (!slash || slash == path) {
+        return copied("/", 1);
+    }
+    return copied(path, size_t(slash - path));
+}
+
+static int result(int returned) {
+    return returned < 0 ? -returned : 0;
+}
+
+static int attributes(const char* path, struct stat& st) {
+    memset(&st, 0, sizeof st);
+    return operations.getattr ? result(operations.getattr(path, &st)) : ENOSYS;
+}
+
+static uint64_t nanoseconds(const timespec& t) {
+    return uint64_t(t.tv_sec) * 1000000000 + uint64_t(t.tv_nsec);
+}
+
+static Stat protocolStat(const struct stat& st) {
+    Stat out{};
+    out.ino = uint64_t(st.st_ino);
+    out.size = uint64_t(st.st_size);
+    out.mtime = nanoseconds(st.st_mtim);
+    out.mode = uint32_t(st.st_mode);
+    out.nlink = uint32_t(st.st_nlink);
+    out.uid = uint32_t(st.st_uid);
+    out.gid = uint32_t(st.st_gid);
+    out.atime = nanoseconds(st.st_atim);
+    out.dev = device;
+    out.ctime = nanoseconds(st.st_ctim);
+    return out;
+}
+
+static void answerStat(int fd, const struct stat& st) {
+    const Stat out = protocolStat(st);
+    answer(fd, opOk, 0, &out, sizeof out);
+}
+
+static void answerStatfs(int fd, const char* path) {
+    struct statvfs st{};
+    if (!operations.statfs) {
+        return fail(fd, ENOSYS);
+    }
+    if (const int e = result(operations.statfs(path, &st))) {
+        return fail(fd, e);
+    }
+    const Statfs out{st.f_blocks, st.f_bfree, st.f_files, st.f_ffree, device, uint32_t(st.f_bsize), uint32_t(st.f_namemax), (st.f_flag & ST_RDONLY) ? 1u : 0u};
+    answer(fd, opOk, 0, &out, sizeof out);
+}
+
+static Node** bucketOf(uint64_t ino) {
+    return &nodes[(ino * 0x9e3779b97f4a7c15ull) >> 54];
+}
+
+// The path a node was last looked up by, or none.
+static const char* pathOf(uint64_t ino) {
+    for (Node* n = *bucketOf(ino); n; n = n->next) {
+        if (n->ino == ino) {
+            return n->path;
         }
-        return p;
     }
+    return nullptr;
+}
 
-    static char* copied(const char* s, size_t length) {
-        auto* copy = static_cast<char*>(allocate(length + 1));
-        memcpy(copy, s, length);
-        return copy;
-    }
-
-    // A name of a directory's path: its path and the name.
-    static char* joined(const char* directory, const char* name, size_t length) {
-        const size_t base = strcmp(directory, "/") == 0 ? 0 : strlen(directory);
-        auto* path = static_cast<char*>(allocate(base + 1 + length + 1));
-        memcpy(path, directory, base);
-        path[base] = '/';
-        memcpy(path + base + 1, name, length);
-        return path;
-    }
-
-    // The directory of a path: "/" for the root and what is in it.
-    static char* parentOf(const char* path) {
-        const char* slash = strrchr(path, '/');
-        if (!slash || slash == path) {
-            return copied("/", 1);
-        }
-        return copied(path, size_t(slash - path));
-    }
-
-    static int result(int returned) {
-        return returned < 0 ? -returned : 0;
-    }
-
-    static int attributes(const char* path, struct stat& st) {
-        memset(&st, 0, sizeof st);
-        return operations.getattr ? result(operations.getattr(path, &st)) : ENOSYS;
-    }
-
-    static uint64_t nanoseconds(const timespec& t) {
-        return uint64_t(t.tv_sec) * 1000000000 + uint64_t(t.tv_nsec);
-    }
-
-    static Stat protocolStat(const struct stat& st) {
-        Stat out{};
-        out.ino = uint64_t(st.st_ino);
-        out.size = uint64_t(st.st_size);
-        out.mtime = nanoseconds(st.st_mtim);
-        out.mode = uint32_t(st.st_mode);
-        out.nlink = uint32_t(st.st_nlink);
-        out.uid = uint32_t(st.st_uid);
-        out.gid = uint32_t(st.st_gid);
-        out.atime = nanoseconds(st.st_atim);
-        out.dev = device;
-        out.ctime = nanoseconds(st.st_ctim);
-        return out;
-    }
-
-    static void answerStat(int fd, const struct stat& st) {
-        const Stat out = protocolStat(st);
-        answer(fd, opOk, 0, &out, sizeof out);
-    }
-
-    static void answerStatfs(int fd, const char* path) {
-        struct statvfs st{};
-        if (!operations.statfs) {
-            return fail(fd, ENOSYS);
-        }
-        if (const int e = result(operations.statfs(path, &st))) {
-            return fail(fd, e);
-        }
-        const Statfs out{st.f_blocks, st.f_bfree, st.f_files, st.f_ffree, device, uint32_t(st.f_bsize), uint32_t(st.f_namemax), (st.f_flag & ST_RDONLY) ? 1u : 0u};
-        answer(fd, opOk, 0, &out, sizeof out);
-    }
-
-    static Node** bucketOf(uint64_t ino) {
-        return &nodes[(ino * 0x9e3779b97f4a7c15ull) >> 54];
-    }
-
-    // The path a node was last looked up by, or none.
-    static const char* pathOf(uint64_t ino) {
-        for (Node* n = *bucketOf(ino); n; n = n->next) {
-            if (n->ino == ino) {
-                return n->path;
+// A node is at path now.
+static void know(uint64_t ino, const char* path) {
+    Node** bucket = bucketOf(ino);
+    for (Node* n = *bucket; n; n = n->next) {
+        if (n->ino == ino) {
+            if (strcmp(n->path, path) != 0) {
+                free(n->path);
+                n->path = copied(path, strlen(path));
             }
+            return;
         }
+    }
+    auto* n = static_cast<Node*>(allocate(sizeof(Node)));
+    *n = {ino, copied(path, strlen(path)), *bucket};
+    *bucket = n;
+}
+
+// A path under from, or from itself, is under to now: what follows from.
+static char* movedPath(const char* path, const char* from, const char* to) {
+    const size_t length = strlen(from);
+    if (strncmp(path, from, length) != 0 || (path[length] != 0 && path[length] != '/')) {
         return nullptr;
     }
+    const size_t tail = strlen(path + length);
+    auto* moved = static_cast<char*>(allocate(strlen(to) + tail + 1));
+    memcpy(moved, to, strlen(to));
+    memcpy(moved + strlen(to), path + length, tail);
+    return moved;
+}
 
-    // A node is at path now.
-    static void know(uint64_t ino, const char* path) {
-        Node** bucket = bucketOf(ino);
-        for (Node* n = *bucket; n; n = n->next) {
-            if (n->ino == ino) {
-                if (strcmp(n->path, path) != 0) {
-                    free(n->path);
-                    n->path = copied(path, strlen(path));
-                }
-                return;
-            }
-        }
-        auto* n = static_cast<Node*>(allocate(sizeof(Node)));
-        *n = {ino, copied(path, strlen(path)), *bucket};
-        *bucket = n;
-    }
-
-    // A path under from, or from itself, is under to now: what follows from.
-    static char* movedPath(const char* path, const char* from, const char* to) {
-        const size_t length = strlen(from);
-        if (strncmp(path, from, length) != 0 || (path[length] != 0 && path[length] != '/')) {
-            return nullptr;
-        }
-        const size_t tail = strlen(path + length);
-        auto* moved = static_cast<char*>(allocate(strlen(to) + tail + 1));
-        memcpy(moved, to, strlen(to));
-        memcpy(moved + strlen(to), path + length, tail);
-        return moved;
-    }
-
-    // A rename: the nodes and the open files under from are under to now.
-    static void moved(const char* from, const char* to) {
-        for (Node* bucket : nodes) {
-            for (Node* n = bucket; n; n = n->next) {
-                if (char* path = movedPath(n->path, from, to)) {
-                    free(n->path);
-                    n->path = path;
-                }
-            }
-        }
-        for (Open* o = opens; o; o = o->next) {
-            if (o->path) {
-                if (char* path = movedPath(o->path, from, to)) {
-                    free(o->path);
-                    o->path = path;
-                }
+// A rename: the nodes and the open files under from are under to now.
+static void moved(const char* from, const char* to) {
+    for (Node* bucket : nodes) {
+        for (Node* n = bucket; n; n = n->next) {
+            if (char* path = movedPath(n->path, from, to)) {
+                free(n->path);
+                n->path = path;
             }
         }
     }
-
-    // An endpoint watched: the request's reply endpoint, a channel's or an
-    // open file's from now on.
-    static Open* keepOn(int fd, bool channel, char* path, bool reads, bool writes) {
-        auto* o = static_cast<Open*>(allocate(sizeof(Open)));
-        o->channel = channel;
-        o->path = path;
-        o->next = opens;
-        if (opens) {
-            opens->previous = o;
+    for (Open* o = opens; o; o = o->next) {
+        if (o->path) {
+            if (char* path = movedPath(o->path, from, to)) {
+                free(o->path);
+                o->path = path;
+            }
         }
-        opens = o;
-        watch(epoll, {fd, false, reads, writes, o});
-        return o;
     }
+}
 
-    static Open* keep(Request& r, bool channel, char* path, bool reads, bool writes) {
-        Open* o = keepOn(r.reply(), channel, path, reads, writes);
-        r.fds[r.count - 1] = -1;
-        return o;
+// An endpoint watched: the request's reply endpoint, a channel's or an
+// open file's from now on.
+static Open* keepOn(int fd, bool channel, char* path, bool reads, bool writes) {
+    auto* o = static_cast<Open*>(allocate(sizeof(Open)));
+    o->channel = channel;
+    o->path = path;
+    o->next = opens;
+    if (opens) {
+        opens->previous = o;
     }
+    opens = o;
+    watch(epoll, {fd, false, reads, writes, o});
+    return o;
+}
 
-    // A name of a call, after what comes before it in the body.
-    static bool nameAt(const Request& r, size_t at, const char*& name, size_t& length) {
-        if (r.size <= at) {
-            return false;
+static Open* keep(Request& r, bool channel, char* path, bool reads, bool writes) {
+    Open* o = keepOn(r.reply(), channel, path, reads, writes);
+    r.fds[r.count - 1] = -1;
+    return o;
+}
+
+// A name of a call, after what comes before it in the body.
+static bool nameAt(const Request& r, size_t at, const char*& name, size_t& length) {
+    if (r.size <= at) {
+        return false;
+    }
+    name = reinterpret_cast<const char*>(r.body + at);
+    length = strnlen(name, r.size - at);
+    return length > 0;
+}
+
+// An open of a file at path, on the reply's endpoint: emptied with
+// O_TRUNC, the file system's open of it; made with O_CREAT. A link is
+// ELOOP, a FIFO is its stat, the kernel makes its pipe, a device has no
+// driver here.
+static void openFile(Request& r, char* path, uint32_t mode, bool creates) {
+    const uint32_t flags = r.h.arg;
+    const uint32_t access = flags & O_ACCMODE;
+    const bool writes = access != O_RDONLY;
+    struct stat st;
+    fuse_file_info info{};
+    info.flags = int(flags & ~uint32_t(O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC));
+    bool opened = false;
+    int e = attributes(path, st);
+    if (e == ENOENT && creates) {
+        if (operations.create) {
+            info.flags = int(flags & ~uint32_t(O_NOCTTY | O_TRUNC));
+            e = result(operations.create(path, S_IFREG | (mode & 07777), &info));
+            opened = e == 0;
+        } else if (operations.mknod) {
+            e = result(operations.mknod(path, S_IFREG | (mode & 07777), 0));
         }
-        name = reinterpret_cast<const char*>(r.body + at);
-        length = strnlen(name, r.size - at);
-        return length > 0;
+        if (e == 0) {
+            e = attributes(path, st);
+        }
+    } else if (e == 0 && creates && (flags & O_EXCL) != 0) {
+        e = EEXIST;
+    } else if (e == 0 && S_ISLNK(st.st_mode)) {
+        e = (flags & O_DIRECTORY) != 0 ? ENOTDIR : ELOOP;
+    } else if (e == 0 && S_ISDIR(st.st_mode)) {
+        e = EISDIR;
+    } else if (e == 0 && (flags & O_DIRECTORY) != 0) {
+        e = ENOTDIR;
+    } else if (e == 0 && (S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode) || S_ISSOCK(st.st_mode))) {
+        e = ENXIO;
+    } else if (e == 0 && S_ISFIFO(st.st_mode)) {
+        free(path);
+        return answerStat(r.reply(), st);
     }
+    if (e == 0 && !opened) {
+        if (writes && (flags & O_TRUNC) != 0 && operations.truncate) {
+            e = result(operations.truncate(path, 0));
+        }
+        if (e == 0 && operations.open) {
+            e = result(operations.open(path, &info));
+            opened = e == 0;
+        }
+        if (e == 0) {
+            e = attributes(path, st);
+        }
+    }
+    if (e != 0) {
+        if (opened && operations.release) {
+            operations.release(path, &info);
+        }
+        free(path);
+        return fail(r.reply(), e);
+    }
+    know(uint64_t(st.st_ino), path);
+    answerStat(r.reply(), st);
+    Open* kept = keep(r, false, path, access != O_WRONLY, writes);
+    kept->opened = opened;
+    kept->info = info;
+}
 
-    // An open of a file at path, on the reply's endpoint: emptied with
-    // O_TRUNC, the file system's open of it; made with O_CREAT. A link is
-    // ELOOP, a FIFO is its stat, the kernel makes its pipe, a device has no
-    // driver here.
-    static void openFile(Request& r, char* path, uint32_t mode, bool creates) {
-        const uint32_t flags = r.h.arg;
-        const uint32_t access = flags & O_ACCMODE;
-        const bool writes = access != O_RDONLY;
+// The times of UTIMES and FUTIMES: when's bits say now or kept, else
+// the nanoseconds given.
+static void timesOf(uint32_t when, const Request& r, size_t at, timespec times[2]) {
+    uint64_t given[2] = {0, 0};
+    r.at(at, given[0]);
+    r.at(at + 8, given[1]);
+    for (int i = 0; i < 2; ++i) {
+        times[i].tv_sec = time_t(given[i] / 1000000000);
+        times[i].tv_nsec = long(given[i] % 1000000000);
+    }
+    if ((when & whenAtimeNow) != 0) {
+        times[0].tv_nsec = UTIME_NOW;
+    } else if ((when & whenAtimeKept) != 0) {
+        times[0].tv_nsec = UTIME_OMIT;
+    }
+    if ((when & whenMtimeNow) != 0) {
+        times[1].tv_nsec = UTIME_NOW;
+    } else if ((when & whenMtimeKept) != 0) {
+        times[1].tv_nsec = UTIME_OMIT;
+    }
+}
+
+static int changeTimes(const char* path, uint32_t when, const Request& r, size_t at) {
+    timespec times[2];
+    timesOf(when, r, at, times);
+    return operations.utimens ? result(operations.utimens(path, times)) : ENOSYS;
+}
+
+static int changeOwner(const char* path, const Request& r, size_t at) {
+    uint32_t uid;
+    uint32_t gid;
+    if (!r.at(at, uid) || !r.at(at + 4, gid)) {
+        return EINVAL;
+    }
+    return operations.chown ? result(operations.chown(path, uid_t(uid), gid_t(gid))) : ENOSYS;
+}
+
+// A READ: what the file system reads at off, into the memfd at woff.
+static void readFile(Open& o, const Endpoint& e, const Request& r) {
+    uint64_t off;
+    uint32_t woff;
+    if (!e.reads || !o.opened) {
+        return fail(r.reply(), EBADF);
+    }
+    if (r.window() < 0 || !r.at(0, off) || !r.at(8, woff) || !operations.read) {
+        return fail(r.reply(), EINVAL);
+    }
+    size_t done = 0;
+    while (done < r.h.arg) {
+        const size_t ask = MIN(sizeof bytes, size_t(r.h.arg) - done);
+        const int got = operations.read(o.path, bytes, ask, off_t(off + done), &o.info);
+        if (got < 0 && done == 0) {
+            return fail(r.reply(), -got);
+        }
+        if (got <= 0) {
+            break;
+        }
+        if (pwrite(r.window(), bytes, size_t(got), off_t(woff + done)) != got) {
+            return fail(r.reply(), EIO);
+        }
+        done += size_t(got);
+        if (size_t(got) < ask) {
+            break;
+        }
+    }
+    const uint32_t count = uint32_t(done);
+    answer(r.reply(), opOk, 0, &count, sizeof count);
+}
+
+// A WRITE: the memfd's bytes at woff, what the file system writes at
+// off, or at its end with append.
+static void writeFile(Open& o, const Endpoint& e, const Request& r) {
+    uint64_t off;
+    uint32_t length;
+    uint32_t woff;
+    if (!e.writes || !o.opened) {
+        return fail(r.reply(), EBADF);
+    }
+    if (r.window() < 0 || !r.at(0, off) || !r.at(8, length) || !r.at(12, woff) || !operations.write) {
+        return fail(r.reply(), EINVAL);
+    }
+    if ((r.h.arg & 1) != 0) {
         struct stat st;
-        fuse_file_info info{};
-        info.flags = int(flags & ~uint32_t(O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC));
-        bool opened = false;
-        int e = attributes(path, st);
-        if (e == ENOENT && creates) {
-            if (operations.create) {
-                info.flags = int(flags & ~uint32_t(O_NOCTTY | O_TRUNC));
-                e = result(operations.create(path, S_IFREG | (mode & 07777), &info));
-                opened = e == 0;
-            } else if (operations.mknod) {
-                e = result(operations.mknod(path, S_IFREG | (mode & 07777), 0));
-            }
-            if (e == 0) {
-                e = attributes(path, st);
-            }
-        } else if (e == 0 && creates && (flags & O_EXCL) != 0) {
-            e = EEXIST;
-        } else if (e == 0 && S_ISLNK(st.st_mode)) {
-            e = (flags & O_DIRECTORY) != 0 ? ENOTDIR : ELOOP;
-        } else if (e == 0 && S_ISDIR(st.st_mode)) {
-            e = EISDIR;
-        } else if (e == 0 && (flags & O_DIRECTORY) != 0) {
-            e = ENOTDIR;
-        } else if (e == 0 && (S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode) || S_ISSOCK(st.st_mode))) {
-            e = ENXIO;
-        } else if (e == 0 && S_ISFIFO(st.st_mode)) {
-            free(path);
-            return answerStat(r.reply(), st);
+        if (const int failed = attributes(o.path, st)) {
+            return fail(r.reply(), failed);
         }
-        if (e == 0 && !opened) {
-            if (writes && (flags & O_TRUNC) != 0 && operations.truncate) {
-                e = result(operations.truncate(path, 0));
-            }
-            if (e == 0 && operations.open) {
-                e = result(operations.open(path, &info));
-                opened = e == 0;
-            }
-            if (e == 0) {
-                e = attributes(path, st);
-            }
-        }
-        if (e != 0) {
-            if (opened && operations.release) {
-                operations.release(path, &info);
-            }
-            free(path);
-            return fail(r.reply(), e);
-        }
-        know(uint64_t(st.st_ino), path);
-        answerStat(r.reply(), st);
-        Open* kept = keep(r, false, path, access != O_WRONLY, writes);
-        kept->opened = opened;
-        kept->info = info;
+        off = uint64_t(st.st_size);
     }
-
-    // The times of UTIMES and FUTIMES: when's bits say now or kept, else
-    // the nanoseconds given.
-    static void timesOf(uint32_t when, const Request& r, size_t at, timespec times[2]) {
-        uint64_t given[2] = {0, 0};
-        r.at(at, given[0]);
-        r.at(at + 8, given[1]);
-        for (int i = 0; i < 2; ++i) {
-            times[i].tv_sec = time_t(given[i] / 1000000000);
-            times[i].tv_nsec = long(given[i] % 1000000000);
+    size_t done = 0;
+    while (done < length) {
+        const size_t n = MIN(sizeof bytes, size_t(length) - done);
+        if (pread(r.window(), bytes, n, off_t(woff + done)) != ssize_t(n)) {
+            return fail(r.reply(), EIO);
         }
-        if ((when & whenAtimeNow) != 0) {
-            times[0].tv_nsec = UTIME_NOW;
-        } else if ((when & whenAtimeKept) != 0) {
-            times[0].tv_nsec = UTIME_OMIT;
+        const int wrote = operations.write(o.path, bytes, n, off_t(off + done), &o.info);
+        if (wrote < 0 && done == 0) {
+            return fail(r.reply(), -wrote);
         }
-        if ((when & whenMtimeNow) != 0) {
-            times[1].tv_nsec = UTIME_NOW;
-        } else if ((when & whenMtimeKept) != 0) {
-            times[1].tv_nsec = UTIME_OMIT;
+        if (wrote <= 0) {
+            break;
+        }
+        done += size_t(wrote);
+        if (size_t(wrote) < n) {
+            break;
         }
     }
+    unsigned char wrote[12];
+    const uint32_t count = uint32_t(done);
+    memcpy(wrote, &count, 4);
+    memcpy(wrote + 4, &off, 8);
+    answer(r.reply(), opOk, 0, wrote, sizeof wrote);
+}
 
-    static int changeTimes(const char* path, uint32_t when, const Request& r, size_t at) {
-        timespec times[2];
-        timesOf(when, r, at, times);
-        return operations.utimens ? result(operations.utimens(path, times)) : ENOSYS;
-    }
-
-    static int changeOwner(const char* path, const Request& r, size_t at) {
-        uint32_t uid;
-        uint32_t gid;
-        if (!r.at(at, uid) || !r.at(at + 4, gid)) {
-            return EINVAL;
-        }
-        return operations.chown ? result(operations.chown(path, uid_t(uid), gid_t(gid))) : ENOSYS;
-    }
-
-    // A READ: what the file system reads at off, into the memfd at woff.
-    static void readFile(Open& o, const Endpoint& e, const Request& r) {
-        uint64_t off;
-        uint32_t woff;
-        if (!e.reads || !o.opened) {
-            return fail(r.reply(), EBADF);
-        }
-        if (r.window() < 0 || !r.at(0, off) || !r.at(8, woff) || !operations.read) {
-            return fail(r.reply(), EINVAL);
-        }
-        size_t done = 0;
-        while (done < r.h.arg) {
-            const size_t ask = MIN(sizeof bytes, size_t(r.h.arg) - done);
-            const int got = operations.read(o.path, bytes, ask, off_t(off + done), &o.info);
-            if (got < 0 && done == 0) {
-                return fail(r.reply(), -got);
-            }
-            if (got <= 0) {
-                break;
-            }
-            if (pwrite(r.window(), bytes, size_t(got), off_t(woff + done)) != got) {
-                return fail(r.reply(), EIO);
-            }
-            done += size_t(got);
-            if (size_t(got) < ask) {
-                break;
-            }
-        }
-        const uint32_t count = uint32_t(done);
-        answer(r.reply(), opOk, 0, &count, sizeof count);
-    }
-
-    // A WRITE: the memfd's bytes at woff, what the file system writes at
-    // off, or at its end with append.
-    static void writeFile(Open& o, const Endpoint& e, const Request& r) {
-        uint64_t off;
-        uint32_t length;
-        uint32_t woff;
-        if (!e.writes || !o.opened) {
-            return fail(r.reply(), EBADF);
-        }
-        if (r.window() < 0 || !r.at(0, off) || !r.at(8, length) || !r.at(12, woff) || !operations.write) {
-            return fail(r.reply(), EINVAL);
-        }
-        if ((r.h.arg & 1) != 0) {
-            struct stat st;
-            if (const int failed = attributes(o.path, st)) {
-                return fail(r.reply(), failed);
-            }
-            off = uint64_t(st.st_size);
-        }
-        size_t done = 0;
-        while (done < length) {
-            const size_t n = MIN(sizeof bytes, size_t(length) - done);
-            if (pread(r.window(), bytes, n, off_t(woff + done)) != ssize_t(n)) {
-                return fail(r.reply(), EIO);
-            }
-            const int wrote = operations.write(o.path, bytes, n, off_t(off + done), &o.info);
-            if (wrote < 0 && done == 0) {
-                return fail(r.reply(), -wrote);
-            }
-            if (wrote <= 0) {
-                break;
-            }
-            done += size_t(wrote);
-            if (size_t(wrote) < n) {
-                break;
-            }
-        }
-        unsigned char wrote[12];
-        const uint32_t count = uint32_t(done);
-        memcpy(wrote, &count, 4);
-        memcpy(wrote + 4, &off, 8);
-        answer(r.reply(), opOk, 0, wrote, sizeof wrote);
-    }
-
-    static int fill(void* buffer, const char* name, const struct stat* st, off_t) {
-        auto& l = *static_cast<Listing*>(buffer);
-        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
-            return 0;
-        }
-        if (l.count == l.room) {
-            l.room = l.room ? l.room * 2 : 32;
-            l.entries = static_cast<Entry*>(realloc(l.entries, l.room * sizeof(Entry)));
-            if (!l.entries) {
-                fatal("fuse: out of memory");
-            }
-        }
-        l.entries[l.count++] = {st ? uint64_t(st->st_ino) : 0, st ? uint8_t((st->st_mode >> 12) & 017) : uint8_t(DT_UNKNOWN), copied(name, strlen(name))};
+static int fill(void* buffer, const char* name, const struct stat* st, off_t) {
+    auto& l = *static_cast<Listing*>(buffer);
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
         return 0;
     }
+    if (l.count == l.room) {
+        l.room = l.room ? l.room * 2 : 32;
+        l.entries = static_cast<Entry*>(realloc(l.entries, l.room * sizeof(Entry)));
+        if (!l.entries) {
+            fatal("fuse: out of memory");
+        }
+    }
+    l.entries[l.count++] = {st ? uint64_t(st->st_ino) : 0, st ? uint8_t((st->st_mode >> 12) & 017) : uint8_t(DT_UNKNOWN), copied(name, strlen(name))};
+    return 0;
+}
 
-    // The entries of a directory after a position, the index of one plus
-    // one, as many as one reply holds; a reading from the start reads them
-    // from the file system again.
-    static void readDirectory(uint64_t ino, const char* path, const Request& r) {
-        uint64_t after;
-        if (!r.at(8, after) || !operations.readdir) {
-            return fail(r.reply(), EINVAL);
+// The entries of a directory after a position, the index of one plus
+// one, as many as one reply holds; a reading from the start reads them
+// from the file system again.
+static void readDirectory(uint64_t ino, const char* path, const Request& r) {
+    uint64_t after;
+    if (!r.at(8, after) || !operations.readdir) {
+        return fail(r.reply(), EINVAL);
+    }
+    Listing* l = listings;
+    while (l && l->ino != ino) {
+        l = l->next;
+    }
+    if (!l) {
+        l = static_cast<Listing*>(allocate(sizeof(Listing)));
+        l->ino = ino;
+        l->next = listings;
+        listings = l;
+    }
+    if (after == 0) {
+        for (size_t i = 0; i < l->count; ++i) {
+            free(l->entries[i].name);
         }
-        Listing* l = listings;
-        while (l && l->ino != ino) {
-            l = l->next;
-        }
-        if (!l) {
-            l = static_cast<Listing*>(allocate(sizeof(Listing)));
-            l->ino = ino;
-            l->next = listings;
-            listings = l;
-        }
-        if (after == 0) {
-            for (size_t i = 0; i < l->count; ++i) {
-                free(l->entries[i].name);
-            }
-            l->count = 0;
-            fuse_file_info info{};
-            if (operations.opendir) {
-                if (const int e = result(operations.opendir(path, &info))) {
-                    return fail(r.reply(), e);
-                }
-            }
-            const int e = result(operations.readdir(path, l, fill, 0, &info));
-            if (operations.releasedir) {
-                operations.releasedir(path, &info);
-            }
-            if (e != 0) {
+        l->count = 0;
+        fuse_file_info info{};
+        if (operations.opendir) {
+            if (const int e = result(operations.opendir(path, &info))) {
                 return fail(r.reply(), e);
             }
         }
-        static unsigned char out[65536 - sizeof(Header)];
-        size_t size = 0;
-        for (uint64_t i = after; i < l->count; ++i) {
-            const Entry& entry = l->entries[i];
-            const size_t length = strlen(entry.name);
-            if (size + 17 + length + 1 > sizeof out) {
-                break;
-            }
-            const uint64_t pos = i + 1;
-            memcpy(out + size, &entry.ino, 8);
-            memcpy(out + size + 8, &pos, 8);
-            out[size + 16] = entry.type;
-            memcpy(out + size + 17, entry.name, length + 1);
-            size += 17 + length + 1;
-        }
-        answer(r.reply(), opOk, 0, out, size);
-    }
-
-    // A call of rootfs's on a channel, by node: the file system's
-    // operations on the node's path, or on a name of it.
-    static void fsCall(Request& r) {
-        uint64_t ino;
-        if (r.h.op == fsRoot) {
-            struct stat st;
-            if (const int failed = attributes("/", st)) {
-                return fail(r.reply(), failed);
-            }
-            know(uint64_t(st.st_ino), "/");
-            return answerStat(r.reply(), st);
-        }
-        if (!r.at(0, ino)) {
-            return fail(r.reply(), EINVAL);
-        }
-        const char* at = pathOf(ino);
-        if (!at) {
-            return fail(r.reply(), ENOENT);
-        }
-        const char* name = nullptr;
-        size_t length = 0;
-        struct stat st;
-        int e = 0;
-        switch (r.h.op) {
-            case fsLookup: {
-                if (!nameAt(r, 8, name, length)) {
-                    return fail(r.reply(), EINVAL);
-                }
-                char* path = length == 2 && memcmp(name, "..", 2) == 0 ? parentOf(at) : joined(at, name, length);
-                e = attributes(path, st);
-                if (e == 0) {
-                    know(uint64_t(st.st_ino), path);
-                    answerStat(r.reply(), st);
-                }
-                free(path);
-                break;
-            }
-            case fsGetattr:
-                e = attributes(at, st);
-                if (e == 0) {
-                    return answerStat(r.reply(), st);
-                }
-                break;
-            case fsReadlink: {
-                static char target[PATH_MAX];
-                e = operations.readlink ? result(operations.readlink(at, target, sizeof target)) : ENOSYS;
-                if (e == 0) {
-                    return answer(r.reply(), opOk, 0, target, strlen(target));
-                }
-                break;
-            }
-            case fsReaddir:
-                return readDirectory(ino, at, r);
-            case fsOpen:
-                return openFile(r, copied(at, strlen(at)), 0, false);
-            case fsCreate: {
-                uint32_t mode;
-                if (!r.at(8, mode) || !nameAt(r, 12, name, length)) {
-                    return fail(r.reply(), EINVAL);
-                }
-                return openFile(r, joined(at, name, length), mode, true);
-            }
-            case fsMkdir:
-            case fsMknod:
-            case fsUnlink: {
-                if (!nameAt(r, 8, name, length)) {
-                    return fail(r.reply(), EINVAL);
-                }
-                char* path = joined(at, name, length);
-                if (r.h.op == fsMkdir) {
-                    e = operations.mkdir ? result(operations.mkdir(path, mode_t(r.h.arg & 07777))) : ENOSYS;
-                } else if (r.h.op == fsMknod) {
-                    e = operations.mknod ? result(operations.mknod(path, mode_t(r.h.arg), 0)) : ENOSYS;
-                } else if ((r.h.arg & AT_REMOVEDIR) != 0) {
-                    e = operations.rmdir ? result(operations.rmdir(path)) : ENOSYS;
-                } else {
-                    e = operations.unlink ? result(operations.unlink(path)) : ENOSYS;
-                }
-                free(path);
-                break;
-            }
-            case fsSymlink: {
-                const char* target;
-                size_t targetLength;
-                if (!nameAt(r, 8, target, targetLength) || !nameAt(r, 8 + targetLength + 1, name, length)) {
-                    return fail(r.reply(), EINVAL);
-                }
-                char* path = joined(at, name, length);
-                e = operations.symlink ? result(operations.symlink(target, path)) : ENOSYS;
-                free(path);
-                break;
-            }
-            case fsLink:
-            case fsRename: {
-                uint64_t toIno;
-                const char* old = nullptr;
-                size_t oldLength = 0;
-                const size_t names = 16;
-                if (!r.at(8, toIno)) {
-                    return fail(r.reply(), EINVAL);
-                }
-                const char* to = pathOf(toIno);
-                if (!to) {
-                    return fail(r.reply(), ENOENT);
-                }
-                if (r.h.op == fsRename) {
-                    if (!nameAt(r, names, old, oldLength) || !nameAt(r, names + oldLength + 1, name, length)) {
-                        return fail(r.reply(), EINVAL);
-                    }
-                } else if (!nameAt(r, names, name, length)) {
-                    return fail(r.reply(), EINVAL);
-                }
-                char* target = joined(to, name, length);
-                if (r.h.op == fsLink) {
-                    e = operations.link ? result(operations.link(at, target)) : ENOSYS;
-                } else {
-                    char* from = joined(at, old, oldLength);
-                    e = operations.rename ? result(operations.rename(from, target)) : ENOSYS;
-                    if (e == 0) {
-                        moved(from, target);
-                    }
-                    free(from);
-                }
-                free(target);
-                break;
-            }
-            case fsChmod:
-                e = operations.chmod ? result(operations.chmod(at, mode_t(r.h.arg & 07777))) : ENOSYS;
-                break;
-            case fsChown:
-                e = changeOwner(at, r, 8);
-                break;
-            case fsUtimes:
-                e = changeTimes(at, r.h.arg, r, 8);
-                break;
-            case fsTruncate: {
-                uint64_t size;
-                e = !r.at(8, size) ? EINVAL : operations.truncate ? result(operations.truncate(at, off_t(size))) : ENOSYS;
-                break;
-            }
-            case fsStatfs:
-                return answerStatfs(r.reply(), "/");
-            case fsPath:
-                return answer(r.reply(), opOk, 0, at, strlen(at));
-            default:
-                e = ENOSYS;
+        const int e = result(operations.readdir(path, l, fill, 0, &info));
+        if (operations.releasedir) {
+            operations.releasedir(path, &info);
         }
         if (e != 0) {
-            fail(r.reply(), e);
-        } else if (r.h.op != fsLookup) {
-            answer(r.reply(), opOk, 0);
+            return fail(r.reply(), e);
         }
     }
-
-    // The calls on an open file.
-    static void fileCall(Open& o, const Endpoint& e, Request& r) {
-        struct stat st;
-        int failed = 0;
-        switch (r.h.op) {
-            case opRead:
-                return readFile(o, e, r);
-            case opWrite:
-                return writeFile(o, e, r);
-            case opReaddir:
-                return fail(r.reply(), ENOTDIR);
-            case opFstat:
-                if (o.opened && operations.fgetattr) {
-                    memset(&st, 0, sizeof st);
-                    failed = result(operations.fgetattr(o.path, &st, &o.info));
-                } else {
-                    failed = attributes(o.path, st);
-                }
-                if (failed == 0) {
-                    return answerStat(r.reply(), st);
-                }
-                break;
-            case opFstatfs:
-                return answerStatfs(r.reply(), o.path);
-            case opFchmod:
-                failed = operations.chmod ? result(operations.chmod(o.path, mode_t(r.h.arg & 07777))) : ENOSYS;
-                break;
-            case opFchown:
-                failed = changeOwner(o.path, r, 0);
-                break;
-            case opFutimes:
-                failed = changeTimes(o.path, r.h.arg, r, 0);
-                break;
-            case opFtruncate: {
-                uint64_t size;
-                if (!e.writes || !r.at(0, size)) {
-                    failed = EINVAL;
-                } else if (o.opened && operations.ftruncate) {
-                    failed = result(operations.ftruncate(o.path, off_t(size), &o.info));
-                } else {
-                    failed = operations.truncate ? result(operations.truncate(o.path, off_t(size))) : ENOSYS;
-                }
-                break;
-            }
-            case opFsync:
-                if (o.opened && operations.fsync) {
-                    failed = result(operations.fsync(o.path, int(r.h.arg), &o.info));
-                }
-                break;
-            case opFlock:
-                break;
-            case opLock: {
-                // No lock of the file system's is in the way of another.
-                uint32_t type;
-                uint64_t start;
-                uint64_t length;
-                if (r.h.arg == 1 && r.at(0, type) && r.at(4, start) && r.at(12, length)) {
-                    unsigned char none[20];
-                    const uint32_t unlocked = F_UNLCK;
-                    memcpy(none, &unlocked, 4);
-                    memcpy(none + 4, &start, 8);
-                    memcpy(none + 12, &length, 8);
-                    return answer(r.reply(), opOk, 0, none, sizeof none);
-                }
-                break;
-            }
-            default:
-                failed = ENOSYS;
+    static unsigned char out[65536 - sizeof(Header)];
+    size_t size = 0;
+    for (uint64_t i = after; i < l->count; ++i) {
+        const Entry& entry = l->entries[i];
+        const size_t length = strlen(entry.name);
+        if (size + 17 + length + 1 > sizeof out) {
+            break;
         }
-        if (failed != 0) {
+        const uint64_t pos = i + 1;
+        memcpy(out + size, &entry.ino, 8);
+        memcpy(out + size + 8, &pos, 8);
+        out[size + 16] = entry.type;
+        memcpy(out + size + 17, entry.name, length + 1);
+        size += 17 + length + 1;
+    }
+    answer(r.reply(), opOk, 0, out, size);
+}
+
+// A call of rootfs's on a channel, by node: the file system's
+// operations on the node's path, or on a name of it.
+static void fsCall(Request& r) {
+    uint64_t ino;
+    if (r.h.op == fsRoot) {
+        struct stat st;
+        if (const int failed = attributes("/", st)) {
             return fail(r.reply(), failed);
         }
+        know(uint64_t(st.st_ino), "/");
+        return answerStat(r.reply(), st);
+    }
+    if (!r.at(0, ino)) {
+        return fail(r.reply(), EINVAL);
+    }
+    const char* at = pathOf(ino);
+    if (!at) {
+        return fail(r.reply(), ENOENT);
+    }
+    const char* name = nullptr;
+    size_t length = 0;
+    struct stat st;
+    int e = 0;
+    switch (r.h.op) {
+        case fsLookup: {
+            if (!nameAt(r, 8, name, length)) {
+                return fail(r.reply(), EINVAL);
+            }
+            char* path = length == 2 && memcmp(name, "..", 2) == 0 ? parentOf(at) : joined(at, name, length);
+            e = attributes(path, st);
+            if (e == 0) {
+                know(uint64_t(st.st_ino), path);
+                answerStat(r.reply(), st);
+            }
+            free(path);
+            break;
+        }
+        case fsGetattr:
+            e = attributes(at, st);
+            if (e == 0) {
+                return answerStat(r.reply(), st);
+            }
+            break;
+        case fsReadlink: {
+            static char target[PATH_MAX];
+            e = operations.readlink ? result(operations.readlink(at, target, sizeof target)) : ENOSYS;
+            if (e == 0) {
+                return answer(r.reply(), opOk, 0, target, strlen(target));
+            }
+            break;
+        }
+        case fsReaddir:
+            return readDirectory(ino, at, r);
+        case fsOpen:
+            return openFile(r, copied(at, strlen(at)), 0, false);
+        case fsCreate: {
+            uint32_t mode;
+            if (!r.at(8, mode) || !nameAt(r, 12, name, length)) {
+                return fail(r.reply(), EINVAL);
+            }
+            return openFile(r, joined(at, name, length), mode, true);
+        }
+        case fsMkdir:
+        case fsMknod:
+        case fsUnlink: {
+            if (!nameAt(r, 8, name, length)) {
+                return fail(r.reply(), EINVAL);
+            }
+            char* path = joined(at, name, length);
+            if (r.h.op == fsMkdir) {
+                e = operations.mkdir ? result(operations.mkdir(path, mode_t(r.h.arg & 07777))) : ENOSYS;
+            } else if (r.h.op == fsMknod) {
+                e = operations.mknod ? result(operations.mknod(path, mode_t(r.h.arg), 0)) : ENOSYS;
+            } else if ((r.h.arg & AT_REMOVEDIR) != 0) {
+                e = operations.rmdir ? result(operations.rmdir(path)) : ENOSYS;
+            } else {
+                e = operations.unlink ? result(operations.unlink(path)) : ENOSYS;
+            }
+            free(path);
+            break;
+        }
+        case fsSymlink: {
+            const char* target;
+            size_t targetLength;
+            if (!nameAt(r, 8, target, targetLength) || !nameAt(r, 8 + targetLength + 1, name, length)) {
+                return fail(r.reply(), EINVAL);
+            }
+            char* path = joined(at, name, length);
+            e = operations.symlink ? result(operations.symlink(target, path)) : ENOSYS;
+            free(path);
+            break;
+        }
+        case fsLink:
+        case fsRename: {
+            uint64_t toIno;
+            const char* old = nullptr;
+            size_t oldLength = 0;
+            const size_t names = 16;
+            if (!r.at(8, toIno)) {
+                return fail(r.reply(), EINVAL);
+            }
+            const char* to = pathOf(toIno);
+            if (!to) {
+                return fail(r.reply(), ENOENT);
+            }
+            if (r.h.op == fsRename) {
+                if (!nameAt(r, names, old, oldLength) || !nameAt(r, names + oldLength + 1, name, length)) {
+                    return fail(r.reply(), EINVAL);
+                }
+            } else if (!nameAt(r, names, name, length)) {
+                return fail(r.reply(), EINVAL);
+            }
+            char* target = joined(to, name, length);
+            if (r.h.op == fsLink) {
+                e = operations.link ? result(operations.link(at, target)) : ENOSYS;
+            } else {
+                char* from = joined(at, old, oldLength);
+                e = operations.rename ? result(operations.rename(from, target)) : ENOSYS;
+                if (e == 0) {
+                    moved(from, target);
+                }
+                free(from);
+            }
+            free(target);
+            break;
+        }
+        case fsChmod:
+            e = operations.chmod ? result(operations.chmod(at, mode_t(r.h.arg & 07777))) : ENOSYS;
+            break;
+        case fsChown:
+            e = changeOwner(at, r, 8);
+            break;
+        case fsUtimes:
+            e = changeTimes(at, r.h.arg, r, 8);
+            break;
+        case fsTruncate: {
+            uint64_t size;
+            e = !r.at(8, size) ? EINVAL : operations.truncate ? result(operations.truncate(at, off_t(size))) : ENOSYS;
+            break;
+        }
+        case fsStatfs:
+            return answerStatfs(r.reply(), "/");
+        case fsPath:
+            return answer(r.reply(), opOk, 0, at, strlen(at));
+        default:
+            e = ENOSYS;
+    }
+    if (e != 0) {
+        fail(r.reply(), e);
+    } else if (r.h.op != fsLookup) {
         answer(r.reply(), opOk, 0);
     }
+}
 
-    static bool handle(Endpoint& e, Request& r) {
-        context.uid = uid_t(r.h.uid);
-        context.gid = gid_t(r.h.gid);
-        Open& o = *static_cast<Open*>(e.of);
-        if (o.channel) {
-            fsCall(r);
-        } else {
-            fileCall(o, e, r);
-        }
-        return false;
-    }
-
-    // A connection mount(2) made to the file system's socket: a channel of
-    // rootfs's calls, ROOT the first.
-    static void accepted(Endpoint&, int connection) {
-        keepOn(connection, true, nullptr, true, true);
-        ++channels;
-    }
-
-    // An endpoint closed: the file system's release of an open file; the
-    // last channel's end is the unmount.
-    static void gone(Endpoint& e) {
-        auto* o = static_cast<Open*>(e.of);
-        if (!o) {
-            return;
-        }
-        if (o->channel && --channels == 0) {
-            stopServing();
-        }
-        if (o->opened) {
-            if (operations.flush) {
-                operations.flush(o->path, &o->info);
+// The calls on an open file.
+static void fileCall(Open& o, const Endpoint& e, Request& r) {
+    struct stat st;
+    int failed = 0;
+    switch (r.h.op) {
+        case opRead:
+            return readFile(o, e, r);
+        case opWrite:
+            return writeFile(o, e, r);
+        case opReaddir:
+            return fail(r.reply(), ENOTDIR);
+        case opFstat:
+            if (o.opened && operations.fgetattr) {
+                memset(&st, 0, sizeof st);
+                failed = result(operations.fgetattr(o.path, &st, &o.info));
+            } else {
+                failed = attributes(o.path, st);
             }
-            if (operations.release) {
-                operations.release(o->path, &o->info);
+            if (failed == 0) {
+                return answerStat(r.reply(), st);
             }
-        }
-        if (o->previous) {
-            o->previous->next = o->next;
-        } else {
-            opens = o->next;
-        }
-        if (o->next) {
-            o->next->previous = o->previous;
-        }
-        free(o->path);
-        free(o);
-    }
-
-    // A device for the file system's files: the number of a pair, which no
-    // other pair in the kernel has, as rootfs's are.
-    static uint64_t deviceNumber() {
-        int ends[2];
-        struct stat st;
-        if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ends) != 0 || fstat(ends[0], &st) != 0) {
-            fatal("fuse: a pair for a device: errno %d", errno);
-        }
-        close(ends[0]);
-        close(ends[1]);
-        return uint64_t(st.st_ino);
-    }
-
-    // The options of -o: ready=fd taken, libfuse's own let be.
-    static void options(const char* list, int& ready) {
-        for (const char* at = list; *at;) {
-            const char* comma = strchr(at, ',');
-            const size_t length = comma ? size_t(comma - at) : strlen(at);
-            if (length > 6 && strncmp(at, "ready=", 6) == 0) {
-                ready = atoi(at + 6);
+            break;
+        case opFstatfs:
+            return answerStatfs(r.reply(), o.path);
+        case opFchmod:
+            failed = operations.chmod ? result(operations.chmod(o.path, mode_t(r.h.arg & 07777))) : ENOSYS;
+            break;
+        case opFchown:
+            failed = changeOwner(o.path, r, 0);
+            break;
+        case opFutimes:
+            failed = changeTimes(o.path, r.h.arg, r, 0);
+            break;
+        case opFtruncate: {
+            uint64_t size;
+            if (!e.writes || !r.at(0, size)) {
+                failed = EINVAL;
+            } else if (o.opened && operations.ftruncate) {
+                failed = result(operations.ftruncate(o.path, off_t(size), &o.info));
+            } else {
+                failed = operations.truncate ? result(operations.truncate(o.path, off_t(size))) : ENOSYS;
             }
-            at += length + (comma ? 1 : 0);
+            break;
         }
+        case opFsync:
+            if (o.opened && operations.fsync) {
+                failed = result(operations.fsync(o.path, int(r.h.arg), &o.info));
+            }
+            break;
+        case opFlock:
+            break;
+        case opLock: {
+            // No lock of the file system's is in the way of another.
+            uint32_t type;
+            uint64_t start;
+            uint64_t length;
+            if (r.h.arg == 1 && r.at(0, type) && r.at(4, start) && r.at(12, length)) {
+                unsigned char none[20];
+                const uint32_t unlocked = F_UNLCK;
+                memcpy(none, &unlocked, 4);
+                memcpy(none + 4, &start, 8);
+                memcpy(none + 12, &length, 8);
+                return answer(r.reply(), opOk, 0, none, sizeof none);
+            }
+            break;
+        }
+        default:
+            failed = ENOSYS;
+    }
+    if (failed != 0) {
+        return fail(r.reply(), failed);
+    }
+    answer(r.reply(), opOk, 0);
+}
+
+static bool handle(Endpoint& e, Request& r) {
+    context.uid = uid_t(r.h.uid);
+    context.gid = gid_t(r.h.gid);
+    Open& o = *static_cast<Open*>(e.of);
+    if (o.channel) {
+        fsCall(r);
+    } else {
+        fileCall(o, e, r);
+    }
+    return false;
+}
+
+// A connection mount(2) made to the file system's socket: a channel of
+// rootfs's calls, ROOT the first.
+static void accepted(Endpoint&, int connection) {
+    keepOn(connection, true, nullptr, true, true);
+    ++channels;
+}
+
+// An endpoint closed: the file system's release of an open file; the
+// last channel's end is the unmount.
+static void gone(Endpoint& e) {
+    auto* o = static_cast<Open*>(e.of);
+    if (!o) {
+        return;
+    }
+    if (o->channel && --channels == 0) {
+        stopServing();
+    }
+    if (o->opened) {
+        if (operations.flush) {
+            operations.flush(o->path, &o->info);
+        }
+        if (operations.release) {
+            operations.release(o->path, &o->info);
+        }
+    }
+    if (o->previous) {
+        o->previous->next = o->next;
+    } else {
+        opens = o->next;
+    }
+    if (o->next) {
+        o->next->previous = o->previous;
+    }
+    free(o->path);
+    free(o);
+}
+
+// A device for the file system's files: the number of a pair, which no
+// other pair in the kernel has, as rootfs's are.
+static uint64_t deviceNumber() {
+    int ends[2];
+    struct stat st;
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ends) != 0 || fstat(ends[0], &st) != 0) {
+        fatal("fuse: a pair for a device: errno %d", errno);
+    }
+    close(ends[0]);
+    close(ends[1]);
+    return uint64_t(st.st_ino);
+}
+
+// The options of -o: ready=fd taken, libfuse's own let be.
+static void options(const char* list, int& ready) {
+    for (const char* at = list; *at;) {
+        const char* comma = strchr(at, ',');
+        const size_t length = comma ? size_t(comma - at) : strlen(at);
+        if (length > 6 && strncmp(at, "ready=", 6) == 0) {
+            ready = atoi(at + 6);
+        }
+        at += length + (comma ? 1 : 0);
     }
 }
 

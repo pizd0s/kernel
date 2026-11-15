@@ -9,18 +9,18 @@ namespace {
         const char* name;
         int (*main)(int, char**);
     };
-
-    static const Tool tools[] = {
-        {"blk", blkMain},
-        {"devfs", devfsMain},
-        {"devices", devicesMain},
-        {"erofs", erofsMain},
-        {"gpt", gptMain},
-        {"mount", mountMain},
-        {"tmpfs", tmpfsMain},
-        {"umount", umountMain},
-    };
 }
+
+static const Tool tools[] = {
+    {"blk", blkMain},
+    {"devfs", devfsMain},
+    {"devices", devicesMain},
+    {"erofs", erofsMain},
+    {"gpt", gptMain},
+    {"mount", mountMain},
+    {"tmpfs", tmpfsMain},
+    {"umount", umountMain},
+};
 
 int runTool(int argc, char** argv) {
     for (; argc > 0; --argc, ++argv) {

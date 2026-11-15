@@ -152,64 +152,64 @@ void std::suspend_never::await_resume() const noexcept {
 extern "C" const u8 rootfs_image[];
 extern "C" const u32 rootfs_image_size;
 
+constexpr usize maxPacket = 65536;
+
+constexpr u32 maxLinks = 40; // the symbolic links one path goes through, Linux's
+
+[[noreturn, gnu::format(printf, 1, 2)]] static void fatal(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    vdprintf(STDERR_FILENO, format, args);
+    va_end(args);
+    dprintf(STDERR_FILENO, "\n");
+    exit(1);
+}
+
+static usize checkedAdd(usize a, usize b) {
+    if (b > SIZE_MAX - a) {
+        fatal("rootfs: size overflow");
+    }
+    return a + b;
+}
+
+static usize checkedMultiply(usize a, usize b) {
+    if (a != 0 && b > SIZE_MAX / a) {
+        fatal("rootfs: size overflow");
+    }
+    return a * b;
+}
+
+static void* allocate(usize size) {
+    void* p = malloc(size);
+    if (!p) {
+        fatal("rootfs: out of memory");
+    }
+    return p;
+}
+
+static void* reallocate(void* p, usize size) {
+    void* q = realloc(p, size);
+    if (!q) {
+        fatal("rootfs: out of memory");
+    }
+    return q;
+}
+
+// ---- containers, bin/aot/aot.cpp's over malloc ------------------------------
+
+constexpr usize objectAlignment = 16;
+
+// An allocation's bytes: a power of two, from objectAlignment, as
+// aot.cpp's.
+static usize allocationBytes(usize size) {
+    usize bytes = objectAlignment;
+    while (bytes < size) {
+        bytes = checkedMultiply(bytes, 2);
+    }
+    return bytes;
+}
+
 namespace {
-    constexpr usize maxPacket = 65536;
-
-    constexpr u32 maxLinks = 40; // the symbolic links one path goes through, Linux's
-
-    [[noreturn, gnu::format(printf, 1, 2)]] static void fatal(const char* format, ...) {
-        va_list args;
-        va_start(args, format);
-        vdprintf(STDERR_FILENO, format, args);
-        va_end(args);
-        dprintf(STDERR_FILENO, "\n");
-        exit(1);
-    }
-
-    static usize checkedAdd(usize a, usize b) {
-        if (b > SIZE_MAX - a) {
-            fatal("rootfs: size overflow");
-        }
-        return a + b;
-    }
-
-    static usize checkedMultiply(usize a, usize b) {
-        if (a != 0 && b > SIZE_MAX / a) {
-            fatal("rootfs: size overflow");
-        }
-        return a * b;
-    }
-
-    static void* allocate(usize size) {
-        void* p = malloc(size);
-        if (!p) {
-            fatal("rootfs: out of memory");
-        }
-        return p;
-    }
-
-    static void* reallocate(void* p, usize size) {
-        void* q = realloc(p, size);
-        if (!q) {
-            fatal("rootfs: out of memory");
-        }
-        return q;
-    }
-
-    // ---- containers, bin/aot/aot.cpp's over malloc ------------------------------
-
-    constexpr usize objectAlignment = 16;
-
-    // An allocation's bytes: a power of two, from objectAlignment, as
-    // aot.cpp's.
-    static usize allocationBytes(usize size) {
-        usize bytes = objectAlignment;
-        while (bytes < size) {
-            bytes = checkedMultiply(bytes, 2);
-        }
-        return bytes;
-    }
-
     struct Buffer {
         struct alignas(objectAlignment) Header {
             usize used;
@@ -234,13 +234,13 @@ namespace {
         Header* header() const;
         void* storage;
     };
+}
 
-    alignas(objectAlignment) constinit const Buffer::Header emptyBuffer{};
+alignas(objectAlignment) constinit const Buffer::Header emptyBuffer{};
 
-    constexpr Buffer::Buffer()
-        : storage(const_cast<Header*>(&emptyBuffer) + 1)
-    {
-    }
+constexpr Buffer::Buffer()
+    : storage(const_cast<Header*>(&emptyBuffer) + 1)
+{
 }
 
 Buffer::~Buffer() {
@@ -330,148 +330,147 @@ namespace {
         };
 
         template <typename Same>
-        T* find(u32 hash, Same same) const {
-            if (!slots) {
-                return nullptr;
-            }
-            for (u32 i = hash & mask;; i = (i + 1) & mask) {
-                if (!slots[i].item) {
-                    return nullptr;
-                }
-                if (slots[i].hash == hash && same(slots[i].item)) {
-                    return slots[i].item;
-                }
-            }
-        }
-
-        void insert(u32 hash, T* item) {
-            if (!slots || (count + 1) * 2 > mask + 1) {
-                grow();
-            }
-            put(hash, item);
-            ++count;
-        }
-
-        void erase(u32 hash, const T* item) {
-            u32 i = hash & mask;
-            while (slots[i].item != item) {
-                if (!slots[i].item) {
-                    fatal("rootfs: no such item in a table");
-                }
-                i = (i + 1) & mask;
-            }
-            // What follows moves back into the hole, unless that would put
-            // it before its home: its home is in (i, j], cyclically.
-            for (u32 j = (i + 1) & mask; slots[j].item; j = (j + 1) & mask) {
-                const u32 home = slots[j].hash & mask;
-                const bool stays = i <= j ? i < home && home <= j : i < home || home <= j;
-                if (!stays) {
-                    slots[i] = slots[j];
-                    i = j;
-                }
-            }
-            slots[i] = {0, nullptr};
-            --count;
-        }
-
-        void put(u32 hash, T* item) {
-            u32 i = hash & mask;
-            while (slots[i].item) {
-                i = (i + 1) & mask;
-            }
-            slots[i] = {hash, item};
-        }
-
-        void grow() {
-            Slot* old = slots;
-            const usize before = old ? usize(mask) + 1 : 0;
-            const usize capacity = old ? checkedMultiply(before, 2) : 16;
-            slots = static_cast<Slot*>(calloc(capacity, sizeof(Slot)));
-            if (!slots) {
-                fatal("rootfs: out of memory");
-            }
-            mask = u32(capacity - 1);
-            for (usize i = 0; i < before; ++i) {
-                if (old[i].item) {
-                    put(old[i].hash, old[i].item);
-                }
-            }
-            free(old);
-        }
+        T* find(u32 hash, Same same) const;
+        void insert(u32 hash, T* item);
+        void erase(u32 hash, const T* item);
+        void put(u32 hash, T* item);
+        void grow();
 
         Slot* slots = nullptr;
         u32 mask = 0;
         u32 count = 0;
     };
+}
 
-    // The bits of a 64-bit hash folded to 32, each output bit depending on
-    // all (murmur3's finalizer).
-    static u32 finish(u64 h) {
-        h ^= h >> 33;
-        h *= 0xff51afd7ed558ccdull;
-        h ^= h >> 33;
-        h *= 0xc4ceb9fe1a85ec53ull;
-        h ^= h >> 33;
-        return u32(h);
+template <typename T>
+template <typename Same>
+inline T* OpenTable<T>::find(u32 hash, Same same) const {
+    if (!slots) {
+        return nullptr;
     }
+    for (u32 i = hash & mask;; i = (i + 1) & mask) {
+        if (!slots[i].item) {
+            return nullptr;
+        }
+        if (slots[i].hash == hash && same(slots[i].item)) {
+            return slots[i].item;
+        }
+    }
+}
 
-    // ---- names and bodies ----------------------------------------------------------
+template <typename T>
+inline void OpenTable<T>::insert(u32 hash, T* item) {
+    if (!slots || (count + 1) * 2 > mask + 1) {
+        grow();
+    }
+    put(hash, item);
+    ++count;
+}
 
+template <typename T>
+inline void OpenTable<T>::erase(u32 hash, const T* item) {
+    u32 i = hash & mask;
+    while (slots[i].item != item) {
+        if (!slots[i].item) {
+            fatal("rootfs: no such item in a table");
+        }
+        i = (i + 1) & mask;
+    }
+    // What follows moves back into the hole, unless that would put
+    // it before its home: its home is in (i, j], cyclically.
+    for (u32 j = (i + 1) & mask; slots[j].item; j = (j + 1) & mask) {
+        const u32 home = slots[j].hash & mask;
+        const bool stays = i <= j ? i < home && home <= j : i < home || home <= j;
+        if (!stays) {
+            slots[i] = slots[j];
+            i = j;
+        }
+    }
+    slots[i] = {0, nullptr};
+    --count;
+}
+
+template <typename T>
+inline void OpenTable<T>::put(u32 hash, T* item) {
+    u32 i = hash & mask;
+    while (slots[i].item) {
+        i = (i + 1) & mask;
+    }
+    slots[i] = {hash, item};
+}
+
+template <typename T>
+inline void OpenTable<T>::grow() {
+    Slot* old = slots;
+    const usize before = old ? usize(mask) + 1 : 0;
+    const usize capacity = old ? checkedMultiply(before, 2) : 16;
+    slots = static_cast<Slot*>(calloc(capacity, sizeof(Slot)));
+    if (!slots) {
+        fatal("rootfs: out of memory");
+    }
+    mask = u32(capacity - 1);
+    for (usize i = 0; i < before; ++i) {
+        if (old[i].item) {
+            put(old[i].hash, old[i].item);
+        }
+    }
+    free(old);
+}
+
+// The bits of a 64-bit hash folded to 32, each output bit depending on
+// all (murmur3's finalizer).
+static u32 finish(u64 h) {
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ull;
+    h ^= h >> 33;
+    return u32(h);
+}
+
+// ---- names and bodies ----------------------------------------------------------
+
+namespace {
     // Bytes of a packet or of a call's, where they are.
     struct Name {
         const char* at = nullptr;
         usize length = 0;
 
-        bool empty() const {
-            return length == 0;
-        }
-
-        bool is(const char* text) const {
-            return length == strlen(text) && memcmp(at, text, length) == 0;
-        }
-
-        bool has(char c) const {
-            return length != 0 && memchr(at, c, length) != nullptr;
-        }
+        bool empty() const;
+        bool is(const char* text) const;
+        bool has(char c) const;
     };
+}
 
-    static Name literal(const char* text) {
-        return {text, strlen(text)};
-    }
+inline bool Name::empty() const {
+    return length == 0;
+}
 
+inline bool Name::is(const char* text) const {
+    return length == strlen(text) && memcmp(at, text, length) == 0;
+}
+
+inline bool Name::has(char c) const {
+    return length != 0 && memchr(at, c, length) != nullptr;
+}
+
+static Name literal(const char* text) {
+    return {text, strlen(text)};
+}
+
+namespace {
     // A request's body, read from its start.
     struct Body {
         const u8* at;
         const u8* end;
 
-        usize size() const {
-            return usize(end - at);
-        }
-
+        usize size() const;
         template <typename T>
-        T take() {
-            if (size() < sizeof(T)) {
-                fatal("a short packet");
-            }
-            T value;
-            memcpy(&value, at, sizeof value);
-            at += sizeof value;
-            return value;
-        }
+        T take();
 
         // A string up to its NUL, or the end, and past the NUL.
-        Name string() {
-            const auto* nul = static_cast<const u8*>(memchr(at, 0, size()));
-            const Name name{reinterpret_cast<const char*>(at), usize((nul ? nul : end) - at)};
-            at = nul ? nul + 1 : end;
-            return name;
-        }
-
-        Name rest() {
-            const Name name{reinterpret_cast<const char*>(at), size()};
-            at = end;
-            return name;
-        }
+        Name string();
+        Name rest();
     };
 
     // ---- file systems, mounts and places --------------------------------------------
@@ -544,429 +543,459 @@ namespace {
         Endpoint* after; // among the live ones
         Endpoint* before;
     };
+}
 
-    // ---- packets ---------------------------------------------------------------------
+inline usize Body::size() const {
+    return usize(end - at);
+}
 
-    // The packet recv takes and the descriptors that come with it: one of
-    // each for the process, whose loop takes a packet and is done with it
-    // before the next.
-    alignas(Header) u8 packet[maxPacket];
-    int packetFds[maxFds];
-    usize packetFdCount;
-
-    // A reply: the header, then the parts where they are.
-    static void reply(int fd, u32 op, u32 arg, const iovec* parts, usize count, const int* fds = nullptr, usize fdCount = 0) {
-        Header head{op, arg, 0, 0};
-        iovec iov[3] = {{&head, sizeof head}};
-        if (count > 2 || fdCount > maxFds) {
-            fatal("rootfs: a reply of %zu parts and %zu descriptors", count, fdCount);
-        }
-        for (usize i = 0; i < count; ++i) {
-            iov[1 + i] = parts[i];
-        }
-        sendPacket(fd, iov, 1 + count, fds, fdCount); // a gone reader is its own loss
+template <typename T>
+inline T Body::take() {
+    if (size() < sizeof(T)) {
+        fatal("a short packet");
     }
+    T value;
+    memcpy(&value, at, sizeof value);
+    at += sizeof value;
+    return value;
+}
 
-    static iovec part(const void* data, usize size) {
-        return {const_cast<void*>(data), size};
+inline Name Body::string() {
+    const auto* nul = static_cast<const u8*>(memchr(at, 0, size()));
+    const Name name{reinterpret_cast<const char*>(at), usize((nul ? nul : end) - at)};
+    at = nul ? nul + 1 : end;
+    return name;
+}
+
+inline Name Body::rest() {
+    const Name name{reinterpret_cast<const char*>(at), size()};
+    at = end;
+    return name;
+}
+
+// ---- packets ---------------------------------------------------------------------
+
+// The packet recv takes and the descriptors that come with it: one of
+// each for the process, whose loop takes a packet and is done with it
+// before the next.
+alignas(Header) static u8 packet[maxPacket];
+static int packetFds[maxFds];
+static usize packetFdCount;
+
+// A reply: the header, then the parts where they are.
+static void reply(int fd, u32 op, u32 arg, const iovec* parts, usize count, const int* fds = nullptr, usize fdCount = 0) {
+    Header head{op, arg, 0, 0};
+    iovec iov[3] = {{&head, sizeof head}};
+    if (count > 2 || fdCount > maxFds) {
+        fatal("rootfs: a reply of %zu parts and %zu descriptors", count, fdCount);
     }
-
-    static void ok(int fd, const void* data = nullptr, usize size = 0) {
-        const iovec body = part(data, size);
-        reply(fd, opOk, 0, &body, size ? 1 : 0);
+    for (usize i = 0; i < count; ++i) {
+        iov[1 + i] = parts[i];
     }
+    sendPacket(fd, iov, 1 + count, fds, fdCount); // a gone reader is its own loss
+}
 
-    // A reply of an error: the reply's endpoint is not kept.
-    static bool error(int fd, int e) {
-        reply(fd, opErr, u32(e), nullptr, 0);
-        return false;
+static iovec part(const void* data, usize size) {
+    return {const_cast<void*>(data), size};
+}
+
+static void ok(int fd, const void* data = nullptr, usize size = 0) {
+    const iovec body = part(data, size);
+    reply(fd, opOk, 0, &body, size ? 1 : 0);
+}
+
+// A reply of an error: the reply's endpoint is not kept.
+static bool error(int fd, int e) {
+    reply(fd, opErr, u32(e), nullptr, 0);
+    return false;
+}
+
+// The reply of a call that changes something: OK, or the error.
+static bool answer(int fd, int e) {
+    if (e != 0) {
+        return error(fd, e);
     }
+    ok(fd);
+    return false;
+}
 
-    // The reply of a call that changes something: OK, or the error.
-    static bool answer(int fd, int e) {
-        if (e != 0) {
-            return error(fd, e);
-        }
-        ok(fd);
-        return false;
+// One packet into packet, its descriptors into packetFds: the length
+// of its body, after the header, or -1 at the end of the endpoint.
+static i64 receive(int fd, Header& h) {
+    const ssize_t n = receivePacket(fd, packet, sizeof packet, packetFds, packetFdCount);
+    if (n <= 0) {
+        return -1;
     }
-
-    // One packet into packet, its descriptors into packetFds: the length
-    // of its body, after the header, or -1 at the end of the endpoint.
-    static i64 receive(int fd, Header& h) {
-        const ssize_t n = receivePacket(fd, packet, sizeof packet, packetFds, packetFdCount);
-        if (n <= 0) {
-            return -1;
-        }
-        if (usize(n) < sizeof(Header)) {
-            fatal("a packet without a header");
-        }
-        memcpy(&h, packet, sizeof h);
-        return i64(n) - i64(sizeof(Header));
+    if (usize(n) < sizeof(Header)) {
+        fatal("a packet without a header");
     }
+    memcpy(&h, packet, sizeof h);
+    return i64(n) - i64(sizeof(Header));
+}
 
-    // ---- the loop's endpoints -------------------------------------------------------
-    //
-    // One epoll of the process watches every endpoint: an endpoint joins it
-    // when it is listened on, leaves it before it closes. An event carries
-    // its endpoint.
+// ---- the loop's endpoints -------------------------------------------------------
+//
+// One epoll of the process watches every endpoint: an endpoint joins it
+// when it is listened on, leaves it before it closes. An event carries
+// its endpoint.
 
-    int watcher = -1;
-    Endpoint* freeEndpoints;
-    Endpoint* buried; // closed in this batch of events: free after it
-    Endpoint* live;   // every endpoint not closed
-    usize endpointCount;
+static int watcher = -1;
+static Endpoint* freeEndpoints;
+static Endpoint* buried; // closed in this batch of events: free after it
+static Endpoint* live;   // every endpoint not closed
+static usize endpointCount;
 
-    // The signal mask of the wait, once reapOnChild blocked SIGCHLD
-    // everywhere else: a child's end that comes while the loop works waits
-    // for the wait, which it interrupts at once, instead of coming before
-    // it, unseen. The handler notes it: the loop reaps after a wait a
-    // child's end interrupted.
-    sigset_t waitMask;
-    bool waitMasked;
-    volatile sig_atomic_t childEnded = 1;
+// The signal mask of the wait, once reapOnChild blocked SIGCHLD
+// everywhere else: a child's end that comes while the loop works waits
+// for the wait, which it interrupts at once, instead of coming before
+// it, unseen. The handler notes it: the loop reaps after a wait a
+// child's end interrupted.
+static sigset_t waitMask;
+static bool waitMasked;
+static volatile sig_atomic_t childEnded = 1;
 
-    // The handles, by id; the ids given out.
-    OpenTable<Endpoint> handles;
-    u64 handleIds;
+// The handles, by id; the ids given out.
+static OpenTable<Endpoint> handles;
+static u64 handleIds;
 
-    static u32 hashId(u64 id) {
-        return finish(id);
+static u32 hashId(u64 id) {
+    return finish(id);
+}
+
+static Endpoint* handleOf(u64 id) {
+    return handles.find(hashId(id), [id](const Endpoint* ep) {
+        return ep->id == id;
+    });
+}
+
+// An endpoint of a role on a descriptor of ours, which came with
+// MSG_CMSG_CLOEXEC or from a pair of ours made with SOCK_CLOEXEC; the
+// caller fills in what its role has.
+static Endpoint* listen(int fd, Role role) {
+    Endpoint* ep = freeEndpoints;
+    if (ep) {
+        freeEndpoints = ep->next;
+    } else {
+        ep = static_cast<Endpoint*>(allocate(sizeof(Endpoint)));
     }
-
-    static Endpoint* handleOf(u64 id) {
-        return handles.find(hashId(id), [id](const Endpoint* ep) {
-            return ep->id == id;
-        });
+    new (ep) Endpoint();
+    ep->fd = fd;
+    ep->role = role;
+    ep->after = live;
+    if (live) {
+        live->before = ep;
     }
-
-    // An endpoint of a role on a descriptor of ours, which came with
-    // MSG_CMSG_CLOEXEC or from a pair of ours made with SOCK_CLOEXEC; the
-    // caller fills in what its role has.
-    static Endpoint* listen(int fd, Role role) {
-        Endpoint* ep = freeEndpoints;
-        if (ep) {
-            freeEndpoints = ep->next;
-        } else {
-            ep = static_cast<Endpoint*>(allocate(sizeof(Endpoint)));
-        }
-        new (ep) Endpoint();
-        ep->fd = fd;
-        ep->role = role;
-        ep->after = live;
-        if (live) {
-            live->before = ep;
-        }
-        live = ep;
-        ++endpointCount;
-        epoll_event ev{};
-        ev.events = EPOLLIN;
-        ev.data.ptr = ep;
-        if (epoll_ctl(watcher, EPOLL_CTL_ADD, fd, &ev) != 0) {
-            fatal("rootfs: epoll_ctl: errno %d", errno);
-        }
-        return ep;
+    live = ep;
+    ++endpointCount;
+    epoll_event ev{};
+    ev.events = EPOLLIN;
+    ev.data.ptr = ep;
+    if (epoll_ctl(watcher, EPOLL_CTL_ADD, fd, &ev) != 0) {
+        fatal("rootfs: epoll_ctl: errno %d", errno);
     }
+    return ep;
+}
 
-    static void hold(const Place& p);
-    static void letGo(Mount* m);
+static void hold(const Place& p);
+static void letGo(Mount* m);
 
-    // A handle at a place, its id the next; O_PATH's reads nothing and
-    // changes nothing.
-    static Endpoint* listenHandle(int fd, const Place& p, bool opath) {
-        Endpoint* ep = listen(fd, Role::Handle);
-        ep->at = p;
-        ep->at.fresh = false; // the stat is the open's, not a later call's
-        ep->reads = !opath;
-        ep->writes = !opath;
-        ep->id = ++handleIds;
-        ++p.m->refs;
-        handles.insert(hashId(ep->id), ep);
-        return ep;
+// A handle at a place, its id the next; O_PATH's reads nothing and
+// changes nothing.
+static Endpoint* listenHandle(int fd, const Place& p, bool opath) {
+    Endpoint* ep = listen(fd, Role::Handle);
+    ep->at = p;
+    ep->at.fresh = false; // the stat is the open's, not a later call's
+    ep->reads = !opath;
+    ep->writes = !opath;
+    ep->id = ++handleIds;
+    ++p.m->refs;
+    handles.insert(hashId(ep->id), ep);
+    return ep;
+}
+
+static void forget(Endpoint* ep);
+
+// The other end of an endpoint closed, or it is let go of: the file is
+// closed.
+static void closed(Endpoint* ep) {
+    const int fd = ep->fd;
+    epoll_ctl(watcher, EPOLL_CTL_DEL, fd, nullptr);
+    forget(ep);
+    close(fd);
+}
+
+// The endpoints closed in a batch of events are free once it is done.
+static void bury() {
+    while (Endpoint* ep = buried) {
+        buried = ep->next;
+        ep->~Endpoint();
+        ep->next = freeEndpoints;
+        freeEndpoints = ep;
     }
+}
 
-    static void forget(Endpoint* ep);
+static void gone(Fs* fs);
 
-    // The other end of an endpoint closed, or it is let go of: the file is
-    // closed.
-    static void closed(Endpoint* ep) {
-        const int fd = ep->fd;
-        epoll_ctl(watcher, EPOLL_CTL_DEL, fd, nullptr);
-        forget(ep);
-        close(fd);
-    }
-
-    // The endpoints closed in a batch of events are free once it is done.
-    static void bury() {
-        while (Endpoint* ep = buried) {
-            buried = ep->next;
-            ep->~Endpoint();
-            ep->next = freeEndpoints;
-            freeEndpoints = ep;
-        }
-    }
-
-    static void gone(Fs* fs);
-
-    // An endpoint that closes: a handle lets go of its place, a file
-    // system's channel of the file system.
-    static void forget(Endpoint* ep) {
-        ep->dead = true;
-        switch (ep->role) {
-            case Role::Handle:
-                handles.erase(hashId(ep->id), ep);
-                letGo(ep->at.m);
-                break;
-            case Role::Fs:
-                if (ep->fs) {
-                    gone(ep->fs);
-                }
-                break;
-        }
-        if (ep->before) {
-            ep->before->after = ep->after;
-        } else {
-            live = ep->after;
-        }
-        if (ep->after) {
-            ep->after->before = ep->before;
-        }
-        ep->next = buried;
-        buried = ep;
-        --endpointCount;
-    }
-
-    // ---- places and mounts ---------------------------------------------------------
-
-    Mount* mounts; // every mount, the VFS's root among them
-    Mount* rootMount;
-
-    static bool isDir(const Place& p) {
-        return S_ISDIR(p.st.mode);
-    }
-
-    static bool isLink(const Place& p) {
-        return S_ISLNK(p.st.mode);
-    }
-
-    static bool same(const Place& a, const Place& b) {
-        return a.m == b.m && a.node == b.node;
-    }
-
-    // Whether who asks may read (4), write (2), and search or execute (1)
-    // what a stat says: root everything but executing what nobody may, the
-    // owner what the owner's bits say, the group of gid the group's,
-    // everyone else the others'.
-    static bool mayStat(const Stat& st, const Header& h, u32 want) {
-        if (h.uid == 0) {
-            return (want & 1) == 0 || S_ISDIR(st.mode) || (st.mode & 0111) != 0;
-        }
-        const u32 bits = h.uid == st.uid ? st.mode >> 6 : h.gid == st.gid ? st.mode >> 3 : st.mode;
-        return (bits & want) == want;
-    }
-
-    static bool mayAt(const Place& p, const Header& h, u32 want) {
-        return mayStat(p.st, h, want);
-    }
-
-    // A place of a file system, as a stat of an answer says.
-    static Place theirPlace(Mount* m, const Stat& st) {
-        Place p;
-        p.m = m;
-        p.node = st.ino;
-        p.st = st;
-        p.fresh = true;
-        return p;
-    }
-
-    static Place rootOf(Mount* m) {
-        Place p;
-        p.m = m;
-        p.node = m->root;
-        p.st = m->rootStat;
-        return p;
-    }
-
-    // Where a mount is mounted: its point, in its parent.
-    static Place pointOf(Mount* m) {
-        Place p;
-        p.m = m->parent;
-        p.node = m->point;
-        p.st = m->pointStat;
-        return p;
-    }
-
-    // The directory of a mount's point, in its parent: where ".." goes out
-    // of the mount's root.
-    static Place dirOf(Mount* m) {
-        Place p;
-        p.m = m->parent;
-        p.node = m->pointDir;
-        p.st = m->pointDirStat;
-        return p;
-    }
-
-    static bool isMountRoot(const Place& p) {
-        return p.node == p.m->root;
-    }
-
-    // What is mounted on a place, the last mounted on it, or none.
-    static Mount* mountedOn(const Place& p) {
-        Mount* found = nullptr;
-        for (Mount* m = mounts; m; m = m->next) {
-            if (!m->gone && m->parent == p.m && m->point == p.node) {
-                found = m;
+// An endpoint that closes: a handle lets go of its place, a file
+// system's channel of the file system.
+static void forget(Endpoint* ep) {
+    ep->dead = true;
+    switch (ep->role) {
+        case Role::Handle:
+            handles.erase(hashId(ep->id), ep);
+            letGo(ep->at.m);
+            break;
+        case Role::Fs:
+            if (ep->fs) {
+                gone(ep->fs);
             }
-        }
-        return found;
+            break;
     }
-
-    // What a name's place is to a walk: the root of what is mounted on it.
-    static Place down(Place p) {
-        while (Mount* m = mountedOn(p)) {
-            p = rootOf(m);
-        }
-        return p;
+    if (ep->before) {
+        ep->before->after = ep->after;
+    } else {
+        live = ep->after;
     }
-
-    // The mount whose point is a name of a directory of a mount's, or none:
-    // a walk goes into its root, and a call on the name, which would take
-    // it away, is EBUSY.
-    static Mount* mountNamed(const Place& dir, Name name) {
-        for (Mount* m = mounts; m; m = m->next) {
-            if (!m->gone && m->parent == dir.m && m->pointDir == dir.node && m->pointLength == name.length && memcmp(m->pointName, name.at, name.length) == 0) {
-                return m;
-            }
-        }
-        return nullptr;
+    if (ep->after) {
+        ep->after->before = ep->before;
     }
+    ep->next = buried;
+    buried = ep;
+    --endpointCount;
+}
 
-    // A call or a handle at a place keeps its mount.
-    static void hold(const Place& p) {
-        ++p.m->refs;
+// ---- places and mounts ---------------------------------------------------------
+
+static Mount* mounts; // every mount, the VFS's root among them
+static Mount* rootMount;
+
+static bool isDir(const Place& p) {
+    return S_ISDIR(p.st.mode);
+}
+
+static bool isLink(const Place& p) {
+    return S_ISLNK(p.st.mode);
+}
+
+static bool same(const Place& a, const Place& b) {
+    return a.m == b.m && a.node == b.node;
+}
+
+// Whether who asks may read (4), write (2), and search or execute (1)
+// what a stat says: root everything but executing what nobody may, the
+// owner what the owner's bits say, the group of gid the group's,
+// everyone else the others'.
+static bool mayStat(const Stat& st, const Header& h, u32 want) {
+    if (h.uid == 0) {
+        return (want & 1) == 0 || S_ISDIR(st.mode) || (st.mode & 0111) != 0;
     }
+    const u32 bits = h.uid == st.uid ? st.mode >> 6 : h.gid == st.gid ? st.mode >> 3 : st.mode;
+    return (bits & want) == want;
+}
 
-    static void unhold(const Place& p) {
-        letGo(p.m);
+static bool mayAt(const Place& p, const Header& h, u32 want) {
+    return mayStat(p.st, h, want);
+}
+
+// A place of a file system, as a stat of an answer says.
+static Place theirPlace(Mount* m, const Stat& st) {
+    Place p;
+    p.m = m;
+    p.node = st.ino;
+    p.st = st;
+    p.fresh = true;
+    return p;
+}
+
+static Place rootOf(Mount* m) {
+    Place p;
+    p.m = m;
+    p.node = m->root;
+    p.st = m->rootStat;
+    return p;
+}
+
+// Where a mount is mounted: its point, in its parent.
+static Place pointOf(Mount* m) {
+    Place p;
+    p.m = m->parent;
+    p.node = m->point;
+    p.st = m->pointStat;
+    return p;
+}
+
+// The directory of a mount's point, in its parent: where ".." goes out
+// of the mount's root.
+static Place dirOf(Mount* m) {
+    Place p;
+    p.m = m->parent;
+    p.node = m->pointDir;
+    p.st = m->pointDirStat;
+    return p;
+}
+
+static bool isMountRoot(const Place& p) {
+    return p.node == p.m->root;
+}
+
+// What is mounted on a place, the last mounted on it, or none.
+static Mount* mountedOn(const Place& p) {
+    Mount* found = nullptr;
+    for (Mount* m = mounts; m; m = m->next) {
+        if (!m->gone && m->parent == p.m && m->point == p.node) {
+            found = m;
+        }
     }
+    return found;
+}
 
-    // A place of a call's taken for another one: the new one held first.
-    static void moveTo(Place& to, const Place& from) {
-        hold(from);
-        if (to.m) {
-            unhold(to);
-        }
-        to = from;
+// What a name's place is to a walk: the root of what is mounted on it.
+static Place down(Place p) {
+    while (Mount* m = mountedOn(p)) {
+        p = rootOf(m);
     }
+    return p;
+}
 
-    static void forgetAll(const Fs* fs);
-
-    // A mount nothing is at any more, unmounted: its memory goes, and its
-    // file system's with its last mount, which closes its channel, and what
-    // rootfs kept of it.
-    static void letGo(Mount* m) {
-        if (--m->refs != 0) {
-            return;
-        }
-        Fs* fs = m->fs;
-        free(m);
-        if (--fs->mounts == 0) {
-            if (fs->channel) {
-                closed(fs->channel);
-            }
-            forgetAll(fs);
-            free(fs);
+// The mount whose point is a name of a directory of a mount's, or none:
+// a walk goes into its root, and a call on the name, which would take
+// it away, is EBUSY.
+static Mount* mountNamed(const Place& dir, Name name) {
+    for (Mount* m = mounts; m; m = m->next) {
+        if (!m->gone && m->parent == dir.m && m->pointDir == dir.node && m->pointLength == name.length && memcmp(m->pointName, name.at, name.length) == 0) {
+            return m;
         }
     }
+    return nullptr;
+}
 
-    // Takes a mount, and what is mounted under it, out of the VFS's tree:
-    // no walk goes into it; what is at it stays until it lets go.
-    static void unmount(Mount* m) {
-        for (Mount* sub = mounts; sub;) {
-            if (!sub->gone && sub->parent == m) {
-                unmount(sub);
-                sub = mounts;
-                continue;
-            }
-            sub = sub->next;
-        }
-        m->gone = true;
-        for (Mount** at = &mounts; *at; at = &(*at)->next) {
-            if (*at == m) {
-                *at = m->next;
-                break;
-            }
-        }
-        if (m->parent) {
-            letGo(m->parent);
-        }
-        letGo(m);
+// A call or a handle at a place keeps its mount.
+static void hold(const Place& p) {
+    ++p.m->refs;
+}
+
+static void unhold(const Place& p) {
+    letGo(p.m);
+}
+
+// A place of a call's taken for another one: the new one held first.
+static void moveTo(Place& to, const Place& from) {
+    hold(from);
+    if (to.m) {
+        unhold(to);
     }
+    to = from;
+}
 
-    // Mounts a directory of a file system, its root, on a place of the
-    // VFS's, point, the name pointName of the directory dir.
-    static Mount* mountAt(Fs* fs, const Place& root, const Place& point, const Place& dir, Name pointName) {
-        auto* m = new (allocate(sizeof(Mount))) Mount();
-        m->fs = fs;
-        ++fs->mounts;
-        m->root = root.node;
-        m->rootStat = root.st;
-        m->parent = point.m;
-        ++point.m->refs;
-        m->point = point.node;
-        m->pointStat = point.st;
-        m->pointDir = dir.node;
-        m->pointDirStat = dir.st;
-        m->pointLength = u8(pointName.length);
-        memcpy(m->pointName, pointName.at, pointName.length);
-        m->next = mounts;
-        mounts = m;
-        return m;
+static void forgetAll(const Fs* fs);
+
+// A mount nothing is at any more, unmounted: its memory goes, and its
+// file system's with its last mount, which closes its channel, and what
+// rootfs kept of it.
+static void letGo(Mount* m) {
+    if (--m->refs != 0) {
+        return;
     }
-
-    // A file system is gone, its channel closed: it is unmounted wherever
-    // it is mounted, the root's too, whose walks are EIO from then on, and
-    // nothing of it is kept.
-    static void gone(Fs* fs) {
-        fs->channel = nullptr;
+    Fs* fs = m->fs;
+    free(m);
+    if (--fs->mounts == 0) {
+        if (fs->channel) {
+            closed(fs->channel);
+        }
         forgetAll(fs);
-        for (Mount* m = mounts; m;) {
-            Mount* next = m->next;
-            if (m->fs == fs && !m->gone) {
-                unmount(m);
-                next = mounts;
-            }
-            m = next;
+        free(fs);
+    }
+}
+
+// Takes a mount, and what is mounted under it, out of the VFS's tree:
+// no walk goes into it; what is at it stays until it lets go.
+static void unmount(Mount* m) {
+    for (Mount* sub = mounts; sub;) {
+        if (!sub->gone && sub->parent == m) {
+            unmount(sub);
+            sub = mounts;
+            continue;
+        }
+        sub = sub->next;
+    }
+    m->gone = true;
+    for (Mount** at = &mounts; *at; at = &(*at)->next) {
+        if (*at == m) {
+            *at = m->next;
+            break;
         }
     }
+    if (m->parent) {
+        letGo(m->parent);
+    }
+    letGo(m);
+}
 
-    // ---- the cache --------------------------------------------------------------------
-    //
-    // What the file systems answered, kept, as Linux's dcache keeps it: the
-    // names of directories, what each names or that it is not there
-    // (ENOENT), and of a node its stat and a link's target. A file system
-    // changes by the calls rootfs hands on to it, and by its open files,
-    // which the kernel calls itself; one that changes otherwise says
-    // fsNocache in its ROOT, and nothing of it is kept. So a name holds until
-    // rootfs hands on a call that may change it, and so does the stat of a
-    // directory or a link, which no open file changes: a directory's
-    // descriptor is a handle of rootfs's, a link opens as none. Of another
-    // node only the type holds, its open files change the rest. atime is
-    // none of rootfs's: the system is noatime.
-    //
-    // rootfs sees no reply to a call it hands on, only that the call may
-    // change something: it forgets what may change before it hands the call
-    // on, and keeps no answer to a question asked before a call handed on
-    // since, as a file system answers its channel in order. Of errors only
-    // ENOENT is kept: the others are who asks's, and rootfs checks the
-    // search of a directory itself. A node's number may be its file
-    // system's again for another node once the node is gone, as ext4's are:
-    // what is kept of a directory goes with it, and rootfs learns what a
-    // call removes before it hands it on. The names kept are the newest
-    // maxEntries, and a node is kept while a name of it or in it is.
+// Mounts a directory of a file system, its root, on a place of the
+// VFS's, point, the name pointName of the directory dir.
+static Mount* mountAt(Fs* fs, const Place& root, const Place& point, const Place& dir, Name pointName) {
+    auto* m = new (allocate(sizeof(Mount))) Mount();
+    m->fs = fs;
+    ++fs->mounts;
+    m->root = root.node;
+    m->rootStat = root.st;
+    m->parent = point.m;
+    ++point.m->refs;
+    m->point = point.node;
+    m->pointStat = point.st;
+    m->pointDir = dir.node;
+    m->pointDirStat = dir.st;
+    m->pointLength = u8(pointName.length);
+    memcpy(m->pointName, pointName.at, pointName.length);
+    m->next = mounts;
+    mounts = m;
+    return m;
+}
 
-    constexpr usize maxEntries = usize(1) << 15;
+// A file system is gone, its channel closed: it is unmounted wherever
+// it is mounted, the root's too, whose walks are EIO from then on, and
+// nothing of it is kept.
+static void gone(Fs* fs) {
+    fs->channel = nullptr;
+    forgetAll(fs);
+    for (Mount* m = mounts; m;) {
+        Mount* next = m->next;
+        if (m->fs == fs && !m->gone) {
+            unmount(m);
+            next = mounts;
+        }
+        m = next;
+    }
+}
 
+// ---- the cache --------------------------------------------------------------------
+//
+// What the file systems answered, kept, as Linux's dcache keeps it: the
+// names of directories, what each names or that it is not there
+// (ENOENT), and of a node its stat and a link's target. A file system
+// changes by the calls rootfs hands on to it, and by its open files,
+// which the kernel calls itself; one that changes otherwise says
+// fsNocache in its ROOT, and nothing of it is kept. So a name holds until
+// rootfs hands on a call that may change it, and so does the stat of a
+// directory or a link, which no open file changes: a directory's
+// descriptor is a handle of rootfs's, a link opens as none. Of another
+// node only the type holds, its open files change the rest. atime is
+// none of rootfs's: the system is noatime.
+//
+// rootfs sees no reply to a call it hands on, only that the call may
+// change something: it forgets what may change before it hands the call
+// on, and keeps no answer to a question asked before a call handed on
+// since, as a file system answers its channel in order. Of errors only
+// ENOENT is kept: the others are who asks's, and rootfs checks the
+// search of a directory itself. A node's number may be its file
+// system's again for another node once the node is gone, as ext4's are:
+// what is kept of a directory goes with it, and rootfs learns what a
+// call removes before it hands it on. The names kept are the newest
+// maxEntries, and a node is kept while a name of it or in it is.
+
+constexpr usize maxEntries = usize(1) << 15;
+
+namespace {
     struct Known;
 
     // A name of a directory kept: what it names, none when it is not there.
@@ -995,235 +1024,237 @@ namespace {
         Entry* inside = nullptr;
         u32 refs = 0; // the names kept of it and in it
     };
+}
 
-    OpenTable<Known> knowns;  // by file system and node
-    OpenTable<Entry> entries; // by directory and name
-    Entry* newest;
-    Entry* oldest;
-    usize entryCount;
+static OpenTable<Known> knowns;  // by file system and node
+static OpenTable<Entry> entries; // by directory and name
+static Entry* newest;
+static Entry* oldest;
+static usize entryCount;
 
-    static u32 hashKnown(const Fs* fs, u64 ino) {
-        return finish(u64(uintptr_t(fs)) * 0x9e3779b97f4a7c15ull ^ ino);
+static u32 hashKnown(const Fs* fs, u64 ino) {
+    return finish(u64(uintptr_t(fs)) * 0x9e3779b97f4a7c15ull ^ ino);
+}
+
+static u32 hashEntry(const Known* dir, Name name) {
+    u64 h = u64(uintptr_t(dir)) * 0x9e3779b97f4a7c15ull;
+    for (usize i = 0; i < name.length; ++i) {
+        h = (h ^ u8(name.at[i])) * 0x100000001b3ull;
     }
+    return finish(h);
+}
 
-    static u32 hashEntry(const Known* dir, Name name) {
-        u64 h = u64(uintptr_t(dir)) * 0x9e3779b97f4a7c15ull;
-        for (usize i = 0; i < name.length; ++i) {
-            h = (h ^ u8(name.at[i])) * 0x100000001b3ull;
-        }
-        return finish(h);
+// Whether a stat holds while rootfs hands on nothing that changes it:
+// a directory's and a link's.
+static bool lasting(const Stat& st) {
+    return S_ISDIR(st.mode) || S_ISLNK(st.mode);
+}
+
+static Known* knownOf(const Fs* fs, u64 ino) {
+    return knowns.find(hashKnown(fs, ino), [fs, ino](const Known* k) {
+        return k->fs == fs && k->ino == ino;
+    });
+}
+
+// The node of a place, kept, or none.
+static Known* knownAt(const Place& p) {
+    const Fs* fs = p.m->fs;
+    return fs->cached ? knownOf(fs, p.node) : nullptr;
+}
+
+static Known* knownFor(Fs* fs, u64 ino) {
+    Known* k = knownOf(fs, ino);
+    if (!k) {
+        k = new (allocate(sizeof(Known))) Known();
+        k->fs = fs;
+        k->ino = ino;
+        knowns.insert(hashKnown(fs, ino), k);
     }
+    return k;
+}
 
-    // Whether a stat holds while rootfs hands on nothing that changes it:
-    // a directory's and a link's.
-    static bool lasting(const Stat& st) {
-        return S_ISDIR(st.mode) || S_ISLNK(st.mode);
+static void release(Known* k) {
+    if (--k->refs == 0) {
+        knowns.erase(hashKnown(k->fs, k->ino), k);
+        k->~Known();
+        free(k);
     }
+}
 
-    static Known* knownOf(const Fs* fs, u64 ino) {
-        return knowns.find(hashKnown(fs, ino), [fs, ino](const Known* k) {
-            return k->fs == fs && k->ino == ino;
-        });
+// A name kept goes, and a node kept for it alone.
+static void drop(Entry* e) {
+    entries.erase(e->hash, e);
+    (e->previous ? e->previous->next : e->dir->inside) = e->next;
+    if (e->next) {
+        e->next->previous = e->previous;
     }
-
-    // The node of a place, kept, or none.
-    static Known* knownAt(const Place& p) {
-        const Fs* fs = p.m->fs;
-        return fs->cached ? knownOf(fs, p.node) : nullptr;
+    (e->newer ? e->newer->older : newest) = e->older;
+    (e->older ? e->older->newer : oldest) = e->newer;
+    --entryCount;
+    Known* dir = e->dir;
+    Known* node = e->node;
+    free(e);
+    if (node) {
+        release(node);
     }
+    release(dir);
+}
 
-    static Known* knownFor(Fs* fs, u64 ino) {
-        Known* k = knownOf(fs, ino);
-        if (!k) {
-            k = new (allocate(sizeof(Known))) Known();
-            k->fs = fs;
-            k->ino = ino;
-            knowns.insert(hashKnown(fs, ino), k);
-        }
-        return k;
-    }
-
-    static void release(Known* k) {
-        if (--k->refs == 0) {
-            knowns.erase(hashKnown(k->fs, k->ino), k);
-            k->~Known();
-            free(k);
-        }
-    }
-
-    // A name kept goes, and a node kept for it alone.
-    static void drop(Entry* e) {
-        entries.erase(e->hash, e);
-        (e->previous ? e->previous->next : e->dir->inside) = e->next;
-        if (e->next) {
-            e->next->previous = e->previous;
-        }
-        (e->newer ? e->newer->older : newest) = e->older;
+// A name of a directory kept, the newest used now.
+static Entry* entryOf(Known* dir, Name name) {
+    Entry* e = entries.find(hashEntry(dir, name), [dir, name](const Entry* x) {
+        return x->dir == dir && x->length == name.length && memcmp(x + 1, name.at, name.length) == 0;
+    });
+    if (e && e != newest) {
+        e->newer->older = e->older;
         (e->older ? e->older->newer : oldest) = e->newer;
-        --entryCount;
-        Known* dir = e->dir;
-        Known* node = e->node;
-        free(e);
-        if (node) {
-            release(node);
-        }
-        release(dir);
+        e->older = newest;
+        e->newer = nullptr;
+        newest->newer = e;
+        newest = e;
     }
+    return e;
+}
 
-    // A name of a directory kept, the newest used now.
-    static Entry* entryOf(Known* dir, Name name) {
-        Entry* e = entries.find(hashEntry(dir, name), [dir, name](const Entry* x) {
-            return x->dir == dir && x->length == name.length && memcmp(x + 1, name.at, name.length) == 0;
-        });
-        if (e && e != newest) {
-            e->newer->older = e->older;
-            (e->older ? e->older->newer : oldest) = e->newer;
-            e->older = newest;
-            e->newer = nullptr;
-            newest->newer = e;
-            newest = e;
-        }
-        return e;
+// A name of a place's directory kept, or none.
+static Entry* keptAt(const Place& dir, Name name) {
+    Known* d = knownAt(dir);
+    return d ? entryOf(d, name) : nullptr;
+}
+
+// A place of a node kept.
+static Place keptPlace(Mount* m, const Known* k) {
+    Place p;
+    p.m = m;
+    p.node = k->ino;
+    p.st = k->st;
+    return p;
+}
+
+// The names kept of a directory go: it goes, or another node may have
+// its number.
+static void forgetInside(Known* k) {
+    ++k->refs;
+    while (k->inside) {
+        drop(k->inside);
     }
+    release(k);
+}
 
-    // A name of a place's directory kept, or none.
-    static Entry* keptAt(const Place& dir, Name name) {
-        Known* d = knownAt(dir);
-        return d ? entryOf(d, name) : nullptr;
+// A node's stat as an answer told it. A node of another kind than the
+// one kept is another of the number: what was kept of the old goes.
+static void learnInto(Known* k, const Stat& st) {
+    if ((k->st.mode & S_IFMT) != 0 && (k->st.mode & S_IFMT) != (st.mode & S_IFMT)) {
+        forgetInside(k);
+        k->linked = false;
+        k->target.clear();
     }
+    k->st = st;
+    k->modes = k->whole = lasting(st);
+}
 
-    // A place of a node kept.
-    static Place keptPlace(Mount* m, const Known* k) {
-        Place p;
-        p.m = m;
-        p.node = k->ino;
-        p.st = k->st;
-        return p;
-    }
-
-    // The names kept of a directory go: it goes, or another node may have
-    // its number.
-    static void forgetInside(Known* k) {
+// The stat of a place's node, as an answer to a question asked since
+// the last call handed on, current, told it.
+static void learn(const Place& p, const Stat& st, bool current) {
+    Known* k = current ? knownAt(p) : nullptr;
+    if (k) {
         ++k->refs;
-        while (k->inside) {
-            drop(k->inside);
-        }
+        learnInto(k, st);
         release(k);
     }
+}
 
-    // A node's stat as an answer told it. A node of another kind than the
-    // one kept is another of the number: what was kept of the old goes.
-    static void learnInto(Known* k, const Stat& st) {
-        if ((k->st.mode & S_IFMT) != 0 && (k->st.mode & S_IFMT) != (st.mode & S_IFMT)) {
-            forgetInside(k);
-            k->linked = false;
-            k->target.clear();
-        }
-        k->st = st;
-        k->modes = k->whole = lasting(st);
+// Keeps what a name of a directory names, as an answer to a question
+// asked since the last call handed on, current, told: its stat, or none
+// when the name is not there.
+static void remember(const Place& dir, Name name, const Stat* st, bool current) {
+    Fs* fs = dir.m->fs;
+    if (!fs->cached || !current || name.length > NAME_MAX) {
+        return;
     }
-
-    // The stat of a place's node, as an answer to a question asked since
-    // the last call handed on, current, told it.
-    static void learn(const Place& p, const Stat& st, bool current) {
-        Known* k = current ? knownAt(p) : nullptr;
-        if (k) {
-            ++k->refs;
-            learnInto(k, st);
-            release(k);
-        }
+    Known* d = knownFor(fs, dir.node);
+    if ((d->st.mode & S_IFMT) == 0) {
+        d->st = dir.st; // its kind, and nothing of it that holds yet
     }
-
-    // Keeps what a name of a directory names, as an answer to a question
-    // asked since the last call handed on, current, told: its stat, or none
-    // when the name is not there.
-    static void remember(const Place& dir, Name name, const Stat* st, bool current) {
-        Fs* fs = dir.m->fs;
-        if (!fs->cached || !current || name.length > NAME_MAX) {
-            return;
-        }
-        Known* d = knownFor(fs, dir.node);
-        if ((d->st.mode & S_IFMT) == 0) {
-            d->st = dir.st; // its kind, and nothing of it that holds yet
-        }
-        ++d->refs;
-        Known* n = nullptr;
-        if (st) {
-            n = knownFor(fs, st->ino);
-            ++n->refs;
-            learnInto(n, *st);
-        }
-        if (Entry* old = entryOf(d, name)) {
-            drop(old);
-        }
-        auto* e = static_cast<Entry*>(allocate(sizeof(Entry) + name.length));
-        memcpy(e + 1, name.at, name.length);
-        e->dir = d;
-        e->node = n;
-        e->hash = hashEntry(d, name);
-        e->length = u32(name.length);
-        e->previous = nullptr;
-        e->next = d->inside;
-        if (d->inside) {
-            d->inside->previous = e;
-        }
-        d->inside = e;
-        e->newer = nullptr;
-        e->older = newest;
-        (newest ? newest->newer : oldest) = e;
-        newest = e;
-        entries.insert(e->hash, e);
-        if (++entryCount > maxEntries) {
-            drop(oldest);
-        }
+    ++d->refs;
+    Known* n = nullptr;
+    if (st) {
+        n = knownFor(fs, st->ino);
+        ++n->refs;
+        learnInto(n, *st);
     }
-
-    // A link's target, as an answer to a question asked since the last
-    // call handed on, current, told it.
-    static void rememberTarget(const Place& link, Name target, bool current) {
-        Known* k = current ? knownAt(link) : nullptr;
-        if (k && S_ISLNK(k->st.mode)) {
-            k->target.clear();
-            k->target.append(target.at, target.length);
-            k->linked = true;
-        }
+    if (Entry* old = entryOf(d, name)) {
+        drop(old);
     }
-
-    // A call handed on to a place's file system may change it: no answer
-    // to a question asked before is kept.
-    static void changing(const Place& p) {
-        ++p.m->fs->changes;
+    auto* e = static_cast<Entry*>(allocate(sizeof(Entry) + name.length));
+    memcpy(e + 1, name.at, name.length);
+    e->dir = d;
+    e->node = n;
+    e->hash = hashEntry(d, name);
+    e->length = u32(name.length);
+    e->previous = nullptr;
+    e->next = d->inside;
+    if (d->inside) {
+        d->inside->previous = e;
     }
+    d->inside = e;
+    e->newer = nullptr;
+    e->older = newest;
+    (newest ? newest->newer : oldest) = e;
+    newest = e;
+    entries.insert(e->hash, e);
+    if (++entryCount > maxEntries) {
+        drop(oldest);
+    }
+}
 
-    // A name kept, forgotten.
-    static void forgetName(const Place& dir, Name name) {
-        if (Entry* e = keptAt(dir, name)) {
+// A link's target, as an answer to a question asked since the last
+// call handed on, current, told it.
+static void rememberTarget(const Place& link, Name target, bool current) {
+    Known* k = current ? knownAt(link) : nullptr;
+    if (k && S_ISLNK(k->st.mode)) {
+        k->target.clear();
+        k->target.append(target.at, target.length);
+        k->linked = true;
+    }
+}
+
+// A call handed on to a place's file system may change it: no answer
+// to a question asked before is kept.
+static void changing(const Place& p) {
+    ++p.m->fs->changes;
+}
+
+// A name kept, forgotten.
+static void forgetName(const Place& dir, Name name) {
+    if (Entry* e = keptAt(dir, name)) {
+        drop(e);
+    }
+}
+
+// What of a node's stat a call may change: all but its mode and
+// owners, or with modes those too.
+static void forgetStat(Known* k, bool modes) {
+    if (k) {
+        k->whole = false;
+        k->modes = k->modes && !modes;
+    }
+}
+
+// A file system's names kept go: it is gone, or let go of.
+static void forgetAll(const Fs* fs) {
+    for (Entry* e = oldest; e;) {
+        Entry* next = e->newer;
+        if (e->dir->fs == fs) {
             drop(e);
         }
+        e = next;
     }
+}
 
-    // What of a node's stat a call may change: all but its mode and
-    // owners, or with modes those too.
-    static void forgetStat(Known* k, bool modes) {
-        if (k) {
-            k->whole = false;
-            k->modes = k->modes && !modes;
-        }
-    }
+// ---- coroutines ------------------------------------------------------------------
 
-    // A file system's names kept go: it is gone, or let go of.
-    static void forgetAll(const Fs* fs) {
-        for (Entry* e = oldest; e;) {
-            Entry* next = e->newer;
-            if (e->dir->fs == fs) {
-                drop(e);
-            }
-            e = next;
-        }
-    }
-
-    // ---- coroutines ------------------------------------------------------------------
-
+namespace {
     // A call of the VFS's that may wait for a file system: a
     // coroutine, which runs at once, until it waits, and goes on when the
     // answer comes. Its frame is kept for the next call of the same size.
@@ -1245,9 +1276,11 @@ namespace {
         usize size;
         void* free;
     };
+}
 
-    Frames frames[32];
+static Frames frames[32];
 
+namespace {
     // What a file system answered: OK with its body, which is the packet's
     // until the call waits again, or the errno.
     struct Answer {
@@ -1273,102 +1306,102 @@ namespace {
         std::coroutine_handle<void> call;
         Ask* next = nullptr; // among the file system's questions
     };
+}
 
-    // A question by node of a place's file system, with a name.
-    static Ask asking(const Place& p, const Header& h, u32 op, Name name) {
-        Ask a;
-        a.fs = p.m->fs;
-        a.head = {op, 0, h.uid, h.gid};
-        memcpy(a.body, &p.node, 8);
-        memcpy(a.body + 8, name.at, MIN(name.length, usize(NAME_MAX)));
-        a.size = 8 + MIN(name.length, usize(NAME_MAX));
-        return a;
-    }
+// A question by node of a place's file system, with a name.
+static Ask asking(const Place& p, const Header& h, u32 op, Name name) {
+    Ask a;
+    a.fs = p.m->fs;
+    a.head = {op, 0, h.uid, h.gid};
+    memcpy(a.body, &p.node, 8);
+    memcpy(a.body + 8, name.at, MIN(name.length, usize(NAME_MAX)));
+    a.size = 8 + MIN(name.length, usize(NAME_MAX));
+    return a;
+}
 
-    // A call that never waits takes no frame of its own but its first.
-    static void* frameOf(usize size) {
-        for (Frames& f : frames) {
-            if (f.size == size && f.free) {
-                void* p = f.free;
-                memcpy(&f.free, p, sizeof(void*));
-                return p;
-            }
+// A call that never waits takes no frame of its own but its first.
+static void* frameOf(usize size) {
+    for (Frames& f : frames) {
+        if (f.size == size && f.free) {
+            void* p = f.free;
+            memcpy(&f.free, p, sizeof(void*));
+            return p;
         }
-        return allocate(MAX(size, sizeof(void*)));
     }
+    return allocate(MAX(size, sizeof(void*)));
+}
 
-    static void keepFrame(void* p, usize size) {
-        for (Frames& f : frames) {
-            if (f.size == size || f.size == 0) {
-                f.size = size;
-                memcpy(p, &f.free, sizeof(void*));
-                f.free = p;
-                return;
-            }
-        }
-        free(p);
-    }
-
-    static bool statIn(Body b, Stat& st) {
-        if (b.size() < sizeof st) {
-            return false;
-        }
-        memcpy(&st, b.at, sizeof st);
-        return true;
-    }
-
-    // Whether a ROOT's answer says its file system is not to be kept.
-    static bool nocacheIn(const Answer& a) {
-        u32 flags = 0;
-        if (a.body.size() >= sizeof(Stat) + sizeof flags) {
-            memcpy(&flags, a.body.at + sizeof(Stat), sizeof flags);
-        }
-        return (flags & fsNocache) != 0;
-    }
-
-    // What a name of a directory names as rootfs keeps it: whether it
-    // keeps the name, and then whether the name is there, and its stat.
-    static bool keptStat(const Place& dir, Name name, Stat& st, bool& there) {
-        const Entry* e = keptAt(dir, name);
-        if (!e) {
-            return false;
-        }
-        there = e->node != nullptr;
-        if (there) {
-            st = e->node->st;
-        }
-        return true;
-    }
-
-    // A node of a stat a call removes or moves, forgotten before the call
-    // goes: its stat, and when it goes, a link's target, a directory's
-    // names kept, or a directory's ".." when it moves.
-    static void forgetNode(Fs* fs, const Stat& st, bool moves) {
-        Known* k = fs->cached ? knownOf(fs, st.ino) : nullptr;
-        if (!k) {
+static void keepFrame(void* p, usize size) {
+    for (Frames& f : frames) {
+        if (f.size == size || f.size == 0) {
+            f.size = size;
+            memcpy(p, &f.free, sizeof(void*));
+            f.free = p;
             return;
         }
-        forgetStat(k, false);
-        if (!S_ISDIR(st.mode)) {
-            k->linked = k->linked && moves;
-            return;
-        }
-        if (!moves) {
-            forgetInside(k);
-        } else if (Entry* e = entryOf(k, literal(".."))) {
-            drop(e);
-        }
     }
+    free(p);
+}
 
-    // Whether a STATFS answer says its file system is read-only.
-    static bool readOnlyIn(const Answer& a) {
-        Statfs st;
-        if (a.error != 0 || a.body.size() < sizeof st) {
-            return false;
-        }
-        memcpy(&st, a.body.at, sizeof st);
-        return (st.flags & ST_RDONLY) != 0;
+static bool statIn(Body b, Stat& st) {
+    if (b.size() < sizeof st) {
+        return false;
     }
+    memcpy(&st, b.at, sizeof st);
+    return true;
+}
+
+// Whether a ROOT's answer says its file system is not to be kept.
+static bool nocacheIn(const Answer& a) {
+    u32 flags = 0;
+    if (a.body.size() >= sizeof(Stat) + sizeof flags) {
+        memcpy(&flags, a.body.at + sizeof(Stat), sizeof flags);
+    }
+    return (flags & fsNocache) != 0;
+}
+
+// What a name of a directory names as rootfs keeps it: whether it
+// keeps the name, and then whether the name is there, and its stat.
+static bool keptStat(const Place& dir, Name name, Stat& st, bool& there) {
+    const Entry* e = keptAt(dir, name);
+    if (!e) {
+        return false;
+    }
+    there = e->node != nullptr;
+    if (there) {
+        st = e->node->st;
+    }
+    return true;
+}
+
+// A node of a stat a call removes or moves, forgotten before the call
+// goes: its stat, and when it goes, a link's target, a directory's
+// names kept, or a directory's ".." when it moves.
+static void forgetNode(Fs* fs, const Stat& st, bool moves) {
+    Known* k = fs->cached ? knownOf(fs, st.ino) : nullptr;
+    if (!k) {
+        return;
+    }
+    forgetStat(k, false);
+    if (!S_ISDIR(st.mode)) {
+        k->linked = k->linked && moves;
+        return;
+    }
+    if (!moves) {
+        forgetInside(k);
+    } else if (Entry* e = entryOf(k, literal(".."))) {
+        drop(e);
+    }
+}
+
+// Whether a STATFS answer says its file system is read-only.
+static bool readOnlyIn(const Answer& a) {
+    Statfs st;
+    if (a.error != 0 || a.body.size() < sizeof st) {
+        return false;
+    }
+    memcpy(&st, a.body.at, sizeof st);
+    return (st.flags & ST_RDONLY) != 0;
 }
 
 Task Task::promise_type::get_return_object() noexcept {
@@ -1426,71 +1459,71 @@ Answer Ask::await_resume() const noexcept {
     return answer;
 }
 
+// ---- opens and calls handed on ---------------------------------------------------
+
+// The reply of a handle's open: its stat and its id.
+static void handleReply(int fd, const Stat& st, u64 id) {
+    u8 b[sizeof st + 8];
+    memcpy(b, &st, sizeof st);
+    memcpy(b + sizeof st, &id, 8);
+    ok(fd, b, sizeof b);
+}
+
+// A call handed on to a file system, with the kernel's endpoint, which
+// the file system answers on: the node of a place,
+// then what follows it in the call. EIO when the file system is gone,
+// EAGAIN when it does not keep up.
+static bool hand(const Place& p, const Header& h, u32 op, u32 arg, const void* args, usize size, Name name, int fd, int extra = -1) {
+    const Header head{op, arg, h.uid, h.gid};
+    const iovec parts[] = {part(&head, sizeof head), part(&p.node, 8), part(args, size), part(name.at, name.length)};
+    const int fds[] = {extra, fd};
+    Endpoint* channel = p.m->fs->channel;
+    if (!channel || sendPacket(channel->fd, parts, 4, extra >= 0 ? fds : fds + 1, extra >= 0 ? 2 : 1, MSG_DONTWAIT) < 0) {
+        return error(fd, channel && errno == EAGAIN ? EAGAIN : EIO);
+    }
+    return false;
+}
+
+// An open of a place: a directory, and what O_PATH opens, is a handle
+// of ours, who asks may read it; a socket opens nothing, ENXIO; else
+// the file system opens it on the kernel's endpoint. Whether fd is kept.
+static bool openAt(const Place& at, int flags, const Header& h, int fd) {
+    const bool opath = (flags & O_PATH) != 0;
+    const u32 access = flags & O_ACCMODE;
+    if (!opath && S_ISSOCK(at.st.mode)) {
+        return error(fd, ENXIO);
+    }
+    if ((flags & O_DIRECTORY) != 0 && !isDir(at)) {
+        return error(fd, ENOTDIR);
+    }
+    if (!opath && isDir(at)) {
+        if (access != O_WRONLY && !mayStat(at.st, h, 4)) {
+            return error(fd, EACCES);
+        }
+        if (access != O_RDONLY || (flags & O_CREAT) != 0) {
+            return error(fd, EISDIR);
+        }
+    }
+    if (opath || isDir(at)) {
+        handleReply(fd, at.st, listenHandle(fd, at, opath)->id);
+        return true;
+    }
+    return hand(at, h, fsOpen, u32(flags), nullptr, 0, {}, fd);
+}
+
+// ---- the walk ---------------------------------------------------------------------
+
+// The kinds of a path's last name.
+constexpr u32 lastName = 0;
+constexpr u32 lastDot = 1;
+constexpr u32 lastDotdot = 2;
+constexpr u32 lastNone = 3; // the path is "/" alone
+
+// The longest a path gets with the targets of the links it goes
+// through in it.
+constexpr usize maxWalk = 65536;
+
 namespace {
-    // ---- opens and calls handed on ---------------------------------------------------
-
-    // The reply of a handle's open: its stat and its id.
-    static void handleReply(int fd, const Stat& st, u64 id) {
-        u8 b[sizeof st + 8];
-        memcpy(b, &st, sizeof st);
-        memcpy(b + sizeof st, &id, 8);
-        ok(fd, b, sizeof b);
-    }
-
-    // A call handed on to a file system, with the kernel's endpoint, which
-    // the file system answers on: the node of a place,
-    // then what follows it in the call. EIO when the file system is gone,
-    // EAGAIN when it does not keep up.
-    static bool hand(const Place& p, const Header& h, u32 op, u32 arg, const void* args, usize size, Name name, int fd, int extra = -1) {
-        const Header head{op, arg, h.uid, h.gid};
-        const iovec parts[] = {part(&head, sizeof head), part(&p.node, 8), part(args, size), part(name.at, name.length)};
-        const int fds[] = {extra, fd};
-        Endpoint* channel = p.m->fs->channel;
-        if (!channel || sendPacket(channel->fd, parts, 4, extra >= 0 ? fds : fds + 1, extra >= 0 ? 2 : 1, MSG_DONTWAIT) < 0) {
-            return error(fd, channel && errno == EAGAIN ? EAGAIN : EIO);
-        }
-        return false;
-    }
-
-    // An open of a place: a directory, and what O_PATH opens, is a handle
-    // of ours, who asks may read it; a socket opens nothing, ENXIO; else
-    // the file system opens it on the kernel's endpoint. Whether fd is kept.
-    static bool openAt(const Place& at, int flags, const Header& h, int fd) {
-        const bool opath = (flags & O_PATH) != 0;
-        const u32 access = flags & O_ACCMODE;
-        if (!opath && S_ISSOCK(at.st.mode)) {
-            return error(fd, ENXIO);
-        }
-        if ((flags & O_DIRECTORY) != 0 && !isDir(at)) {
-            return error(fd, ENOTDIR);
-        }
-        if (!opath && isDir(at)) {
-            if (access != O_WRONLY && !mayStat(at.st, h, 4)) {
-                return error(fd, EACCES);
-            }
-            if (access != O_RDONLY || (flags & O_CREAT) != 0) {
-                return error(fd, EISDIR);
-            }
-        }
-        if (opath || isDir(at)) {
-            handleReply(fd, at.st, listenHandle(fd, at, opath)->id);
-            return true;
-        }
-        return hand(at, h, fsOpen, u32(flags), nullptr, 0, {}, fd);
-    }
-
-    // ---- the walk ---------------------------------------------------------------------
-
-    // The kinds of a path's last name.
-    constexpr u32 lastName = 0;
-    constexpr u32 lastDot = 1;
-    constexpr u32 lastDotdot = 2;
-    constexpr u32 lastNone = 3; // the path is "/" alone
-
-    // The longest a path gets with the targets of the links it goes
-    // through in it.
-    constexpr usize maxWalk = 65536;
-
     // A walk of a path as Linux walks one, to the directory of its last
     // name, here: every name but the last a directory who asks may search,
     // or a symbolic link, whose target takes its place, from the root of
@@ -1566,17 +1599,17 @@ namespace {
         Place asked;
         Name name;
     };
+}
 
-    // The place of a handle a call names by its id: the root of the
-    // process, or where a second path starts.
-    static bool placeOf(u64 id, Place& out) {
-        const Endpoint* ep = handleOf(id);
-        if (!ep) {
-            return false;
-        }
-        out = ep->at;
-        return true;
+// The place of a handle a call names by its id: the root of the
+// process, or where a second path starts.
+static bool placeOf(u64 id, Place& out) {
+    const Endpoint* ep = handleOf(id);
+    if (!ep) {
+        return false;
     }
+    out = ep->at;
+    return true;
 }
 
 Walk::~Walk() {
@@ -1971,16 +2004,16 @@ Walk::Step Walk::answered(const Answer& a) {
     return fail(EIO);
 }
 
-namespace {
-    // ---- the VFS's calls ---------------------------------------------------------------
-    //
-    // Each is a coroutine that takes the kernel's endpoint, which it closes
-    // when it is done unless an endpoint of ours took it: walks the path as
-    // a walk does, waiting for the file systems, and makes the last step as
-    // Linux makes it, by the file system the place is of, which answers the
-    // kernel itself. What a call needs of the request it copies before it
-    // first waits.
+// ---- the VFS's calls ---------------------------------------------------------------
+//
+// Each is a coroutine that takes the kernel's endpoint, which it closes
+// when it is done unless an endpoint of ours took it: walks the path as
+// a walk does, waiting for the file systems, and makes the last step as
+// Linux makes it, by the file system the place is of, which answers the
+// kernel itself. What a call needs of the request it copies before it
+// first waits.
 
+namespace {
     // The kernel's endpoint of a call.
     struct Reply {
         int fd;
@@ -2001,23 +2034,25 @@ namespace {
 
         Buffer bytes; // the names, each with a slash before it
     };
+}
 
-    // Whether a path is prefix or under it, and what follows it then.
-    static bool under(Name prefix, Name path, Name& rest) {
-        if (prefix.is("/")) {
-            rest = path.is("/") ? Name{} : path;
-            return true;
-        }
-        if (path.length < prefix.length || memcmp(path.at, prefix.at, prefix.length) != 0) {
-            return false;
-        }
-        if (path.length != prefix.length && path.at[prefix.length] != '/') {
-            return false;
-        }
-        rest = {path.at + prefix.length, path.length - prefix.length};
+// Whether a path is prefix or under it, and what follows it then.
+static bool under(Name prefix, Name path, Name& rest) {
+    if (prefix.is("/")) {
+        rest = path.is("/") ? Name{} : path;
         return true;
     }
+    if (path.length < prefix.length || memcmp(path.at, prefix.at, prefix.length) != 0) {
+        return false;
+    }
+    if (path.length != prefix.length && path.at[prefix.length] != '/') {
+        return false;
+    }
+    rest = {path.at + prefix.length, path.length - prefix.length};
+    return true;
+}
 
+namespace {
     // A place of a call's, held while the call holds it.
     struct Held {
         Held(const Place& p);
@@ -2028,358 +2063,382 @@ namespace {
 
         Place at;
     };
+}
 
-    // OPEN: what the path names, opened as open(2) opens it.
-    static Task openCall(Header h, int fd, Place root, Place from, u32 mode, Name path) {
-        Reply r{fd};
-        const int flags = int(h.arg);
-        const bool excl = (flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL);
-        Walk w;
-        w.start(h, from, root, path, true, (flags & O_NOFOLLOW) == 0 && !excl, (flags & O_CREAT) != 0);
-        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, w.error);
-                co_return;
-            }
-        }
-        if (w.kind != lastName) {
-            if ((flags & O_CREAT) != 0) {
-                error(fd, EISDIR);
-            } else if (openAt(w.target, flags, h, fd)) {
-                r.fd = -1;
-            }
+// OPEN: what the path names, opened as open(2) opens it.
+static Task openCall(Header h, int fd, Place root, Place from, u32 mode, Name path) {
+    Reply r{fd};
+    const int flags = int(h.arg);
+    const bool excl = (flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL);
+    Walk w;
+    w.start(h, from, root, path, true, (flags & O_NOFOLLOW) == 0 && !excl, (flags & O_CREAT) != 0);
+    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, w.error);
             co_return;
         }
-        int fl = flags;
-        if (w.slash) {
-            if ((flags & O_CREAT) != 0) {
-                error(fd, EISDIR);
-                co_return;
-            }
-            fl |= O_DIRECTORY;
-        }
-        if (!w.found) {
-            changing(w.here);
-            forgetName(w.here, w.last);
-            forgetStat(knownAt(w.here), false);
-            hand(w.here, h, fsCreate, u32(fl), &mode, sizeof mode, w.last, fd);
-            co_return;
-        }
-        if (excl) {
-            error(fd, EEXIST);
-            co_return;
-        }
-        if (isLink(w.target) && !((fl & O_PATH) != 0 && (fl & O_NOFOLLOW) != 0)) {
-            error(fd, (fl & O_DIRECTORY) != 0 ? ENOTDIR : ELOOP);
-            co_return;
-        }
-        if (openAt(w.target, fl, h, fd)) {
+    }
+    if (w.kind != lastName) {
+        if ((flags & O_CREAT) != 0) {
+            error(fd, EISDIR);
+        } else if (openAt(w.target, flags, h, fd)) {
             r.fd = -1;
         }
+        co_return;
     }
-
-    // STAT: the metadata of what the path names, or of a last link itself.
-    static Task statCall(Header h, int fd, Place root, Place from, Name path) {
-        Reply r{fd};
-        Walk w;
-        w.start(h, from, root, path, true, h.arg != 0, false);
-        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, w.error);
-                co_return;
-            }
-        }
-        const Place& t = w.target;
-        if (t.fresh) {
-            ok(fd, &t.st, sizeof t.st);
+    int fl = flags;
+    if (w.slash) {
+        if ((flags & O_CREAT) != 0) {
+            error(fd, EISDIR);
             co_return;
         }
-        if (const Known* k = knownAt(t); k && k->whole) {
-            ok(fd, &k->st, sizeof k->st);
-            co_return;
-        }
-        const Answer a = co_await asking(t, h, fsGetattr, {});
-        Stat st;
-        if (a.error != 0) {
-            error(fd, a.error);
-        } else {
-            if (statIn(a.body, st)) {
-                learn(t, st, a.current);
-            }
-            ok(fd, a.body.at, a.body.size());
-        }
+        fl |= O_DIRECTORY;
     }
-
-    // READLINK: a last link's target; what is no link is EINVAL, a slash
-    // after one follows it.
-    static Task readlinkCall(Header h, int fd, Place root, Place from, Name path) {
-        Reply r{fd};
-        Walk w;
-        w.start(h, from, root, path, true, false, false);
-        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, w.error);
-                co_return;
-            }
-        }
-        const Place& t = w.target;
-        if (w.kind != lastName || !isLink(t)) {
-            error(fd, EINVAL);
-        } else if (const Known* k = knownAt(t); k && k->linked) {
-            ok(fd, k->target.data(), k->target.size());
-        } else {
-            hand(t, h, fsReadlink, 0, nullptr, 0, {}, fd);
-        }
-    }
-
-    // MKDIR, MKNOD and SYMLINK: the last name made. One that is there,
-    // ".", ".." and the root alone are EEXIST, and a slash after a name is
-    // for a directory only: EEXIST for one that is there, else ENOENT.
-    static Task makeCall(Header h, int fd, Place root, Place from, Name target, Name path) {
-        Reply r{fd};
-        Buffer link;
-        link.append(target.at, target.length);
-        Walk w;
-        w.start(h, from, root, path, false, false, false);
-        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, w.error);
-                co_return;
-            }
-        }
-        if (w.kind != lastName) {
-            error(fd, EEXIST);
-            co_return;
-        }
-        Stat st;
-        bool there = false;
-        const bool kept = keptStat(w.here, w.last, st, there);
-        if (there) {
-            error(fd, EEXIST);
-            co_return;
-        }
-        if (w.slash && h.op != vfsMkdir) {
-            if (kept) {
-                error(fd, ENOENT);
-                co_return;
-            }
-            const Answer a = co_await asking(w.here, h, fsLookup, w.last);
-            error(fd, a.error == 0 ? EEXIST : ENOENT);
-            co_return;
-        }
-        const Name to{static_cast<const char*>(link.data()), link.size()};
+    if (!w.found) {
         changing(w.here);
         forgetName(w.here, w.last);
         forgetStat(knownAt(w.here), false);
-        if (h.op == vfsSymlink) {
-            Buffer names;
-            names.append(to.at, to.length);
-            names.append("", 1);
-            names.append(w.last.at, w.last.length);
-            hand(w.here, h, fsSymlink, 0, nullptr, 0, {static_cast<const char*>(names.data()), names.size()}, fd);
-            co_return;
-        }
-        hand(w.here, h, h.op == vfsMkdir ? fsMkdir : fsMknod, h.arg, nullptr, 0, w.last, fd);
+        hand(w.here, h, fsCreate, u32(fl), &mode, sizeof mode, w.last, fd);
+        co_return;
     }
-
-    // UNLINK: the last name taken away, a directory's with AT_REMOVEDIR.
-    // "." is EINVAL to rmdir, ".." ENOTEMPTY, the root alone EBUSY, and all
-    // three EISDIR to unlink; a slash after a name that is no directory is
-    // ENOTDIR to unlink, EISDIR after one that is; a mount point is EBUSY,
-    // but on a read-only file system, whose EROFS Linux finds first.
-    static Task unlinkCall(Header h, int fd, Place root, Place from, Name path) {
-        Reply r{fd};
-        const bool dir = (h.arg & AT_REMOVEDIR) != 0;
-        Walk w;
-        w.start(h, from, root, path, false, false, false);
-        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, w.error);
-                co_return;
-            }
-        }
-        if (w.kind != lastName) {
-            error(fd, !dir ? EISDIR : w.kind == lastDot ? EINVAL : w.kind == lastDotdot ? ENOTEMPTY : EBUSY);
-            co_return;
-        }
-        if (w.slash && !dir) {
-            const Answer a = co_await asking(w.here, h, fsLookup, w.last);
-            Stat st;
-            error(fd, a.error != 0 ? a.error : !statIn(a.body, st) ? EIO : S_ISDIR(st.mode) ? EISDIR : ENOTDIR);
-            co_return;
-        }
-        if (dir && mountNamed(w.here, w.last) && !readOnlyIn(co_await asking(w.here, h, fsStatfs, {}))) {
-            error(fd, EBUSY);
-            co_return;
-        }
-        // What goes, which rootfs forgets first: kept, or asked.
-        Stat st;
-        bool there = false;
-        if (w.here.m->fs->cached && !keptStat(w.here, w.last, st, there)) {
-            const Answer got = co_await asking(w.here, h, fsLookup, w.last);
-            there = got.error == 0 && statIn(got.body, st);
-        }
-        changing(w.here);
-        if (there) {
-            forgetNode(w.here.m->fs, st, false);
-        }
-        forgetName(w.here, w.last);
-        forgetStat(knownAt(w.here), false);
-        hand(w.here, h, fsUnlink, h.arg, nullptr, 0, w.last, fd);
+    if (excl) {
+        error(fd, EEXIST);
+        co_return;
     }
+    if (isLink(w.target) && !((fl & O_PATH) != 0 && (fl & O_NOFOLLOW) != 0)) {
+        error(fd, (fl & O_DIRECTORY) != 0 ? ENOTDIR : ELOOP);
+        co_return;
+    }
+    if (openAt(w.target, fl, h, fd)) {
+        r.fd = -1;
+    }
+}
 
-    // RENAME: the last name of one path moved to the last name of another,
-    // from the handle to: ".", ".." and the root alone are EBUSY, a slash
-    // after either is for a directory only, two mounts are EXDEV and a
-    // mount point EBUSY, but on a read-only file system, whose EROFS Linux
-    // finds first.
-    static Task renameCall(Header h, int fd, Place root, Place from, Place to, Name oldPath, Name newPath) {
-        Reply r{fd};
-        Buffer second;
-        second.append(newPath.at, newPath.length);
-        Held toward(to);
-        Walk a;
-        a.start(h, from, root, oldPath, false, false, false);
-        for (Walk::Step s = a.run(); s != Walk::Step::Done; s = a.answered(co_await a.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, a.error);
-                co_return;
-            }
-        }
-        Walk b;
-        b.start(h, toward.at, root, {static_cast<const char*>(second.data()), second.size()}, false, false, false);
-        for (Walk::Step s = b.run(); s != Walk::Step::Done; s = b.answered(co_await b.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, b.error);
-                co_return;
-            }
-        }
-        if (a.kind != lastName || b.kind != lastName) {
-            error(fd, EBUSY);
+// STAT: the metadata of what the path names, or of a last link itself.
+static Task statCall(Header h, int fd, Place root, Place from, Name path) {
+    Reply r{fd};
+    Walk w;
+    w.start(h, from, root, path, true, h.arg != 0, false);
+    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, w.error);
             co_return;
         }
-        if (a.slash || b.slash) {
-            const Answer got = co_await asking(a.here, h, fsLookup, a.last);
-            Stat st;
-            if (got.error != 0 || !statIn(got.body, st)) {
-                error(fd, got.error != 0 ? got.error : EIO);
-                co_return;
-            }
-            if (!S_ISDIR(st.mode)) {
-                error(fd, ENOTDIR);
-                co_return;
-            }
+    }
+    const Place& t = w.target;
+    if (t.fresh) {
+        ok(fd, &t.st, sizeof t.st);
+        co_return;
+    }
+    if (const Known* k = knownAt(t); k && k->whole) {
+        ok(fd, &k->st, sizeof k->st);
+        co_return;
+    }
+    const Answer a = co_await asking(t, h, fsGetattr, {});
+    Stat st;
+    if (a.error != 0) {
+        error(fd, a.error);
+    } else {
+        if (statIn(a.body, st)) {
+            learn(t, st, a.current);
         }
-        if (a.here.m != b.here.m) {
-            error(fd, EXDEV);
+        ok(fd, a.body.at, a.body.size());
+    }
+}
+
+// READLINK: a last link's target; what is no link is EINVAL, a slash
+// after one follows it.
+static Task readlinkCall(Header h, int fd, Place root, Place from, Name path) {
+    Reply r{fd};
+    Walk w;
+    w.start(h, from, root, path, true, false, false);
+    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, w.error);
             co_return;
         }
-        if ((mountNamed(a.here, a.last) || mountNamed(b.here, b.last)) && !readOnlyIn(co_await asking(a.here, h, fsStatfs, {}))) {
-            error(fd, EBUSY);
+    }
+    const Place& t = w.target;
+    if (w.kind != lastName || !isLink(t)) {
+        error(fd, EINVAL);
+    } else if (const Known* k = knownAt(t); k && k->linked) {
+        ok(fd, k->target.data(), k->target.size());
+    } else {
+        hand(t, h, fsReadlink, 0, nullptr, 0, {}, fd);
+    }
+}
+
+// MKDIR, MKNOD and SYMLINK: the last name made. One that is there,
+// ".", ".." and the root alone are EEXIST, and a slash after a name is
+// for a directory only: EEXIST for one that is there, else ENOENT.
+static Task makeCall(Header h, int fd, Place root, Place from, Name target, Name path) {
+    Reply r{fd};
+    Buffer link;
+    link.append(target.at, target.length);
+    Walk w;
+    w.start(h, from, root, path, false, false, false);
+    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, w.error);
             co_return;
         }
-        // What moves and what it replaces, which rootfs forgets first: kept,
-        // or asked.
-        Stat st[2];
-        bool there[2] = {false, false};
-        const Place* dirs[] = {&a.here, &b.here};
-        const Name lasts[] = {a.last, b.last};
-        for (int i = 0; i < 2 && a.here.m->fs->cached; ++i) {
-            if (!keptStat(*dirs[i], lasts[i], st[i], there[i])) {
-                const Answer got = co_await asking(*dirs[i], h, fsLookup, lasts[i]);
-                there[i] = got.error == 0 && statIn(got.body, st[i]);
-            }
+    }
+    if (w.kind != lastName) {
+        error(fd, EEXIST);
+        co_return;
+    }
+    Stat st;
+    bool there = false;
+    const bool kept = keptStat(w.here, w.last, st, there);
+    if (there) {
+        error(fd, EEXIST);
+        co_return;
+    }
+    if (w.slash && h.op != vfsMkdir) {
+        if (kept) {
+            error(fd, ENOENT);
+            co_return;
         }
-        changing(a.here);
-        for (int i = 0; i < 2; ++i) {
-            if (there[i]) {
-                forgetNode(a.here.m->fs, st[i], i == 0);
-            }
-            forgetName(*dirs[i], lasts[i]);
-            forgetStat(knownAt(*dirs[i]), false);
-        }
+        const Answer a = co_await asking(w.here, h, fsLookup, w.last);
+        error(fd, a.error == 0 ? EEXIST : ENOENT);
+        co_return;
+    }
+    const Name to{static_cast<const char*>(link.data()), link.size()};
+    changing(w.here);
+    forgetName(w.here, w.last);
+    forgetStat(knownAt(w.here), false);
+    if (h.op == vfsSymlink) {
         Buffer names;
-        names.append(a.last.at, a.last.length);
+        names.append(to.at, to.length);
         names.append("", 1);
-        names.append(b.last.at, b.last.length);
-        hand(a.here, h, fsRename, 0, &b.here.node, 8, {static_cast<const char*>(names.data()), names.size()}, fd);
+        names.append(w.last.at, w.last.length);
+        hand(w.here, h, fsSymlink, 0, nullptr, 0, {static_cast<const char*>(names.data()), names.size()}, fd);
+        co_return;
     }
+    hand(w.here, h, h.op == vfsMkdir ? fsMkdir : fsMknod, h.arg, nullptr, 0, w.last, fd);
+}
 
-    // LINK: the last name of a new path, from the handle to, made a name of
-    // what an old path names, a last link of it followed when follow says:
-    // a directory is EPERM, the new name is made as MKDIR makes one, and
-    // two mounts are EXDEV, but EROFS when the new name's file system is
-    // read-only, which Linux finds first.
-    static Task linkCall(Header h, int fd, Place root, Place from, Place to, Name oldPath, Name newPath) {
-        Reply r{fd};
-        Buffer second;
-        second.append(newPath.at, newPath.length);
-        Held toward(to);
-        Walk a;
-        a.start(h, from, root, oldPath, true, h.arg != 0, false);
-        for (Walk::Step s = a.run(); s != Walk::Step::Done; s = a.answered(co_await a.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, a.error);
-                co_return;
-            }
-        }
-        if (a.kind != lastName || isDir(a.target)) {
-            error(fd, EPERM);
+// UNLINK: the last name taken away, a directory's with AT_REMOVEDIR.
+// "." is EINVAL to rmdir, ".." ENOTEMPTY, the root alone EBUSY, and all
+// three EISDIR to unlink; a slash after a name that is no directory is
+// ENOTDIR to unlink, EISDIR after one that is; a mount point is EBUSY,
+// but on a read-only file system, whose EROFS Linux finds first.
+static Task unlinkCall(Header h, int fd, Place root, Place from, Name path) {
+    Reply r{fd};
+    const bool dir = (h.arg & AT_REMOVEDIR) != 0;
+    Walk w;
+    w.start(h, from, root, path, false, false, false);
+    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, w.error);
             co_return;
-        }
-        Walk b;
-        b.start(h, toward.at, root, {static_cast<const char*>(second.data()), second.size()}, false, false, false);
-        for (Walk::Step s = b.run(); s != Walk::Step::Done; s = b.answered(co_await b.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, b.error);
-                co_return;
-            }
-        }
-        if (b.kind != lastName) {
-            error(fd, EEXIST);
-            co_return;
-        }
-        if (b.slash) {
-            const Answer got = co_await asking(b.here, h, fsLookup, b.last);
-            error(fd, got.error == 0 ? EEXIST : ENOENT);
-            co_return;
-        }
-        if (a.target.m != b.here.m) {
-            error(fd, readOnlyIn(co_await asking(b.here, h, fsStatfs, {})) ? EROFS : EXDEV);
-            co_return;
-        }
-        changing(b.here);
-        forgetName(b.here, b.last);
-        forgetStat(knownAt(b.here), false);
-        forgetStat(knownAt(a.target), false);
-        hand(a.target, h, fsLink, 0, &b.here.node, 8, b.last, fd);
-    }
-
-    // CHMOD, CHOWN, UTIMES and TRUNCATE: the file system's call op on what
-    // the path names, a last link followed when follows says; a link has no
-    // mode to change, EOPNOTSUPP as Linux's fchmodat says.
-    static Task changeCall(Header h, int fd, Place root, Place from, u32 op, bool follows, Args args, Name path) {
-        Reply r{fd};
-        Walk w;
-        w.start(h, from, root, path, true, follows, false);
-        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, w.error);
-                co_return;
-            }
-        }
-        if (op == fsChmod && isLink(w.target)) {
-            error(fd, EOPNOTSUPP);
-        } else {
-            changing(w.target);
-            forgetStat(knownAt(w.target), op == fsChmod || op == fsChown);
-            hand(w.target, h, op, h.arg, args.bytes, args.size, {}, fd);
         }
     }
+    if (w.kind != lastName) {
+        error(fd, !dir ? EISDIR : w.kind == lastDot ? EINVAL : w.kind == lastDotdot ? ENOTEMPTY : EBUSY);
+        co_return;
+    }
+    if (w.slash && !dir) {
+        const Answer a = co_await asking(w.here, h, fsLookup, w.last);
+        Stat st;
+        error(fd, a.error != 0 ? a.error : !statIn(a.body, st) ? EIO : S_ISDIR(st.mode) ? EISDIR : ENOTDIR);
+        co_return;
+    }
+    if (dir && mountNamed(w.here, w.last) && !readOnlyIn(co_await asking(w.here, h, fsStatfs, {}))) {
+        error(fd, EBUSY);
+        co_return;
+    }
+    // What goes, which rootfs forgets first: kept, or asked.
+    Stat st;
+    bool there = false;
+    if (w.here.m->fs->cached && !keptStat(w.here, w.last, st, there)) {
+        const Answer got = co_await asking(w.here, h, fsLookup, w.last);
+        there = got.error == 0 && statIn(got.body, st);
+    }
+    changing(w.here);
+    if (there) {
+        forgetNode(w.here.m->fs, st, false);
+    }
+    forgetName(w.here, w.last);
+    forgetStat(knownAt(w.here), false);
+    hand(w.here, h, fsUnlink, h.arg, nullptr, 0, w.last, fd);
+}
 
-    // STATFS: the file system of what the path names.
-    static Task statfsCall(Header h, int fd, Place root, Place from, Name path) {
-        Reply r{fd};
+// RENAME: the last name of one path moved to the last name of another,
+// from the handle to: ".", ".." and the root alone are EBUSY, a slash
+// after either is for a directory only, two mounts are EXDEV and a
+// mount point EBUSY, but on a read-only file system, whose EROFS Linux
+// finds first.
+static Task renameCall(Header h, int fd, Place root, Place from, Place to, Name oldPath, Name newPath) {
+    Reply r{fd};
+    Buffer second;
+    second.append(newPath.at, newPath.length);
+    Held toward(to);
+    Walk a;
+    a.start(h, from, root, oldPath, false, false, false);
+    for (Walk::Step s = a.run(); s != Walk::Step::Done; s = a.answered(co_await a.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, a.error);
+            co_return;
+        }
+    }
+    Walk b;
+    b.start(h, toward.at, root, {static_cast<const char*>(second.data()), second.size()}, false, false, false);
+    for (Walk::Step s = b.run(); s != Walk::Step::Done; s = b.answered(co_await b.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, b.error);
+            co_return;
+        }
+    }
+    if (a.kind != lastName || b.kind != lastName) {
+        error(fd, EBUSY);
+        co_return;
+    }
+    if (a.slash || b.slash) {
+        const Answer got = co_await asking(a.here, h, fsLookup, a.last);
+        Stat st;
+        if (got.error != 0 || !statIn(got.body, st)) {
+            error(fd, got.error != 0 ? got.error : EIO);
+            co_return;
+        }
+        if (!S_ISDIR(st.mode)) {
+            error(fd, ENOTDIR);
+            co_return;
+        }
+    }
+    if (a.here.m != b.here.m) {
+        error(fd, EXDEV);
+        co_return;
+    }
+    if ((mountNamed(a.here, a.last) || mountNamed(b.here, b.last)) && !readOnlyIn(co_await asking(a.here, h, fsStatfs, {}))) {
+        error(fd, EBUSY);
+        co_return;
+    }
+    // What moves and what it replaces, which rootfs forgets first: kept,
+    // or asked.
+    Stat st[2];
+    bool there[2] = {false, false};
+    const Place* dirs[] = {&a.here, &b.here};
+    const Name lasts[] = {a.last, b.last};
+    for (int i = 0; i < 2 && a.here.m->fs->cached; ++i) {
+        if (!keptStat(*dirs[i], lasts[i], st[i], there[i])) {
+            const Answer got = co_await asking(*dirs[i], h, fsLookup, lasts[i]);
+            there[i] = got.error == 0 && statIn(got.body, st[i]);
+        }
+    }
+    changing(a.here);
+    for (int i = 0; i < 2; ++i) {
+        if (there[i]) {
+            forgetNode(a.here.m->fs, st[i], i == 0);
+        }
+        forgetName(*dirs[i], lasts[i]);
+        forgetStat(knownAt(*dirs[i]), false);
+    }
+    Buffer names;
+    names.append(a.last.at, a.last.length);
+    names.append("", 1);
+    names.append(b.last.at, b.last.length);
+    hand(a.here, h, fsRename, 0, &b.here.node, 8, {static_cast<const char*>(names.data()), names.size()}, fd);
+}
+
+// LINK: the last name of a new path, from the handle to, made a name of
+// what an old path names, a last link of it followed when follow says:
+// a directory is EPERM, the new name is made as MKDIR makes one, and
+// two mounts are EXDEV, but EROFS when the new name's file system is
+// read-only, which Linux finds first.
+static Task linkCall(Header h, int fd, Place root, Place from, Place to, Name oldPath, Name newPath) {
+    Reply r{fd};
+    Buffer second;
+    second.append(newPath.at, newPath.length);
+    Held toward(to);
+    Walk a;
+    a.start(h, from, root, oldPath, true, h.arg != 0, false);
+    for (Walk::Step s = a.run(); s != Walk::Step::Done; s = a.answered(co_await a.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, a.error);
+            co_return;
+        }
+    }
+    if (a.kind != lastName || isDir(a.target)) {
+        error(fd, EPERM);
+        co_return;
+    }
+    Walk b;
+    b.start(h, toward.at, root, {static_cast<const char*>(second.data()), second.size()}, false, false, false);
+    for (Walk::Step s = b.run(); s != Walk::Step::Done; s = b.answered(co_await b.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, b.error);
+            co_return;
+        }
+    }
+    if (b.kind != lastName) {
+        error(fd, EEXIST);
+        co_return;
+    }
+    if (b.slash) {
+        const Answer got = co_await asking(b.here, h, fsLookup, b.last);
+        error(fd, got.error == 0 ? EEXIST : ENOENT);
+        co_return;
+    }
+    if (a.target.m != b.here.m) {
+        error(fd, readOnlyIn(co_await asking(b.here, h, fsStatfs, {})) ? EROFS : EXDEV);
+        co_return;
+    }
+    changing(b.here);
+    forgetName(b.here, b.last);
+    forgetStat(knownAt(b.here), false);
+    forgetStat(knownAt(a.target), false);
+    hand(a.target, h, fsLink, 0, &b.here.node, 8, b.last, fd);
+}
+
+// CHMOD, CHOWN, UTIMES and TRUNCATE: the file system's call op on what
+// the path names, a last link followed when follows says; a link has no
+// mode to change, EOPNOTSUPP as Linux's fchmodat says.
+static Task changeCall(Header h, int fd, Place root, Place from, u32 op, bool follows, Args args, Name path) {
+    Reply r{fd};
+    Walk w;
+    w.start(h, from, root, path, true, follows, false);
+    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, w.error);
+            co_return;
+        }
+    }
+    if (op == fsChmod && isLink(w.target)) {
+        error(fd, EOPNOTSUPP);
+    } else {
+        changing(w.target);
+        forgetStat(knownAt(w.target), op == fsChmod || op == fsChown);
+        hand(w.target, h, op, h.arg, args.bytes, args.size, {}, fd);
+    }
+}
+
+// STATFS: the file system of what the path names.
+static Task statfsCall(Header h, int fd, Place root, Place from, Name path) {
+    Reply r{fd};
+    Walk w;
+    w.start(h, from, root, path, true, true, false);
+    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, w.error);
+            co_return;
+        }
+    }
+    hand(w.target, h, fsStatfs, 0, nullptr, 0, {}, fd);
+}
+
+// PATH and REALPATH: the path from the root of a place, up through the
+// places ".." goes to: in its file system as the file system says,
+// then where its mount is mounted. A removed directory has none, nor one the root is
+// not above: ENOENT. PATH's place is a handle's; REALPATH's is what a
+// path names, a last link followed: its directory's path and its name,
+// or a directory's own, with no ".", ".." or link in it.
+static Task pathCall(Header h, int fd, Place root, Place from, bool walks, Name path) {
+    Reply r{fd};
+    Held top(root);
+    Held up(from);
+    Path out;
+    if (walks) {
         Walk w;
         w.start(h, from, root, path, true, true, false);
         for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
@@ -2388,250 +2447,226 @@ namespace {
                 co_return;
             }
         }
-        hand(w.target, h, fsStatfs, 0, nullptr, 0, {}, fd);
-    }
-
-    // PATH and REALPATH: the path from the root of a place, up through the
-    // places ".." goes to: in its file system as the file system says,
-    // then where its mount is mounted. A removed directory has none, nor one the root is
-    // not above: ENOENT. PATH's place is a handle's; REALPATH's is what a
-    // path names, a last link followed: its directory's path and its name,
-    // or a directory's own, with no ".", ".." or link in it.
-    static Task pathCall(Header h, int fd, Place root, Place from, bool walks, Name path) {
-        Reply r{fd};
-        Held top(root);
-        Held up(from);
-        Path out;
-        if (walks) {
-            Walk w;
-            w.start(h, from, root, path, true, true, false);
-            for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
-                if (s == Walk::Step::Failed) {
-                    error(fd, w.error);
-                    co_return;
-                }
-            }
-            if (isDir(w.target)) {
-                up.become(w.target);
-            } else {
-                out.prepend(w.last);
-                up.become(w.here);
-            }
+        if (isDir(w.target)) {
+            up.become(w.target);
+        } else {
+            out.prepend(w.last);
+            up.become(w.here);
         }
-        while (!same(up.at, top.at)) {
-            if (isMountRoot(up.at)) {
-                if (!up.at.m->parent) {
-                    error(fd, ENOENT);
-                    co_return;
-                }
-                up.become(pointOf(up.at.m));
-                continue;
-            }
-            // The file system says the place's path in it, and that of the
-            // mount's root, or of the root of the process in this mount.
-            Buffer own;
-            {
-                const Answer got = co_await asking(up.at, h, fsPath, {});
-                if (got.error != 0) {
-                    error(fd, got.error);
-                    co_return;
-                }
-                own.append(got.body.at, got.body.size());
-            }
-            const bool rooted = top.at.m == up.at.m;
-            Buffer base;
-            {
-                const Answer got = co_await asking(rooted ? top.at : rootOf(up.at.m), h, fsPath, {});
-                if (got.error != 0) {
-                    error(fd, got.error);
-                    co_return;
-                }
-                base.append(got.body.at, got.body.size());
-            }
-            Name rest;
-            if (!under({static_cast<const char*>(base.data()), base.size()}, {static_cast<const char*>(own.data()), own.size()}, rest)) {
+    }
+    while (!same(up.at, top.at)) {
+        if (isMountRoot(up.at)) {
+            if (!up.at.m->parent) {
                 error(fd, ENOENT);
                 co_return;
             }
-            out.prepend(rest);
-            if (rooted) {
-                break;
-            }
-            up.become(rootOf(up.at.m));
+            up.become(pointOf(up.at.m));
+            continue;
         }
-        const Name text = out.text();
-        ok(fd, text.at, text.length);
-    }
-
-    // MOUNT: on the directory target names, a directory source names, or
-    // with a connection the kernel made to a file system's socket, the
-    // root of that file system, which the connection's first question
-    // asks: the connection is its channel from then on. A target that is a
-    // mount's root, of what is mounted on it or of the VFS's, is EBUSY.
-    static Task mountCall(Header h, int fd, Place root, Place from, int conn, Name target, Name source) {
-        Reply r{fd};
-        Reply connection{conn};
-        Buffer second;
-        second.append(source.at, source.length);
-        Walk t;
-        t.start(h, from, root, target, true, true, false);
-        for (Walk::Step s = t.run(); s != Walk::Step::Done; s = t.answered(co_await t.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, t.error);
+        // The file system says the place's path in it, and that of the
+        // mount's root, or of the root of the process in this mount.
+        Buffer own;
+        {
+            const Answer got = co_await asking(up.at, h, fsPath, {});
+            if (got.error != 0) {
+                error(fd, got.error);
                 co_return;
             }
+            own.append(got.body.at, got.body.size());
         }
-        if (t.kind != lastName) {
-            error(fd, EINVAL);
+        const bool rooted = top.at.m == up.at.m;
+        Buffer base;
+        {
+            const Answer got = co_await asking(rooted ? top.at : rootOf(up.at.m), h, fsPath, {});
+            if (got.error != 0) {
+                error(fd, got.error);
+                co_return;
+            }
+            base.append(got.body.at, got.body.size());
+        }
+        Name rest;
+        if (!under({static_cast<const char*>(base.data()), base.size()}, {static_cast<const char*>(own.data()), own.size()}, rest)) {
+            error(fd, ENOENT);
             co_return;
         }
-        if (!isDir(t.target)) {
-            error(fd, ENOTDIR);
+        out.prepend(rest);
+        if (rooted) {
+            break;
+        }
+        up.become(rootOf(up.at.m));
+    }
+    const Name text = out.text();
+    ok(fd, text.at, text.length);
+}
+
+// MOUNT: on the directory target names, a directory source names, or
+// with a connection the kernel made to a file system's socket, the
+// root of that file system, which the connection's first question
+// asks: the connection is its channel from then on. A target that is a
+// mount's root, of what is mounted on it or of the VFS's, is EBUSY.
+static Task mountCall(Header h, int fd, Place root, Place from, int conn, Name target, Name source) {
+    Reply r{fd};
+    Reply connection{conn};
+    Buffer second;
+    second.append(source.at, source.length);
+    Walk t;
+    t.start(h, from, root, target, true, true, false);
+    for (Walk::Step s = t.run(); s != Walk::Step::Done; s = t.answered(co_await t.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, t.error);
             co_return;
         }
-        if (isMountRoot(t.target)) {
+    }
+    if (t.kind != lastName) {
+        error(fd, EINVAL);
+        co_return;
+    }
+    if (!isDir(t.target)) {
+        error(fd, ENOTDIR);
+        co_return;
+    }
+    if (isMountRoot(t.target)) {
+        error(fd, EBUSY);
+        co_return;
+    }
+    if (conn >= 0) {
+        auto* fs = new (allocate(sizeof(Fs))) Fs();
+        fs->channel = listen(conn, Role::Fs);
+        fs->channel->fs = fs;
+        connection.fd = -1; // the channel's now
+        Ask ask;
+        ask.fs = fs;
+        ask.head = {fsRoot, 0, h.uid, h.gid};
+        const Answer got = co_await ask;
+        Stat st;
+        if (got.error != 0 || !statIn(got.body, st)) {
+            if (fs->channel) {
+                closed(fs->channel);
+            }
+            free(fs);
+            error(fd, got.error != 0 ? got.error : EIO);
+            co_return;
+        }
+        fs->cached = !nocacheIn(got);
+        Place top;
+        top.node = st.ino;
+        top.st = st;
+        mountAt(fs, top, t.target, t.here, t.last);
+        ok(fd);
+        co_return;
+    }
+    Walk ws;
+    ws.start(h, from, root, {static_cast<const char*>(second.data()), second.size()}, true, true, false);
+    for (Walk::Step s = ws.run(); s != Walk::Step::Done; s = ws.answered(co_await ws.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, ws.error);
+            co_return;
+        }
+    }
+    const Place& src = ws.target;
+    if (!isDir(src)) {
+        error(fd, ENOTDIR);
+        co_return;
+    }
+    mountAt(src.m->fs, src, t.target, t.here, t.last);
+    ok(fd);
+}
+
+// BIND: a socket node of the last name, which holds the listener the
+// call brings, made as MKNOD makes a name: one that is there, and ".",
+// ".." and the root alone, are EEXIST, which the kernel says
+// EADDRINUSE.
+static Task bindCall(Header h, int fd, Place root, Place from, int listener, Name path) {
+    Reply r{fd};
+    Reply object{listener};
+    Walk w;
+    w.start(h, from, root, path, false, false, false);
+    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, w.error);
+            co_return;
+        }
+    }
+    if (w.kind != lastName) {
+        error(fd, EEXIST);
+        co_return;
+    }
+    if (w.slash) {
+        const Answer a = co_await asking(w.here, h, fsLookup, w.last);
+        error(fd, a.error == 0 ? EEXIST : ENOENT);
+        co_return;
+    }
+    changing(w.here);
+    forgetName(w.here, w.last);
+    forgetStat(knownAt(w.here), false);
+    hand(w.here, h, fsBind, h.arg, nullptr, 0, w.last, fd, listener);
+}
+
+// CONNECT: the listener of the socket node a path names, a last link
+// followed; what is no socket refuses, ECONNREFUSED.
+static Task connectCall(Header h, int fd, Place root, Place from, Name path) {
+    Reply r{fd};
+    Walk w;
+    w.start(h, from, root, path, true, true, false);
+    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, w.error);
+            co_return;
+        }
+    }
+    if (!S_ISSOCK(w.target.st.mode)) {
+        error(fd, ECONNREFUSED);
+        co_return;
+    }
+    hand(w.target, h, fsConnect, 0, nullptr, 0, {}, fd);
+}
+
+// FSTAT of a handle: the stat of its place, which its file system
+// tells, and the handle's id after it, which the kernel learns the id
+// of a handle it did not open by.
+static Task fstatCall(Header h, int fd, Place at, u64 id) {
+    Reply r{fd};
+    Held here(at);
+    if (const Known* k = knownAt(here.at); k && k->whole) {
+        handleReply(fd, k->st, id);
+        co_return;
+    }
+    const Answer a = co_await asking(here.at, h, fsGetattr, {});
+    Stat st;
+    if (a.error != 0 || !statIn(a.body, st)) {
+        error(fd, a.error != 0 ? a.error : EIO);
+    } else {
+        learn(here.at, st, a.current);
+        handleReply(fd, st, id);
+    }
+}
+
+// UNMOUNT: what is mounted where a path names, a last link followed
+// unless UMOUNT_NOFOLLOW says; EINVAL for what is no mount's root, EBUSY
+// for one with mounts on it.
+static Task unmountCall(Header h, int fd, Place root, Place from, Name path) {
+    Reply r{fd};
+    Walk w;
+    w.start(h, from, root, path, true, (h.arg & UMOUNT_NOFOLLOW) == 0, false);
+    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, w.error);
+            co_return;
+        }
+    }
+    Mount* m = w.target.m;
+    if (w.kind != lastName || !isMountRoot(w.target) || !m->parent) {
+        error(fd, EINVAL);
+        co_return;
+    }
+    for (const Mount* sub = mounts; sub; sub = sub->next) {
+        if (sub->parent == m) {
             error(fd, EBUSY);
             co_return;
         }
-        if (conn >= 0) {
-            auto* fs = new (allocate(sizeof(Fs))) Fs();
-            fs->channel = listen(conn, Role::Fs);
-            fs->channel->fs = fs;
-            connection.fd = -1; // the channel's now
-            Ask ask;
-            ask.fs = fs;
-            ask.head = {fsRoot, 0, h.uid, h.gid};
-            const Answer got = co_await ask;
-            Stat st;
-            if (got.error != 0 || !statIn(got.body, st)) {
-                if (fs->channel) {
-                    closed(fs->channel);
-                }
-                free(fs);
-                error(fd, got.error != 0 ? got.error : EIO);
-                co_return;
-            }
-            fs->cached = !nocacheIn(got);
-            Place top;
-            top.node = st.ino;
-            top.st = st;
-            mountAt(fs, top, t.target, t.here, t.last);
-            ok(fd);
-            co_return;
-        }
-        Walk ws;
-        ws.start(h, from, root, {static_cast<const char*>(second.data()), second.size()}, true, true, false);
-        for (Walk::Step s = ws.run(); s != Walk::Step::Done; s = ws.answered(co_await ws.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, ws.error);
-                co_return;
-            }
-        }
-        const Place& src = ws.target;
-        if (!isDir(src)) {
-            error(fd, ENOTDIR);
-            co_return;
-        }
-        mountAt(src.m->fs, src, t.target, t.here, t.last);
-        ok(fd);
     }
-
-    // BIND: a socket node of the last name, which holds the listener the
-    // call brings, made as MKNOD makes a name: one that is there, and ".",
-    // ".." and the root alone, are EEXIST, which the kernel says
-    // EADDRINUSE.
-    static Task bindCall(Header h, int fd, Place root, Place from, int listener, Name path) {
-        Reply r{fd};
-        Reply object{listener};
-        Walk w;
-        w.start(h, from, root, path, false, false, false);
-        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, w.error);
-                co_return;
-            }
-        }
-        if (w.kind != lastName) {
-            error(fd, EEXIST);
-            co_return;
-        }
-        if (w.slash) {
-            const Answer a = co_await asking(w.here, h, fsLookup, w.last);
-            error(fd, a.error == 0 ? EEXIST : ENOENT);
-            co_return;
-        }
-        changing(w.here);
-        forgetName(w.here, w.last);
-        forgetStat(knownAt(w.here), false);
-        hand(w.here, h, fsBind, h.arg, nullptr, 0, w.last, fd, listener);
-    }
-
-    // CONNECT: the listener of the socket node a path names, a last link
-    // followed; what is no socket refuses, ECONNREFUSED.
-    static Task connectCall(Header h, int fd, Place root, Place from, Name path) {
-        Reply r{fd};
-        Walk w;
-        w.start(h, from, root, path, true, true, false);
-        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, w.error);
-                co_return;
-            }
-        }
-        if (!S_ISSOCK(w.target.st.mode)) {
-            error(fd, ECONNREFUSED);
-            co_return;
-        }
-        hand(w.target, h, fsConnect, 0, nullptr, 0, {}, fd);
-    }
-
-    // FSTAT of a handle: the stat of its place, which its file system
-    // tells, and the handle's id after it, which the kernel learns the id
-    // of a handle it did not open by.
-    static Task fstatCall(Header h, int fd, Place at, u64 id) {
-        Reply r{fd};
-        Held here(at);
-        if (const Known* k = knownAt(here.at); k && k->whole) {
-            handleReply(fd, k->st, id);
-            co_return;
-        }
-        const Answer a = co_await asking(here.at, h, fsGetattr, {});
-        Stat st;
-        if (a.error != 0 || !statIn(a.body, st)) {
-            error(fd, a.error != 0 ? a.error : EIO);
-        } else {
-            learn(here.at, st, a.current);
-            handleReply(fd, st, id);
-        }
-    }
-
-    // UNMOUNT: what is mounted where a path names, a last link followed
-    // unless UMOUNT_NOFOLLOW says; EINVAL for what is no mount's root, EBUSY
-    // for one with mounts on it.
-    static Task unmountCall(Header h, int fd, Place root, Place from, Name path) {
-        Reply r{fd};
-        Walk w;
-        w.start(h, from, root, path, true, (h.arg & UMOUNT_NOFOLLOW) == 0, false);
-        for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
-            if (s == Walk::Step::Failed) {
-                error(fd, w.error);
-                co_return;
-            }
-        }
-        Mount* m = w.target.m;
-        if (w.kind != lastName || !isMountRoot(w.target) || !m->parent) {
-            error(fd, EINVAL);
-            co_return;
-        }
-        for (const Mount* sub = mounts; sub; sub = sub->next) {
-            if (sub->parent == m) {
-                error(fd, EBUSY);
-                co_return;
-            }
-        }
-        unmount(m);
-        ok(fd);
-    }
+    unmount(m);
+    ok(fd);
 }
 
 Reply::~Reply() {
@@ -2677,585 +2712,583 @@ Name Path::text() const {
     return {static_cast<const char*>(bytes.data()), bytes.size()};
 }
 
-namespace {
-    // ---- the loop ---------------------------------------------------------------
+// ---- the loop ---------------------------------------------------------------
 
-    // An open file's call on a handle: FSTAT rootfs answers, with the
-    // handle's id, the others are handed on to the file system its place
-    // is of. O_PATH's handle reads, changes and locks nothing: EBADF; a
-    // handle locks nothing, EINVAL.
-    static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
-        const Place& at = ep->at;
-        const bool opath = !ep->reads;
-        switch (h.op) {
-            case opFstat:
-                fstatCall(h, fd, at, ep->id);
-                return true;
-            case opFstatfs:
-                return hand(at, h, fsStatfs, 0, nullptr, 0, {}, fd);
-            case opReaddir:
-                if (opath) {
-                    return error(fd, EBADF);
-                }
-                if (!isDir(at)) {
-                    return error(fd, ENOTDIR);
-                }
-                return hand(at, h, fsReaddir, 0, body.at, body.size(), {}, fd);
-            case opFsync:
-                return opath ? error(fd, EBADF) : answer(fd, 0);
-            case opFtruncate:
-                return error(fd, opath ? EBADF : EINVAL);
-            case opFchmod:
-            case opFchown:
-            case opFutimes:
-                if (opath) {
-                    return error(fd, EBADF);
-                }
-                changing(at);
-                forgetStat(knownAt(at), h.op != opFutimes);
-                return hand(at, h, h.op == opFchmod ? fsChmod : h.op == opFchown ? fsChown : fsUtimes, h.arg, body.at, body.size(), {}, fd);
-            case opFlock:
-            case opLock:
-                return error(fd, opath ? EBADF : EINVAL);
-            default:
-                return error(fd, ENOSYS);
-        }
+// An open file's call on a handle: FSTAT rootfs answers, with the
+// handle's id, the others are handed on to the file system its place
+// is of. O_PATH's handle reads, changes and locks nothing: EBADF; a
+// handle locks nothing, EINVAL.
+static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
+    const Place& at = ep->at;
+    const bool opath = !ep->reads;
+    switch (h.op) {
+        case opFstat:
+            fstatCall(h, fd, at, ep->id);
+            return true;
+        case opFstatfs:
+            return hand(at, h, fsStatfs, 0, nullptr, 0, {}, fd);
+        case opReaddir:
+            if (opath) {
+                return error(fd, EBADF);
+            }
+            if (!isDir(at)) {
+                return error(fd, ENOTDIR);
+            }
+            return hand(at, h, fsReaddir, 0, body.at, body.size(), {}, fd);
+        case opFsync:
+            return opath ? error(fd, EBADF) : answer(fd, 0);
+        case opFtruncate:
+            return error(fd, opath ? EBADF : EINVAL);
+        case opFchmod:
+        case opFchown:
+        case opFutimes:
+            if (opath) {
+                return error(fd, EBADF);
+            }
+            changing(at);
+            forgetStat(knownAt(at), h.op != opFutimes);
+            return hand(at, h, h.op == opFchmod ? fsChmod : h.op == opFchown ? fsChown : fsUtimes, h.arg, body.at, body.size(), {}, fd);
+        case opFlock:
+        case opLock:
+            return error(fd, opath ? EBADF : EINVAL);
+        default:
+            return error(fd, ENOSYS);
     }
+}
 
-    // A call on a handle, answered on fd: one of the VFS's, which names
-    // the process's root by its handle's id and walks from this one; or an
-    // open file's. Whether fd is kept: a call of the VFS's keeps it, and
-    // closes it when it is done.
-    static bool onHandle(Endpoint* ep, const Header& h, Body body, int fd) {
-        if (h.op < vfsOpen || h.op > vfsConnect) {
-            return onPlace(ep, h, body, fd);
+// A call on a handle, answered on fd: one of the VFS's, which names
+// the process's root by its handle's id and walks from this one; or an
+// open file's. Whether fd is kept: a call of the VFS's keeps it, and
+// closes it when it is done.
+static bool onHandle(Endpoint* ep, const Header& h, Body body, int fd) {
+    if (h.op < vfsOpen || h.op > vfsConnect) {
+        return onPlace(ep, h, body, fd);
+    }
+    Place root;
+    if (body.size() < 8 || !placeOf(body.take<u64>(), root)) {
+        return error(fd, EIO);
+    }
+    const Place from = ep->at;
+    switch (h.op) {
+        case vfsOpen: {
+            const u32 mode = body.take<u32>();
+            openCall(h, fd, root, from, mode, body.rest());
+            break;
         }
-        Place root;
-        if (body.size() < 8 || !placeOf(body.take<u64>(), root)) {
-            return error(fd, EIO);
+        case vfsStat:
+            statCall(h, fd, root, from, body.rest());
+            break;
+        case vfsReadlink:
+            readlinkCall(h, fd, root, from, body.rest());
+            break;
+        case vfsMkdir:
+        case vfsMknod:
+            makeCall(h, fd, root, from, {}, body.rest());
+            break;
+        case vfsSymlink: {
+            const Name target = body.string();
+            makeCall(h, fd, root, from, target, body.rest());
+            break;
         }
-        const Place from = ep->at;
-        switch (h.op) {
-            case vfsOpen: {
-                const u32 mode = body.take<u32>();
-                openCall(h, fd, root, from, mode, body.rest());
-                break;
+        case vfsUnlink:
+            unlinkCall(h, fd, root, from, body.rest());
+            break;
+        case vfsRename:
+        case vfsLink: {
+            Place to;
+            if (!placeOf(body.take<u64>(), to)) {
+                return error(fd, EIO);
             }
-            case vfsStat:
-                statCall(h, fd, root, from, body.rest());
-                break;
-            case vfsReadlink:
-                readlinkCall(h, fd, root, from, body.rest());
-                break;
-            case vfsMkdir:
-            case vfsMknod:
-                makeCall(h, fd, root, from, {}, body.rest());
-                break;
-            case vfsSymlink: {
-                const Name target = body.string();
-                makeCall(h, fd, root, from, target, body.rest());
-                break;
+            const Name old = body.string();
+            if (h.op == vfsRename) {
+                renameCall(h, fd, root, from, to, old, body.rest());
+            } else {
+                linkCall(h, fd, root, from, to, old, body.rest());
             }
-            case vfsUnlink:
-                unlinkCall(h, fd, root, from, body.rest());
-                break;
-            case vfsRename:
-            case vfsLink: {
-                Place to;
-                if (!placeOf(body.take<u64>(), to)) {
-                    return error(fd, EIO);
-                }
-                const Name old = body.string();
-                if (h.op == vfsRename) {
-                    renameCall(h, fd, root, from, to, old, body.rest());
-                } else {
-                    linkCall(h, fd, root, from, to, old, body.rest());
-                }
-                break;
+            break;
+        }
+        case vfsChmod:
+        case vfsChown:
+        case vfsUtimes:
+        case vfsTruncate: {
+            const u32 flags = h.op == vfsTruncate ? 0 : body.take<u32>();
+            const usize size = h.op == vfsChown || h.op == vfsTruncate ? 8 : h.op == vfsUtimes ? 16 : 0;
+            Args args{};
+            if (body.size() < size) {
+                return error(fd, EINVAL);
             }
-            case vfsChmod:
-            case vfsChown:
-            case vfsUtimes:
-            case vfsTruncate: {
-                const u32 flags = h.op == vfsTruncate ? 0 : body.take<u32>();
-                const usize size = h.op == vfsChown || h.op == vfsTruncate ? 8 : h.op == vfsUtimes ? 16 : 0;
-                Args args{};
-                if (body.size() < size) {
-                    return error(fd, EINVAL);
-                }
-                memcpy(args.bytes, body.at, size);
-                args.size = size;
-                body.at += size;
-                const u32 op = h.op == vfsChmod ? fsChmod : h.op == vfsChown ? fsChown : h.op == vfsUtimes ? fsUtimes : fsTruncate;
-                changeCall(h, fd, root, from, op, (flags & AT_SYMLINK_NOFOLLOW) == 0, args, body.rest());
-                break;
-            }
-            case vfsStatfs:
-                statfsCall(h, fd, root, from, body.rest());
-                break;
-            case vfsRealpath:
-                pathCall(h, fd, root, from, true, body.rest());
-                break;
-            case vfsMount: {
-                const Name target = body.string();
-                const int conn = packetFdCount == 2 ? packetFds[0] : -1;
-                if (conn >= 0) {
-                    packetFds[0] = -1; // the call's now
-                }
-                mountCall(h, fd, root, from, conn, target, body.rest());
-                break;
-            }
-            case vfsBind: {
-                if (packetFdCount != 2) {
-                    return error(fd, EINVAL);
-                }
-                const int listener = packetFds[0];
+            memcpy(args.bytes, body.at, size);
+            args.size = size;
+            body.at += size;
+            const u32 op = h.op == vfsChmod ? fsChmod : h.op == vfsChown ? fsChown : h.op == vfsUtimes ? fsUtimes : fsTruncate;
+            changeCall(h, fd, root, from, op, (flags & AT_SYMLINK_NOFOLLOW) == 0, args, body.rest());
+            break;
+        }
+        case vfsStatfs:
+            statfsCall(h, fd, root, from, body.rest());
+            break;
+        case vfsRealpath:
+            pathCall(h, fd, root, from, true, body.rest());
+            break;
+        case vfsMount: {
+            const Name target = body.string();
+            const int conn = packetFdCount == 2 ? packetFds[0] : -1;
+            if (conn >= 0) {
                 packetFds[0] = -1; // the call's now
-                bindCall(h, fd, root, from, listener, body.rest());
-                break;
             }
-            case vfsConnect:
-                connectCall(h, fd, root, from, body.rest());
-                break;
-            case vfsUnmount:
-                unmountCall(h, fd, root, from, body.rest());
-                break;
-            case vfsPath:
-                pathCall(h, fd, root, from, false, {});
-                break;
+            mountCall(h, fd, root, from, conn, target, body.rest());
+            break;
         }
-        return true;
+        case vfsBind: {
+            if (packetFdCount != 2) {
+                return error(fd, EINVAL);
+            }
+            const int listener = packetFds[0];
+            packetFds[0] = -1; // the call's now
+            bindCall(h, fd, root, from, listener, body.rest());
+            break;
+        }
+        case vfsConnect:
+            connectCall(h, fd, root, from, body.rest());
+            break;
+        case vfsUnmount:
+            unmountCall(h, fd, root, from, body.rest());
+            break;
+        case vfsPath:
+            pathCall(h, fd, root, from, false, {});
+            break;
     }
+    return true;
+}
 
-    // A file system's channel closes, the file system gone or let go of:
-    // its questions are EIO, and their calls go on once it is closed.
-    static void ended(Endpoint* ep) {
-        Ask* left = nullptr;
-        if (Fs* fs = ep->fs) {
-            left = fs->waiting;
-            fs->waiting = fs->lastWaiting = nullptr;
-        }
-        closed(ep);
-        while (Ask* a = left) {
-            left = a->next;
-            a->answer.error = EIO;
-            a->call.resume();
-        }
+// A file system's channel closes, the file system gone or let go of:
+// its questions are EIO, and their calls go on once it is closed.
+static void ended(Endpoint* ep) {
+    Ask* left = nullptr;
+    if (Fs* fs = ep->fs) {
+        left = fs->waiting;
+        fs->waiting = fs->lastWaiting = nullptr;
     }
-
-    // The answer to a question on a file system's channel, its first: the
-    // call goes on. What nobody asked is dropped.
-    static void answeredOn(Endpoint* ep) {
-        Fs* fs = ep->fs;
-        int fds[maxFds];
-        usize count = 0;
-        const ssize_t n = receivePacket(ep->fd, packet, sizeof packet, fds, count);
-        for (usize i = 0; i < count; ++i) {
-            close(fds[i]);
-        }
-        if (n <= 0) {
-            ended(ep);
-            return;
-        }
-        Ask* a = fs ? fs->waiting : nullptr;
-        if (!a) {
-            return;
-        }
-        fs->waiting = a->next;
-        if (!fs->waiting) {
-            fs->lastWaiting = nullptr;
-        }
-        Header h{};
-        if (n >= ssize_t(sizeof h)) {
-            memcpy(&h, packet, sizeof h);
-        }
-        a->answer.current = fs->changes == a->changes;
-        if (n < ssize_t(sizeof h) || (h.op != opOk && h.op != opErr)) {
-            a->answer.error = EIO;
-        } else if (h.op == opErr) {
-            a->answer.error = h.arg != 0 ? int(h.arg) : EIO;
-        } else {
-            a->answer.body = {packet + sizeof h, packet + n};
-        }
+    closed(ep);
+    while (Ask* a = left) {
+        left = a->next;
+        a->answer.error = EIO;
         a->call.resume();
     }
+}
 
-    static void handle(Endpoint* ep) {
-        if (ep->dead) {
-            return;
+// The answer to a question on a file system's channel, its first: the
+// call goes on. What nobody asked is dropped.
+static void answeredOn(Endpoint* ep) {
+    Fs* fs = ep->fs;
+    int fds[maxFds];
+    usize count = 0;
+    const ssize_t n = receivePacket(ep->fd, packet, sizeof packet, fds, count);
+    for (usize i = 0; i < count; ++i) {
+        close(fds[i]);
+    }
+    if (n <= 0) {
+        ended(ep);
+        return;
+    }
+    Ask* a = fs ? fs->waiting : nullptr;
+    if (!a) {
+        return;
+    }
+    fs->waiting = a->next;
+    if (!fs->waiting) {
+        fs->lastWaiting = nullptr;
+    }
+    Header h{};
+    if (n >= ssize_t(sizeof h)) {
+        memcpy(&h, packet, sizeof h);
+    }
+    a->answer.current = fs->changes == a->changes;
+    if (n < ssize_t(sizeof h) || (h.op != opOk && h.op != opErr)) {
+        a->answer.error = EIO;
+    } else if (h.op == opErr) {
+        a->answer.error = h.arg != 0 ? int(h.arg) : EIO;
+    } else {
+        a->answer.body = {packet + sizeof h, packet + n};
+    }
+    a->call.resume();
+}
+
+static void handle(Endpoint* ep) {
+    if (ep->dead) {
+        return;
+    }
+    if (ep->role == Role::Fs) {
+        answeredOn(ep);
+        return;
+    }
+    Header h;
+    const i64 n = receive(ep->fd, h);
+    if (n < 0) {
+        closed(ep);
+        return;
+    }
+    if (packetFdCount == 0) {
+        return; // a request without its reply endpoint: nobody to answer
+    }
+    if (h.op == opOk || h.op == opErr) {
+        for (usize i = 0; i < packetFdCount; ++i) {
+            close(packetFds[i]);
         }
-        if (ep->role == Role::Fs) {
-            answeredOn(ep);
-            return;
-        }
-        Header h;
-        const i64 n = receive(ep->fd, h);
-        if (n < 0) {
-            closed(ep);
-            return;
-        }
-        if (packetFdCount == 0) {
-            return; // a request without its reply endpoint: nobody to answer
-        }
-        if (h.op == opOk || h.op == opErr) {
-            for (usize i = 0; i < packetFdCount; ++i) {
-                close(packetFds[i]);
-            }
-            return;
-        }
-        const int fd = packetFds[packetFdCount - 1];
-        const Body body{packet + sizeof(Header), packet + sizeof(Header) + n};
-        const bool kept = onHandle(ep, h, body, fd);
-        if (!kept) {
-            close(fd);
-        }
-        // The request's other descriptors, a READ's or WRITE's window, are
-        // done with once it is answered; one a call kept is -1.
-        for (usize i = 0; i + 1 < packetFdCount; ++i) {
-            if (packetFds[i] >= 0) {
-                close(packetFds[i]);
-            }
+        return;
+    }
+    const int fd = packetFds[packetFdCount - 1];
+    const Body body{packet + sizeof(Header), packet + sizeof(Header) + n};
+    const bool kept = onHandle(ep, h, body, fd);
+    if (!kept) {
+        close(fd);
+    }
+    // The request's other descriptors, a READ's or WRITE's window, are
+    // done with once it is answered; one a call kept is -1.
+    for (usize i = 0; i + 1 < packetFdCount; ++i) {
+        if (packetFds[i] >= 0) {
+            close(packetFds[i]);
         }
     }
+}
 
-    pid_t shellPid;
-    int shellStatus = -1;
+static pid_t shellPid;
+static int shellStatus = -1;
 
-    // After a wait a child's end interrupted: what ended is reaped; the
-    // shell's end is the system's.
-    static bool reap() {
-        if (!childEnded) {
-            return true;
-        }
-        childEnded = 0;
-        int status;
-        for (pid_t pid; (pid = waitpid(-1, &status, WNOHANG)) > 0;) {
-            if (pid == shellPid) {
-                shellStatus = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
-            }
-        }
-        return shellStatus < 0;
+// After a wait a child's end interrupted: what ended is reaped; the
+// shell's end is the system's.
+static bool reap() {
+    if (!childEnded) {
+        return true;
     }
-
-    int bootEnd = -1;    // ours of the pair the services close once they are up
-    Endpoint bootMarker; // what the events of bootEnd carry
-
-    static void booted();
-
-    // The shell ended: the system goes down. The services' devices lose
-    // their names and the file systems their channels, the root's too; a
-    // service ends once what is open of it is closed, a file system once it
-    // has written what it holds, the file systems first, as the devices
-    // under them serve them until then.
-    static void shutdown() {
-        for (Endpoint* ep = live; ep;) {
-            Endpoint* after = ep->after;
-            if (!ep->dead && ep->role == Role::Fs) {
-                ended(ep);
-            }
-            ep = after;
+    childEnded = 0;
+    int status;
+    for (pid_t pid; (pid = waitpid(-1, &status, WNOHANG)) > 0;) {
+        if (pid == shellPid) {
+            shellStatus = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
         }
     }
+    return shellStatus < 0;
+}
 
-    static i64 monotonicMilliseconds() {
-        timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        return i64(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+static int bootEnd = -1;    // ours of the pair the services close once they are up
+static Endpoint bootMarker; // what the events of bootEnd carry
+
+static void booted();
+
+// The shell ended: the system goes down. The services' devices lose
+// their names and the file systems their channels, the root's too; a
+// service ends once what is open of it is closed, a file system once it
+// has written what it holds, the file systems first, as the devices
+// under them serve them until then.
+static void shutdown() {
+    for (Endpoint* ep = live; ep;) {
+        Endpoint* after = ep->after;
+        if (!ep->dead && ep->role == Role::Fs) {
+            ended(ep);
+        }
+        ep = after;
     }
+}
 
-    // Serves the VFS until the last endpoint closes: then nobody can reach
-    // it. When the shell ends, the system goes down (shutdown), and it is
-    // served until its processes are gone, the last endpoint closed, or for
-    // 10 seconds at most. The end of bootEnd, no packet on it, is the
-    // services' being up. An endpoint closed while a batch of events is
-    // handled stays dead to the rest of the batch.
-    static void serve() {
-        epoll_event events[64];
-        i64 deadline = -1;
-        while (endpointCount > 0) {
-            const i64 left = deadline < 0 ? -1 : deadline - monotonicMilliseconds();
-            if (deadline >= 0 && left <= 0) {
-                break;
-            }
-            const int n = epoll_pwait(watcher, events, 64, int(left), waitMasked ? &waitMask : nullptr);
-            if (!reap() && deadline < 0) {
-                deadline = monotonicMilliseconds() + 10000;
-                shutdown();
-                bury();
+static i64 monotonicMilliseconds() {
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return i64(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+}
+
+// Serves the VFS until the last endpoint closes: then nobody can reach
+// it. When the shell ends, the system goes down (shutdown), and it is
+// served until its processes are gone, the last endpoint closed, or for
+// 10 seconds at most. The end of bootEnd, no packet on it, is the
+// services' being up. An endpoint closed while a batch of events is
+// handled stays dead to the rest of the batch.
+static void serve() {
+    epoll_event events[64];
+    i64 deadline = -1;
+    while (endpointCount > 0) {
+        const i64 left = deadline < 0 ? -1 : deadline - monotonicMilliseconds();
+        if (deadline >= 0 && left <= 0) {
+            break;
+        }
+        const int n = epoll_pwait(watcher, events, 64, int(left), waitMasked ? &waitMask : nullptr);
+        if (!reap() && deadline < 0) {
+            deadline = monotonicMilliseconds() + 10000;
+            shutdown();
+            bury();
+            continue;
+        }
+        for (int i = 0; i < n; ++i) {
+            if (events[i].data.ptr == &bootMarker) {
+                if (recv(bootEnd, packet, sizeof packet, MSG_DONTWAIT) == 0) {
+                    booted();
+                }
                 continue;
             }
-            for (int i = 0; i < n; ++i) {
-                if (events[i].data.ptr == &bootMarker) {
-                    if (recv(bootEnd, packet, sizeof packet, MSG_DONTWAIT) == 0) {
-                        booted();
-                    }
-                    continue;
-                }
-                handle(static_cast<Endpoint*>(events[i].data.ptr));
-            }
-            bury();
+            handle(static_cast<Endpoint*>(events[i].data.ptr));
         }
-        close(watcher);
-        watcher = -1;
+        bury();
     }
+    close(watcher);
+    watcher = -1;
+}
 
-    // ---- the system ----------------------------------------------------------------
+// ---- the system ----------------------------------------------------------------
 
-    static void onChild(int) {
-        childEnded = 1;
+static void onChild(int) {
+    childEnded = 1;
+}
+
+// Has a child's end interrupt the server's wait, and nothing else: the
+// loop then reaps. SIGCHLD is blocked but in the wait, and the mask
+// before is the wait's and, through spawn, a child's.
+static void reapOnChild() {
+    sigset_t chld;
+    sigemptyset(&chld);
+    sigaddset(&chld, SIGCHLD);
+    signal(SIGCHLD, onChild);
+    if (sigprocmask(SIG_BLOCK, &chld, &waitMask) != 0) {
+        fatal("rootfs: sigprocmask: errno %d", errno);
     }
+    waitMasked = true;
+}
 
-    // Has a child's end interrupt the server's wait, and nothing else: the
-    // loop then reaps. SIGCHLD is blocked but in the wait, and the mask
-    // before is the wait's and, through spawn, a child's.
-    static void reapOnChild() {
-        sigset_t chld;
-        sigemptyset(&chld);
-        sigaddset(&chld, SIGCHLD);
-        signal(SIGCHLD, onChild);
-        if (sigprocmask(SIG_BLOCK, &chld, &waitMask) != 0) {
-            fatal("rootfs: sigprocmask: errno %d", errno);
+// The most descriptors a child gets: the end of boot's pair, a file
+// system's channel, and the disks.
+constexpr int maxKept = 2 + 32;
+
+// A program run in a child whose root and working directory are root,
+// an end of a pair of ours: the child asks us, who serve when it does;
+// with no root, rootfs's own, which has no path. The descriptors kept
+// are the child's 3 and on, in order. The program is the file path
+// names, or the one of the descriptor program.
+static pid_t spawn(const char* path, char* const* argv, char* const* env, int root, const int* kept = nullptr, int count = 0, int program = -1) {
+    const pid_t pid = fork();
+    if (pid == 0) {
+        if (waitMasked) {
+            sigprocmask(SIG_SETMASK, &waitMask, nullptr);
         }
-        waitMasked = true;
-    }
-
-    // The most descriptors a child gets: the end of boot's pair, a file
-    // system's channel, and the disks.
-    constexpr int maxKept = 2 + 32;
-
-    // A program run in a child whose root and working directory are root,
-    // an end of a pair of ours: the child asks us, who serve when it does;
-    // with no root, rootfs's own, which has no path. The descriptors kept
-    // are the child's 3 and on, in order. The program is the file path
-    // names, or the one of the descriptor program.
-    static pid_t spawn(const char* path, char* const* argv, char* const* env, int root, const int* kept = nullptr, int count = 0, int program = -1) {
-        const pid_t pid = fork();
-        if (pid == 0) {
-            if (waitMasked) {
-                sigprocmask(SIG_SETMASK, &waitMask, nullptr);
-            }
-            if (root >= 0 && (fchdir(root) != 0 || chroot(".") != 0)) {
-                dprintf(STDERR_FILENO, "rootfs: chroot: errno %d\n", errno);
-                _exit(127);
-            }
-            if (root >= 0) {
-                close(root);
-            }
-            int high[maxKept];
-            for (int i = 0; i < count; ++i) {
-                high[i] = fcntl(kept[i], F_DUPFD_CLOEXEC, 64);
-            }
-            const int file = program >= 0 ? fcntl(program, F_DUPFD_CLOEXEC, 64) : -1;
-            for (int i = 0; i < count; ++i) {
-                if (high[i] < 0 || dup2(high[i], 3 + i) < 0) {
-                    dprintf(STDERR_FILENO, "rootfs: descriptor %d: errno %d\n", 3 + i, errno);
-                    _exit(127);
-                }
-            }
-            if (program >= 0) {
-                fexecve(file, argv, env);
-            } else {
-                execve(path, argv, env);
-            }
-            dprintf(STDERR_FILENO, "rootfs: %s: errno %d\n", path, errno);
+        if (root >= 0 && (fchdir(root) != 0 || chroot(".") != 0)) {
+            dprintf(STDERR_FILENO, "rootfs: chroot: errno %d\n", errno);
             _exit(127);
         }
-        if (pid < 0) {
-            fatal("rootfs: fork: errno %d", errno);
+        if (root >= 0) {
+            close(root);
         }
-        return pid;
-    }
-
-    // What rootfs starts runs with a clean environment, its root the far
-    // end of our own pair, never ours: a server does not walk its own tree
-    // by path, and could not ask itself before it serves. erofs has none.
-    char pathVariable[] = "PATH=/bin";
-    char homeVariable[] = "HOME=/";
-    char termVariable[] = "TERM=vt100";
-    char* const environment[] = {pathVariable, homeVariable, termVariable, nullptr};
-    int rootEnd = -1;
-
-    // A file system rootfs starts: its channel, ours, on the loop.
-    static Fs* started(int channel) {
-        auto* fs = new (allocate(sizeof(Fs))) Fs();
-        fs->channel = listen(channel, Role::Fs);
-        fs->channel->fs = fs;
-        return fs;
-    }
-
-    // Mounts the root of a file system rootfs started on a directory of the
-    // root's, point, named name there: the file system's channel ours, its
-    // root its node 1, a directory of root's of mode perm as it starts,
-    // until its own stat says more.
-    static Mount* mountStarted(int channel, const Stat& point, Name name, u32 perm) {
-        Place top;
-        top.node = 1;
-        top.st.ino = 1;
-        top.st.mode = S_IFDIR | perm;
-        top.st.nlink = 2;
-        return mountAt(started(channel), top, theirPlace(rootMount, point), rootOf(rootMount), name);
-    }
-
-    // The image's header: where erofs's program is in it, the file of
-    // /bin/tools, its offset and size.
-    static void serverOf(u32& offset, u32& size) {
-        u32 header[11];
-        if (rootfs_image_size < sizeof header) {
-            fatal("rootfs: no image");
+        int high[maxKept];
+        for (int i = 0; i < count; ++i) {
+            high[i] = fcntl(kept[i], F_DUPFD_CLOEXEC, 64);
         }
-        memcpy(header, rootfs_image, sizeof header);
-        if (memcmp(header, "PZIM", 4) != 0 || header[1] != 2 || header[8] != rootfs_image_size || header[9] > rootfs_image_size || header[10] == 0 || header[10] > rootfs_image_size - header[9]) {
-            fatal("rootfs: the image is none of image.py's");
-        }
-        offset = header[9];
-        size = header[10];
-    }
-
-    // Starts the system. erofs serves the image, its descriptor 3 a memfd
-    // of it, its 4 the channel of the root, its program a memfd of its bytes
-    // there; it has no root and walks no path. erofs tells the root's stat,
-    // then where /tmp and /dev are. The file systems and the services of
-    // the system start next, the far end of a pair of ours their descriptor
-    // 3: they close it once they are up, after the services they start
-    // have it, and when the last one has, the shell starts (booted).
-    // /bin/tmpfs is /tmp, its channel its descriptor 3. /bin/devfs is /dev,
-    // its channel its descriptor 4, and it gets the disks vm gave us, our
-    // descriptors after 2, in order, named by DISKS: its 5 and on, and it
-    // starts their services and every system's devices. Each is mounted
-    // before it starts: what it starts finds it there.
-    static Task boot() {
-        int ends[2];
-        int tmp[2];
-        int dev[2];
-        int image[2];
-        int roots[2];
-        int* pairs[] = {ends, tmp, dev, image, roots};
-        for (int* pair : pairs) {
-            if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
-                fatal("rootfs: socketpair: errno %d", errno);
+        const int file = program >= 0 ? fcntl(program, F_DUPFD_CLOEXEC, 64) : -1;
+        for (int i = 0; i < count; ++i) {
+            if (high[i] < 0 || dup2(high[i], 3 + i) < 0) {
+                dprintf(STDERR_FILENO, "rootfs: descriptor %d: errno %d\n", 3 + i, errno);
+                _exit(127);
             }
         }
-        // The disks are no one's but devfs's.
-        char disks[256] = {};
-        if (const char* given = getenv("DISKS")) {
-            strncpy(disks, given, sizeof disks - 1);
+        if (program >= 0) {
+            fexecve(file, argv, env);
+        } else {
+            execve(path, argv, env);
         }
-        int kept[maxKept] = {ends[1], dev[1]};
-        char numbers[maxKept][12];
-        char* argv[3 + 2 * maxKept];
-        char devfsName[] = "devfs";
-        char option[] = "-r";
-        char three[] = "3";
-        char four[] = "4";
-        int count = 2;
-        int args = 0;
-        argv[args++] = devfsName;
-        argv[args++] = option;
-        argv[args++] = three;
-        argv[args++] = four;
-        for (char* name = strtok(disks, " "); name && count < maxKept; name = strtok(nullptr, " ")) {
-            fcntl(3 + count - 2, F_SETFD, FD_CLOEXEC);
-            kept[count] = 3 + count - 2;
-            snprintf(numbers[count], sizeof numbers[count], "%d", 3 + count);
-            argv[args++] = name;
-            argv[args++] = numbers[count];
-            ++count;
-        }
-        argv[args] = nullptr;
-        u32 offset;
-        u32 size;
-        serverOf(offset, size);
-        auto* bytes = const_cast<u8*>(rootfs_image);
-        const int served[] = {memfd_create(bytes, rootfs_image_size, O_RDONLY | O_CLOEXEC), image[1]};
-        const int program = memfd_create(bytes + offset, size, O_RDONLY | O_CLOEXEC);
-        if (served[0] < 0 || program < 0) {
-            fatal("rootfs: memfd_create: errno %d", errno);
-        }
-        char erofsName[] = "erofs";
-        char* const erofsArgv[] = {erofsName, three, four, nullptr};
-        spawn(erofsName, erofsArgv, environment, -1, served, 2, program);
-        close(served[0]);
-        close(program);
-        close(image[1]);
-        rootMount = new (allocate(sizeof(Mount))) Mount();
-        rootMount->fs = started(image[0]);
-        rootMount->fs->mounts = 1;
-        rootMount->root = 1;
-        mounts = rootMount;
-        const Header h{};
-        {
-            Ask ask;
-            ask.fs = rootMount->fs;
-            ask.head = {fsRoot, 0, 0, 0};
-            const Answer a = co_await ask;
-            if (a.error != 0 || !statIn(a.body, rootMount->rootStat)) {
-                fatal("rootfs: erofs serves no root: errno %d", a.error);
-            }
-            rootMount->fs->cached = !nocacheIn(a);
-        }
-        listenHandle(roots[0], rootOf(rootMount), false);
-        rootEnd = roots[1];
+        dprintf(STDERR_FILENO, "rootfs: %s: errno %d\n", path, errno);
+        _exit(127);
+    }
+    if (pid < 0) {
+        fatal("rootfs: fork: errno %d", errno);
+    }
+    return pid;
+}
 
-        const struct {
-            const char* name;
-            int channel;
-            u32 perm;
-        } points[] = {{"tmp", tmp[0], 01777}, {"dev", dev[0], 0755}};
+// What rootfs starts runs with a clean environment, its root the far
+// end of our own pair, never ours: a server does not walk its own tree
+// by path, and could not ask itself before it serves. erofs has none.
+static char pathVariable[] = "PATH=/bin";
+static char homeVariable[] = "HOME=/";
+static char termVariable[] = "TERM=vt100";
+static char* const environment[] = {pathVariable, homeVariable, termVariable, nullptr};
+static int rootEnd = -1;
 
-        Mount* begun[2];
-        int begins = 0;
-        for (const auto& p : points) {
-            const Answer a = co_await asking(rootOf(rootMount), h, fsLookup, literal(p.name));
-            Stat st;
-            if (a.error != 0 || !statIn(a.body, st) || !S_ISDIR(st.mode)) {
-                fatal("rootfs: mount on /%s: errno %d", p.name, a.error);
-            }
-            begun[begins++] = mountStarted(p.channel, st, literal(p.name), p.perm);
-        }
-        char tmpfsName[] = "tmpfs";
-        char* const tmpfsArgv[] = {tmpfsName, three, nullptr};
-        spawn("/bin/tmpfs", tmpfsArgv, environment, rootEnd, &tmp[1], 1);
-        close(tmp[1]);
-        spawn("/bin/devfs", argv, environment, rootEnd, kept, count);
-        for (int i = 2; i < count; ++i) {
-            close(kept[i]);
-        }
-        close(dev[1]);
-        close(ends[1]);
-        bootEnd = ends[0];
-        epoll_event ev{};
-        ev.events = EPOLLIN;
-        ev.data.ptr = &bootMarker;
-        if (epoll_ctl(watcher, EPOLL_CTL_ADD, bootEnd, &ev) != 0) {
-            fatal("rootfs: epoll_ctl: errno %d", errno);
-        }
-        // Each file system started tells its root once it serves, and
-        // whether rootfs keeps its answers: until then it keeps none.
-        for (Mount* m : begun) {
-            Held held(rootOf(m));
-            Ask ask;
-            ask.fs = m->fs;
-            ask.head = {fsRoot, 0, 0, 0};
-            const Answer a = co_await ask;
-            Stat st;
-            if (!m->gone && a.error == 0 && statIn(a.body, st)) {
-                m->rootStat = st;
-                m->fs->cached = !nocacheIn(a);
-            }
+// A file system rootfs starts: its channel, ours, on the loop.
+static Fs* started(int channel) {
+    auto* fs = new (allocate(sizeof(Fs))) Fs();
+    fs->channel = listen(channel, Role::Fs);
+    fs->channel->fs = fs;
+    return fs;
+}
+
+// Mounts the root of a file system rootfs started on a directory of the
+// root's, point, named name there: the file system's channel ours, its
+// root its node 1, a directory of root's of mode perm as it starts,
+// until its own stat says more.
+static Mount* mountStarted(int channel, const Stat& point, Name name, u32 perm) {
+    Place top;
+    top.node = 1;
+    top.st.ino = 1;
+    top.st.mode = S_IFDIR | perm;
+    top.st.nlink = 2;
+    return mountAt(started(channel), top, theirPlace(rootMount, point), rootOf(rootMount), name);
+}
+
+// The image's header: where erofs's program is in it, the file of
+// /bin/tools, its offset and size.
+static void serverOf(u32& offset, u32& size) {
+    u32 header[11];
+    if (rootfs_image_size < sizeof header) {
+        fatal("rootfs: no image");
+    }
+    memcpy(header, rootfs_image, sizeof header);
+    if (memcmp(header, "PZIM", 4) != 0 || header[1] != 2 || header[8] != rootfs_image_size || header[9] > rootfs_image_size || header[10] == 0 || header[10] > rootfs_image_size - header[9]) {
+        fatal("rootfs: the image is none of image.py's");
+    }
+    offset = header[9];
+    size = header[10];
+}
+
+// Starts the system. erofs serves the image, its descriptor 3 a memfd
+// of it, its 4 the channel of the root, its program a memfd of its bytes
+// there; it has no root and walks no path. erofs tells the root's stat,
+// then where /tmp and /dev are. The file systems and the services of
+// the system start next, the far end of a pair of ours their descriptor
+// 3: they close it once they are up, after the services they start
+// have it, and when the last one has, the shell starts (booted).
+// /bin/tmpfs is /tmp, its channel its descriptor 3. /bin/devfs is /dev,
+// its channel its descriptor 4, and it gets the disks vm gave us, our
+// descriptors after 2, in order, named by DISKS: its 5 and on, and it
+// starts their services and every system's devices. Each is mounted
+// before it starts: what it starts finds it there.
+static Task boot() {
+    int ends[2];
+    int tmp[2];
+    int dev[2];
+    int image[2];
+    int roots[2];
+    int* pairs[] = {ends, tmp, dev, image, roots};
+    for (int* pair : pairs) {
+        if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+            fatal("rootfs: socketpair: errno %d", errno);
         }
     }
-
-    // The services are up: the shell starts on the terminal.
-    static void booted() {
-        epoll_ctl(watcher, EPOLL_CTL_DEL, bootEnd, nullptr);
-        close(bootEnd);
-        bootEnd = -1;
-        char sh[] = "sh";
-        char* const argv[] = {sh, nullptr};
-        shellPid = spawn("/bin/sh", argv, environment, rootEnd);
-        close(rootEnd);
-        rootEnd = -1;
+    // The disks are no one's but devfs's.
+    char disks[256] = {};
+    if (const char* given = getenv("DISKS")) {
+        strncpy(disks, given, sizeof disks - 1);
     }
+    int kept[maxKept] = {ends[1], dev[1]};
+    char numbers[maxKept][12];
+    char* argv[3 + 2 * maxKept];
+    char devfsName[] = "devfs";
+    char option[] = "-r";
+    char three[] = "3";
+    char four[] = "4";
+    int count = 2;
+    int args = 0;
+    argv[args++] = devfsName;
+    argv[args++] = option;
+    argv[args++] = three;
+    argv[args++] = four;
+    for (char* name = strtok(disks, " "); name && count < maxKept; name = strtok(nullptr, " ")) {
+        fcntl(3 + count - 2, F_SETFD, FD_CLOEXEC);
+        kept[count] = 3 + count - 2;
+        snprintf(numbers[count], sizeof numbers[count], "%d", 3 + count);
+        argv[args++] = name;
+        argv[args++] = numbers[count];
+        ++count;
+    }
+    argv[args] = nullptr;
+    u32 offset;
+    u32 size;
+    serverOf(offset, size);
+    auto* bytes = const_cast<u8*>(rootfs_image);
+    const int served[] = {memfd_create(bytes, rootfs_image_size, O_RDONLY | O_CLOEXEC), image[1]};
+    const int program = memfd_create(bytes + offset, size, O_RDONLY | O_CLOEXEC);
+    if (served[0] < 0 || program < 0) {
+        fatal("rootfs: memfd_create: errno %d", errno);
+    }
+    char erofsName[] = "erofs";
+    char* const erofsArgv[] = {erofsName, three, four, nullptr};
+    spawn(erofsName, erofsArgv, environment, -1, served, 2, program);
+    close(served[0]);
+    close(program);
+    close(image[1]);
+    rootMount = new (allocate(sizeof(Mount))) Mount();
+    rootMount->fs = started(image[0]);
+    rootMount->fs->mounts = 1;
+    rootMount->root = 1;
+    mounts = rootMount;
+    const Header h{};
+    {
+        Ask ask;
+        ask.fs = rootMount->fs;
+        ask.head = {fsRoot, 0, 0, 0};
+        const Answer a = co_await ask;
+        if (a.error != 0 || !statIn(a.body, rootMount->rootStat)) {
+            fatal("rootfs: erofs serves no root: errno %d", a.error);
+        }
+        rootMount->fs->cached = !nocacheIn(a);
+    }
+    listenHandle(roots[0], rootOf(rootMount), false);
+    rootEnd = roots[1];
+
+    const struct {
+        const char* name;
+        int channel;
+        u32 perm;
+    } points[] = {{"tmp", tmp[0], 01777}, {"dev", dev[0], 0755}};
+
+    Mount* begun[2];
+    int begins = 0;
+    for (const auto& p : points) {
+        const Answer a = co_await asking(rootOf(rootMount), h, fsLookup, literal(p.name));
+        Stat st;
+        if (a.error != 0 || !statIn(a.body, st) || !S_ISDIR(st.mode)) {
+            fatal("rootfs: mount on /%s: errno %d", p.name, a.error);
+        }
+        begun[begins++] = mountStarted(p.channel, st, literal(p.name), p.perm);
+    }
+    char tmpfsName[] = "tmpfs";
+    char* const tmpfsArgv[] = {tmpfsName, three, nullptr};
+    spawn("/bin/tmpfs", tmpfsArgv, environment, rootEnd, &tmp[1], 1);
+    close(tmp[1]);
+    spawn("/bin/devfs", argv, environment, rootEnd, kept, count);
+    for (int i = 2; i < count; ++i) {
+        close(kept[i]);
+    }
+    close(dev[1]);
+    close(ends[1]);
+    bootEnd = ends[0];
+    epoll_event ev{};
+    ev.events = EPOLLIN;
+    ev.data.ptr = &bootMarker;
+    if (epoll_ctl(watcher, EPOLL_CTL_ADD, bootEnd, &ev) != 0) {
+        fatal("rootfs: epoll_ctl: errno %d", errno);
+    }
+    // Each file system started tells its root once it serves, and
+    // whether rootfs keeps its answers: until then it keeps none.
+    for (Mount* m : begun) {
+        Held held(rootOf(m));
+        Ask ask;
+        ask.fs = m->fs;
+        ask.head = {fsRoot, 0, 0, 0};
+        const Answer a = co_await ask;
+        Stat st;
+        if (!m->gone && a.error == 0 && statIn(a.body, st)) {
+            m->rootStat = st;
+            m->fs->cached = !nocacheIn(a);
+        }
+    }
+}
+
+// The services are up: the shell starts on the terminal.
+static void booted() {
+    epoll_ctl(watcher, EPOLL_CTL_DEL, bootEnd, nullptr);
+    close(bootEnd);
+    bootEnd = -1;
+    char sh[] = "sh";
+    char* const argv[] = {sh, nullptr};
+    shellPid = spawn("/bin/sh", argv, environment, rootEnd);
+    close(rootEnd);
+    rootEnd = -1;
 }
 
 int main() {

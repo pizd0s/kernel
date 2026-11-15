@@ -33,93 +33,93 @@ namespace {
         Kind kind;
         Device registered;
     };
+}
 
-    static Source sources[] = {
-        {"null", Kind::Null, {}},
-        {"zero", Kind::Zero, {}},
-        {"random", Kind::Random, {}},
-        {"urandom", Kind::Random, {}},
-    };
+static Source sources[] = {
+    {"null", Kind::Null, {}},
+    {"zero", Kind::Zero, {}},
+    {"random", Kind::Random, {}},
+    {"urandom", Kind::Random, {}},
+};
 
-    static const unsigned char zeros[65536] = {};
-    static unsigned char entropy[65536];
+static const unsigned char zeros[65536] = {};
+static unsigned char entropy[65536];
 
-    // As many bytes as asked go into the reader's memory: zeros, or the
-    // kernel's random bytes; none of null.
-    static void readSource(const Source& s, const Endpoint& e, const Request& r) {
-        uint32_t woff;
-        if (!e.reads) {
-            return fail(r.reply(), EBADF);
-        }
-        if (r.window() < 0 || !r.at(8, woff)) {
-            return fail(r.reply(), EINVAL);
-        }
-        const size_t n = s.kind == Kind::Null ? 0 : r.h.arg;
-        for (size_t at = 0; at < n; at += sizeof zeros) {
-            const size_t count = MIN(sizeof zeros, n - at);
-            const unsigned char* bytes = zeros;
-            if (s.kind == Kind::Random) {
-                for (size_t k = 0; k < count; k += 256) {
-                    if (getentropy(entropy + k, MIN(size_t(256), count - k)) != 0) {
-                        return fail(r.reply(), EIO);
-                    }
+// As many bytes as asked go into the reader's memory: zeros, or the
+// kernel's random bytes; none of null.
+static void readSource(const Source& s, const Endpoint& e, const Request& r) {
+    uint32_t woff;
+    if (!e.reads) {
+        return fail(r.reply(), EBADF);
+    }
+    if (r.window() < 0 || !r.at(8, woff)) {
+        return fail(r.reply(), EINVAL);
+    }
+    const size_t n = s.kind == Kind::Null ? 0 : r.h.arg;
+    for (size_t at = 0; at < n; at += sizeof zeros) {
+        const size_t count = MIN(sizeof zeros, n - at);
+        const unsigned char* bytes = zeros;
+        if (s.kind == Kind::Random) {
+            for (size_t k = 0; k < count; k += 256) {
+                if (getentropy(entropy + k, MIN(size_t(256), count - k)) != 0) {
+                    return fail(r.reply(), EIO);
                 }
-                bytes = entropy;
             }
-            if (pwrite(r.window(), bytes, count, off_t(woff) + off_t(at)) != ssize_t(count)) {
-                return fail(r.reply(), EIO);
-            }
+            bytes = entropy;
         }
-        const uint32_t count = uint32_t(n);
-        answer(r.reply(), opOk, 0, &count, sizeof count);
+        if (pwrite(r.window(), bytes, count, off_t(woff) + off_t(at)) != ssize_t(count)) {
+            return fail(r.reply(), EIO);
+        }
     }
+    const uint32_t count = uint32_t(n);
+    answer(r.reply(), opOk, 0, &count, sizeof count);
+}
 
-    // Everything written is taken, where it was written.
-    static void writeSource(const Endpoint& e, const Request& r) {
-        uint64_t off;
-        uint32_t length;
-        if (!e.writes) {
-            return fail(r.reply(), EBADF);
-        }
-        if (!r.at(0, off) || !r.at(8, length)) {
-            return fail(r.reply(), EINVAL);
-        }
-        unsigned char taken[12];
-        memcpy(taken, &length, 4);
-        memcpy(taken + 4, &off, 8);
-        answer(r.reply(), opOk, 0, taken, sizeof taken);
+// Everything written is taken, where it was written.
+static void writeSource(const Endpoint& e, const Request& r) {
+    uint64_t off;
+    uint32_t length;
+    if (!e.writes) {
+        return fail(r.reply(), EBADF);
     }
+    if (!r.at(0, off) || !r.at(8, length)) {
+        return fail(r.reply(), EINVAL);
+    }
+    unsigned char taken[12];
+    memcpy(taken, &length, 4);
+    memcpy(taken + 4, &off, 8);
+    answer(r.reply(), opOk, 0, taken, sizeof taken);
+}
 
-    static bool handle(Endpoint& e, Request& r) {
-        const Source& s = *static_cast<Source*>(e.of);
-        const Stat& st = s.registered.st;
-        if (e.channel) {
+static bool handle(Endpoint& e, Request& r) {
+    const Source& s = *static_cast<Source*>(e.of);
+    const Stat& st = s.registered.st;
+    if (e.channel) {
+        answer(r.reply(), opOk, 0, &st, sizeof st);
+        return true;
+    }
+    switch (r.h.op) {
+        case opRead:
+            readSource(s, e, r);
+            break;
+        case opWrite:
+            writeSource(e, r);
+            break;
+        case opFstat:
             answer(r.reply(), opOk, 0, &st, sizeof st);
-            return true;
-        }
-        switch (r.h.op) {
-            case opRead:
-                readSource(s, e, r);
-                break;
-            case opWrite:
-                writeSource(e, r);
-                break;
-            case opFstat:
-                answer(r.reply(), opOk, 0, &st, sizeof st);
-                break;
-            case opFsync:
-                answer(r.reply(), opOk, 0);
-                break;
-            case opFchmod:
-            case opFchown:
-            case opFutimes:
-                fail(r.reply(), EPERM);
-                break;
-            default:
-                fail(r.reply(), EINVAL);
-        }
-        return false;
+            break;
+        case opFsync:
+            answer(r.reply(), opOk, 0);
+            break;
+        case opFchmod:
+        case opFchown:
+        case opFutimes:
+            fail(r.reply(), EPERM);
+            break;
+        default:
+            fail(r.reply(), EINVAL);
     }
+    return false;
 }
 
 int devicesMain(int argc, char** argv) {

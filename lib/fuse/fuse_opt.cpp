@@ -20,199 +20,199 @@ namespace {
         char* opts;
         int nonopt;
     };
+}
 
-    static int failed() {
-        fprintf(stderr, "fuse: out of memory\n");
+static int failed() {
+    fprintf(stderr, "fuse: out of memory\n");
+    return -1;
+}
+
+static int addOptCommon(char** opts, const char* opt, bool escape) {
+    const size_t old = *opts ? strlen(*opts) : 0;
+    auto* d = static_cast<char*>(realloc(*opts, old + 1 + strlen(opt) * 2 + 1));
+    if (!d) {
+        return failed();
+    }
+    *opts = d;
+    if (old) {
+        d += old;
+        *d++ = ',';
+    }
+    for (; *opt; ++opt) {
+        if (escape && (*opt == ',' || *opt == '\\')) {
+            *d++ = '\\';
+        }
+        *d++ = *opt;
+    }
+    *d = 0;
+    return 0;
+}
+
+static int nextArg(Context& c, const char* opt) {
+    if (c.argctr + 1 >= c.argc) {
+        fprintf(stderr, "fuse: missing argument after `%s'\n", opt);
         return -1;
     }
+    ++c.argctr;
+    return 0;
+}
 
-    static int addOptCommon(char** opts, const char* opt, bool escape) {
-        const size_t old = *opts ? strlen(*opts) : 0;
-        auto* d = static_cast<char*>(realloc(*opts, old + 1 + strlen(opt) * 2 + 1));
-        if (!d) {
-            return failed();
-        }
-        *opts = d;
-        if (old) {
-            d += old;
-            *d++ = ',';
-        }
-        for (; *opt; ++opt) {
-            if (escape && (*opt == ',' || *opt == '\\')) {
-                *d++ = '\\';
-            }
-            *d++ = *opt;
-        }
-        *d = 0;
+static int callProc(Context& c, const char* arg, int key, bool iso) {
+    if (key == FUSE_OPT_KEY_DISCARD) {
         return 0;
     }
-
-    static int nextArg(Context& c, const char* opt) {
-        if (c.argctr + 1 >= c.argc) {
-            fprintf(stderr, "fuse: missing argument after `%s'\n", opt);
-            return -1;
+    if (key != FUSE_OPT_KEY_KEEP && c.proc) {
+        const int res = c.proc(c.data, arg, key, &c.outargs);
+        if (res == -1 || res == 0) {
+            return res;
         }
-        ++c.argctr;
-        return 0;
     }
+    return iso ? addOptCommon(&c.opts, arg, true) : fuse_opt_add_arg(&c.outargs, arg);
+}
 
-    static int callProc(Context& c, const char* arg, int key, bool iso) {
-        if (key == FUSE_OPT_KEY_DISCARD) {
-            return 0;
+// Whether a template takes an argument: "name" alone, or "name=%..." and
+// "name %..." by the name; sep is where the parameter starts.
+static bool matches(const char* t, const char* arg, unsigned& sep) {
+    const size_t length = strlen(arg);
+    const char* at = strchr(t, '=');
+    at = at ? at : strchr(t, ' ');
+    if (at && (!at[1] || at[1] == '%')) {
+        size_t n = size_t(at - t);
+        if (at[0] == '=') {
+            ++n;
         }
-        if (key != FUSE_OPT_KEY_KEEP && c.proc) {
-            const int res = c.proc(c.data, arg, key, &c.outargs);
-            if (res == -1 || res == 0) {
-                return res;
-            }
-        }
-        return iso ? addOptCommon(&c.opts, arg, true) : fuse_opt_add_arg(&c.outargs, arg);
-    }
-
-    // Whether a template takes an argument: "name" alone, or "name=%..." and
-    // "name %..." by the name; sep is where the parameter starts.
-    static bool matches(const char* t, const char* arg, unsigned& sep) {
-        const size_t length = strlen(arg);
-        const char* at = strchr(t, '=');
-        at = at ? at : strchr(t, ' ');
-        if (at && (!at[1] || at[1] == '%')) {
-            size_t n = size_t(at - t);
-            if (at[0] == '=') {
-                ++n;
-            }
-            if (length >= n && strncmp(arg, t, n) == 0) {
-                sep = unsigned(at - t);
-                return true;
-            }
-        }
-        if (strcmp(t, arg) == 0) {
-            sep = 0;
+        if (length >= n && strncmp(arg, t, n) == 0) {
+            sep = unsigned(at - t);
             return true;
         }
-        return false;
     }
-
-    static const fuse_opt* find(const fuse_opt* opt, const char* arg, unsigned& sep) {
-        for (; opt && opt->templ; ++opt) {
-            if (matches(opt->templ, arg, sep)) {
-                return opt;
-            }
-        }
-        return nullptr;
+    if (strcmp(t, arg) == 0) {
+        sep = 0;
+        return true;
     }
+    return false;
+}
 
-    static int param(void* var, const char* format, const char* value, const char* arg) {
-        if (format[1] == 's') {
-            char* copy = strdup(value);
-            if (!copy) {
-                return failed();
-            }
-            *static_cast<char**>(var) = copy;
-            return 0;
+static const fuse_opt* find(const fuse_opt* opt, const char* arg, unsigned& sep) {
+    for (; opt && opt->templ; ++opt) {
+        if (matches(opt->templ, arg, sep)) {
+            return opt;
         }
-        if (sscanf(value, format, var) != 1) {
-            fprintf(stderr, "fuse: invalid parameter in option `%s'\n", arg);
-            return -1;
-        }
-        return 0;
     }
+    return nullptr;
+}
 
-    static int process(Context& c, const fuse_opt* opt, unsigned sep, const char* arg, bool iso) {
-        if (opt->offset == -1U) {
-            return callProc(c, arg, opt->value, iso) == -1 ? -1 : 0;
-        }
-        void* var = static_cast<char*>(c.data) + opt->offset;
-        if (sep && opt->templ[sep + 1]) {
-            const char* value = arg + sep + (opt->templ[sep] == '=' ? 1 : 0);
-            return param(var, opt->templ + sep + 1, value, arg);
-        }
-        *static_cast<int*>(var) = opt->value;
-        return 0;
-    }
-
-    static int processSeparate(Context& c, const fuse_opt* opt, unsigned sep, const char* arg, bool iso) {
-        if (nextArg(c, arg) == -1) {
-            return -1;
-        }
-        const char* value = c.argv[c.argctr];
-        auto* joined = static_cast<char*>(malloc(sep + strlen(value) + 1));
-        if (!joined) {
-            return failed();
-        }
-        memcpy(joined, arg, sep);
-        strcpy(joined + sep, value);
-        const int res = process(c, opt, sep, joined, iso);
-        free(joined);
-        return res;
-    }
-
-    static int processGeneral(Context& c, const char* arg, bool iso) {
-        unsigned sep;
-        const fuse_opt* opt = find(c.opt, arg, sep);
-        if (!opt) {
-            return callProc(c, arg, FUSE_OPT_KEY_OPT, iso);
-        }
-        for (; opt; opt = find(opt + 1, arg, sep)) {
-            const int res = sep && opt->templ[sep] == ' ' && !arg[sep] ? processSeparate(c, opt, sep, arg, iso) : process(c, opt, sep, arg, iso);
-            if (res == -1) {
-                return -1;
-            }
-        }
-        return 0;
-    }
-
-    // An "-o" list: options by commas, "\," a comma of one.
-    static int processGroup(Context& c, const char* list) {
-        char* copy = strdup(list);
+static int param(void* var, const char* format, const char* value, const char* arg) {
+    if (format[1] == 's') {
+        char* copy = strdup(value);
         if (!copy) {
             return failed();
         }
-        char* opt = copy;
-        char* d = copy;
-        for (const char* s = copy;; ++s) {
-            if (*s == ',' || *s == 0) {
-                *d = 0;
-                if (processGeneral(c, opt, true) == -1) {
-                    free(copy);
-                    return -1;
-                }
-                if (*s == 0) {
-                    break;
-                }
-                d = opt;
-                continue;
-            }
-            if (s[0] == '\\' && s[1] != 0) {
-                ++s;
-            }
-            *d++ = *s;
-        }
-        free(copy);
+        *static_cast<char**>(var) = copy;
         return 0;
     }
-
-    static int processOne(Context& c, const char* arg) {
-        if (c.nonopt || arg[0] != '-') {
-            return callProc(c, arg, FUSE_OPT_KEY_NONOPT, false);
-        }
-        if (arg[1] == 'o') {
-            if (arg[2]) {
-                return processGroup(c, arg + 2);
-            }
-            if (nextArg(c, arg) == -1) {
-                return -1;
-            }
-            return processGroup(c, c.argv[c.argctr]);
-        }
-        if (arg[1] == '-' && !arg[2]) {
-            if (fuse_opt_add_arg(&c.outargs, arg) == -1) {
-                return -1;
-            }
-            c.nonopt = c.outargs.argc;
-            return 0;
-        }
-        return processGeneral(c, arg, false);
+    if (sscanf(value, format, var) != 1) {
+        fprintf(stderr, "fuse: invalid parameter in option `%s'\n", arg);
+        return -1;
     }
+    return 0;
+}
+
+static int process(Context& c, const fuse_opt* opt, unsigned sep, const char* arg, bool iso) {
+    if (opt->offset == -1U) {
+        return callProc(c, arg, opt->value, iso) == -1 ? -1 : 0;
+    }
+    void* var = static_cast<char*>(c.data) + opt->offset;
+    if (sep && opt->templ[sep + 1]) {
+        const char* value = arg + sep + (opt->templ[sep] == '=' ? 1 : 0);
+        return param(var, opt->templ + sep + 1, value, arg);
+    }
+    *static_cast<int*>(var) = opt->value;
+    return 0;
+}
+
+static int processSeparate(Context& c, const fuse_opt* opt, unsigned sep, const char* arg, bool iso) {
+    if (nextArg(c, arg) == -1) {
+        return -1;
+    }
+    const char* value = c.argv[c.argctr];
+    auto* joined = static_cast<char*>(malloc(sep + strlen(value) + 1));
+    if (!joined) {
+        return failed();
+    }
+    memcpy(joined, arg, sep);
+    strcpy(joined + sep, value);
+    const int res = process(c, opt, sep, joined, iso);
+    free(joined);
+    return res;
+}
+
+static int processGeneral(Context& c, const char* arg, bool iso) {
+    unsigned sep;
+    const fuse_opt* opt = find(c.opt, arg, sep);
+    if (!opt) {
+        return callProc(c, arg, FUSE_OPT_KEY_OPT, iso);
+    }
+    for (; opt; opt = find(opt + 1, arg, sep)) {
+        const int res = sep && opt->templ[sep] == ' ' && !arg[sep] ? processSeparate(c, opt, sep, arg, iso) : process(c, opt, sep, arg, iso);
+        if (res == -1) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+// An "-o" list: options by commas, "\," a comma of one.
+static int processGroup(Context& c, const char* list) {
+    char* copy = strdup(list);
+    if (!copy) {
+        return failed();
+    }
+    char* opt = copy;
+    char* d = copy;
+    for (const char* s = copy;; ++s) {
+        if (*s == ',' || *s == 0) {
+            *d = 0;
+            if (processGeneral(c, opt, true) == -1) {
+                free(copy);
+                return -1;
+            }
+            if (*s == 0) {
+                break;
+            }
+            d = opt;
+            continue;
+        }
+        if (s[0] == '\\' && s[1] != 0) {
+            ++s;
+        }
+        *d++ = *s;
+    }
+    free(copy);
+    return 0;
+}
+
+static int processOne(Context& c, const char* arg) {
+    if (c.nonopt || arg[0] != '-') {
+        return callProc(c, arg, FUSE_OPT_KEY_NONOPT, false);
+    }
+    if (arg[1] == 'o') {
+        if (arg[2]) {
+            return processGroup(c, arg + 2);
+        }
+        if (nextArg(c, arg) == -1) {
+            return -1;
+        }
+        return processGroup(c, c.argv[c.argctr]);
+    }
+    if (arg[1] == '-' && !arg[2]) {
+        if (fuse_opt_add_arg(&c.outargs, arg) == -1) {
+            return -1;
+        }
+        c.nonopt = c.outargs.argc;
+        return 0;
+    }
+    return processGeneral(c, arg, false);
 }
 
 void fuse_opt_free_args(fuse_args* args) {

@@ -14,32 +14,30 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-namespace {
-    static sockaddr_un addressOf(const char* path) {
-        sockaddr_un a{};
-        a.sun_family = AF_UNIX;
-        strncpy(a.sun_path, path, sizeof a.sun_path - 1);
-        return a;
-    }
+static sockaddr_un addressOf(const char* path) {
+    sockaddr_un a{};
+    a.sun_family = AF_UNIX;
+    strncpy(a.sun_path, path, sizeof a.sun_path - 1);
+    return a;
+}
 
-    static int bound(int s, const char* path) {
-        const sockaddr_un a = addressOf(path);
-        return bind(s, reinterpret_cast<const sockaddr*>(&a), sizeof a);
-    }
+static int bound(int s, const char* path) {
+    const sockaddr_un a = addressOf(path);
+    return bind(s, reinterpret_cast<const sockaddr*>(&a), sizeof a);
+}
 
-    static int connected(int s, const char* path) {
-        const sockaddr_un a = addressOf(path);
-        return connect(s, reinterpret_cast<const sockaddr*>(&a), sizeof a);
-    }
+static int connected(int s, const char* path) {
+    const sockaddr_un a = addressOf(path);
+    return connect(s, reinterpret_cast<const sockaddr*>(&a), sizeof a);
+}
 
-    static void says(const char* what, int result) {
-        printf("%s %s\n", what, result == 0 ? "ok" : strerror(errno));
-        fflush(stdout);
-    }
+static void says(const char* what, int result) {
+    printf("%s %s\n", what, result == 0 ? "ok" : strerror(errno));
+    fflush(stdout);
+}
 
-    static int socketOf() {
-        return socket(AF_UNIX, SOCK_SEQPACKET, 0);
-    }
+static int socketOf() {
+    return socket(AF_UNIX, SOCK_SEQPACKET, 0);
 }
 
 int main(int argc, char** argv) {

@@ -11,10 +11,8 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 
-namespace {
-    static bool stopping = false;
-    static size_t watched = 0;
-}
+static bool stopping = false;
+static size_t watched = 0;
 
 void fatal(const char* format, ...) {
     va_list args;

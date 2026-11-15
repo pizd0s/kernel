@@ -26,62 +26,60 @@
 #include <sys/param.h>
 #include <unistd.h>
 
-namespace {
-    static const char* text;
-    static size_t length;
-    static Device device;
+static const char* text;
+static size_t length;
+static Device device;
 
-    static void readText(const Endpoint& e, const Request& r) {
-        uint64_t off;
-        uint32_t woff;
-        if (!e.reads) {
-            return fail(r.reply(), EBADF);
-        }
-        if (r.window() < 0 || !r.at(0, off) || !r.at(8, woff)) {
-            return fail(r.reply(), EINVAL);
-        }
-        const size_t part = off < length ? MIN(size_t(r.h.arg), length - size_t(off)) : 0;
-        pwrite(r.window(), text + MIN(off, uint64_t(length)), part, woff);
-        const uint32_t done = uint32_t(part);
-        answer(r.reply(), opOk, 0, &done, sizeof done);
+static void readText(const Endpoint& e, const Request& r) {
+    uint64_t off;
+    uint32_t woff;
+    if (!e.reads) {
+        return fail(r.reply(), EBADF);
     }
+    if (r.window() < 0 || !r.at(0, off) || !r.at(8, woff)) {
+        return fail(r.reply(), EINVAL);
+    }
+    const size_t part = off < length ? MIN(size_t(r.h.arg), length - size_t(off)) : 0;
+    pwrite(r.window(), text + MIN(off, uint64_t(length)), part, woff);
+    const uint32_t done = uint32_t(part);
+    answer(r.reply(), opOk, 0, &done, sizeof done);
+}
 
-    static bool handle(Endpoint& e, Request& r) {
-        if (e.channel) {
+static bool handle(Endpoint& e, Request& r) {
+    if (e.channel) {
+        answer(r.reply(), opOk, 0, &device.st, sizeof device.st);
+        return true;
+    }
+    switch (r.h.op) {
+        case opRead:
+            readText(e, r);
+            break;
+        case opFstat:
             answer(r.reply(), opOk, 0, &device.st, sizeof device.st);
-            return true;
-        }
-        switch (r.h.op) {
-            case opRead:
-                readText(e, r);
-                break;
-            case opFstat:
-                answer(r.reply(), opOk, 0, &device.st, sizeof device.st);
-                break;
-            default:
-                fail(r.reply(), EINVAL);
-        }
-        return false;
+            break;
+        default:
+            fail(r.reply(), EINVAL);
     }
+    return false;
+}
 
-    static int copy(const char* path, long long off, long long woff, long long n) {
-        char bytes[16];
-        memset(bytes, '.', sizeof bytes);
-        const int source = open(path, O_RDONLY);
-        const int window = memfd_create(bytes, sizeof bytes, O_RDWR);
-        off_t from = off;
-        off_t to = woff;
-        const ssize_t got = copy_file_range(source, &from, window, &to, size_t(n), 0);
-        printf("%zd %lld %lld %.16s\n", got, (long long)from, (long long)to, bytes);
-        return 0;
-    }
+static int copy(const char* path, long long off, long long woff, long long n) {
+    char bytes[16];
+    memset(bytes, '.', sizeof bytes);
+    const int source = open(path, O_RDONLY);
+    const int window = memfd_create(bytes, sizeof bytes, O_RDWR);
+    off_t from = off;
+    off_t to = woff;
+    const ssize_t got = copy_file_range(source, &from, window, &to, size_t(n), 0);
+    printf("%zd %lld %lld %.16s\n", got, (long long)from, (long long)to, bytes);
+    return 0;
+}
 
-    static int put(const char* path, const char* bytes) {
-        const int target = open(path, O_WRONLY);
-        const int window = memfd_create(const_cast<char*>(bytes), strlen(bytes), O_RDONLY);
-        printf("%zd\n", copy_file_range(window, nullptr, target, nullptr, strlen(bytes), 0));
-        return 0;
-    }
+static int put(const char* path, const char* bytes) {
+    const int target = open(path, O_WRONLY);
+    const int window = memfd_create(const_cast<char*>(bytes), strlen(bytes), O_RDONLY);
+    printf("%zd\n", copy_file_range(window, nullptr, target, nullptr, strlen(bytes), 0));
+    return 0;
 }
 
 int main(int argc, char** argv) {

@@ -10,6 +10,13 @@ Per-project settings that the shared [STYLE.md](STYLE.md) delegates here.
 - **Names.** Functions, types and macros of the libc ABI keep their external
   spelling (`__stdio_write`, `struct stat`, `O_CLOEXEC`). Our own helpers and
   locals follow STYLE.md: `lowerCamelCase`, `UpperCamelCase` types.
+- **Anonymous namespaces.** Unlike STYLE.md, an anonymous namespace holds
+  types only, as declarations, so that types of one name in a program's
+  several files do not collide; their methods are defined out of line after
+  it closes. A file's own functions and variables are `static` at file
+  scope, outside any namespace. An operator or a hash of such a type that a
+  template finds by argument-dependent lookup is the type's method: at file
+  scope that lookup does not find it.
 - **Kernel imports.** A libc function the kernel implements is lib/c's own
   function calling the import, declared `__KERNEL(name)` under the C name
   `__kernel_<name>` (`src/kernel.c`, or `__INLINE` in its header); the
