@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/binary"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -39,7 +40,7 @@ const (
 type Epoll interface {
 	File
 	ctl(op uint32, key epollKey, events uint32, data uint64) error
-	take(buf []byte, max int) int
+	scan(buf []byte, max int, armed bool, all []<-chan struct{}) (int, []<-chan struct{})
 }
 
 type epoll struct {
@@ -128,7 +129,7 @@ func (ep *epoll) stat(st *syscall.Stat_t) error {
 
 // poll: the epoll is readable when a member would be reported.
 func (ep *epoll) poll(events int16) int16 {
-	if ep.take(nil, 1) > 0 {
+	if n, _ := ep.scan(nil, 1, false, nil); n > 0 {
 		return (pollIn | pollRdnorm) & events
 	}
 
@@ -138,15 +139,33 @@ func (ep *epoll) poll(events int16) int16 {
 // changes are the members', each once: the ends a process reads share
 // its queue's.
 func (ep *epoll) changes(events int16) []<-chan struct{} {
+	ep.mu.Lock()
+	defer ep.mu.Unlock()
+
 	var all []<-chan struct{}
 
-	for _, m := range ep.snapshot() {
+	for _, m := range ep.order {
 		if !m.disabled {
-			all = appendChanges(all, m.key.obj.changes(int16(m.events)))
+			all = memberChanges(all, m)
 		}
 	}
 
 	return all
+}
+
+// A changeAppender adds its changes to a list, each once, without a list
+// of its own: a wait that asks many files takes them so.
+type changeAppender interface {
+	appendChanges(events int16, all []<-chan struct{}) []<-chan struct{}
+}
+
+// memberChanges adds a member's changes to all.
+func memberChanges(all []<-chan struct{}, m *epollMember) []<-chan struct{} {
+	if a, ok := m.key.obj.(changeAppender); ok {
+		return a.appendChanges(int16(m.events), all)
+	}
+
+	return appendChanges(all, m.key.obj.changes(int16(m.events)))
 }
 
 func (ep *epoll) flags() (int, error) {
@@ -285,22 +304,37 @@ func changedSince(last, now []<-chan struct{}) bool {
 	return false
 }
 
-// take reports up to max members that are ready into a guest's
-// epoll_event array, or only counts them without an array, and tells how
-// many; the next take starts after the last reported.
-func (ep *epoll) take(buf []byte, max int) int {
-	members := ep.snapshot()
+// scan reports up to max members that are ready into a guest's
+// epoll_event array, or counts one without an array, and tells how many;
+// the next scan starts after the last reported. Armed, it adds each
+// member's changes to all before it asks the member, so a change after
+// the ask closes one of them: a wait that finds none ready sleeps on
+// what it returns. The members are asked under the lock, in one pass.
+func (ep *epoll) scan(buf []byte, max int, armed bool, all []<-chan struct{}) (int, []<-chan struct{}) {
+	ep.mu.Lock()
+	defer ep.mu.Unlock()
+
+	count := len(ep.order)
+
+	if count == 0 {
+		return 0, all
+	}
+
+	at := ep.next % count
 	n := 0
 
-	for i, m := range members {
-		ep.mu.Lock()
-		events, disabled, last, seen, reported := m.events, m.disabled, m.last, m.edges, m.reported
-		ep.mu.Unlock()
+	for i := range count {
+		m := ep.order[(at+i)%count]
 
-		if disabled {
+		if m.disabled {
 			continue
 		}
 
+		if armed {
+			all = memberChanges(all, m)
+		}
+
+		events := m.events
 		revents := m.key.obj.poll(int16(events))
 
 		if revents == 0 {
@@ -314,36 +348,32 @@ func (ep *epoll) take(buf []byte, max int) int {
 			if counted, ok := m.key.obj.(edger); ok {
 				edges = counted.edges(int16(events))
 
-				if reported && edges == seen {
+				if m.reported && edges == m.edges {
 					continue
 				}
-			} else if now = m.key.obj.changes(int16(events)); !changedSince(last, now) {
+			} else if now = m.key.obj.changes(int16(events)); !changedSince(m.last, now) {
 				continue
 			}
 		}
 
 		if buf == nil {
-			return 1
+			return 1, all
 		}
 
 		binary.LittleEndian.PutUint32(buf[epollEventSize*n:], uint32(uint16(revents)))
 		binary.LittleEndian.PutUint64(buf[epollEventSize*n+8:], m.data)
 		n++
-		ep.mu.Lock()
 		m.last, m.edges, m.reported = now, edges, true
 		m.disabled = events&epollOneshot != 0
-		ep.mu.Unlock()
 
 		if n == max {
-			ep.mu.Lock()
 			ep.next += i + 1
-			ep.mu.Unlock()
 
 			break
 		}
 	}
 
-	return n
+	return n, all
 }
 
 // epollAt is the Epoll of a descriptor: another file is EINVAL.
@@ -422,35 +452,95 @@ func (p *Process) epollWait(epfd, at, max uint32, timeout int) (int, error) {
 		return 0, err
 	}
 
+	buf := p.span(at, max*epollEventSize)
 	end := deadline(timeout)
 
 	for {
-		if n := ep.take(p.span(at, max*epollEventSize), int(max)); n > 0 {
+		if n, _ := ep.scan(buf, int(max), false, nil); n > 0 {
 			return n, nil
 		}
 
-		wait := -1
+		if !end.IsZero() && !time.Now().Before(end) {
+			return 0, nil
+		}
+
+		if p.wakeSignal() {
+			return 0, syscall.EINTR
+		}
+
+		n, all := ep.scan(buf, int(max), true, p.waitChans[:0])
+
+		if n > 0 {
+			p.waitChans = all[:0]
+
+			return n, nil
+		}
+
+		var timer *time.Timer
+		var expired <-chan time.Time
 
 		if !end.IsZero() {
-			left := time.Until(end)
-
-			if left <= 0 {
-				return 0, nil
-			}
-
-			wait = waitMs(left)
+			timer = time.NewTimer(time.Until(end))
+			expired = timer.C
 		}
 
-		ready, err := p.waitObject(ep, pollIn, wait, false)
+		fired := p.sleepOn(all, expired)
+		p.waitChans = all[:0]
 
-		if err != nil {
-			return 0, err
+		if timer != nil {
+			timer.Stop()
 		}
 
-		if ready == 0 {
+		if fired {
 			return 0, nil
 		}
 	}
+}
+
+// sleepOn sleeps until the process is woken, a change of all closes or
+// expired fires, and tells whether it fired. A few changes, as many as the
+// files a process reads have, are a plain select.
+func (p *Process) sleepOn(all []<-chan struct{}, expired <-chan time.Time) bool {
+	switch len(all) {
+	case 0:
+		select {
+		case <-p.wake:
+		case <-expired:
+			return true
+		}
+
+		return false
+	case 1:
+		select {
+		case <-p.wake:
+		case <-all[0]:
+		case <-expired:
+			return true
+		}
+
+		return false
+	case 2:
+		select {
+		case <-p.wake:
+		case <-all[0]:
+		case <-all[1]:
+		case <-expired:
+			return true
+		}
+
+		return false
+	}
+
+	cases := make([]reflect.SelectCase, 0, len(all)+2)
+	cases = append(cases, recvCase(p.wake), recvCase(expired))
+
+	for _, ch := range all {
+		cases = append(cases, recvCase(ch))
+	}
+
+	chosen, _, _ := reflect.Select(cases)
+
+	return chosen == 1
 }
 
 func (p *Process) libcEpoll_wait(epfd, at, max, timeout uint32) uint32 {

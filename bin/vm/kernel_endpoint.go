@@ -141,23 +141,25 @@ func (e *pairEnd) unref() {
 // input, and that write it, for output; both when neither is asked. Most
 // often they are one process's, and so one change.
 func (e *pairEnd) changes(events int16) []<-chan struct{} {
+	return e.appendChanges(events, nil)
+}
+
+func (e *pairEnd) appendChanges(events int16, all []<-chan struct{}) []<-chan struct{} {
 	in, out := events&(pollIn|pollRdnorm|pollPri) != 0, events&(pollOut|pollWrnorm) != 0
 
 	if !in && !out {
 		in, out = true, true
 	}
 
-	var chans []<-chan struct{}
-
 	if in {
-		chans = append(chans, e.from.wait())
+		all = appendChange(all, e.from.wait())
 	}
 
 	if out {
-		chans = appendChanges(chans, []<-chan struct{}{e.to.writerWait()})
+		all = appendChange(all, e.to.writerWait())
 	}
 
-	return chans
+	return all
 }
 
 // edges count the changes of the end's sides, for an edge-triggered wait:

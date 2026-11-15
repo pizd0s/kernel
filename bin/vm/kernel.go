@@ -142,8 +142,10 @@ type Process struct {
 	// own state, each put the wake in it, and the call looks again.
 	wake chan struct{}
 	// queue is the process's queue (kernel_queue.go): every channel it
-	// reads wakes it by the queue's one change.
-	queue *procQueue
+	// reads wakes it by the queue's one change. waitChans is what its
+	// epoll_wait sleeps on, kept for the next.
+	queue     *procQueue
+	waitChans []<-chan struct{}
 }
 
 // execImage is a program a process runs; panicked by exec, it unwinds the

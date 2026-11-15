@@ -625,6 +625,15 @@ func appendChanges(all, more []<-chan struct{}) []<-chan struct{} {
 	return all
 }
 
+// appendChange adds one change to a list, unless it is in it.
+func appendChange(all []<-chan struct{}, ch <-chan struct{}) []<-chan struct{} {
+	if slices.Contains(all, ch) {
+		return all
+	}
+
+	return append(all, ch)
+}
+
 // recvCase is a receive from any channel, for a select over a list.
 func recvCase[T any](ch <-chan T) reflect.SelectCase {
 	return reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch)}
