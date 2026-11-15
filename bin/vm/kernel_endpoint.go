@@ -222,11 +222,21 @@ func (e *pairEnd) send(p *Process, data []byte, files []File, mode ioMode) error
 		return syscall.EMSGSIZE
 	}
 
+	return e.sendOwned(p, append([]byte(nil), data...), files, mode)
+}
+
+// sendOwned is send of data the caller gives away: the packet keeps it as
+// it is.
+func (e *pairEnd) sendOwned(p *Process, data []byte, files []File, mode ioMode) error {
+	if len(data) > packetMax {
+		return syscall.EMSGSIZE
+	}
+
 	for _, f := range files {
 		f.ref()
 	}
 
-	err := e.queue(p, packet{data: append([]byte(nil), data...), files: files}, mode)
+	err := e.queue(p, packet{data: data, files: files}, mode)
 
 	if err != nil {
 		dropFiles(files)
@@ -539,34 +549,32 @@ func (e *pairEnd) recvfrom(p *Process, buf, n, flags uint32) (int, []byte, error
 	return got, unixAddress(nil), err
 }
 
-// sendmsg sends the guest's msghdr: its iovecs gathered, the descriptors
-// of its SCM_RIGHTS as the packet's files.
+// sendmsg sends the guest's msghdr, read at once: the descriptors of its
+// SCM_RIGHTS as the packet's files, its iovecs gathered into the packet's
+// bytes. The descriptors are Linux's first: a bad one is EBADF even in a
+// message too long.
 func (e *pairEnd) sendmsg(p *Process, at, flags uint32) (int, error) {
-	if p.u32(at) != 0 {
+	h := p.span(at, sizeofMsghdr)
+
+	if binary.LittleEndian.Uint32(h) != 0 {
 		return 0, syscall.EISCONN
 	}
 
-	spans, err := p.ioSpans(p.u32(at+8), p.u32(at+12))
+	files, err := p.rights(binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
 
 	if err != nil {
 		return 0, err
 	}
 
-	files, err := p.rights(p.u32(at+16), p.u32(at+20))
+	data, err := p.gather(binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]), packetMax)
 
 	if err != nil {
 		return 0, err
-	}
-
-	var data []byte
-
-	for _, b := range spans {
-		data = append(data, b...)
 	}
 
 	mode := ioMode{nonblock: flags&msgDontwait != 0, quiet: flags&msgNosignal != 0}
 
-	if err := e.send(p, data, files, mode); err != nil {
+	if err := e.sendOwned(p, data, files, mode); err != nil {
 		return 0, err
 	}
 

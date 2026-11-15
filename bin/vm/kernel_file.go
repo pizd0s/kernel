@@ -34,6 +34,35 @@ func (p *Process) ioSpans(iovs uint32, count uint32) ([][]byte, error) {
 	return out, nil
 }
 
+// gather copies a guest iovec array's bytes into one buffer of their
+// length, made once: the spans are checked first, then EMSGSIZE past max
+// bytes, before any is copied.
+func (p *Process) gather(iovs, count uint32, max int) ([]byte, error) {
+	if count > 1024 {
+		return nil, syscall.EINVAL
+	}
+
+	table := p.span(iovs, 8*count)
+	total := 0
+
+	for i := range count {
+		total += len(p.span(binary.LittleEndian.Uint32(table[8*i:]), binary.LittleEndian.Uint32(table[8*i+4:])))
+	}
+
+	if total > max {
+		return nil, syscall.EMSGSIZE
+	}
+
+	data := make([]byte, total)
+	at := 0
+
+	for i := range count {
+		at += copy(data[at:], p.span(binary.LittleEndian.Uint32(table[8*i:]), binary.LittleEndian.Uint32(table[8*i+4:])))
+	}
+
+	return data, nil
+}
+
 // iovecs reads a guest iovec array as host iovecs into memory.
 func (p *Process) iovecs(iovs uint32, count uint32) ([]syscall.Iovec, error) {
 	spans, err := p.ioSpans(iovs, count)
