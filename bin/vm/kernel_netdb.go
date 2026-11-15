@@ -180,8 +180,8 @@ func numericHost(s string) (netip.Addr, uint32, bool) {
 	if zone != "" {
 		if n, err := strconv.ParseUint(zone, 10, 32); err == nil {
 			scope = uint32(n)
-		} else if ifc, err := net.InterfaceByName(zone); err == nil {
-			scope = uint32(ifc.Index)
+		} else if index := interfaceIndex(zone); index != 0 {
+			scope = index
 		} else {
 			return netip.Addr{}, 0, false
 		}
@@ -427,11 +427,10 @@ func (p *Process) getaddrinfo(node, service, hints, res uint32) int {
 		have6 = have6 || a.addr.Is6()
 	}
 
-	usable4, usable6 := true, true
-
-	if flags&aiAddrconfig != 0 {
-		usable4, usable6 = configured(afInet), configured(afInet6)
-	}
+	// AI_ADDRCONFIG takes the families the system has an address of: it
+	// has no network, so none.
+	usable := flags&aiAddrconfig == 0
+	usable4, usable6 := usable, usable
 
 	for _, a := range addrs {
 		switch {
@@ -1141,28 +1140,39 @@ func (p *Process) libcInet_netof(in uint32) uint32 {
 	return in >> 8
 }
 
-func (p *Process) libcIf_nametoindex(name uint32) uint32 {
-	ifc, err := net.InterfaceByName(p.str(name))
+// The system's network interfaces: it has no network, and the loopback
+// interface alone, lo, of index 1, as Linux always has.
+var interfaces = []string{"lo"}
 
-	if err != nil {
-		p.setErrno(syscall.ENXIO)
-
-		return 0
+// interfaceIndex is the index of the interface of a name, 0 for none.
+func interfaceIndex(name string) uint32 {
+	for i, n := range interfaces {
+		if n == name {
+			return uint32(i + 1)
+		}
 	}
 
-	return uint32(ifc.Index)
+	return 0
+}
+
+func (p *Process) libcIf_nametoindex(name uint32) uint32 {
+	index := interfaceIndex(p.str(name))
+
+	if index == 0 {
+		p.setErrno(syscall.ENXIO)
+	}
+
+	return index
 }
 
 func (p *Process) libcIf_indextoname(index, buf uint32) uint32 {
-	ifc, err := net.InterfaceByIndex(int(index))
-
-	if err != nil {
+	if index == 0 || int(index) > len(interfaces) {
 		p.setErrno(syscall.ENXIO)
 
 		return 0
 	}
 
-	p.putString(buf, truncate(ifc.Name, 15))
+	p.putString(buf, interfaces[index-1])
 
 	return buf
 }
@@ -1170,18 +1180,10 @@ func (p *Process) libcIf_indextoname(index, buf uint32) uint32 {
 // if_nameindex's array and names are one block, which
 // if_freenameindex frees.
 func (p *Process) libcIf_nameindex() uint32 {
-	list, err := net.Interfaces()
+	size := 8 * uint32(len(interfaces)+1)
 
-	if err != nil {
-		p.setErrno(errnoOf(err))
-
-		return 0
-	}
-
-	size := 8 * uint32(len(list)+1)
-
-	for _, ifc := range list {
-		size += uint32(len(ifc.Name)) + 1
+	for _, name := range interfaces {
+		size += uint32(len(name)) + 1
 	}
 
 	block := p.malloc(size)
@@ -1192,17 +1194,17 @@ func (p *Process) libcIf_nameindex() uint32 {
 		return 0
 	}
 
-	names := block + 8*uint32(len(list)+1)
+	names := block + 8*uint32(len(interfaces)+1)
 
-	for i, ifc := range list {
-		p.put32(block+8*uint32(i), uint32(ifc.Index))
+	for i, name := range interfaces {
+		p.put32(block+8*uint32(i), uint32(i+1))
 		p.put32(block+8*uint32(i)+4, names)
-		p.putString(names, ifc.Name)
-		names += uint32(len(ifc.Name)) + 1
+		p.putString(names, name)
+		names += uint32(len(name)) + 1
 	}
 
-	p.put32(block+8*uint32(len(list)), 0)
-	p.put32(block+8*uint32(len(list))+4, 0)
+	p.put32(block+8*uint32(len(interfaces)), 0)
+	p.put32(block+8*uint32(len(interfaces))+4, 0)
 
 	return block
 }

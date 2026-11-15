@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
-	"os"
 	"slices"
 	"strings"
 	"syscall"
@@ -683,9 +682,9 @@ func (p *Process) fatal(msg string) {
 	p.exitWith(int(syscall.SIGABRT))
 }
 
-// crash reports what ends the process on the host's standard error: the
-// message, then the trace (trace.go), each line marked with the program
-// and the pid, as the lines of processes interleave.
+// crash reports what ends the process on the console's standard error
+// (report): the message, then the trace (trace.go), each line marked with
+// the program and the pid, as the lines of processes interleave.
 func (p *Process) crash(msg string, stack []uintptr) {
 	name := "?"
 
@@ -700,7 +699,7 @@ func (p *Process) crash(msg string, stack []uintptr) {
 		fmt.Fprintf(&b, "%s[%d]:     %s\n", name, p.pid, line)
 	}
 
-	os.Stderr.WriteString(b.String())
+	p.k.report(b.String())
 }
 
 const (

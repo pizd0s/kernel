@@ -11,7 +11,10 @@ its signals.
     test_busybox.py <vm> <rootfs> <tests.img>
 """
 import hashlib
+import os
+import select
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -108,18 +111,38 @@ def run(vm, rootfs, image, argv, stdin, env=None):
     return subprocess.run(boot(vm, rootfs, image, script), input=stdin.encode(), capture_output=True, timeout=60)
 
 
+def until(fd, marker, seconds):
+    """What fd gives until it has given marker, or seconds pass: the shell
+    reads its input once it is compiled and its first prompt is out."""
+    out, end = b"", time.monotonic() + seconds
+
+    while marker not in out and time.monotonic() < end:
+        if select.select([fd], [], [], 0.05)[0]:
+            chunk = os.read(fd, 4096)
+
+            if not chunk:
+                break
+
+            out += chunk
+
+    return out
+
+
 def interrupt(vm, rootfs, image, first):
-    """An interactive shell, whose standard output is a pipe nobody reads
-    yet, gets SIGINT from a process of the system two seconds on, none of
-    its children: after first, then the line that ends it."""
-    script = "( (sleep 2; kill -INT $$) & ); exec env PS1='$ ' sh -i"
-    p = subprocess.Popen(boot(vm, rootfs, image, script), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    """An interactive shell gets the host's SIGINT of vm, which the
+    console's foreground group, the shell's, takes: after first, while its
+    standard output is a pipe nobody reads, then the line that ends it."""
+    p = subprocess.Popen(boot(vm, rootfs, image, "exec env PS1='$ ' sh -i"), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE)
+    prompt = until(p.stdout.fileno(), b"$ ", 60)
 
     if first:
         p.stdin.write(first.encode() + b"\n")
         p.stdin.flush()
 
-    time.sleep(3)
+    time.sleep(0.5)
+    p.send_signal(signal.SIGINT)
+    time.sleep(0.3)
     p.stdin.write(b"echo after; exit 5\n")
     p.stdin.flush()
 
@@ -129,7 +152,7 @@ def interrupt(vm, rootfs, image, first):
         p.kill()
         out, _ = p.communicate()
 
-    return out.decode(errors="replace"), p.returncode
+    return (prompt + out).decode(errors="replace"), p.returncode
 
 
 # files: a tree made, archived, compressed and read back, in one boot

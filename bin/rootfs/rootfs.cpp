@@ -3079,7 +3079,7 @@ constexpr int maxKept = 2 + 32;
 // are the child's 3 and on, in order. The program is the file path
 // names, or the one of the descriptor program. A session's leads one of
 // its own, as the shell does, whose signals to its group are none of
-// the system's.
+// the system's, its group the console's foreground one.
 static pid_t spawn(const char* path, char* const* argv, char* const* env, int root, const int* kept = nullptr, int count = 0, int program = -1,
                    bool session = false) {
     const pid_t pid = fork();
@@ -3090,6 +3090,11 @@ static pid_t spawn(const char* path, char* const* argv, char* const* env, int ro
         if (session && setsid() < 0) {
             dprintf(STDERR_FILENO, "rootfs: setsid: errno %d\n", errno);
             _exit(127);
+        }
+        if (session) {
+            // The console's foreground group: what the host's terminal
+            // makes of a ^C goes to the session's.
+            tcsetpgrp(STDIN_FILENO, getpid());
         }
         if (root >= 0 && (fchdir(root) != 0 || chroot(".") != 0)) {
             dprintf(STDERR_FILENO, "rootfs: chroot: errno %d\n", errno);

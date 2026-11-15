@@ -93,47 +93,6 @@ func (s *subscribers) takeOver(from *subscribers) {
 	s.mu.Unlock()
 }
 
-// A waitQueue is a wait of a goroutine of the kernel's that is no
-// process, an inbox's (kernel_inbox.go): the ids that came since the
-// waiter took them last, and the channel the first of them closes for the
-// waiter asleep.
-type waitQueue struct {
-	mu  sync.Mutex
-	ids []uint64
-	ch  chan struct{}
-}
-
-func (q *waitQueue) wake(id uint64) {
-	q.mu.Lock()
-
-	if !slices.Contains(q.ids, id) {
-		q.ids = append(q.ids, id)
-	}
-
-	if q.ch != nil {
-		close(q.ch)
-		q.ch = nil
-	}
-
-	q.mu.Unlock()
-}
-
-// sleep is the channel a waiter sleeps on: closed once an id came.
-func (q *waitQueue) sleep() <-chan struct{} {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if len(q.ids) > 0 {
-		return closedChannel
-	}
-
-	if q.ch == nil {
-		q.ch = make(chan struct{})
-	}
-
-	return q.ch
-}
-
 // mailMax is how much mail a process's box holds.
 const mailMax = 16
 
@@ -192,20 +151,6 @@ func (p *Process) waitMail(end time.Time) bool {
 		return true
 	}
 }
-
-// reset forgets the ids that came.
-func (q *waitQueue) reset() {
-	q.mu.Lock()
-	q.ids = q.ids[:0]
-	q.mu.Unlock()
-}
-
-var closedChannel = func() chan struct{} {
-	ch := make(chan struct{})
-	close(ch)
-
-	return ch
-}()
 
 // msgChannel is a channel of messages: the oldest first, at most limit of
 // them, its ends, and the subscriptions it wakes, readers as it may

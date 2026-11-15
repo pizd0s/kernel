@@ -5,9 +5,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"math/rand/v2"
-	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -100,6 +98,17 @@ func checked(path string) error {
 
 	return nil
 }
+
+const (
+	oPath             = 0o10000000
+	atFdcwd           = -100
+	atSymlinkNofollow = 0x100
+	atRemovedir       = 0x200
+	atEaccess         = 0x200
+	atSymlinkFollow   = 0x400
+	atEmptyPath       = 0x1000
+	sIfifo            = 0o10000
+)
 
 // onVFS runs call on the handle a path relative to dirfd starts at when
 // it is rootfs's, the VFS's, which walks the path whole: handled says it
@@ -239,44 +248,6 @@ func (p *Process) through(s step, w *walk) (Dir, string, error) {
 	return s.dir, target, nil
 }
 
-// hostDevice is the directory, with a reference, and the name of a device
-// of the host that a path names in a root of the host (kernel_hostdir.go
-// hostDevices); ok is false for any other path. A relative path is one
-// from d, the directory it starts at: one without a path, removed,
-// outside the root or too long, names no device, but EIO finding it fails
-// the call.
-func (p *Process) hostDevice(d Dir, path string) (dev Dir, name string, ok bool, err error) {
-	if _, host := p.root.(*hostDir); !host {
-		return nil, "", false, nil
-	}
-
-	full := path
-
-	if !strings.HasPrefix(path, "/") {
-		base, err := d.path(p)
-
-		if err == syscall.EIO {
-			return nil, "", false, err
-		}
-
-		if err != nil {
-			return nil, "", false, nil
-		}
-
-		full = base + "/" + path
-	}
-
-	clean := filepath.Clean(full)
-
-	if !hostDevice(clean) {
-		return nil, "", false, nil
-	}
-
-	dir, name := filepath.Split(clean)
-
-	return newDeviceDir(dir), name, true, nil
-}
-
 // lookup is what a path relative to dirfd names to a call that looks at
 // it: the directory of the last name, the name, "" when the directory is
 // itself what the path names, and its stat. A last symbolic link is
@@ -291,18 +262,6 @@ func (p *Process) lookup(dirfd int32, path string, follow bool, st *syscall.Stat
 
 	if err != nil {
 		return nil, "", err
-	}
-
-	if dev, name, ok, err := p.hostDevice(d, path); ok || err != nil {
-		d.unref()
-
-		if err == nil {
-			if err = dev.statName(p, name, st); err != nil {
-				dev.unref()
-			}
-		}
-
-		return dev, name, err
 	}
 
 	w := &walk{root: p.root}
@@ -421,18 +380,6 @@ func (p *Process) openAt(dirfd int32, path string, flags int, mode uint32) (File
 		defer v.unref()
 
 		return v.openPath(p, path, flags, mode)
-	}
-
-	if dev, name, ok, err := p.hostDevice(d, path); ok || err != nil {
-		d.unref()
-
-		if err != nil {
-			return nil, err
-		}
-
-		defer dev.unref()
-
-		return dev.openName(p, name, flags, mode)
 	}
 
 	follow := flags&syscall.O_NOFOLLOW == 0 && flags&(syscall.O_CREAT|syscall.O_EXCL) != syscall.O_CREAT|syscall.O_EXCL
@@ -1663,56 +1610,6 @@ func (p *Process) mkstemp(template, suffix, flags uint32) uint32 {
 	})
 
 	return p.result(fd, err)
-}
-
-// unixPath is the host's address of a guest path of a socket: a socket of
-// a root of the host, by the descriptor of its directory; bind makes the
-// last name, connect finds what the path names. A path of a server names
-// no socket of the host: EOPNOTSUPP.
-func (p *Process) unixPath(guest string, bind bool, call func(host string) error) error {
-	if handled, err := p.onVFS(atFdcwd, guest, func(v *remoteDir) error {
-		return syscall.EOPNOTSUPP
-	}); handled {
-		return err
-	}
-
-	if bind {
-		s, err := p.walkTo(atFdcwd, guest)
-
-		if err != nil {
-			return err
-		}
-
-		defer s.dir.unref()
-		d, ok := s.dir.(*hostDir)
-
-		if !ok {
-			return syscall.EOPNOTSUPP
-		}
-
-		if s.kind != lastName {
-			return syscall.EADDRINUSE
-		}
-
-		return call(fmt.Sprintf("/proc/self/fd/%d/%s", d.fd, s.last))
-	}
-
-	return p.onName(atFdcwd, guest, true, func(d Dir, name string, st *syscall.Stat_t) error {
-		if _, ok := d.(*hostDir); !ok {
-			return syscall.EOPNOTSUPP
-		}
-
-		f, err := d.openName(p, name, oPath|syscall.O_NOFOLLOW, 0)
-
-		if err != nil {
-			return err
-		}
-
-		defer f.unref()
-		fd, _ := hostFdOf(f)
-
-		return call(procFd(fd))
-	})
 }
 
 // A DIR is a block of the heap: the descriptor, the position and end of

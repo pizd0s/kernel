@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"maps"
-	"os"
 	"slices"
 	"syscall"
 	"time"
@@ -382,7 +381,9 @@ func (p *Process) waitid(idtype, id, info, options uint32) uint32 {
 			p.put32(info, uint32(syscall.SIGCHLD))
 			p.put32(info+8, uint32(code))
 			p.put32(info+12, uint32(q))
-			p.put32(info+16, uint32(os.Getuid()))
+			// The kernel keeps no ids of a reaped child: its real uid is
+			// taken to be its parent's, which a child has but by setuid.
+			p.put32(info+16, p.cred.uid())
 			p.put32(info+20, uint32(value))
 		}
 	}

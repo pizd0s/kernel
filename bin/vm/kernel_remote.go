@@ -245,21 +245,18 @@ func (n *remoteNode) setsockopt(p *Process, level, name, at, size uint32) error 
 }
 
 // request sends a request on an endpoint, the files with it, as the
-// host's user vm runs as, whose ids are taken once: vm never changes them.
-// The kernel waits as itself, not as the process: nothing of the process's
-// interrupts a call to a server.
+// process's effective user and group. The kernel waits as itself, not as
+// the process: nothing of the process's interrupts a call to a server.
 func request(p *Process, to *pairEnd, op, arg uint32, body []byte, files []File) error {
 	data := make([]byte, remoteHeader+len(body))
 	binary.LittleEndian.PutUint32(data, op)
 	binary.LittleEndian.PutUint32(data[4:], arg)
-	binary.LittleEndian.PutUint32(data[8:], hostEuid)
-	binary.LittleEndian.PutUint32(data[12:], hostEgid)
+	binary.LittleEndian.PutUint32(data[8:], p.cred.euid())
+	binary.LittleEndian.PutUint32(data[12:], p.cred.egid())
 	copy(data[remoteHeader:], body)
 
 	return to.kernelSend(p, data, files)
 }
-
-var hostEuid, hostEgid = uint32(syscall.Geteuid()), uint32(syscall.Getegid())
 
 // reply waits for the reply on an endpoint: the reply must come to the
 // request that was sent. A server that goes away is EIO; its error is
@@ -379,21 +376,20 @@ func decodeStatfs(b []byte, st *syscall.Statfs_t) error {
 
 // permits tells whether the process may read (4), write (2) or execute
 // (1) what a stat describes, as a server decides it: root everything but
-// executing what nobody may, the owner by the owner's bits, the process's
-// group, its effective gid, by the group's, everyone else by the others'.
-func permits(st *syscall.Stat_t, want uint32) bool {
-	uid, gid := hostEuid, hostEgid
-
-	if uid == 0 {
+// executing what nobody may, the owner by the owner's bits, a member of
+// the group, its effective gid or a supplementary group, by the group's,
+// everyone else by the others'.
+func (p *Process) permits(st *syscall.Stat_t, want uint32) bool {
+	if p.cred.privileged() {
 		return want&1 == 0 || st.Mode&syscall.S_IFMT == syscall.S_IFDIR || st.Mode&0o111 != 0
 	}
 
 	bits := st.Mode
 
 	switch {
-	case uid == st.Uid:
+	case p.cred.euid() == st.Uid:
 		bits >>= 6
-	case gid == st.Gid:
+	case p.cred.inGroup(st.Gid):
 		bits >>= 3
 	}
 
@@ -560,15 +556,8 @@ func (n *remoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error 
 // identity is a directory's device and inode, which a server finds the
 // root of a process by.
 func identity(p *Process, d Dir) (uint64, uint64) {
-	switch d := d.(type) {
-	case *remoteDir:
+	if d, ok := d.(*remoteDir); ok {
 		return d.ident(p)
-	case *hostDir:
-		var st syscall.Stat_t
-
-		if syscall.Fstat(d.fd, &st) == nil {
-			return st.Dev, st.Ino
-		}
 	}
 
 	return 0, 0

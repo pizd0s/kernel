@@ -734,14 +734,6 @@ func (p *Process) libcDup3(old, new, flags uint32) uint32 {
 	return p.result(p.dupTo(old, new, flags&syscall.O_CLOEXEC != 0))
 }
 
-func (p *Process) libcTcflow(fd, action uint32) uint32 {
-	return p.termiosIoctl(fd, tcxonc, int(action))
-}
-
-func (p *Process) libcTcflush(fd, queue uint32) uint32 {
-	return p.termiosIoctl(fd, tcflsh, int(queue))
-}
-
 // tcgetsid is the caller's session: the kernel keeps no session of
 // a terminal.
 func (p *Process) libcTcgetsid(fd uint32) uint32 {
@@ -958,183 +950,6 @@ const (
 	vmin   = 6
 )
 
-// ioctl: the descriptor's own requests, FIONBIO, FIOCLEX and FIONCLEX,
-// are the kernel's; the rest go to the object with the host's layout.
-func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	switch req {
-	case fionbio:
-		fl, err := obj.flags()
-
-		if err != nil {
-			return p.result(0, err)
-		}
-
-		fl &^= syscall.O_NONBLOCK
-
-		if p.u32(p.varArg(va, 0)) != 0 {
-			fl |= syscall.O_NONBLOCK
-		}
-
-		return p.result(0, obj.setFlags(fl))
-	case fioclex, fionclex:
-		p.files.slots[fd].cloexec = req == fioclex
-
-		return p.result(0, nil)
-	}
-
-	i, ok := obj.(Ioctl)
-
-	if !ok {
-		return p.result(0, syscall.ENOTTY)
-	}
-
-	switch req {
-	case tiocgwinsz, tiocswinsz:
-		var ws [8]byte
-		at := p.varArg(va, 0)
-
-		if req == tiocswinsz {
-			copy(ws[:], p.span(at, 8))
-		}
-
-		if err := i.ioctl(uintptr(req), unsafe.Pointer(&ws)); err != nil {
-			return p.result(0, err)
-		}
-
-		if req == tiocgwinsz {
-			copy(p.span(at, 8), ws[:])
-		}
-
-		return p.result(0, nil)
-	case fionread:
-		var n int32
-
-		if err := i.ioctl(fionread, unsafe.Pointer(&n)); err != nil {
-			return p.result(0, err)
-		}
-
-		p.put32(p.varArg(va, 0), uint32(n))
-
-		return p.result(0, nil)
-	case tcgets:
-		return p.libcTcgetattr(fd, p.varArg(va, 0))
-	case tcsets, tcsets + 1, tcsets + 2:
-		return p.libcTcsetattr(fd, req-tcsets, p.varArg(va, 0))
-	case tiocgpgrp:
-		r := p.libcTcgetpgrp(fd)
-
-		if int32(r) >= 0 {
-			p.put32(p.varArg(va, 0), r)
-			r = 0
-		}
-
-		return r
-	case tiocspgrp:
-		return p.libcTcsetpgrp(fd, p.u32(p.varArg(va, 0)))
-	}
-
-	return p.result(0, syscall.ENOTTY)
-}
-
-// hostTermios is Linux's struct termios of TCGETS: the guest's has 32
-// control characters and the speeds after them.
-type hostTermios struct {
-	iflag, oflag, cflag, lflag uint32
-	line                       byte
-	cc                         [19]byte
-}
-
-// terminal is the Ioctl of a descriptor that is a terminal: one that
-// answers TCGETS.
-func (p *Process) terminal(fd uint32) (Ioctl, *hostTermios, error) {
-	i, err := p.ioctlAt(fd)
-
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var t hostTermios
-
-	if err := i.ioctl(tcgets, unsafe.Pointer(&t)); err != nil {
-		return nil, nil, err
-	}
-
-	return i, &t, nil
-}
-
-func (p *Process) libcIsatty(fd uint32) uint32 {
-	if _, err := p.fd(fd); err != nil {
-		p.setErrno(syscall.EBADF)
-
-		return 0
-	}
-
-	if _, _, err := p.terminal(fd); err != nil {
-		p.setErrno(syscall.ENOTTY)
-
-		return 0
-	}
-
-	return 1
-}
-
-func (p *Process) libcTcgetattr(fd, at uint32) uint32 {
-	_, t, err := p.terminal(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	b := p.span(at, 60)
-	clear(b)
-	le := binary.LittleEndian
-	le.PutUint32(b, t.iflag)
-	le.PutUint32(b[4:], t.oflag)
-	le.PutUint32(b[8:], t.cflag)
-	le.PutUint32(b[12:], t.lflag)
-	b[16] = t.line
-	copy(b[17:], t.cc[:])
-	speed := t.cflag & 0o10017
-	le.PutUint32(b[52:], speed)
-	le.PutUint32(b[56:], speed)
-
-	return p.result(0, nil)
-}
-
-func (p *Process) libcTcsetattr(fd, action, at uint32) uint32 {
-	i, err := p.ioctlAt(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	if action > 2 {
-		return p.result(0, syscall.EINVAL)
-	}
-
-	t := p.guestTermios(at)
-
-	return p.result(0, i.ioctl(uintptr(tcsets+action), unsafe.Pointer(&t)))
-}
-
-// termiosIoctl runs an ioctl of a terminal's with an int argument, which
-// the object takes pointed to.
-func (p *Process) termiosIoctl(fd uint32, req uintptr, arg int) uint32 {
-	i, err := p.ioctlAt(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	return p.result(0, i.ioctl(req, unsafe.Pointer(&arg)))
-}
-
 // cbaud is the speed of termios.h's c_cflag.
 const cbaud = 0o010017
 
@@ -1310,18 +1125,123 @@ func (p *Process) libcPipe2(fds, flags uint32) uint32 {
 	return p.pipe(fds, flags)
 }
 
-func (p *Process) libcTcdrain(fd uint32) uint32 {
-	return p.termiosIoctl(fd, tcsbrk, 1)
-}
-
-func (p *Process) libcTcsendbreak(fd, duration uint32) uint32 {
-	return p.termiosIoctl(fd, tcsbrk, 0)
-}
-
 func (p *Process) libcCfsetospeed(at, speed uint32) uint32 {
 	return p.cfsetspeed(at, speed)
 }
 
 func (p *Process) libcCfsetspeed(at, speed uint32) uint32 {
 	return p.cfsetspeed(at, speed)
+}
+
+// ioctl: the descriptor's own requests, FIONBIO, FIOCLEX and FIONCLEX,
+// are the kernel's, as are the console's foreground group, TIOCGPGRP and
+// TIOCSPGRP (kernel_console.go), and FIONREAD of a pipe. The system has no
+// terminal: the rest is ENOTTY.
+func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
+	obj, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	switch req {
+	case fionbio:
+		fl, err := obj.flags()
+
+		if err != nil {
+			return p.result(0, err)
+		}
+
+		fl &^= syscall.O_NONBLOCK
+
+		if p.u32(p.varArg(va, 0)) != 0 {
+			fl |= syscall.O_NONBLOCK
+		}
+
+		return p.result(0, obj.setFlags(fl))
+	case fioclex, fionclex:
+		p.files.slots[fd].cloexec = req == fioclex
+
+		return p.result(0, nil)
+	case tiocgpgrp:
+		r := p.libcTcgetpgrp(fd)
+
+		if int32(r) >= 0 {
+			p.put32(p.varArg(va, 0), r)
+			r = 0
+		}
+
+		return r
+	case tiocspgrp:
+		return p.libcTcsetpgrp(fd, p.u32(p.varArg(va, 0)))
+	case fionread:
+		i, ok := obj.(Ioctl)
+
+		if !ok {
+			break
+		}
+
+		var n int32
+
+		if err := i.ioctl(fionread, unsafe.Pointer(&n)); err != nil {
+			return p.result(0, err)
+		}
+
+		p.put32(p.varArg(va, 0), uint32(n))
+
+		return p.result(0, nil)
+	}
+
+	return p.result(0, syscall.ENOTTY)
+}
+
+// notTerminal is the answer of a call of a terminal's on a descriptor,
+// which none is: ENOTTY, EBADF for a descriptor not open.
+func (p *Process) notTerminal(fd uint32) uint32 {
+	if _, err := p.fd(fd); err != nil {
+		return p.result(0, err)
+	}
+
+	return p.result(0, syscall.ENOTTY)
+}
+
+func (p *Process) libcIsatty(fd uint32) uint32 {
+	if _, err := p.fd(fd); err != nil {
+		p.setErrno(syscall.EBADF)
+
+		return 0
+	}
+
+	p.setErrno(syscall.ENOTTY)
+
+	return 0
+}
+
+func (p *Process) libcTcgetattr(fd, at uint32) uint32 {
+	return p.notTerminal(fd)
+}
+
+// tcsetattr's action is musl's to check first: EINVAL past TCSAFLUSH.
+func (p *Process) libcTcsetattr(fd, action, at uint32) uint32 {
+	if action > 2 {
+		return p.result(0, syscall.EINVAL)
+	}
+
+	return p.notTerminal(fd)
+}
+
+func (p *Process) libcTcflow(fd, action uint32) uint32 {
+	return p.notTerminal(fd)
+}
+
+func (p *Process) libcTcflush(fd, queue uint32) uint32 {
+	return p.notTerminal(fd)
+}
+
+func (p *Process) libcTcdrain(fd uint32) uint32 {
+	return p.notTerminal(fd)
+}
+
+func (p *Process) libcTcsendbreak(fd, duration uint32) uint32 {
+	return p.notTerminal(fd)
 }

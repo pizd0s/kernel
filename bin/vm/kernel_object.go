@@ -14,10 +14,10 @@ import (
 // casts to: a Transfer reads and writes, a Seeker seeks, a Dir lists
 // entries, a Node is a file of a host file system with its metadata, a
 // Socket speaks sockets, an Ioctl takes ioctls, a Locker takes locks, an
-// Epoll watches files (kernel_epoll.go). A file of the host
-// (kernel_host.go) plays the roles the host's kind of file does and keeps
-// its host descriptor to itself; a file of the kernel (a pipe,
-// kernel_pipe.go) plays only its own.
+// Epoll watches files (kernel_epoll.go). Every file is the kernel's: one
+// of a server (kernel_remote.go), a pipe (kernel_pipe.go), a socket, a
+// memfd, the console or a disk (kernel_console.go); each plays its own
+// roles.
 type File interface {
 	// ref takes a reference, unref drops one; the last closes the object.
 	ref()
@@ -71,10 +71,9 @@ type Seeker interface {
 // names the calls make their last step on, as Linux's namei has it
 // (kernel_path.go). resolve walks a path from the directory to the
 // directory of its last name, or to where the walk goes on, which only it
-// knows: the host's directories walk with the host's calls one name at a
-// time (kernel_hostdir.go). A handle of rootfs's is a Dir too, but the
-// kernel walks nothing of the VFS's: a call with a path goes to rootfs
-// whole (kernel_vfs.go), and its names are paths of one name from it.
+// knows. A handle of rootfs's is a Dir, but the kernel walks nothing of
+// the VFS's: a call with a path goes to rootfs whole (kernel_vfs.go), and
+// its names are paths of one name from it.
 // The calls on a name never follow it: a symbolic link is itself, and the
 // caller follows it when it means to; "" names the directory itself for
 // the calls that look at a name. path is the directory's path from the

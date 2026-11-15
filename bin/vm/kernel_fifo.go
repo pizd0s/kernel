@@ -10,7 +10,7 @@ import "syscall"
 // writer or, with O_RDWR, both (kernel_pipe.go join). An open to read
 // waits for a writer and one to write for a reader, as POSIX has it,
 // unless O_NONBLOCK: then a reader goes on alone and a writer with no
-// reader is ENXIO. A FIFO of a host root is the host's (kernel_inbox.go).
+// reader is ENXIO.
 
 type fifoKey struct {
 	dev, ino uint64

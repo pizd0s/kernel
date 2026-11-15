@@ -75,8 +75,7 @@ type epollKey struct {
 // report of it gives. queued says it is marked; disabled that it is a
 // one-shot member reported; removed that it is out of the set. asking
 // says a wait asks the file, and raced that a mark came meanwhile: the
-// file's poll can wake its subscriptions itself, a host's that reads what
-// the host has into its inbox (kernel_host.go), so that mark is the
+// file's poll can wake its subscriptions itself, so that mark is the
 // wait's to keep, for a member not ready, or to drop, for one it reports
 // edge-triggered: the report gives what the mark told.
 type epollMember struct {
@@ -134,7 +133,7 @@ func (ep *epoll) unref() {
 
 // stat is an anonymous inode's: no type, as Linux has it.
 func (ep *epoll) stat(p *Process, st *syscall.Stat_t) error {
-	*st = syscall.Stat_t{Ino: ep.ino, Mode: 0o600, Nlink: 1, Uid: uint32(syscall.Getuid()), Gid: uint32(syscall.Getgid()), Blksize: 4096}
+	*st = syscall.Stat_t{Ino: ep.ino, Mode: 0o600, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
 	st.Atim = syscall.NsecToTimespec(ep.made.UnixNano())
 	st.Mtim, st.Ctim = st.Atim, st.Atim
 

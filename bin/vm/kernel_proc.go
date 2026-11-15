@@ -7,13 +7,11 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"math"
-	"os"
 	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
-	"unsafe"
 )
 
 // Processes: identity, limits, the environment and exec. exec runs a
@@ -64,11 +62,8 @@ func (k *Kernel) code(p *Process, f File, name string) (*Code, error) {
 }
 
 // programData is the executable a file begins with, read at offsets to
-// its length and no further, as exec reads a program and vm run its
-// first, without a process. A file that begins with none is not read on;
-// for vm run, module, it is read whole, a module of a WASI command, and ok
-// is false. EACCES when it cannot be read at an offset, ENOEXEC when it
-// ends before its size.
+// its length and no further, as exec reads a program (readProgram).
+// EACCES when it cannot be read at an offset.
 func programData(p *Process, f File, module bool) (data []byte, ok bool, err error) {
 	var st syscall.Stat_t
 
@@ -82,19 +77,26 @@ func programData(p *Process, f File, module bool) (data []byte, ok bool, err err
 		return nil, false, syscall.EACCES
 	}
 
-	header := make([]byte, min(exeHeader, max(st.Size, 0)))
+	return readProgram(st.Size, func(b []byte, off int64) error { return readAt(p, t, b, off) }, module)
+}
 
-	if err := readAt(p, t, header, 0); err != nil {
+// readProgram is the executable a file of size bytes begins with, which
+// readAt reads at offsets to its length and no further, as exec reads a
+// program and vm run its first. A file that begins with none is not read
+// on; for vm run, module, it is read whole, a module of a WASI command,
+// and ok is false. ENOEXEC when it ends before its size.
+func readProgram(size int64, readAt func(b []byte, off int64) error, module bool) (data []byte, ok bool, err error) {
+	header := make([]byte, min(exeHeader, max(size, 0)))
+
+	if err := readAt(header, 0); err != nil {
 		return nil, false, err
 	}
 
-	length, err := exeLength(header, st.Size)
+	length, err := exeLength(header, size)
 
 	if err != nil || length == 0 && !module {
 		return nil, false, err
 	}
-
-	size := st.Size
 
 	if length > 0 {
 		size = int64(length)
@@ -103,7 +105,7 @@ func programData(p *Process, f File, module bool) (data []byte, ok bool, err err
 	data = make([]byte, size)
 	copy(data, header)
 
-	if err := readAt(p, t, data[len(header):], int64(len(header))); err != nil {
+	if err := readAt(data[len(header):], int64(len(header))); err != nil {
 		return nil, false, err
 	}
 
@@ -287,7 +289,7 @@ func (p *Process) loadFrom(path string, first File, argv []string) (*execImage, 
 
 				return nil, err
 			}
-		} else if !permits(&st, 1) {
+		} else if !p.permits(&st, 1) {
 			f.unref()
 
 			return nil, syscall.EACCES
@@ -587,27 +589,23 @@ func (p *Process) libcGetpgrp() uint32 {
 }
 
 func (p *Process) libcGetuid() uint32 {
-	return uint32(os.Getuid())
+	return p.cred.uid()
 }
 
 func (p *Process) libcGeteuid() uint32 {
-	return uint32(os.Geteuid())
+	return p.cred.euid()
 }
 
 func (p *Process) libcGetgid() uint32 {
-	return uint32(os.Getgid())
+	return p.cred.gid()
 }
 
 func (p *Process) libcGetegid() uint32 {
-	return uint32(os.Getegid())
+	return p.cred.egid()
 }
 
 func (p *Process) libcGetgroups(n, list uint32) uint32 {
-	groups, err := os.Getgroups()
-
-	if err != nil {
-		return p.result(0, err)
-	}
+	groups := p.cred.groups
 
 	if n == 0 {
 		return p.result(len(groups), nil)
@@ -618,24 +616,10 @@ func (p *Process) libcGetgroups(n, list uint32) uint32 {
 	}
 
 	for i, g := range groups {
-		p.put32(list+uint32(4*i), uint32(g))
+		p.put32(list+uint32(4*i), g)
 	}
 
 	return p.result(len(groups), nil)
-}
-
-func (p *Process) libcUname(at uint32) uint32 {
-	var u syscall.Utsname
-
-	if err := syscall.Uname(&u); err != nil {
-		return p.result(0, err)
-	}
-
-	b := p.span(at, 390)
-	raw := unsafe.Slice((*byte)(unsafe.Pointer(&u)), unsafe.Sizeof(u))
-	copy(b, raw)
-
-	return p.result(0, nil)
 }
 
 // sysconf's -1 for timezone names and the buffers of the user and group
@@ -956,20 +940,23 @@ func (p *Process) libcSetpgid(pid, pgid uint32) uint32 {
 	return p.result(0, nil)
 }
 
+// tcgetpgrp and tcsetpgrp are the console's foreground group: the console
+// is the one file that has one (kernel_console.go); any other is ENOTTY.
 func (p *Process) libcTcgetpgrp(fd uint32) uint32 {
-	if p.libcIsatty(fd) == 0 {
-		return p.result(0, p.errno())
+	if err := p.consoleAt(fd); err != nil {
+		return p.result(0, err)
 	}
 
-	p.k.mu.Lock()
-	defer p.k.mu.Unlock()
-
-	return p.result(int(p.k.fg), nil)
+	return p.result(int(p.k.foreground()), nil)
 }
 
 func (p *Process) libcTcsetpgrp(fd, pgrp uint32) uint32 {
-	if p.libcIsatty(fd) == 0 {
-		return p.result(0, p.errno())
+	if err := p.consoleAt(fd); err != nil {
+		return p.result(0, err)
+	}
+
+	if int32(pgrp) < 0 {
+		return p.result(0, syscall.EINVAL)
 	}
 
 	if !p.groupExists(int32(pgrp)) {
@@ -981,4 +968,16 @@ func (p *Process) libcTcsetpgrp(fd, pgrp uint32) uint32 {
 	p.k.mu.Unlock()
 
 	return p.result(0, nil)
+}
+
+// consoleAt is nil for a descriptor of the console's, else EBADF or
+// ENOTTY.
+func (p *Process) consoleAt(fd uint32) error {
+	ok, err := p.isConsole(fd)
+
+	if err == nil && !ok {
+		err = syscall.ENOTTY
+	}
+
+	return err
 }

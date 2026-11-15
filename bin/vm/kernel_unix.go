@@ -141,7 +141,7 @@ func (s *unixSocket) stat(p *Process, st *syscall.Stat_t) error {
 		return c.stat(p, st)
 	}
 
-	*st = syscall.Stat_t{Mode: syscall.S_IFSOCK | 0o777, Nlink: 1, Uid: uint32(syscall.Getuid()), Gid: uint32(syscall.Getgid()), Blksize: 4096}
+	*st = syscall.Stat_t{Mode: syscall.S_IFSOCK | 0o777, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
 
 	return nil
 }
@@ -972,7 +972,7 @@ func (s *unixDgram) send(p *Process, data []byte, files []File, cred *ucred, non
 	defer to.unref()
 
 	if cred == nil && to.peer.passcred.Load() {
-		cred = &ucred{uint32(p.pid), uint32(syscall.Getuid()), uint32(syscall.Getgid())}
+		cred = p.ucred()
 	}
 
 	s.mu.Lock()

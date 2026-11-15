@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/binary"
 	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -52,26 +53,24 @@ const (
 	shutRdwr       = 2
 )
 
-// A packet is bytes, files and the sender's credentials, for a pair; one
-// of a host stream's inbox (kernel_inbox.go) carries more: the sender's
-// address and the control messages of a socket's message as the host
-// gives them, its flags, the end of the data, eof, or an error the next
-// read gets.
+// A packet is bytes, files and the sender's credentials, and the address
+// of a datagram's sender, the path it is bound to (kernel_unix.go).
 type packet struct {
-	data    []byte
-	files   []File
-	cred    *ucred
-	addr    []byte
-	control []byte
-	flags   uint32
-	eof     bool
-	err     error
+	data  []byte
+	files []File
+	cred  *ucred
+	addr  []byte
 }
 
 // ucred is SCM_CREDENTIALS' struct ucred: the pid, uid and gid of a
 // sender.
 type ucred struct {
 	pid, uid, gid uint32
+}
+
+// ucred is the process's own: its pid and real ids.
+func (p *Process) ucred() *ucred {
+	return &ucred{uint32(p.pid), p.cred.uid(), p.cred.gid()}
 }
 
 // dropFiles lets go of the files of packets nobody takes.
@@ -245,7 +244,7 @@ func ioSides(events int16) (in, out bool) {
 
 func (e *pairEnd) stat(p *Process, st *syscall.Stat_t) error {
 	s := e.shared
-	*st = syscall.Stat_t{Ino: s.ino, Mode: syscall.S_IFSOCK | 0o777, Nlink: 1, Uid: uint32(syscall.Getuid()), Gid: uint32(syscall.Getgid()), Blksize: 4096}
+	*st = syscall.Stat_t{Ino: s.ino, Mode: syscall.S_IFSOCK | 0o777, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
 	st.Atim = syscall.NsecToTimespec(s.made.UnixNano())
 	st.Mtim, st.Ctim = st.Atim, st.Atim
 
@@ -335,7 +334,7 @@ func (e *pairEnd) sendCred(p *Process, data []byte, files []File, cred *ucred, m
 	}
 
 	if cred == nil && p != nil && e.peer.passcred.Load() {
-		cred = &ucred{uint32(p.pid), uint32(syscall.Getuid()), uint32(syscall.Getgid())}
+		cred = p.ucred()
 	}
 
 	for _, f := range files {
@@ -763,6 +762,20 @@ func (e *pairEnd) streamTake(bufs [][]byte, peek bool) (n int, first packet, eof
 	return n, first, false, false
 }
 
+// advance is bufs without their first n bytes.
+func advance(bufs [][]byte, n int) [][]byte {
+	for len(bufs) > 0 && n >= len(bufs[0]) {
+		n -= len(bufs[0])
+		bufs = bufs[1:]
+	}
+
+	if n == 0 {
+		return bufs
+	}
+
+	return append([][]byte{bufs[0][n:]}, bufs[1:]...)
+}
+
 // scatterInto copies data into bufs in turn, as far as it fits.
 func scatterInto(bufs [][]byte, data []byte) int {
 	n := 0
@@ -933,8 +946,8 @@ func (o *sockOptions) get(p *Process, kind int, level, name, at, lenAt uint32) e
 		// The peer is in this kernel: the ids are the process's own.
 		b := make([]byte, 12)
 		binary.LittleEndian.PutUint32(b, uint32(p.pid))
-		binary.LittleEndian.PutUint32(b[4:], uint32(syscall.Getuid()))
-		binary.LittleEndian.PutUint32(b[8:], uint32(syscall.Getgid()))
+		binary.LittleEndian.PutUint32(b[4:], p.cred.uid())
+		binary.LittleEndian.PutUint32(b[8:], p.cred.gid())
 		length := min(p.u32(lenAt), 12)
 		copy(p.span(at, length), b)
 		p.put32(lenAt, length)
@@ -1158,7 +1171,7 @@ func (p *Process) rights(at, n uint32) ([]File, *ucred, error) {
 		case level == solSocket && kind == scmCredentials && len(data) == ucredSize:
 			c := ucred{binary.LittleEndian.Uint32(data), binary.LittleEndian.Uint32(data[4:]), binary.LittleEndian.Uint32(data[8:])}
 
-			if c.pid != uint32(p.pid) || c.uid != uint32(syscall.Getuid()) && c.uid != hostEuid || c.gid != uint32(syscall.Getgid()) && c.gid != hostEgid {
+			if !p.cred.privileged() && (c.pid != uint32(p.pid) || !slices.Contains(p.cred.uids[:], c.uid) || !slices.Contains(p.cred.gids[:], c.gid)) {
 				return nil, nil, syscall.EPERM
 			}
 

@@ -334,9 +334,14 @@ func (p *Process) handleSignals() bool {
 }
 
 // stop stops the process until SIGCONT or SIGKILL (kernel_fork.go). The
-// first process stops vm, so the host's shell gets the terminal back.
+// first process stops vm, so the host's shell gets the terminal back,
+// once what it wrote to the console is out.
 func (p *Process) stop(sig int) {
 	if p == p.k.first {
+		if p.k.console != nil {
+			p.k.console.settle()
+		}
+
 		// A process-directed stop can reach another thread after this one
 		// resumes the guest. Stop this thread before returning to its code.
 		runtime.LockOSThread()

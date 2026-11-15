@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"os"
 	"runtime"
 	"strings"
@@ -32,8 +31,12 @@ import (
 type Kernel struct {
 	FunctionImports
 	// root is the first process's root, none: rootfs, the VFS, serves the
-	// roots of the others.
+	// roots of the others; user is its credentials, `vm run --user`'s.
 	root    Dir
+	user    cred
+	console *console
+	// names are uname's.
+	names   systemNames
 	mu      sync.Mutex
 	procs   map[int32]*Process
 	lastPid int32
@@ -45,16 +48,11 @@ type Kernel struct {
 	// fifos are the pipes of the FIFOs of servers with an end open
 	// (kernel_fifo.go).
 	fifos map[fifoKey]*pipe
-	// fg is the foreground process group of the terminal.
+	// fg is the foreground process group of the console.
 	fg        int32
 	first     *Process
 	exit      chan int
 	functions map[string]any
-	// abstract prefixes the abstract socket names of the kernel's
-	// processes; unixNames are the guest paths of the host paths their
-	// sockets are bound by (kernel_socket.go).
-	abstract  string
-	unixNames sync.Map
 }
 
 type Process struct {
@@ -99,6 +97,7 @@ type Process struct {
 	env       uint32
 	seed      uint64
 	limits    [rlimitCount]rlimit
+	cred      cred
 	regexes   map[uint32]*posixRegex
 	nextRegex uint32
 	// constants are strings of the heap the kernel returns and the program
@@ -162,14 +161,14 @@ type procExit struct {
 // newKernel makes a kernel whose first process has a directory of the
 // host for its root, or with no root at all when root is empty: then it
 // is a server, or a program of none. Its programs compile with options.
-func newKernel(options CompileOptions) *Kernel {
+func newKernel(options CompileOptions, user cred) *Kernel {
 	k := &Kernel{procs: map[int32]*Process{}, codes: map[[sha256.Size]byte]*codeEntry{}, options: options, fifos: map[fifoKey]*pipe{},
-		exit: make(chan int, 1), abstract: fmt.Sprintf("pizdos.%d.", os.Getpid()), root: newNoRoot()}
+		exit: make(chan int, 1), root: newNoRoot(), user: user}
+	k.names.host, k.names.domain = "pizdos", "(none)"
 
 	k.functions = k.functionTable()
 	// The kernel applies the processes' umasks itself.
 	syscall.Umask(0)
-	raiseFileLimit()
 	k.routeSignals()
 
 	return k
@@ -201,25 +200,26 @@ func importsKernel(obj *Object) bool {
 	return false
 }
 
-// runKernel runs a program of the kernel as the first process, from the
-// module f at path, data, which compiled to obj with options, and returns
-// the exit code of vm: the process's, or 128 and the signal that ended it.
-// A disk is a file of the host the first process gets as a descriptor:
-// read and written as it is, its name the first process's to give.
+// A disk is a file of the host the first process gets as a descriptor
+// (diskFile): read and written as it is, its name the first process's to
+// give.
 type disk struct {
 	name, path string
 }
 
-// runKernel runs the first process of the kernel. Its descriptors 0, 1
-// and 2 are vm's, the disks those after them, in order, read and written,
-// and DISKS in its environment their names, by spaces.
-func runKernel(f File, path string, argv []string, options CompileOptions, data []byte, obj *Object, disks []disk) int {
-	k := newKernel(options)
+// runKernel runs a program of the kernel as the first process, from the
+// module data at path, which compiled to obj with options, and returns
+// the exit code of vm: the process's, or 128 and the signal that ended it,
+// once the console has moved out what it was given. The process's
+// descriptors 0, 1 and 2 are the console's (kernel_console.go), the disks
+// those after them, in order, and DISKS in its environment their names, by
+// spaces. Its program has no path of the system's: the system has no
+// file of vm's.
+func runKernel(path string, argv []string, options CompileOptions, data []byte, obj *Object, disks []disk, user cred) int {
+	k := newKernel(options, user)
 	p := throw2(k.newProcess(nil))
 	code, err := k.codeOf(p, data, path, obj)
 	throw(err)
-	program := p.programPath(f)
-	f.unref()
 	cwd, pwd := p.firstCwd()
 	p.setCwd(cwd)
 	env := []string{"PWD=" + pwd}
@@ -230,7 +230,7 @@ func runKernel(f File, path string, argv []string, options CompileOptions, data 
 		}
 	}
 
-	for fd, f := range hostStdio() {
+	for fd, f := range k.newConsole() {
 		if f != nil {
 			p.files.put(fd, f, false)
 		}
@@ -246,7 +246,7 @@ func runKernel(f File, path string, argv []string, options CompileOptions, data 
 				throwFmt("--disk %s: %v", d.path, err)
 			}
 
-			p.files.put(max(p.files.size(), 3), newHostObject(fd, true), false)
+			p.files.put(max(p.files.size(), 3), newDiskFile(fd), false)
 			names[i] = d.name
 		}
 
@@ -256,9 +256,12 @@ func runKernel(f File, path string, argv []string, options CompileOptions, data 
 	k.first = p
 	k.fg = p.pgid
 
-	go p.run(&execImage{code: code, argv: argv, envp: env, path: program})
+	go p.run(&execImage{code: code, argv: argv, envp: env})
 
-	return <-k.exit
+	status := <-k.exit
+	k.console.flush()
+
+	return status
 }
 
 // newProcess makes a process: a child of parent, or the first, the leader
@@ -275,11 +278,13 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 		p.pgid, p.sid = p.pid, p.pid
 		p.limits = hostLimits()
 		p.root, p.cwd = k.root, k.root
+		p.cred = k.user.clone()
 	} else {
 		p.ppid, p.pgid, p.sid = parent.pid, parent.pgid, parent.sid
 		p.nice, p.policy = parent.nice, parent.policy
 		p.comm, p.undumpable, p.noNewPrivs = parent.comm, parent.undumpable, parent.noNewPrivs
 		p.cwd, p.umask, p.limits, p.seed = parent.cwd, parent.umask, parent.limits, parent.seed
+		p.cred = parent.cred.clone()
 		p.root, p.rootPath = parent.root, parent.rootPath
 	}
 

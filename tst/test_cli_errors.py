@@ -79,7 +79,8 @@ def main():
             return subprocess.run([vm, *map(str, arguments)], capture_output=True, env=env, timeout=30)
 
         usage_cases = [[], ["-o"], ["input.wasm"], ["-o", "out.o"], ["a.wasm", "b.wasm"],
-                       ["run"], ["run", "--"], ["run", "--root", "dir", "--"], ["run", "-a"],
+                       ["run"], ["run", "--"], ["run", "--root", "dir", "--"], ["run", "-a"], ["run", "--user", "-1", "--"],
+                       ["run", "--user", "0:x", "--"],
                        ["run", "--unknown"], ["run", "--asan"], ["spec"], ["spec", "a", "b"],
                        ["stand"], ["stand", "magic"], ["stand", "magic", "object.o"]]
         for args in usage_cases:

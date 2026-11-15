@@ -468,7 +468,7 @@ func (d *remoteDir) accessName(p *Process, name string, mode, flags uint32) erro
 		return err
 	}
 
-	if !permits(&st, mode&7) {
+	if !p.permits(&st, mode&7) {
 		return syscall.EACCES
 	}
 

@@ -213,14 +213,13 @@ def main():
     vm, rootfs = sys.argv[1:3]
     # No root, no cwd of the host's: the environment is empty but for what
     # vm needs, and the working directory is one nothing is in.
-    script, want = SCRIPT, WANT
-    if os.getuid() != 0:
-        script, want = script + PERMISSIONS, want + PERMITTED
+    # The system's user is root; PERMISSIONS run as one who is not.
     with tempfile.TemporaryDirectory(prefix="pizdos-rootfs-") as empty:
         env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
-        result = subprocess.run([vm, "run", "--", rootfs], input=(script + "exit 3\n").encode(), capture_output=True, cwd=empty, env=env,
-                                timeout=180)
-        assert (result.returncode, result.stdout.decode(), result.stderr) == (3, want, b""), result
+        for user, script, want in ((), SCRIPT, WANT), (("--user", "1000:1000"), PERMISSIONS, PERMITTED):
+            result = subprocess.run([vm, "run", *user, "--", rootfs], input=(script + "exit 3\n").encode(), capture_output=True, cwd=empty,
+                                    env=env, timeout=180)
+            assert (result.returncode, result.stdout.decode(), result.stderr) == (3, want, b""), result
         assert not os.listdir(empty), os.listdir(empty)
         result = subprocess.run([vm, "run", "--", rootfs], input=b"ls /missing\n", capture_output=True, cwd=empty, env=env, timeout=120)
         assert result.returncode == 1 and b"No such file" in result.stderr and result.stdout == b"", result

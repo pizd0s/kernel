@@ -129,9 +129,10 @@ int main() {
     assert(getaddrinfo("fe80::1%pizdos-noif", "0", &hints, &result) == EAI_NONAME);
     hints.ai_family = AF_INET;
     assert(getaddrinfo("::1", "0", &hints, &result) == EAI_NONAME);
+    // AI_ADDRCONFIG takes the families the system has an address of: it
+    // has no network, so none, as musl's.
     hints.ai_flags = AI_NUMERICHOST | AI_ADDRCONFIG;
-    assert(getaddrinfo("127.0.0.1", "0", &hints, &result) == 0);
-    freeaddrinfo(result);
+    assert(getaddrinfo("127.0.0.1", "0", &hints, &result) == EAI_NONAME);
 
     char hostname[128], servicename[32];
     sockaddr_in endpoint{AF_INET, htons(4101), address, {}};

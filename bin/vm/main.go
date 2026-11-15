@@ -7,12 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"time"
 )
 
 func usage() {
-	throwFmt("usage: vm [-v] [--asan] -o output.o input.wasm\n       vm run [-a argv0] [--asan] [--disk name=file]... -- module.wasm [arg...]\n       vm spec test.json\n       vm stand [--repeat N] im|pdf|djvu|svg|magic object.o file...")
+	throwFmt("usage: vm [-v] [--asan] -o output.o input.wasm\n       vm run [-a argv0] [--asan] [--user uid[:gid]] [--disk name=file]... -- module.wasm [arg...]\n       vm spec test.json\n       vm stand [--repeat N] im|pdf|djvu|svg|magic object.o file...")
 }
 
 func main() {
@@ -117,16 +118,28 @@ func compileCommand(args []string) {
 // the others have theirs from, rootfs, or needs none. argv0 is by default
 // the module's path. --asan compiles the programs with the checks of the
 // kernel's address sanitizer (kernel_asan.go). Each --disk gives a program
-// of the kernel a file of the host as a disk (runKernel).
+// of the kernel a file of the host as a disk (runKernel). --user gives the
+// first process its user and group ids, the group the user's without one:
+// it is root without it.
 func runCommand(args []string) int {
 	argv0, asan := "", false
 	var disks []disk
+	var user cred
 
 	for len(args) > 0 && args[0] != "--" {
 		switch {
 		case args[0] == "--asan":
 			asan = true
 			args = args[1:]
+		case len(args) > 1 && args[0] == "--user":
+			uid, gid, ok := parseUser(args[1])
+
+			if !ok {
+				usage()
+			}
+
+			user = cred{uids: [3]uint32{uid, uid, uid}, gids: [3]uint32{gid, gid, gid}}
+			args = args[2:]
 		case len(args) > 1 && args[0] == "-a":
 			argv0 = args[1]
 			args = args[2:]
@@ -156,5 +169,23 @@ func runCommand(args []string) int {
 
 	argv := append([]string{argv0}, args[1:]...)
 
-	return runModule(args[0], argv, asan, disks)
+	return runModule(args[0], argv, asan, disks, user)
+}
+
+// parseUser reads --user's uid[:gid], decimal ids short of -1.
+func parseUser(text string) (uid, gid uint32, ok bool) {
+	u, g, both := strings.Cut(text, ":")
+
+	if !both {
+		g = u
+	}
+
+	a, errA := strconv.ParseUint(u, 10, 32)
+	b, errB := strconv.ParseUint(g, 10, 32)
+
+	if errA != nil || errB != nil || a == uint64(keep) || b == uint64(keep) {
+		return 0, 0, false
+	}
+
+	return uint32(a), uint32(b), true
 }

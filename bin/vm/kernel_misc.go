@@ -9,8 +9,8 @@ import (
 	"math"
 	"path"
 	"strings"
+	"sync"
 	"syscall"
-	"unsafe"
 )
 
 // The rest of libc's services: random's generator, suboptions, daemon,
@@ -286,65 +286,6 @@ func (p *Process) prctl(option, va uint32) uint32 {
 	return p.result(0, nil)
 }
 
-// getpass reads a line from the terminal with echo off, as musl's: at most
-// 127 bytes, its newline dropped, in a static block.
-func (p *Process) getpass(prompt uint32) uint32 {
-	f, err := p.openPath("/dev/tty", syscall.O_RDWR|syscall.O_NOCTTY, 0)
-
-	if err != nil {
-		return p.pointer(0, err)
-	}
-
-	defer f.unref()
-	term, isTerm := f.(Ioctl)
-	tty, ok := f.(Transfer)
-
-	if !isTerm || !ok {
-		return p.pointer(0, syscall.ENOTTY)
-	}
-
-	var saved, t hostTermios
-
-	if err := term.ioctl(tcgets, unsafe.Pointer(&saved)); err != nil {
-		return p.pointer(0, err)
-	}
-
-	t = saved
-	t.lflag = t.lflag&^(echo|isig) | icanon
-	t.iflag = t.iflag&^(inlcr|igncr) | icrnl
-	term.ioctl(tcsets+2, unsafe.Pointer(&t))
-	defer term.ioctl(tcsets+2, unsafe.Pointer(&saved))
-
-	tty.write(p, []byte(p.str(prompt)), ioMode{})
-	var line []byte
-
-	for len(line) < 127 {
-		var b [1]byte
-		n, err := tty.read(p, b[:], ioMode{})
-
-		if err != nil {
-			return p.pointer(0, err)
-		}
-
-		if n == 0 || b[0] == '\n' {
-			break
-		}
-
-		line = append(line, b[0])
-	}
-
-	tty.write(p, []byte("\n"), ioMode{})
-	block := p.staticResult(staticPass, 128)
-
-	if block == 0 {
-		return p.pointer(0, syscall.ENOMEM)
-	}
-
-	p.putString(block, string(line))
-
-	return p.pointer(block, nil)
-}
-
 // shells are /etc/shells' paths, or musl's two without it.
 func (p *Process) shells() []string {
 	data, err := p.readPath("/etc/shells", databaseMax)
@@ -458,40 +399,6 @@ func (p *Process) libcGetentropy(buf, n uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) libcGethostname(name, n uint32) uint32 {
-	var u syscall.Utsname
-
-	if err := syscall.Uname(&u); err != nil {
-		return p.result(0, err)
-	}
-
-	host := utsField(u.Nodename[:])
-
-	if n > 0 {
-		p.putString(name, truncate(host, int(n-1)))
-	}
-
-	return p.result(0, nil)
-}
-
-func (p *Process) libcGetdomainname(name, n uint32) uint32 {
-	var u syscall.Utsname
-
-	if err := syscall.Uname(&u); err != nil {
-		return p.result(0, err)
-	}
-
-	domain := utsField(u.Domainname[:])
-
-	if uint32(len(domain)) >= n {
-		return p.result(0, syscall.EINVAL)
-	}
-
-	p.putString(name, domain)
-
-	return p.result(0, nil)
-}
-
 func (p *Process) libcGethostid() uint32 {
 	return 0
 }
@@ -526,20 +433,6 @@ func (p *Process) complain(prefix uint32, msg string) {
 	}
 }
 
-func utsField(b []int8) string {
-	out := make([]byte, 0, len(b))
-
-	for _, c := range b {
-		if c == 0 {
-			break
-		}
-
-		out = append(out, byte(c))
-	}
-
-	return string(out)
-}
-
 func (p *Process) libcRandom() uint32 {
 	return p.random()
 }
@@ -565,14 +458,143 @@ func (p *Process) libcVhangup() uint32 {
 	return p.result(0, syscall.EPERM)
 }
 
-func (p *Process) libcSethostname(name, n uint32) uint32 {
+func (p *Process) libcSethostid(id uint32) uint32 {
 	return p.result(0, syscall.EPERM)
+}
+
+// getpass reads a password from the process's terminal, /dev/tty: the
+// system has no terminal, so it is NULL, with open's error, as musl's when
+// it opens none.
+func (p *Process) getpass(prompt uint32) uint32 {
+	f, err := p.openPath("/dev/tty", syscall.O_RDWR|syscall.O_NOCTTY, 0)
+
+	if err == nil {
+		f.unref()
+		err = syscall.ENOTTY
+	}
+
+	p.setErrno(errnoOf(err))
+
+	return 0
+}
+
+// The system has no pseudoterminal: posix_openpt, openpty and forkpty are
+// ENOSYS, and the calls on a master, which no descriptor is, ENOTTY.
+
+func (p *Process) libcPosix_openpt(flags uint32) uint32 {
+	return p.result(0, syscall.ENOSYS)
+}
+
+func (p *Process) libcOpenpty(amaster, aslave, name, termp, winp uint32) uint32 {
+	return p.result(0, syscall.ENOSYS)
+}
+
+func (p *Process) libcForkpty(amaster, name, termp, winp uint32) uint32 {
+	return p.result(0, syscall.ENOSYS)
+}
+
+func (p *Process) libcGrantpt(fd uint32) uint32 {
+	return p.notTerminal(fd)
+}
+
+func (p *Process) libcUnlockpt(fd uint32) uint32 {
+	return p.notTerminal(fd)
+}
+
+// ptsname is NULL with ENOTTY, ptsname_r the error number.
+func (p *Process) libcPtsname(fd uint32) uint32 {
+	p.notTerminal(fd)
+
+	return 0
+}
+
+func (p *Process) libcPtsname_r(fd, buf, size uint32) uint32 {
+	if _, err := p.fd(fd); err != nil {
+		return uint32(errnoOf(err))
+	}
+
+	return uint32(syscall.ENOTTY)
+}
+
+// The system's names, uname's, the kernel's own: none of the host's. The
+// host and domain names are root's to set.
+type systemNames struct {
+	mu           sync.Mutex
+	host, domain string
+}
+
+const (
+	utsSysname = "pizdos"
+	utsRelease = "1"
+	utsVersion = "#1"
+	utsMachine = "wasm32"
+	utsField   = 65
+)
+
+func (p *Process) libcUname(at uint32) uint32 {
+	n := &p.k.names
+	n.mu.Lock()
+	fields := []string{utsSysname, n.host, utsRelease, utsVersion, utsMachine, n.domain}
+	n.mu.Unlock()
+	b := p.span(at, utsField*uint32(len(fields)))
+	clear(b)
+
+	for i, f := range fields {
+		copy(b[i*utsField:], f)
+	}
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcGethostname(name, n uint32) uint32 {
+	p.k.names.mu.Lock()
+	host := p.k.names.host
+	p.k.names.mu.Unlock()
+
+	if n > 0 {
+		p.putString(name, truncate(host, int(n-1)))
+	}
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcGetdomainname(name, n uint32) uint32 {
+	p.k.names.mu.Lock()
+	domain := p.k.names.domain
+	p.k.names.mu.Unlock()
+
+	if uint32(len(domain)) >= n {
+		return p.result(0, syscall.EINVAL)
+	}
+
+	p.putString(name, domain)
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcSethostname(name, n uint32) uint32 {
+	return p.result(0, p.setName(&p.k.names.host, name, n))
 }
 
 func (p *Process) libcSetdomainname(name, n uint32) uint32 {
-	return p.result(0, syscall.EPERM)
+	return p.result(0, p.setName(&p.k.names.domain, name, n))
 }
 
-func (p *Process) libcSethostid(id uint32) uint32 {
-	return p.result(0, syscall.EPERM)
+// setName sets one of the names to n bytes at name: EPERM for a process
+// without privilege, EINVAL past what uname holds.
+func (p *Process) setName(to *string, name, n uint32) error {
+	if !p.cred.privileged() {
+		return syscall.EPERM
+	}
+
+	if n >= utsField {
+		return syscall.EINVAL
+	}
+
+	text := string(p.span(name, n))
+	p.k.names.mu.Lock()
+	*to = text
+	p.k.names.mu.Unlock()
+
+	return nil
 }

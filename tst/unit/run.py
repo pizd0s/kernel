@@ -20,7 +20,8 @@ all is build and run, as coverage runs a case with its own vm and aot.
 Directives use trustme's //@ spelling. stdout/stderr are JSON strings;
 compile-flags, aot-flags, run-flags and args use shell quoting. host: false
 disables the native reference for programs that depend on this kernel.
-run-flags are --asan and --disk <name>=<path>: a disk is /dev/<name> in
+run-flags are --asan, --user and --disk <name>=<path>: --user is the
+system's, everyone's in it, as vm's; a disk is /dev/<name> in
 the system, which the program gets open to read and write as its
 descriptors after 2, in order, their names in DISKS, as the first process
 gets vm's disks. $ROOT in a disk's path is a directory of the host with
@@ -171,11 +172,13 @@ def disks(case):
     while flags:
         match flags:
             case ["--asan", *rest]:
-                asan = ["--asan"]
+                asan.append("--asan")
+            case ["--user", user, *rest]:
+                asan += ["--user", user]
             case ["--disk", disk, *rest] if re.fullmatch(r"[A-Za-z0-9_.-]+=.+", disk):
                 named.append(tuple(disk.split("=", 1)))
             case _:
-                raise ValueError(f"run-flags: {shlex.join(flags)}: --asan and --disk <name>=<path> only")
+                raise ValueError(f"run-flags: {shlex.join(flags)}: --asan, --user and --disk <name>=<path> only")
         flags = rest
     return asan, named
 

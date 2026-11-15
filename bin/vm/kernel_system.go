@@ -5,7 +5,6 @@ package main
 import (
 	"fmt"
 	"math"
-	"os"
 	"runtime"
 	"strings"
 	"syscall"
@@ -140,38 +139,6 @@ func (p *Process) putRusage(at uint32, ru *syscall.Rusage) {
 	}
 }
 
-// terminalName is the name of a descriptor's terminal: one of the host's
-// devices a guest's path names.
-func (p *Process) terminalName(fd uint32) (string, syscall.Errno) {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return "", syscall.EBADF
-	}
-
-	if _, _, err := p.terminal(fd); err != nil {
-		return "", syscall.ENOTTY
-	}
-
-	pathed, ok := obj.(Pathed)
-
-	if !ok {
-		return "", syscall.ENOTTY
-	}
-
-	name, err := pathed.hostPath()
-
-	if err != nil {
-		return "", errnoOf(err)
-	}
-
-	if !hostDevice(name) {
-		name = p.guestPath(name)
-	}
-
-	return name, 0
-}
-
 // limitOf reads or sets a resource limit of a process.
 func (p *Process) limitOf(q *Process, res, set, old uint32) error {
 	if res >= rlimitCount {
@@ -190,7 +157,7 @@ func (p *Process) limitOf(q *Process, res, set, old uint32) error {
 			return syscall.EINVAL
 		}
 
-		if l.max > cur.max && os.Geteuid() != 0 {
+		if l.max > cur.max && !p.cred.privileged() {
 			return syscall.EPERM
 		}
 
@@ -417,4 +384,14 @@ func (p *Process) libcTtyname_r(fd, buf, n uint32) uint32 {
 
 func (p *Process) libc__kernel_syslog(priority, message uint32) {
 	p.syslog(priority, message)
+}
+
+// terminalName is the name of a descriptor's terminal: the system has
+// none, so ENOTTY, EBADF for a descriptor not open.
+func (p *Process) terminalName(fd uint32) (string, syscall.Errno) {
+	if _, err := p.fd(fd); err != nil {
+		return "", syscall.EBADF
+	}
+
+	return "", syscall.ENOTTY
 }

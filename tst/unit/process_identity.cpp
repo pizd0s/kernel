@@ -1,4 +1,5 @@
 //@ host: false
+//@ run-flags: --user 1000:1000
 //@ compile-flags: -g
 //@ stdout: "process identity: ok\n"
 

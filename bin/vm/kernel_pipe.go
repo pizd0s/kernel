@@ -256,7 +256,7 @@ func (e *pipeEnd) unsubscribe(to waker, id uint64) {
 // ends of a FIFO's pipe the FIFO's.
 func (e *pipeEnd) stat(p *Process, st *syscall.Stat_t) error {
 	pp := e.pipe
-	*st = syscall.Stat_t{Ino: pp.ino, Mode: syscall.S_IFIFO | 0o600, Nlink: 1, Uid: uint32(syscall.Getuid()), Gid: uint32(syscall.Getgid()), Blksize: pipeChunk}
+	*st = syscall.Stat_t{Ino: pp.ino, Mode: syscall.S_IFIFO | 0o600, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: pipeChunk}
 
 	if n := pp.name; n != nil {
 		st.Dev, st.Ino, st.Mode = n.key.dev, n.key.ino, n.mode

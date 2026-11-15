@@ -99,7 +99,7 @@ func (f *memfdFile) unref() {
 
 func (f *memfdFile) stat(p *Process, st *syscall.Stat_t) error {
 	*st = syscall.Stat_t{Ino: f.ino, Mode: syscall.S_IFREG | 0o777, Nlink: 1, Size: int64(len(f.mem)),
-		Uid: uint32(syscall.Getuid()), Gid: uint32(syscall.Getgid()), Blksize: 4096}
+		Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
 	st.Atim = syscall.NsecToTimespec(f.made.UnixNano())
 	st.Mtim, st.Ctim = st.Atim, st.Atim
 
@@ -256,7 +256,7 @@ func (f *memfdFile) fill(p *Process, src File, from, to *int64, n int) (int, err
 	case *remoteFile:
 		count, err = s.readWindow(p, f, uint32(at), n, from)
 	default:
-		count, err = hostTransfer(src, f.mem[at:int(at)+n], from, false)
+		count, err = diskTransfer(p, src, f.mem[at:int(at)+n], from, false)
 	}
 
 	f.moved(to, count)
@@ -288,7 +288,7 @@ func (f *memfdFile) drain(p *Process, dst File, from, to *int64, n int) (int, er
 	case *remoteFile:
 		count, err = d.writeWindow(p, f, uint32(at), n, to)
 	default:
-		count, err = hostTransfer(dst, f.mem[at:int(at)+n], to, true)
+		count, err = diskTransfer(p, dst, f.mem[at:int(at)+n], to, true)
 	}
 
 	f.moved(from, count)
@@ -368,45 +368,25 @@ func (f *remoteFile) writeWindow(p *Process, w *memfdFile, woff uint32, n int, t
 	return count, err
 }
 
-// hostTransfer reads a regular file or a block device of the host into b,
-// or with write writes b into it, at off or at its position, which moves:
-// the host copies between the file and the memory of b. Any other file is
-// EINVAL, as copy_file_range has it.
-func hostTransfer(f File, b []byte, off *int64, write bool) (int, error) {
-	fd, ok := hostFdOf(f)
-	var st syscall.Stat_t
+// diskTransfer reads a disk into b, or with write writes b into it, at off
+// or at its position, which moves: vm's calls copy between the disk and the
+// memory of b. Any other file is EINVAL, as copy_file_range has it.
+func diskTransfer(p *Process, f File, b []byte, off *int64, write bool) (int, error) {
+	d, ok := f.(*diskFile)
 
-	if !ok || syscall.Fstat(fd, &st) != nil || (st.Mode&syscall.S_IFMT != syscall.S_IFREG && st.Mode&syscall.S_IFMT != syscall.S_IFBLK) {
+	if !ok {
 		return 0, syscall.EINVAL
 	}
 
-	for {
-		var n int
-		var err error
-
-		switch {
-		case write && off != nil:
-			n, err = syscall.Pwrite(fd, b, *off)
-		case write:
-			n, err = syscall.Write(fd, b)
-		case off != nil:
-			n, err = syscall.Pread(fd, b, *off)
-		default:
-			n, err = syscall.Read(fd, b)
-		}
-
-		if err == syscall.EINTR {
-			continue
-		}
-
-		if err != nil {
-			return 0, err
-		}
-
-		if off != nil {
-			*off += int64(n)
-		}
-
-		return n, nil
+	switch {
+	case off == nil && write:
+		return d.write(p, b, ioMode{})
+	case off == nil:
+		return d.read(p, b, ioMode{})
 	}
+
+	n, err := d.at(b, *off, write)
+	*off += int64(n)
+
+	return n, err
 }

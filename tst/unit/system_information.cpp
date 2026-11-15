@@ -63,8 +63,12 @@ int main() {
     check(getdomainname(domain, sizeof(domain)) == 0);
     check(getdomainname(nullptr, 0) == -1 && errno == EINVAL);
     check(gethostid() == 0);
-    check(sethostname("changed", 7) == -1 && errno == EPERM);
-    check(setdomainname("changed", 7) == -1 && errno == EPERM);
+    // The names are the system's, root's to set: the system's user.
+    check(strcmp(names.sysname, "pizdos") == 0 && strcmp(names.machine, "wasm32") == 0);
+    check(sethostname("changed", 7) == 0 && gethostname(host, sizeof(host)) == 0 && strcmp(host, "changed") == 0);
+    check(setdomainname("changed", 7) == 0 && getdomainname(domain, sizeof(domain)) == 0 && strcmp(domain, "changed") == 0);
+    check(sethostname(host, 65) == -1 && errno == EINVAL);
+    check(uname(&names) == 0 && strcmp(names.nodename, "changed") == 0);
     check(sethostid(1) == -1 && errno == EPERM);
     check(vhangup() == -1 && errno == EPERM);
     tms timesUsed{};
