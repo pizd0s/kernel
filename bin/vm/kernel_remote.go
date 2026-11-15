@@ -246,7 +246,7 @@ func (n *remoteNode) setsockopt(p *Process, level, name, at, size uint32) error 
 // host's user vm runs as, whose ids are taken once: vm never changes them.
 // The kernel waits as itself, not as the process: nothing of the process's
 // interrupts a call to a server.
-func request(to *pairEnd, op, arg uint32, body []byte, files []File) error {
+func request(p *Process, to *pairEnd, op, arg uint32, body []byte, files []File) error {
 	data := make([]byte, remoteHeader+len(body))
 	binary.LittleEndian.PutUint32(data, op)
 	binary.LittleEndian.PutUint32(data[4:], arg)
@@ -254,7 +254,7 @@ func request(to *pairEnd, op, arg uint32, body []byte, files []File) error {
 	binary.LittleEndian.PutUint32(data[12:], hostEgid)
 	copy(data[remoteHeader:], body)
 
-	return to.sendOwned(nil, data, files, ioMode{quiet: true})
+	return to.kernelSend(p, data, files)
 }
 
 var hostEuid, hostEgid = uint32(syscall.Geteuid()), uint32(syscall.Getegid())
@@ -262,9 +262,9 @@ var hostEuid, hostEgid = uint32(syscall.Geteuid()), uint32(syscall.Getegid())
 // reply waits for the reply on an endpoint: the reply must come to the
 // request that was sent. A server that goes away is EIO; its error is
 // the reply's.
-func reply(on *pairEnd) (packet, error) {
+func reply(p *Process, on *pairEnd) (packet, error) {
 	for {
-		pk, eof, err := on.recv(nil, ioMode{}, false)
+		pk, eof, err := on.kernelRecv(p)
 
 		if err != nil {
 			return pk, err
@@ -292,9 +292,9 @@ func reply(on *pairEnd) (packet, error) {
 // with the request and stay the caller's. Only an OPEN's reply brings a
 // file, the file itself, which the packet keeps; the files of any other
 // reply, or the rest of an OPEN's, go here.
-func (n *remoteNode) call(op, arg uint32, body []byte, files []File) (packet, *pairEnd, error) {
+func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []File) (packet, *pairEnd, error) {
 	mine, theirs := newPair(false)
-	err := request(n.end, op, arg, body, append(files, theirs))
+	err := request(p, n.end, op, arg, body, append(files, theirs))
 	theirs.unref()
 
 	if err == syscall.EPIPE {
@@ -307,7 +307,7 @@ func (n *remoteNode) call(op, arg uint32, body []byte, files []File) (packet, *p
 		return packet{}, nil, err
 	}
 
-	pk, err := reply(mine)
+	pk, err := reply(p, mine)
 
 	if err != nil {
 		mine.unref()
@@ -327,8 +327,8 @@ func (n *remoteNode) call(op, arg uint32, body []byte, files []File) (packet, *p
 }
 
 // on is a call on the node that opens nothing: the reply's packet.
-func (n *remoteNode) on(op, arg uint32, body []byte) (packet, error) {
-	pk, mine, err := n.call(op, arg, body, nil)
+func (n *remoteNode) on(p *Process, op, arg uint32, body []byte) (packet, error) {
+	pk, mine, err := n.call(p, op, arg, body, nil)
 
 	if err != nil {
 		return packet{}, err
@@ -430,49 +430,49 @@ func whens(ts []syscall.Timespec) (uint32, []byte) {
 
 // The Attrs role, of a file or a directory of a server.
 
-func (n *remoteNode) simple(op, arg uint32, body []byte) error {
-	_, err := n.on(op, arg, body)
+func (n *remoteNode) simple(p *Process, op, arg uint32, body []byte) error {
+	_, err := n.on(p, op, arg, body)
 
 	return err
 }
 
-func (n *remoteNode) truncate(size int64) error {
+func (n *remoteNode) truncate(p *Process, size int64) error {
 	var body [8]byte
 	binary.LittleEndian.PutUint64(body[:], uint64(size))
 
-	return n.simple(rFtruncate, 0, body[:])
+	return n.simple(p, rFtruncate, 0, body[:])
 }
 
-func (n *remoteNode) sync(data bool) error {
+func (n *remoteNode) sync(p *Process, data bool) error {
 	arg := uint32(0)
 
 	if data {
 		arg = 1
 	}
 
-	return n.simple(rFsync, arg, nil)
+	return n.simple(p, rFsync, arg, nil)
 }
 
-func (n *remoteNode) chmod(mode uint32) error {
-	return n.simple(rFchmod, mode, nil)
+func (n *remoteNode) chmod(p *Process, mode uint32) error {
+	return n.simple(p, rFchmod, mode, nil)
 }
 
-func (n *remoteNode) chown(uid, gid int) error {
+func (n *remoteNode) chown(p *Process, uid, gid int) error {
 	var body [8]byte
 	binary.LittleEndian.PutUint32(body[:], uint32(uid))
 	binary.LittleEndian.PutUint32(body[4:], uint32(gid))
 
-	return n.simple(rFchown, 0, body[:])
+	return n.simple(p, rFchown, 0, body[:])
 }
 
-func (n *remoteNode) utimes(ts []syscall.Timespec) error {
+func (n *remoteNode) utimes(p *Process, ts []syscall.Timespec) error {
 	when, body := whens(ts)
 
-	return n.simple(rFutimes, when, body)
+	return n.simple(p, rFutimes, when, body)
 }
 
-func (n *remoteNode) stat(st *syscall.Stat_t) error {
-	pk, err := n.on(rFstat, 0, nil)
+func (n *remoteNode) stat(p *Process, st *syscall.Stat_t) error {
+	pk, err := n.on(p, rFstat, 0, nil)
 
 	if err != nil {
 		return err
@@ -481,8 +481,8 @@ func (n *remoteNode) stat(st *syscall.Stat_t) error {
 	return decodeStat(pk.data, st)
 }
 
-func (n *remoteNode) statfs(st *syscall.Statfs_t) error {
-	pk, err := n.on(rFstatfs, 0, nil)
+func (n *remoteNode) statfs(p *Process, st *syscall.Statfs_t) error {
+	pk, err := n.on(p, rFstatfs, 0, nil)
 
 	if err != nil {
 		return err
@@ -493,14 +493,14 @@ func (n *remoteNode) statfs(st *syscall.Statfs_t) error {
 
 // The Locker role: the locks are the endpoint's, the open file's.
 
-func (n *remoteNode) flock(op int) error {
-	return n.simple(rFlock, uint32(op), nil)
+func (n *remoteNode) flock(p *Process, op int) error {
+	return n.simple(p, rFlock, uint32(op), nil)
 }
 
 // recordLock is fcntl's lock on the bytes a struct flock says, from the
 // start, the position or the end, before the start for a negative length;
 // F_OFD_GETLK tells the lock in the way, from the start.
-func (n *remoteNode) recordLock(cmd int, lk *syscall.Flock_t) error {
+func (n *remoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
 	start, length := lk.Start, lk.Len
 
 	switch lk.Whence {
@@ -510,7 +510,7 @@ func (n *remoteNode) recordLock(cmd int, lk *syscall.Flock_t) error {
 	case 2:
 		var st syscall.Stat_t
 
-		if err := n.stat(&st); err != nil {
+		if err := n.stat(p, &st); err != nil {
 			return err
 		}
 
@@ -533,10 +533,10 @@ func (n *remoteNode) recordLock(cmd int, lk *syscall.Flock_t) error {
 	binary.LittleEndian.PutUint64(body[12:], uint64(length))
 
 	if cmd != fOfdGetlk {
-		return n.simple(rLock, 0, body)
+		return n.simple(p, rLock, 0, body)
 	}
 
-	pk, err := n.on(rLock, 1, body)
+	pk, err := n.on(p, rLock, 1, body)
 
 	if err != nil {
 		return err
@@ -557,10 +557,10 @@ func (n *remoteNode) recordLock(cmd int, lk *syscall.Flock_t) error {
 
 // identity is a directory's device and inode, which a server finds the
 // root of a process by.
-func identity(d Dir) (uint64, uint64) {
+func identity(p *Process, d Dir) (uint64, uint64) {
 	switch d := d.(type) {
 	case *remoteDir:
-		return d.ident()
+		return d.ident(p)
 	case *hostDir:
 		var st syscall.Stat_t
 
@@ -573,11 +573,11 @@ func identity(d Dir) (uint64, uint64) {
 }
 
 // ident is the directory's device and inode, asked once.
-func (d *remoteDir) ident() (uint64, uint64) {
+func (d *remoteDir) ident(p *Process) (uint64, uint64) {
 	if !d.known.Load() {
 		var st syscall.Stat_t
 
-		if d.stat(&st) != nil {
+		if d.stat(p, &st) != nil {
 			return 0, 0
 		}
 
@@ -592,10 +592,10 @@ func (d *remoteDir) ident() (uint64, uint64) {
 // readdir fills the entries after the last it gave, as many as fit, in
 // the guest's struct dirent layout: ino, off, reclen, type, name; an
 // entry's off is its position.
-func (d *remoteDir) readdir(b []byte) (int, error) {
+func (d *remoteDir) readdir(p *Process, b []byte) (int, error) {
 	var after [8]byte
 	binary.LittleEndian.PutUint64(after[:], d.after)
-	pk, err := d.on(rReaddir, 0, after[:])
+	pk, err := d.on(p, rReaddir, 0, after[:])
 
 	if err != nil {
 		return 0, err
@@ -636,7 +636,7 @@ func (d *remoteDir) readdir(b []byte) (int, error) {
 }
 
 // seek of a directory is rewinddir.
-func (d *remoteDir) seek(off int64, whence int) (int64, error) {
+func (d *remoteDir) seek(p *Process, off int64, whence int) (int64, error) {
 	if off != 0 || whence != 0 {
 		return 0, syscall.EINVAL
 	}
@@ -652,11 +652,11 @@ func (d *remoteDir) seek(off int64, whence int) (int64, error) {
 // memfd of b.
 func (f *remoteFile) readAt(p *Process, b []byte, off int64) (int, error) {
 	if off < 0 || len(b) == 0 {
-		return f.readInto(nil, 0, 0, off)
+		return f.readInto(p, nil, 0, 0, off)
 	}
 
 	w := window(p, b, syscall.O_WRONLY)
-	n, err := f.readInto(w, 0, len(b), off)
+	n, err := f.readInto(p, w, 0, len(b), off)
 	w.unref()
 
 	return n, err
@@ -665,7 +665,7 @@ func (f *remoteFile) readAt(p *Process, b []byte, off int64) (int, error) {
 // readInto reads n bytes at off into the memfd w, from its byte woff on:
 // the READ brings w, and the server writes the bytes there itself. A
 // count past n is the server's lie: EIO.
-func (f *remoteFile) readInto(w *memfdFile, woff uint32, n int, off int64) (int, error) {
+func (f *remoteFile) readInto(p *Process, w *memfdFile, woff uint32, n int, off int64) (int, error) {
 	if off < 0 {
 		return 0, syscall.EINVAL
 	}
@@ -677,7 +677,7 @@ func (f *remoteFile) readInto(w *memfdFile, woff uint32, n int, off int64) (int,
 	var body [12]byte
 	binary.LittleEndian.PutUint64(body[:], uint64(off))
 	binary.LittleEndian.PutUint32(body[8:], woff)
-	pk, mine, err := f.call(rRead, uint32(n), body[:], []File{w})
+	pk, mine, err := f.call(p, rRead, uint32(n), body[:], []File{w})
 
 	if err != nil {
 		return 0, err
@@ -702,11 +702,11 @@ func (f *remoteFile) writeAt(p *Process, b []byte, off int64) (int, error) {
 // file has when the server takes the write: the WRITE brings a memfd of b.
 func (f *remoteFile) put(p *Process, b []byte, off int64, atEnd bool) (int, int64, error) {
 	if off < 0 || len(b) == 0 {
-		return f.writeFrom(nil, 0, 0, off, atEnd)
+		return f.writeFrom(p, nil, 0, 0, off, atEnd)
 	}
 
 	w := window(p, b, syscall.O_RDONLY)
-	n, at, err := f.writeFrom(w, 0, len(b), off, atEnd)
+	n, at, err := f.writeFrom(p, w, 0, len(b), off, atEnd)
 	w.unref()
 
 	return n, at, err
@@ -716,7 +716,7 @@ func (f *remoteFile) put(p *Process, b []byte, off int64, atEnd bool) (int, int6
 // or atEnd at the end the file has when the server takes the write: the
 // WRITE brings w, and the server reads the bytes from there itself. The
 // count and where they went; a count past n is the server's lie: EIO.
-func (f *remoteFile) writeFrom(w *memfdFile, woff uint32, n int, off int64, atEnd bool) (int, int64, error) {
+func (f *remoteFile) writeFrom(p *Process, w *memfdFile, woff uint32, n int, off int64, atEnd bool) (int, int64, error) {
 	if off < 0 {
 		return 0, 0, syscall.EINVAL
 	}
@@ -735,7 +735,7 @@ func (f *remoteFile) writeFrom(w *memfdFile, woff uint32, n int, off int64, atEn
 	binary.LittleEndian.PutUint64(body[:], uint64(off))
 	binary.LittleEndian.PutUint32(body[8:], uint32(n))
 	binary.LittleEndian.PutUint32(body[12:], woff)
-	pk, mine, err := f.call(rWrite, arg, body[:], []File{w})
+	pk, mine, err := f.call(p, rWrite, arg, body[:], []File{w})
 
 	if err != nil {
 		return 0, 0, err
@@ -792,7 +792,7 @@ func (f *remoteFile) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return f.writeAt(p, b, off)
 }
 
-func (f *remoteFile) seek(off int64, whence int) (int64, error) {
+func (f *remoteFile) seek(p *Process, off int64, whence int) (int64, error) {
 	base := int64(0)
 
 	switch whence {
@@ -802,7 +802,7 @@ func (f *remoteFile) seek(off int64, whence int) (int64, error) {
 	case 2:
 		var st syscall.Stat_t
 
-		if err := f.stat(&st); err != nil {
+		if err := f.stat(p, &st); err != nil {
 			return 0, err
 		}
 
@@ -837,7 +837,7 @@ func newNoRoot() *noRoot {
 func (r *noRoot) ref()   { r.refs.Add(1) }
 func (r *noRoot) unref() { r.refs.Add(-1) }
 
-func (r *noRoot) stat(st *syscall.Stat_t) error {
+func (r *noRoot) stat(p *Process, st *syscall.Stat_t) error {
 	*st = syscall.Stat_t{Ino: 1, Mode: syscall.S_IFDIR | 0o555, Nlink: 2, Blksize: 4096}
 	st.Mtim = syscall.NsecToTimespec(r.made.UnixNano())
 	st.Atim, st.Ctim = st.Mtim, st.Mtim
@@ -853,7 +853,7 @@ func (r *noRoot) subscribe(to waker, id uint64, events int16) bool { return fals
 func (r *noRoot) unsubscribe(to waker, id uint64)                  {}
 func (r *noRoot) flags() (int, error)                              { return syscall.O_RDONLY, nil }
 func (r *noRoot) setFlags(fl int) error                            { return nil }
-func (r *noRoot) readdir(b []byte) (int, error)                    { return 0, nil }
+func (r *noRoot) readdir(p *Process, b []byte) (int, error)        { return 0, nil }
 func (r *noRoot) path(p *Process) (string, error)                  { return "/", nil }
 
 // resolve walks a path in the one directory there is: a name in it is
@@ -884,7 +884,7 @@ func (r *noRoot) statName(p *Process, name string, st *syscall.Stat_t) error {
 		return syscall.ENOENT
 	}
 
-	return r.stat(st)
+	return r.stat(p, st)
 }
 
 func (r *noRoot) readlinkName(p *Process, name string) (string, error) {

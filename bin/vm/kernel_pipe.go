@@ -254,7 +254,7 @@ func (e *pipeEnd) unsubscribe(to waker, id uint64) {
 
 // stat is a FIFO's: the ends of a pipe share an inode of the kernel's, the
 // ends of a FIFO's pipe the FIFO's.
-func (e *pipeEnd) stat(st *syscall.Stat_t) error {
+func (e *pipeEnd) stat(p *Process, st *syscall.Stat_t) error {
 	pp := e.pipe
 	*st = syscall.Stat_t{Ino: pp.ino, Mode: syscall.S_IFIFO | 0o600, Nlink: 1, Uid: uint32(syscall.Getuid()), Gid: uint32(syscall.Getgid()), Blksize: pipeChunk}
 

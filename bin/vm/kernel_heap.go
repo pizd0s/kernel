@@ -820,7 +820,7 @@ func (p *Process) writeBack(at uint32, m mapping, from, n uint32) error {
 
 	var st syscall.Stat_t
 
-	if err := statFile(m.file, &st); err != nil {
+	if err := statFile(p, m.file, &st); err != nil {
 		return err
 	}
 

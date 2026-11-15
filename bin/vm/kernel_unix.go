@@ -138,9 +138,9 @@ func (s *unixSocket) state() (*unixListener, *pairEnd) {
 	return s.listener, s.conn
 }
 
-func (s *unixSocket) stat(st *syscall.Stat_t) error {
+func (s *unixSocket) stat(p *Process, st *syscall.Stat_t) error {
 	if _, c := s.state(); c != nil {
-		return c.stat(st)
+		return c.stat(p, st)
 	}
 
 	*st = syscall.Stat_t{Mode: syscall.S_IFSOCK | 0o777, Nlink: 1, Uid: uint32(syscall.Getuid()), Gid: uint32(syscall.Getgid()), Blksize: 4096}
@@ -596,7 +596,7 @@ func (l *unixListener) push(e *pairEnd) (queued, refused bool) {
 	return !full, false
 }
 
-func (l *unixListener) stat(st *syscall.Stat_t) error {
+func (l *unixListener) stat(p *Process, st *syscall.Stat_t) error {
 	*st = syscall.Stat_t{Ino: l.ino, Mode: syscall.S_IFSOCK | 0o777, Nlink: 1, Blksize: 4096}
 
 	return nil

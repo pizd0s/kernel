@@ -23,7 +23,7 @@ type File interface {
 	ref()
 	unref()
 	// stat is fstat.
-	stat(st *syscall.Stat_t) error
+	stat(p *Process, st *syscall.Stat_t) error
 	// poll is the events ready now of those asked. subscribe makes the
 	// file wake to, with id, as it may become ready for events, and tells
 	// whether it ever changes: a file ready whenever asked does not, and
@@ -64,7 +64,7 @@ type Vectored interface {
 
 type Seeker interface {
 	File
-	seek(off int64, whence int) (int64, error)
+	seek(p *Process, off int64, whence int) (int64, error)
 }
 
 // A Dir is a directory: where a path is walked from, and what holds the
@@ -85,7 +85,7 @@ type Dir interface {
 	File
 	resolve(p *Process, path string, w *walk) (step, error)
 	path(p *Process) (string, error)
-	readdir(b []byte) (int, error)
+	readdir(p *Process, b []byte) (int, error)
 	statName(p *Process, name string, st *syscall.Stat_t) error
 	readlinkName(p *Process, name string) (string, error)
 	openName(p *Process, name string, flags int, mode uint32) (File, error)
@@ -121,12 +121,12 @@ type Named interface {
 // (kernel_remote.go) both.
 type Attrs interface {
 	File
-	truncate(size int64) error
-	sync(data bool) error
-	chmod(mode uint32) error
-	chown(uid, gid int) error
-	utimes(ts []syscall.Timespec) error
-	statfs(st *syscall.Statfs_t) error
+	truncate(p *Process, size int64) error
+	sync(p *Process, data bool) error
+	chmod(p *Process, mode uint32) error
+	chown(p *Process, uid, gid int) error
+	utimes(p *Process, ts []syscall.Timespec) error
+	statfs(p *Process, st *syscall.Statfs_t) error
 }
 
 // A Node is a file of a host file system: what the calls the host makes
@@ -179,8 +179,8 @@ type Ioctl interface {
 // without blocking: EAGAIN or EACCES is a lock held by another.
 type Locker interface {
 	File
-	flock(op int) error
-	recordLock(cmd int, lk *syscall.Flock_t) error
+	flock(p *Process, op int) error
+	recordLock(p *Process, cmd int, lk *syscall.Flock_t) error
 }
 
 type Descriptor struct {
@@ -421,107 +421,43 @@ type pollEntry struct {
 }
 
 // waitObjects waits until an object is ready for its events: it
-// subscribes to them all, on a wait queue of the process's, asks them,
-// and sleeps on the queue's one channel, which a signal rings too, until
-// the deadline of timeout milliseconds; woken, it asks the objects whose
-// subscriptions woke it, and no other. The ids are taken before the
-// signals are asked: one that comes after leaves its id for the sleep. A
-// signal interrupts it: then the error is EINTR, after the handlers ran
-// when all of them restart calls and restart is set. It returns how many
-// are ready.
+// subscribes the process to them all, then takes its mail, asks them all
+// and sleeps on the mail until the deadline of timeout milliseconds, as
+// long as none is ready. A signal interrupts it: then the error is EINTR,
+// after the handlers ran when all of them restart calls and restart is
+// set. It returns how many are ready.
 func (p *Process) waitObjects(entries []pollEntry, timeout int, restart bool) (int, error) {
 	end := deadline(timeout)
-	q := p.pushWait()
-	defer p.popWait(q, entries)
 
 	for i := range entries {
-		entries[i].obj.subscribe(q, uint64(i), entries[i].events)
+		entries[i].obj.subscribe(p, uint64(i), entries[i].events)
 	}
 
-	asked := false
-	var ids []uint64
+	defer func() {
+		for i := range entries {
+			entries[i].obj.unsubscribe(p, uint64(i))
+		}
+	}()
 
 	for {
-		ids = q.take(ids[:0])
+		p.takeMail()
 
 		if p.sig.deliverable() != 0 {
 			if restart && p.interrupted() {
-				asked = false
-
 				continue
 			}
 
 			return 0, syscall.EINTR
 		}
 
-		var ready int
-
-		if asked {
-			ready = pollSome(entries, ids)
-		} else {
-			ready, asked = pollEntries(entries), true
-		}
-
-		if ready > 0 {
+		if ready := pollEntries(entries); ready > 0 {
 			return ready, nil
 		}
 
-		if q.sleepUntil(end) {
+		if p.waitMail(end) {
 			return 0, nil
 		}
 	}
-}
-
-// pushWait is a wait queue of the process's for one wait, as a wait can
-// run inside another's signal handler, and the one ring wakes from now on;
-// popWait gives it back, its subscriptions taken back, and ring wakes the
-// wait under it again. The ids an earlier wait left in it are there: each
-// wait forgets them before it first looks.
-func (p *Process) pushWait() *waitQueue {
-	if p.waitDepth == len(p.waitQueues) {
-		p.waitQueues = append(p.waitQueues, &waitQueue{})
-	}
-
-	q := p.waitQueues[p.waitDepth]
-	p.waitDepth++
-	p.waiting.Store(q)
-
-	return q
-}
-
-func (p *Process) popWait(q *waitQueue, entries []pollEntry) {
-	for i := range entries {
-		entries[i].obj.unsubscribe(q, uint64(i))
-	}
-
-	p.waitDepth--
-
-	if p.waitDepth > 0 {
-		p.waiting.Store(p.waitQueues[p.waitDepth-1])
-	} else {
-		p.waiting.Store(nil)
-	}
-}
-
-// pollSome asks the entries of ids again, the others not ready as they
-// were, and counts the ready ones; ringID is none of them.
-func pollSome(entries []pollEntry, ids []uint64) int {
-	ready := 0
-
-	for _, id := range ids {
-		if id >= uint64(len(entries)) {
-			continue
-		}
-
-		e := &entries[id]
-		e.revents = e.obj.poll(e.events)
-
-		if e.revents != 0 {
-			ready++
-		}
-	}
-
-	return ready
 }
 
 // pollEntries asks every entry's object for its events and counts the
@@ -540,20 +476,15 @@ func pollEntries(entries []pollEntry) int {
 	return ready
 }
 
-// waitFor waits until ready says so, as waitObjects waits for files: on a
-// wait queue subscribed to the changes of list, which a signal rings too.
-// A signal interrupts it, restart as there.
+// waitFor waits until ready says so, as waitObjects waits for files: the
+// process subscribed to the changes of list. A signal interrupts it,
+// restart as there.
 func (p *Process) waitFor(ready func() bool, list *subscribers, restart bool) error {
-	q := p.pushWait()
-	list.add(q, 0)
-
-	defer func() {
-		list.remove(q, 0)
-		p.popWait(q, nil)
-	}()
+	list.add(p, 0)
+	defer list.remove(p, 0)
 
 	for {
-		q.reset()
+		p.takeMail()
 
 		if p.sig.deliverable() != 0 {
 			if restart && p.interrupted() {
@@ -567,7 +498,7 @@ func (p *Process) waitFor(ready func() bool, list *subscribers, restart bool) er
 			return nil
 		}
 
-		<-q.sleep()
+		p.waitMail(time.Time{})
 	}
 }
 

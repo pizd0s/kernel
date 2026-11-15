@@ -137,14 +137,10 @@ type Process struct {
 	// (kernel_signal.go).
 	token   atomic.Uintptr
 	chasing atomic.Bool
-	// waitQueues are the queues of its waits (kernel_queue.go), as deep as
-	// they go, a wait in a signal handler's under another; waitDepth is how
-	// many are taken. waiting is the innermost, the wait the process is
-	// in: a signal, a change of its children or of its own state wakes it
-	// (ring), and the wait looks again.
-	waitQueues []*waitQueue
-	waitDepth  int
-	waiting    atomic.Pointer[waitQueue]
+	// mail is all the process sleeps on (kernel_queue.go): a change for a
+	// wait of its, a signal, a child's, puts a function in, which the
+	// process applies to itself as it wakes.
+	mail chan func(*Process)
 }
 
 // execImage is a program a process runs; panicked by exec, it unwinds the
@@ -226,7 +222,7 @@ type disk struct {
 func runKernel(f File, path, root string, argv []string, options CompileOptions, data []byte, obj *Object, disks []disk) int {
 	k := newKernel(root, options)
 	p := throw2(k.newProcess(nil))
-	code, err := k.codeOf(data, path, obj)
+	code, err := k.codeOf(p, data, path, obj)
 	throw(err)
 	program := p.programPath(f)
 	f.unref()
@@ -278,7 +274,8 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 	defer k.mu.Unlock()
 
 	k.lastPid++
-	p := &Process{k: k, pid: k.lastPid, umask: 0o022, regexes: map[uint32]*posixRegex{}, seed: 0}
+	p := &Process{k: k, pid: k.lastPid, umask: 0o022, regexes: map[uint32]*posixRegex{}, seed: 0,
+		mail: make(chan func(*Process), mailMax)}
 
 	if parent == nil {
 		p.pgid, p.sid = p.pid, p.pid

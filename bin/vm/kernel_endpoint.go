@@ -81,8 +81,6 @@ type pairEnd struct {
 	mu     sync.Mutex
 	front  *packet
 	peeked atomic.Bool
-	// kernel is the wait queue of the kernel's own reads of the end.
-	kernel waitQueue
 }
 
 var _ Socket = (*pairEnd)(nil)
@@ -170,7 +168,7 @@ func ioSides(events int16) (in, out bool) {
 	return in, out
 }
 
-func (e *pairEnd) stat(st *syscall.Stat_t) error {
+func (e *pairEnd) stat(p *Process, st *syscall.Stat_t) error {
 	s := e.shared
 	*st = syscall.Stat_t{Ino: s.ino, Mode: syscall.S_IFSOCK | 0o777, Nlink: 1, Uid: uint32(syscall.Getuid()), Gid: uint32(syscall.Getgid()), Blksize: 4096}
 	st.Atim = syscall.NsecToTimespec(s.made.UnixNano())
@@ -214,8 +212,7 @@ func (e *pairEnd) setFlags(fl int) error {
 // send queues a packet for the other end, blocking for room unless
 // nonblock. The packet takes references of its own to the files before
 // the other end can see it, and gives them back when it does not go; the
-// sender keeps its own. Without a process the wait is the kernel's own,
-// on the end's queue. EPIPE comes without SIGPIPE, as Linux has it for
+// sender keeps its own. EPIPE comes without SIGPIPE, as Linux has it for
 // these.
 func (e *pairEnd) send(p *Process, data []byte, files []File, mode ioMode) error {
 	if len(data) > packetMax {
@@ -245,6 +242,66 @@ func (e *pairEnd) sendOwned(p *Process, data []byte, files []File, mode ioMode) 
 	return err
 }
 
+// kernelSend is a send of the kernel's own for p, a request to a server:
+// data given away, with files, quiet, and no signal of p's ends its wait
+// for room, which sleeps on p's mail. A nonblocking end is EAGAIN when
+// full.
+func (e *pairEnd) kernelSend(p *Process, data []byte, files []File) error {
+	if len(data) > packetMax {
+		return syscall.EMSGSIZE
+	}
+
+	for _, f := range files {
+		f.ref()
+	}
+
+	err := e.kernelPut(p, packet{data: data, files: files})
+
+	if err != nil {
+		dropFiles(files)
+	}
+
+	return err
+}
+
+func (e *pairEnd) kernelPut(p *Process, pk packet) error {
+	waiting := false
+
+	defer func() {
+		if waiting {
+			e.to.writers.remove(p, 0)
+		}
+	}()
+
+	for {
+		p.takeMail()
+
+		if e.noWrite.Load() {
+			return syscall.EPIPE
+		}
+
+		full, err := e.to.put(pk)
+
+		if err != nil || !full {
+			return err
+		}
+
+		if e.nonblock.Load() {
+			return syscall.EAGAIN
+		}
+
+		if !waiting {
+			// A take from the full channel wakes its writers.
+			e.to.writers.add(p, 0)
+			waiting = true
+
+			continue
+		}
+
+		p.waitMail(time.Time{})
+	}
+}
+
 func (e *pairEnd) queue(p *Process, pk packet, mode ioMode) error {
 	nonblock := mode.nonblock || e.nonblock.Load()
 
@@ -261,13 +318,6 @@ func (e *pairEnd) queue(p *Process, pk packet, mode ioMode) error {
 
 		if nonblock {
 			return syscall.EAGAIN
-		}
-
-		if p == nil {
-			// A take from the full channel wakes its writers.
-			kernelWait(&e.to.writers, func() bool { return e.to.room() || e.to.gone() })
-
-			continue
 		}
 
 		if _, err := p.waitObject(e, pollOut, -1, true); err != nil {
@@ -328,9 +378,7 @@ func (e *pairEnd) take(peek bool) (pk packet, eof, ok bool) {
 }
 
 // recv takes the next packet, or looks at it with peek: EOF is an empty
-// packet with eof set. Without a process the wait is the kernel's own, on
-// the end's wait queue: the kernel reads an end of its own so, one at a
-// time.
+// packet with eof set.
 func (e *pairEnd) recv(p *Process, mode ioMode, peek bool) (packet, bool, error) {
 	nonblock := mode.nonblock || e.nonblock.Load()
 
@@ -345,30 +393,30 @@ func (e *pairEnd) recv(p *Process, mode ioMode, peek bool) (packet, bool, error)
 			return packet{}, false, syscall.EAGAIN
 		}
 
-		if p == nil {
-			return e.kernelRecv(peek)
-		}
-
 		if _, err := p.waitObject(e, pollIn, -1, true); err != nil {
 			return packet{}, false, err
 		}
 	}
 }
 
-// kernelRecv waits for the next packet on the end's wait queue, which
-// what comes to it wakes.
-func (e *pairEnd) kernelRecv(peek bool) (packet, bool, error) {
-	q := &e.kernel
-	e.from.readers.add(q, 0)
-	defer e.from.readers.remove(q, 0)
+// kernelRecv takes the next packet as the kernel for p, the reply of a
+// server: its wait sleeps on p's mail, which no signal of p's ends.
+func (e *pairEnd) kernelRecv(p *Process) (packet, bool, error) {
+	if pk, eof, ok := e.take(false); ok {
+		return pk, eof, nil
+	}
+
+	e.from.readers.add(p, 0)
+	defer e.from.readers.remove(p, 0)
 
 	for {
-		if pk, eof, ok := e.take(peek); ok {
+		p.takeMail()
+
+		if pk, eof, ok := e.take(false); ok {
 			return pk, eof, nil
 		}
 
-		<-q.sleep()
-		q.reset()
+		p.waitMail(time.Time{})
 	}
 }
 

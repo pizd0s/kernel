@@ -43,12 +43,12 @@ const (
 
 // handleID is the handle's id, asked once: an open or a chdir gave it,
 // else the handle's FSTAT says it, after the stat.
-func (d *remoteDir) handleID() (uint64, error) {
+func (d *remoteDir) handleID(p *Process) (uint64, error) {
 	if id := d.id.Load(); id != 0 {
 		return id, nil
 	}
 
-	pk, err := d.on(rFstat, 0, nil)
+	pk, err := d.on(p, rFstat, 0, nil)
 
 	if err != nil {
 		return 0, err
@@ -69,10 +69,10 @@ func (d *remoteDir) handleID() (uint64, error) {
 // they chroot.
 func (p *Process) rootID(d *remoteDir) (uint64, error) {
 	if root, ok := p.root.(*remoteDir); ok {
-		return root.handleID()
+		return root.handleID(p)
 	}
 
-	return d.handleID()
+	return d.handleID(p)
 }
 
 // vfsAt is the handle a path relative to dirfd starts at when it is one
@@ -107,7 +107,7 @@ func (d *remoteDir) vfs(p *Process, op, arg uint32, body []byte, files ...File) 
 	b := make([]byte, 8, 8+len(body))
 	binary.LittleEndian.PutUint64(b, root)
 
-	return d.call(op, arg, append(b, body...), files)
+	return d.call(p, op, arg, append(b, body...), files)
 }
 
 // vfsDone is a call of the VFS's that opens nothing: its reply's packet.
@@ -243,8 +243,8 @@ func (d *remoteDir) unlinkPath(p *Process, path string, dir bool) error {
 
 // twoPaths is the body of a call on two paths, the second from the
 // handle to: to's id, the old path and the new.
-func twoPaths(to *remoteDir, old, new string) ([]byte, error) {
-	id, err := to.handleID()
+func twoPaths(p *Process, to *remoteDir, old, new string) ([]byte, error) {
+	id, err := to.handleID(p)
 
 	if err != nil {
 		return nil, err
@@ -257,7 +257,7 @@ func twoPaths(to *remoteDir, old, new string) ([]byte, error) {
 }
 
 func (d *remoteDir) renamePath(p *Process, old string, to *remoteDir, new string) error {
-	body, err := twoPaths(to, old, new)
+	body, err := twoPaths(p, to, old, new)
 
 	if err != nil {
 		return err
@@ -269,7 +269,7 @@ func (d *remoteDir) renamePath(p *Process, old string, to *remoteDir, new string
 }
 
 func (d *remoteDir) linkPath(p *Process, old string, to *remoteDir, new string, follow bool) error {
-	body, err := twoPaths(to, old, new)
+	body, err := twoPaths(p, to, old, new)
 
 	if err != nil {
 		return err

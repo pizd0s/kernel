@@ -10,16 +10,19 @@ import (
 	"time"
 )
 
-// Waits. An object tells of its changes whoever subscribed to it, a wait
-// or a set of epoll: it wakes each subscription's waker with the id the
-// subscription named. A wait subscribes to the objects it waits for, asks
-// them, and sleeps on its one channel until an id comes, then asks the
-// objects of the ids that came and no other (kernel_object.go
-// waitObjects, kernel_epoll.go). An object that poll finds not ready for
-// events wakes the subscriptions for them as it may become ready. The
-// process's own changes, a signal, a child's, wake the queue of the wait
-// it is in with ringID (kernel_signal.go ring), so a wait sleeps on its
-// one channel whatever it waits for.
+// Waits. An object tells of its changes whoever subscribed to it, a
+// process or a set of epoll: it wakes each subscription's waker with the
+// id the subscription named. A process sleeps on one channel, its mail,
+// and on nothing else: whatever may change for a wait of the process's,
+// an object it waits on, a signal, a child, the server it called, puts a
+// function in (post), and the process, woken, takes all that came,
+// applies it to itself and looks again at what it waits for (takeMail,
+// waitMail). A wait subscribes to the objects it waits for before it first
+// looks, so a change after the look is mail. Mail says to look; what
+// changed is in the objects, so mail a full box drops is lost to nobody:
+// a full box wakes the process, which looks at everything. An object that
+// poll finds not ready for events wakes the subscriptions for them as it
+// may become ready.
 
 // A waker is what an object wakes as it changes.
 type waker interface {
@@ -90,8 +93,10 @@ func (s *subscribers) takeOver(from *subscribers) {
 	s.mu.Unlock()
 }
 
-// A waitQueue is a wait's: the ids that came since the waiter took them
-// last, and the channel the first of them closes for the waiter asleep.
+// A waitQueue is a wait of a goroutine of the kernel's that is no
+// process, an inbox's (kernel_inbox.go): the ids that came since the
+// waiter took them last, and the channel the first of them closes for the
+// waiter asleep.
 type waitQueue struct {
 	mu  sync.Mutex
 	ids []uint64
@@ -113,9 +118,6 @@ func (q *waitQueue) wake(id uint64) {
 	q.mu.Unlock()
 }
 
-// ringID is the id of a wake for the process itself, no object's.
-const ringID = ^uint64(0)
-
 // sleep is the channel a waiter sleeps on: closed once an id came.
 func (q *waitQueue) sleep() <-chan struct{} {
 	q.mu.Lock()
@@ -132,11 +134,42 @@ func (q *waitQueue) sleep() <-chan struct{} {
 	return q.ch
 }
 
-// sleepUntil sleeps until an id comes or end passes, zero for never; it
-// tells whether end passed.
-func (q *waitQueue) sleepUntil(end time.Time) bool {
+// mailMax is how much mail a process's box holds.
+const mailMax = 16
+
+// look is the mail of a change: the process looks again.
+func look(*Process) {}
+
+// post puts mail in the process's box; it never blocks.
+func (p *Process) post(m func(*Process)) {
+	select {
+	case p.mail <- m:
+	default:
+	}
+}
+
+// wake is the process as the waker of its subscriptions.
+func (p *Process) wake(id uint64) {
+	p.post(look)
+}
+
+// takeMail applies to the process the mail that came, all of it.
+func (p *Process) takeMail() {
+	for {
+		select {
+		case m := <-p.mail:
+			m(p)
+		default:
+			return
+		}
+	}
+}
+
+// waitMail sleeps until mail comes, which it applies, or end passes, zero
+// for never; it tells whether end passed.
+func (p *Process) waitMail(end time.Time) bool {
 	if end.IsZero() {
-		<-q.sleep()
+		(<-p.mail)(p)
 
 		return false
 	}
@@ -151,31 +184,13 @@ func (q *waitQueue) sleepUntil(end time.Time) bool {
 	defer t.Stop()
 
 	select {
-	case <-q.sleep():
+	case m := <-p.mail:
+		m(p)
+
 		return false
 	case <-t.C:
 		return true
 	}
-}
-
-// take moves the ids that came into into.
-func (q *waitQueue) take(into []uint64) []uint64 {
-	q.mu.Lock()
-	into = append(into, q.ids...)
-	q.ids = q.ids[:0]
-	q.mu.Unlock()
-
-	return into
-}
-
-// came forgets the ids that came and tells whether id was one of them.
-func (q *waitQueue) came(id uint64) bool {
-	q.mu.Lock()
-	had := slices.Contains(q.ids, id)
-	q.ids = q.ids[:0]
-	q.mu.Unlock()
-
-	return had
 }
 
 // reset forgets the ids that came.
@@ -375,18 +390,5 @@ func (c *msgChannel) edge(fill, free bool) {
 
 	if free {
 		c.nudgeWriter()
-	}
-}
-
-// kernelWait is a wait of the kernel's own, with no process, until ready
-// holds: on subscribers of a channel, which wake it.
-func kernelWait(list *subscribers, ready func() bool) {
-	q := &waitQueue{}
-	list.add(q, 0)
-	defer list.remove(q, 0)
-
-	for !ready() {
-		<-q.sleep()
-		q.reset()
 	}
 }

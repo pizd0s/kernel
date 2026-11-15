@@ -14,9 +14,8 @@ import (
 // An epoll is a set of files of the kernel, each a member subscribed to
 // the set (kernel_queue.go): a change of its file wakes the set with the
 // member's id, which marks it, in the order of the marks. epoll_wait asks
-// the marked members and no other, and sleeps while none of them is ready
-// on the queue of the process's wait, which a mark wakes, as a signal
-// does. A level-triggered member reported stays marked, asked again by
+// the marked members and no other, and sleeps on the process's mail while
+// none of them is ready, among the set's sleepers, whom a mark wakes. A level-triggered member reported stays marked, asked again by
 // the next wait while it is ready; an edge-triggered one is reported once
 // a change of its file, a one-shot one once until EPOLL_CTL_MOD. A file
 // that is ready whenever asked and never changes, a regular file, cannot
@@ -49,14 +48,14 @@ type epoll struct {
 	members map[epollKey]*epollMember
 	// order is the members as added, byID by the ids of their
 	// subscriptions; ready the marked ones, the oldest mark first, spare
-	// the list a wait gave back; sleepers the queues of the waits asleep,
-	// which a mark wakes and forgets.
+	// the list a wait gave back; sleepers the processes of the waits
+	// asleep, which a mark wakes and forgets.
 	order    []*epollMember
 	byID     map[uint64]*epollMember
 	lastID   uint64
 	ready    []*epollMember
 	spare    []*epollMember
-	sleepers []*waitQueue
+	sleepers []*Process
 	// subs are the subscriptions to the set: of the waits it is asked by,
 	// of the sets it is a member of.
 	subs subscribers
@@ -134,7 +133,7 @@ func (ep *epoll) unref() {
 }
 
 // stat is an anonymous inode's: no type, as Linux has it.
-func (ep *epoll) stat(st *syscall.Stat_t) error {
+func (ep *epoll) stat(p *Process, st *syscall.Stat_t) error {
 	*st = syscall.Stat_t{Ino: ep.ino, Mode: 0o600, Nlink: 1, Uid: uint32(syscall.Getuid()), Gid: uint32(syscall.Getgid()), Blksize: 4096}
 	st.Atim = syscall.NsecToTimespec(ep.made.UnixNano())
 	st.Mtim, st.Ctim = st.Atim, st.Atim
@@ -210,28 +209,20 @@ func (ep *epoll) mark(m *epollMember) {
 	m.queued = true
 	ep.ready = append(ep.ready, m)
 
-	for _, q := range ep.sleepers {
-		q.wake(epollMarkID)
+	for _, p := range ep.sleepers {
+		p.post(look)
 	}
 
 	clear(ep.sleepers)
 	ep.sleepers = ep.sleepers[:0]
 }
 
-// epollMarkID is the id a mark wakes a sleeping wait with, no entry's of
-// a wait of the process's.
-const epollMarkID = ringID - 1
-
-// forget takes the queue of a wait that sleeps no more out of the
-// sleepers, as the wait leaves without a mark.
-func (ep *epoll) forget(q *waitQueue) {
-	ep.mu.Lock()
-
-	if i := slices.Index(ep.sleepers, q); i >= 0 {
+// forget takes a process that sleeps no more out of the sleepers, with
+// the lock.
+func (ep *epoll) forget(p *Process) {
+	if i := slices.Index(ep.sleepers, p); i >= 0 {
 		ep.sleepers = slices.Delete(ep.sleepers, i, i+1)
 	}
-
-	ep.mu.Unlock()
 }
 
 func (ep *epoll) flags() (int, error) {
@@ -368,8 +359,9 @@ func (ep *epoll) add(key epollKey, events uint32, data uint64) error {
 // file's held, a pipe's, which its poll takes too. One not ready waits for
 // its next change; a level-triggered one reported is marked again, after
 // the others; those max left unasked stay first.
-func (ep *epoll) collect(buf []byte, max int) int {
+func (ep *epoll) collect(p *Process, buf []byte, max int) int {
 	ep.mu.Lock()
+	ep.forget(p)
 	marked := ep.ready
 	ep.ready, ep.spare = ep.spare[:0], nil
 
@@ -442,26 +434,14 @@ func (ep *epoll) collect(buf []byte, max int) int {
 }
 
 // wait waits for up to max ready members until end, zero for never: on
-// a wait queue of the process's, among the sleepers of the set, so a mark
-// wakes it, and a signal, which interrupts it. A wait a mark woke is out
-// of the sleepers; one that leaves otherwise takes itself out.
+// the process's mail, among the sleepers of the set, so a mark wakes it,
+// as a signal does, which interrupts it. collect takes the process out of
+// the sleepers, the one way out but the deadline's.
 func (ep *epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, error) {
-	q := p.pushWait()
-	defer p.popWait(q, nil)
-	asleep := false
-
-	defer func() {
-		if asleep {
-			ep.forget(q)
-		}
-	}()
-
 	for {
-		if q.came(epollMarkID) {
-			asleep = false
-		}
+		p.takeMail()
 
-		if n := ep.collect(buf, max); n > 0 {
+		if n := ep.collect(p, buf, max); n > 0 {
 			return n, nil
 		}
 
@@ -481,14 +461,14 @@ func (ep *epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, erro
 			continue
 		}
 
-		if !asleep {
-			ep.sleepers = append(ep.sleepers, q)
-			asleep = true
-		}
-
+		ep.sleepers = append(ep.sleepers, p)
 		ep.mu.Unlock()
 
-		if q.sleepUntil(end) {
+		if p.waitMail(end) {
+			ep.mu.Lock()
+			ep.forget(p)
+			ep.mu.Unlock()
+
 			return 0, nil
 		}
 	}

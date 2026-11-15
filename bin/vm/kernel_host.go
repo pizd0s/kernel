@@ -280,7 +280,7 @@ func (o *hostObject) tell(events int16) {
 	}()
 }
 
-func (o *hostObject) stat(st *syscall.Stat_t) error {
+func (o *hostObject) stat(p *Process, st *syscall.Stat_t) error {
 	return syscall.Fstat(o.fd, st)
 }
 
@@ -428,7 +428,7 @@ func fileStat(fd int, st *syscall.Stat_t) error {
 	return syscall.Fstat(fd, st)
 }
 
-func (o *hostObject) truncate(size int64) error {
+func (o *hostObject) truncate(p *Process, size int64) error {
 	return syscall.Ftruncate(o.fd, size)
 }
 
@@ -471,7 +471,7 @@ func (o *hostObject) copyRange(dst Node, from, to *int64, n int, flags int) (int
 	return int(r), nil
 }
 
-func (o *hostObject) sync(data bool) error {
+func (o *hostObject) sync(p *Process, data bool) error {
 	if data {
 		return syscall.Fdatasync(o.fd)
 	}
@@ -479,19 +479,19 @@ func (o *hostObject) sync(data bool) error {
 	return syscall.Fsync(o.fd)
 }
 
-func (o *hostObject) chmod(mode uint32) error {
+func (o *hostObject) chmod(p *Process, mode uint32) error {
 	return syscall.Fchmod(o.fd, mode)
 }
 
-func (o *hostObject) chown(uid, gid int) error {
+func (o *hostObject) chown(p *Process, uid, gid int) error {
 	return syscall.Fchown(o.fd, uid, gid)
 }
 
-func (o *hostObject) utimes(ts []syscall.Timespec) error {
+func (o *hostObject) utimes(p *Process, ts []syscall.Timespec) error {
 	return utimensat(o.fd, nil, ts, 0)
 }
 
-func (o *hostObject) statfs(st *syscall.Statfs_t) error {
+func (o *hostObject) statfs(p *Process, st *syscall.Statfs_t) error {
 	return syscall.Fstatfs(o.fd, st)
 }
 
@@ -574,14 +574,14 @@ func ioctlPtr(fd int, req uintptr, arg unsafe.Pointer) error {
 	return nil
 }
 
-func (o *hostObject) flock(op int) error {
+func (o *hostObject) flock(p *Process, op int) error {
 	return syscall.Flock(o.fd, op|syscall.LOCK_NB)
 }
 
 // Record locks are the host's open file description locks: a guest's lock
 // is its open file's, which fork shares, and does not end when another
 // descriptor of the process closes.
-func (o *hostObject) recordLock(cmd int, lk *syscall.Flock_t) error {
+func (o *hostObject) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
 	if _, _, e := syscall.Syscall(syscall.SYS_FCNTL, uintptr(o.fd), uintptr(cmd), uintptr(unsafe.Pointer(lk))); e != 0 {
 		return e
 	}
@@ -591,15 +591,15 @@ func (o *hostObject) recordLock(cmd int, lk *syscall.Flock_t) error {
 
 // A file and a directory seek; a socket does not, so it is no Seeker: a
 // mapping of one is no device for it.
-func (f *hostFile) seek(off int64, whence int) (int64, error) {
+func (f *hostFile) seek(p *Process, off int64, whence int) (int64, error) {
 	return syscall.Seek(f.fd, off, whence)
 }
 
-func (d *hostDir) seek(off int64, whence int) (int64, error) {
+func (d *hostDir) seek(p *Process, off int64, whence int) (int64, error) {
 	return syscall.Seek(d.fd, off, whence)
 }
 
-func (d *hostDir) readdir(b []byte) (int, error) {
+func (d *hostDir) readdir(p *Process, b []byte) (int, error) {
 	return syscall.Getdents(d.fd, b)
 }
 

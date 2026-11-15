@@ -97,7 +97,7 @@ func (f *memfdFile) unref() {
 	}
 }
 
-func (f *memfdFile) stat(st *syscall.Stat_t) error {
+func (f *memfdFile) stat(p *Process, st *syscall.Stat_t) error {
 	*st = syscall.Stat_t{Ino: f.ino, Mode: syscall.S_IFREG | 0o777, Nlink: 1, Size: int64(len(f.mem)),
 		Uid: uint32(syscall.Getuid()), Gid: uint32(syscall.Getgid()), Blksize: 4096}
 	st.Atim = syscall.NsecToTimespec(f.made.UnixNano())
@@ -184,7 +184,7 @@ func (f *memfdFile) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return n, nil
 }
 
-func (f *memfdFile) seek(off int64, whence int) (int64, error) {
+func (f *memfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -214,19 +214,19 @@ func (f *memfdFile) seek(off int64, whence int) (int64, error) {
 // through a READ or WRITE that brings the memfd itself; another memfd's
 // bytes are moved. from and to are the offsets given, nil for the files'
 // positions, which move.
-func copyWindow(src, dst File, from, to *int64, n int) (int, error) {
+func copyWindow(p *Process, src, dst File, from, to *int64, n int) (int, error) {
 	if w, ok := dst.(*memfdFile); ok {
-		return w.fill(src, from, to, n)
+		return w.fill(p, src, from, to, n)
 	}
 
-	return src.(*memfdFile).drain(dst, from, to, n)
+	return src.(*memfdFile).drain(p, dst, from, to, n)
 }
 
 // fill copies up to n bytes of src, at from or its position, into the
 // range at to or its position: the range does not grow, past its end the
 // copy is ENOSPC. No lock is held while the bytes go: a server that
 // writes to the range as it answers waits for nothing.
-func (f *memfdFile) fill(src File, from, to *int64, n int) (int, error) {
+func (f *memfdFile) fill(p *Process, src File, from, to *int64, n int) (int, error) {
 	if src == File(f) {
 		return 0, syscall.EINVAL
 	}
@@ -254,7 +254,7 @@ func (f *memfdFile) fill(src File, from, to *int64, n int) (int, error) {
 	case *memfdFile:
 		count, err = s.moveTo(f.mem[at:int(at)+n], from)
 	case *remoteFile:
-		count, err = s.readWindow(f, uint32(at), n, from)
+		count, err = s.readWindow(p, f, uint32(at), n, from)
 	default:
 		count, err = hostTransfer(src, f.mem[at:int(at)+n], from, false)
 	}
@@ -266,7 +266,7 @@ func (f *memfdFile) fill(src File, from, to *int64, n int) (int, error) {
 
 // drain copies up to n bytes of the range, at from or its position, into
 // dst at to or its position.
-func (f *memfdFile) drain(dst File, from, to *int64, n int) (int, error) {
+func (f *memfdFile) drain(p *Process, dst File, from, to *int64, n int) (int, error) {
 	if f.mode == syscall.O_WRONLY {
 		return 0, syscall.EBADF
 	}
@@ -286,7 +286,7 @@ func (f *memfdFile) drain(dst File, from, to *int64, n int) (int, error) {
 
 	switch d := dst.(type) {
 	case *remoteFile:
-		count, err = d.writeWindow(f, uint32(at), n, to)
+		count, err = d.writeWindow(p, f, uint32(at), n, to)
 	default:
 		count, err = hostTransfer(dst, f.mem[at:int(at)+n], to, true)
 	}
@@ -333,15 +333,15 @@ func (f *memfdFile) moved(at *int64, count int) {
 
 // readWindow reads n bytes of the server's file at from, or at its
 // position, which moves, into the memfd w from its byte woff on.
-func (f *remoteFile) readWindow(w *memfdFile, woff uint32, n int, from *int64) (int, error) {
+func (f *remoteFile) readWindow(p *Process, w *memfdFile, woff uint32, n int, from *int64) (int, error) {
 	if from != nil {
-		count, err := f.readInto(w, woff, n, *from)
+		count, err := f.readInto(p, w, woff, n, *from)
 		*from += int64(count)
 
 		return count, err
 	}
 
-	count, err := f.readInto(w, woff, n, atomic.LoadInt64(&f.pos))
+	count, err := f.readInto(p, w, woff, n, atomic.LoadInt64(&f.pos))
 	atomic.AddInt64(&f.pos, int64(count))
 
 	return count, err
@@ -350,19 +350,19 @@ func (f *remoteFile) readWindow(w *memfdFile, woff uint32, n int, from *int64) (
 // writeWindow writes n bytes of the memfd w, from its byte woff on, into
 // the server's file at to, or at its position, which moves. A file open
 // to append is EBADF, as Linux has it.
-func (f *remoteFile) writeWindow(w *memfdFile, woff uint32, n int, to *int64) (int, error) {
+func (f *remoteFile) writeWindow(p *Process, w *memfdFile, woff uint32, n int, to *int64) (int, error) {
 	if f.append {
 		return 0, syscall.EBADF
 	}
 
 	if to != nil {
-		count, _, err := f.writeFrom(w, woff, n, *to, false)
+		count, _, err := f.writeFrom(p, w, woff, n, *to, false)
 		*to += int64(count)
 
 		return count, err
 	}
 
-	count, _, err := f.writeFrom(w, woff, n, atomic.LoadInt64(&f.pos), false)
+	count, _, err := f.writeFrom(p, w, woff, n, atomic.LoadInt64(&f.pos), false)
 	atomic.AddInt64(&f.pos, int64(count))
 
 	return count, err

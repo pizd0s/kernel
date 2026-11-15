@@ -10,7 +10,9 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -58,7 +60,7 @@ func (k *Kernel) code(p *Process, f File, name string) (*Code, error) {
 		return nil, fmt.Errorf("%s: no executable of PZD1: %w", name, syscall.ENOEXEC)
 	}
 
-	return k.codeOf(exe, name, nil)
+	return k.codeOf(p, exe, name, nil)
 }
 
 // programData is the executable a file begins with, read at offsets to
@@ -70,7 +72,7 @@ func (k *Kernel) code(p *Process, f File, name string) (*Code, error) {
 func programData(p *Process, f File, module bool) (data []byte, ok bool, err error) {
 	var st syscall.Stat_t
 
-	if err := f.stat(&st); err != nil {
+	if err := f.stat(p, &st); err != nil {
 		return nil, false, err
 	}
 
@@ -127,13 +129,16 @@ func readAt(p *Process, t Transfer, b []byte, off int64) error {
 	return nil
 }
 
-// A codeEntry is the code of a module, or why it has none; done closes
-// when either is known, so a process that asks for a module another is
-// compiling waits for that compilation.
+// A codeEntry is the code of a module, or why it has none; done says
+// either is known, and waiting are the processes that wait for it, whom
+// the end of the compilation wakes, so a process that asks for a module
+// another is compiling waits for that compilation: both with the kernel's
+// lock.
 type codeEntry struct {
-	done chan struct{}
-	code *Code
-	err  error
+	done    bool
+	waiting []*Process
+	code    *Code
+	err     error
 }
 
 // codeOf is the code of an executable, data, the part of a file to its
@@ -143,40 +148,57 @@ type codeEntry struct {
 // is no part of them. obj is the module compiled already, or nil. A
 // failure is not kept: the next exec tries again.
 //
-// The compiler runs on a goroutine of its own, and the process waits for
-// its end: in the frames of the process's code, a compiler that ends in a
-// panic, a module it refuses, would leave the goroutine's instance its own
-// (aot.cpp's entry thunk restores it only on return).
-func (k *Kernel) codeOf(data []byte, name string, obj *Object) (*Code, error) {
+// The compiler runs on a goroutine of its own, and the process p waits
+// for its end on its mail, which no signal ends: in the frames of the
+// process's code, a compiler that ends in a panic, a module it refuses,
+// would leave the goroutine's instance its own (aot.cpp's entry thunk
+// restores it only on return).
+func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *Object) (*Code, error) {
 	key := sha256.Sum256(data)
 	k.mu.Lock()
 	e, found := k.codes[key]
 
 	if !found {
-		e = &codeEntry{done: make(chan struct{})}
+		e = &codeEntry{}
 		k.codes[key] = e
 
 		go func() {
-			e.code, e.err = k.compile(data, name, obj)
+			code, err := k.compile(data, name, obj)
+			k.mu.Lock()
+			e.code, e.err, e.done = code, err, true
+			waiting := e.waiting
+			e.waiting = nil
 
-			if e.err != nil {
-				k.mu.Lock()
-
-				if k.codes[key] == e {
-					delete(k.codes, key)
-				}
-
-				k.mu.Unlock()
+			if err != nil && k.codes[key] == e {
+				delete(k.codes, key)
 			}
 
-			close(e.done)
+			k.mu.Unlock()
+
+			for _, w := range waiting {
+				w.post(look)
+			}
 		}()
 	}
 
-	k.mu.Unlock()
-	<-e.done
+	if !e.done {
+		e.waiting = append(e.waiting, p)
+	}
 
-	return e.code, e.err
+	k.mu.Unlock()
+
+	for {
+		p.takeMail()
+		k.mu.Lock()
+		done := e.done
+		k.mu.Unlock()
+
+		if done {
+			return e.code, e.err
+		}
+
+		p.waitMail(time.Time{})
+	}
 }
 
 // compile compiles a module, unless obj is its object already, and links
@@ -251,7 +273,7 @@ func (p *Process) loadFrom(path string, first File, argv []string) (*execImage, 
 		var st syscall.Stat_t
 		t, transfers := f.(Transfer)
 
-		if err := f.stat(&st); err != nil || !transfers || st.Mode&syscall.S_IFMT != syscall.S_IFREG {
+		if err := f.stat(p, &st); err != nil || !transfers || st.Mode&syscall.S_IFMT != syscall.S_IFREG {
 			f.unref()
 
 			return nil, syscall.EACCES
@@ -839,14 +861,27 @@ func (p *Process) libcSystem(cmd uint32) uint32 {
 
 	c.inherit(p)
 	c.execReset()
-	done := make(chan int, 1)
+	var ended atomic.Bool
 
+	// The child's end wakes p, which waits on its mail, its signals left
+	// for after.
 	go func() {
 		c.run(img)
-		done <- c.status
+		ended.Store(true)
+		p.post(look)
 	}()
 
-	status := <-done
+	for {
+		p.takeMail()
+
+		if ended.Load() {
+			break
+		}
+
+		p.waitMail(time.Time{})
+	}
+
+	status := c.status
 	// its parent never waits for it: the child is reaped here
 	p.k.mu.Lock()
 	delete(p.k.procs, c.pid)

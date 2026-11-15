@@ -247,13 +247,10 @@ func (p *Process) interrupt() {
 	binary.LittleEndian.PutUint32(p.inst.block[at:], sp)
 }
 
-// ring makes the wait the process is in look again: for a signal, a
-// change of its children or of its own state. Out of a wait there is
-// nothing to wake: a wait looks before it sleeps.
+// ring makes the process look again where it waits, or at its next wait:
+// for a signal, a change of its children or of its own state.
 func (p *Process) ring() {
-	if q := p.waiting.Load(); q != nil {
-		q.wake(ringID)
-	}
+	p.post(look)
 }
 
 // sendSelf sends a signal the process raised itself; it takes it on its
@@ -446,11 +443,8 @@ func (p *Process) sigwait(set uint64, timeout time.Duration) (int, error) {
 		end = time.Now().Add(timeout)
 	}
 
-	q := p.pushWait()
-	defer p.popWait(q, nil)
-
 	for {
-		q.reset()
+		p.takeMail()
 		p.sig.mu.Lock()
 
 		if ready := p.sig.pending & set; ready != 0 {
@@ -470,7 +464,7 @@ func (p *Process) sigwait(set uint64, timeout time.Duration) (int, error) {
 			return 0, syscall.EINTR
 		}
 
-		if q.sleepUntil(end) {
+		if p.waitMail(end) {
 			return 0, syscall.EAGAIN
 		}
 	}

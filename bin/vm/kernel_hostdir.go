@@ -173,7 +173,7 @@ func up(cur int, dev, ino uint64) (int, error) {
 // root of the process.
 func (d *hostDir) resolve(p *Process, path string, w *walk) (step, error) {
 	names, slash := splitPath(path)
-	dev, ino := identity(w.root)
+	dev, ino := identity(p, w.root)
 	cur, owned := d.fd, false
 
 	drop := func() {
@@ -518,7 +518,7 @@ func newDeviceDir(dir string) *deviceDir {
 func (d *deviceDir) ref()   { d.refs.Add(1) }
 func (d *deviceDir) unref() { d.refs.Add(-1) }
 
-func (d *deviceDir) stat(st *syscall.Stat_t) error {
+func (d *deviceDir) stat(p *Process, st *syscall.Stat_t) error {
 	return syscall.Stat(d.dir, st)
 }
 
@@ -530,7 +530,7 @@ func (d *deviceDir) subscribe(to waker, id uint64, events int16) bool { return f
 func (d *deviceDir) unsubscribe(to waker, id uint64)                  {}
 func (d *deviceDir) flags() (int, error)                              { return syscall.O_RDONLY, nil }
 func (d *deviceDir) setFlags(fl int) error                            { return nil }
-func (d *deviceDir) readdir(b []byte) (int, error)                    { return 0, nil }
+func (d *deviceDir) readdir(p *Process, b []byte) (int, error)        { return 0, nil }
 
 func (d *deviceDir) resolve(p *Process, path string, w *walk) (step, error) {
 	return step{}, syscall.ENOTDIR

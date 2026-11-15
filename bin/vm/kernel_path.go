@@ -859,7 +859,7 @@ func (p *Process) libcFstatat(dirfd, path, at, flags uint32) uint32 {
 
 		return nil
 	}, func(f File) error {
-		return statFile(f, &st)
+		return statFile(p, f, &st)
 	}, func(v *remoteDir, follow bool) error {
 		return v.statPath(p, p.str(path), follow, &st)
 	})
@@ -923,7 +923,7 @@ func (p *Process) libcFstatvfs(fd, at uint32) uint32 {
 
 	var st syscall.Statfs_t
 
-	if err := n.statfs(&st); err != nil {
+	if err := n.statfs(p, &st); err != nil {
 		return p.result(0, err)
 	}
 
@@ -1384,7 +1384,7 @@ func (p *Process) libcFstatfs(fd, at uint32) uint32 {
 
 	var st syscall.Statfs_t
 
-	if err := n.statfs(&st); err != nil {
+	if err := n.statfs(p, &st); err != nil {
 		return p.result(0, err)
 	}
 
@@ -1431,7 +1431,7 @@ func (p *Process) libcFchmodat(dirfd, path, mode, flags uint32) uint32 {
 	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(d Dir, name string, st *syscall.Stat_t) error {
 		return p.chmodName(d, name, st, mode)
 	}, attrsCall(func(a Attrs) error {
-		return a.chmod(mode & 0o7777)
+		return a.chmod(p, mode&0o7777)
 	}), func(v *remoteDir, follow bool) error {
 		return v.chmodPath(p, p.str(path), mode&0o7777, follow)
 	}))
@@ -1441,7 +1441,7 @@ func (p *Process) libcFchownat(dirfd, path, uid, gid, flags uint32) uint32 {
 	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(d Dir, name string, st *syscall.Stat_t) error {
 		return d.chownName(p, name, int(int32(uid)), int(int32(gid)))
 	}, attrsCall(func(a Attrs) error {
-		return a.chown(int(int32(uid)), int(int32(gid)))
+		return a.chown(p, int(int32(uid)), int(int32(gid)))
 	}), func(v *remoteDir, follow bool) error {
 		return v.chownPath(p, p.str(path), int(int32(uid)), int(int32(gid)), follow)
 	}))
@@ -1488,7 +1488,7 @@ func (p *Process) libcUtimensat(dirfd, path, times, flags uint32) uint32 {
 		n, err := p.attrsAt(dirfd)
 
 		if err == nil {
-			err = n.utimes(p.timespecs(times))
+			err = n.utimes(p, p.timespecs(times))
 		}
 
 		return p.result(0, err)
@@ -1769,7 +1769,7 @@ func (p *Process) libcFdopendir(fd uint32) uint32 {
 
 	var st syscall.Stat_t
 
-	if err := statFile(obj, &st); err != nil {
+	if err := statFile(p, obj, &st); err != nil {
 		return p.pointer(0, err)
 	}
 
@@ -1790,7 +1790,7 @@ func (p *Process) libcFdopendir(fd uint32) uint32 {
 
 func (p *Process) rewinddir(dir uint32) {
 	if s, err := p.seekerAt(p.u32(dir + dirFd)); err == nil {
-		s.seek(0, 0)
+		s.seek(p, 0, 0)
 	}
 
 	p.put32(dir+dirPos, 0)
@@ -1822,7 +1822,7 @@ func (p *Process) readdir(dir uint32) (uint32, error) {
 			return 0, err
 		}
 
-		n, err := d.readdir(p.span(dir+dirBuf, dirBufLen))
+		n, err := d.readdir(p, p.span(dir+dirBuf, dirBufLen))
 
 		if err != nil || n == 0 {
 			return 0, err

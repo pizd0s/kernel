@@ -125,7 +125,7 @@ func (g *globber) names(dir string) ([]string, error) {
 	buf := make([]byte, 4096)
 
 	for {
-		n, err := d.readdir(buf)
+		n, err := d.readdir(g.p, buf)
 
 		if err != nil || n == 0 {
 			return names, err

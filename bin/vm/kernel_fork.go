@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"syscall"
+	"time"
 )
 
 // Children. A child of vfork runs on its parent's goroutine, in its frames
@@ -396,11 +397,9 @@ func (p *Process) stopped(sig int) {
 	p.halted, p.report = true, sig<<8|stoppedBy
 	p.k.mu.Unlock()
 	p.tellParent(saNocldstop)
-	q := p.pushWait()
-	defer p.popWait(q, nil)
 
 	for {
-		q.reset()
+		p.takeMail()
 		p.k.mu.Lock()
 		halted := p.halted
 		p.k.mu.Unlock()
@@ -412,7 +411,7 @@ func (p *Process) stopped(sig int) {
 			return
 		}
 
-		<-q.sleep()
+		p.waitMail(time.Time{})
 	}
 }
 
@@ -460,11 +459,8 @@ func (p *Process) tellParent(flag uint32) {
 // handlers ran when they all restart calls. Ready comes first, as a call
 // that has its result returns it.
 func (p *Process) waitEvent(ready func() bool) error {
-	q := p.pushWait()
-	defer p.popWait(q, nil)
-
 	for {
-		q.reset()
+		p.takeMail()
 		signal := p.sig.deliverable() != 0
 
 		if ready() {
@@ -479,7 +475,7 @@ func (p *Process) waitEvent(ready func() bool) error {
 			return syscall.EINTR
 		}
 
-		<-q.sleep()
+		p.waitMail(time.Time{})
 	}
 }
 

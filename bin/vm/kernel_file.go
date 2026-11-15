@@ -181,7 +181,7 @@ func (p *Process) recordLock(l Locker, cmd, at uint32) error {
 	lk := syscall.Flock_t{Type: int16(p.u16(at)), Whence: int16(p.u16(at + 2)), Start: int64(p.u64(at + 8)), Len: int64(p.u64(at + 16))}
 
 	if cmd == fGetlk {
-		if err := l.recordLock(fOfdGetlk, &lk); err != nil {
+		if err := l.recordLock(p, fOfdGetlk, &lk); err != nil {
 			return err
 		}
 
@@ -195,7 +195,7 @@ func (p *Process) recordLock(l Locker, cmd, at uint32) error {
 	}
 
 	return p.waitLock(cmd == fSetlkw, func() error {
-		return l.recordLock(fOfdSetlk, &lk)
+		return l.recordLock(p, fOfdSetlk, &lk)
 	})
 }
 
@@ -386,7 +386,7 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 	var r int
 
 	if fromWindow || toWindow {
-		r, err = copyWindow(src, dst, from, to, int(n))
+		r, err = copyWindow(p, src, dst, from, to, int(n))
 	} else {
 		r, err = srcNode.copyRange(dstNode, from, to, int(n), int(flags))
 	}
@@ -410,7 +410,7 @@ func (p *Process) libcFdatasync(fd uint32) uint32 {
 	n, err := p.attrsAt(fd)
 
 	if err == nil {
-		err = n.sync(true)
+		err = n.sync(p, true)
 	}
 
 	return p.result(0, err)
@@ -444,7 +444,7 @@ func (p *Process) libcFlock(fd, op uint32) uint32 {
 	}
 
 	return p.result(0, p.waitLock(op&syscall.LOCK_NB == 0, func() error {
-		return l.flock(int(op))
+		return l.flock(p, int(op))
 	}))
 }
 
@@ -461,15 +461,15 @@ func (p *Process) libcLockf(fd, cmd uint32, n uint64) uint32 {
 	switch cmd {
 	case 0:
 		lk.Type = fUnlck
-		err = l.recordLock(fOfdSetlk, &lk)
+		err = l.recordLock(p, fOfdSetlk, &lk)
 	case 1, 2:
 		err = p.waitLock(cmd == 1, func() error {
-			return l.recordLock(fOfdSetlk, &lk)
+			return l.recordLock(p, fOfdSetlk, &lk)
 		})
 	case 3:
 		lk.Type = fRdlck
 
-		if err = l.recordLock(fOfdGetlk, &lk); err == nil && lk.Type != fUnlck {
+		if err = l.recordLock(p, fOfdGetlk, &lk); err == nil && lk.Type != fUnlck {
 			err = syscall.EACCES
 		}
 	default:
@@ -558,7 +558,7 @@ func (p *Process) libcLseek(fd uint32, off uint64, whence uint32) uint64 {
 		return p.result64(0, err)
 	}
 
-	return p.result64(s.seek(int64(off), int(whence)))
+	return p.result64(s.seek(p, int64(off), int(whence)))
 }
 
 func (p *Process) libcClose(fd uint32) uint32 {
@@ -639,7 +639,7 @@ func (p *Process) libcFsync(fd uint32) uint32 {
 	n, err := p.attrsAt(fd)
 
 	if err == nil {
-		err = n.sync(false)
+		err = n.sync(p, false)
 	}
 
 	return p.result(0, err)
@@ -649,7 +649,7 @@ func (p *Process) libcFtruncate(fd uint32, size uint64) uint32 {
 	n, err := p.attrsAt(fd)
 
 	if err == nil {
-		err = n.truncate(int64(size))
+		err = n.truncate(p, int64(size))
 	}
 
 	return p.result(0, err)
@@ -657,12 +657,12 @@ func (p *Process) libcFtruncate(fd uint32, size uint64) uint32 {
 
 // statFile reads a file's metadata for a guest operation on a
 // descriptor.
-func statFile(f File, st *syscall.Stat_t) error {
+func statFile(p *Process, f File, st *syscall.Stat_t) error {
 	if chaosFail("file-stat") {
 		return syscall.EIO
 	}
 
-	return f.stat(st)
+	return f.stat(p, st)
 }
 
 func (p *Process) libcFstat(fd, at uint32) uint32 {
@@ -674,7 +674,7 @@ func (p *Process) libcFstat(fd, at uint32) uint32 {
 
 	var st syscall.Stat_t
 
-	if err := statFile(obj, &st); err != nil {
+	if err := statFile(p, obj, &st); err != nil {
 		return p.result(0, err)
 	}
 
@@ -687,7 +687,7 @@ func (p *Process) libcFchmod(fd, mode uint32) uint32 {
 	n, err := p.attrsAt(fd)
 
 	if err == nil {
-		err = n.chmod(mode & 0o7777)
+		err = n.chmod(p, mode&0o7777)
 	}
 
 	return p.result(0, err)
@@ -697,7 +697,7 @@ func (p *Process) libcFchown(fd, uid, gid uint32) uint32 {
 	n, err := p.attrsAt(fd)
 
 	if err == nil {
-		err = n.chown(int(int32(uid)), int(int32(gid)))
+		err = n.chown(p, int(int32(uid)), int(int32(gid)))
 	}
 
 	return p.result(0, err)
@@ -707,7 +707,7 @@ func (p *Process) libcFutimes(fd, times uint32) uint32 {
 	n, err := p.attrsAt(fd)
 
 	if err == nil {
-		err = n.utimes(p.timevals(times))
+		err = n.utimes(p, p.timevals(times))
 	}
 
 	return p.result(0, err)
@@ -717,7 +717,7 @@ func (p *Process) libcFutimens(fd, times uint32) uint32 {
 	n, err := p.attrsAt(fd)
 
 	if err == nil {
-		err = n.utimes(p.timespecs(times))
+		err = n.utimes(p, p.timespecs(times))
 	}
 
 	return p.result(0, err)
