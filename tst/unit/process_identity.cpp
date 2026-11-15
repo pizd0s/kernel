@@ -85,10 +85,11 @@ int main() {
     check(setpriority(PRIO_PROCESS, 0, 19) == 0);
     check(getpriority(PRIO_PROCESS, getpid()) == 19);
     check(getpriority(PRIO_PGRP, getpgrp()) == 19);
-    check(getpriority(PRIO_USER, real) == 19);
     check(nice(10) == 19);
     check(setpriority(PRIO_PGRP, 0, 19) == 0);
+    // The user's are the system's processes too: theirs is 19 once all are.
     check(setpriority(PRIO_USER, 0, 19) == 0);
+    check(getpriority(PRIO_USER, real) == 19);
     check(getpriority(99, 0) == -1 && errno == EINVAL);
     check(setpriority(99, 0, 0) == -1 && errno == EINVAL);
     check(getpriority(PRIO_PROCESS, 0x7fffffff) == -1 && errno == ESRCH);

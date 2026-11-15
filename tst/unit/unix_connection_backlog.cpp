@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
@@ -26,8 +27,8 @@ int main() {
     int listener = socket(AF_UNIX, SOCK_STREAM, 0);
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
-    int used = snprintf(address.sun_path + 1, sizeof(address.sun_path) - 1, "pizdos-backlog-%ld", long(getpid()));
-    socklen_t length = offsetof(sockaddr_un, sun_path) + 1 + used;
+    strcpy(address.sun_path, "backlog.sock");
+    socklen_t length = sizeof(address);
     assert(listener >= 0 && bind(listener, reinterpret_cast<sockaddr*>(&address), length) == 0);
     assert(listen(listener, 0) == 0);
     int queued = socket(AF_UNIX, SOCK_STREAM, 0);

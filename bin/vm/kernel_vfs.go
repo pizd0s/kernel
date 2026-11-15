@@ -161,8 +161,9 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (F
 		return nil, err
 	}
 
-	node := remoteNode{end: mine, accmode: flags & 3, append: flags&syscall.O_APPEND != 0}
+	node := remoteNode{end: mine, accmode: flags & 3}
 	node.refs.Store(1)
+	node.append.Store(flags&syscall.O_APPEND != 0)
 
 	switch {
 	case len(pk.data) >= remoteStat+8:
@@ -372,14 +373,15 @@ func (d *remoteDir) mountPath(p *Process, target, source string, conn *pairEnd) 
 }
 
 // bindPath makes a socket node of the last name of a path, of a mode,
-// which holds a listener.
-func (d *remoteDir) bindPath(p *Process, path string, mode uint32, l *unixListener) error {
-	_, err := d.vfsDone(p, vBind, mode, []byte(path), l)
+// which holds what the name of a socket stands for: a listener, or the
+// mouth of a datagram socket (kernel_unix.go).
+func (d *remoteDir) bindPath(p *Process, path string, mode uint32, held File) error {
+	_, err := d.vfsDone(p, vBind, mode, []byte(path), held)
 
 	return err
 }
 
-// connectPath is the listener the socket node a path names holds.
+// connectPath is what the socket node a path names holds.
 func (d *remoteDir) connectPath(p *Process, path string) (File, error) {
 	pk, mine, err := d.vfs(p, vConnect, 0, []byte(path))
 

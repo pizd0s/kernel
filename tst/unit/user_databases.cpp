@@ -1,3 +1,4 @@
+//@ root: own
 //@ host: false
 //@ compile-flags: -g -D_GNU_SOURCE -fno-builtin
 //@ stdout: "user databases: ok\n"

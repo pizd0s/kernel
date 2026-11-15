@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""lib/cxx's C++ library under `vm run`: tst/cxx/check.cpp prints one line
-of results per area, between its static and thread_local objects' lines,
-which must be these. Its root has a /tmp for the files.
+"""lib/cxx's C++ library in the system: tst/cxx/check.cpp, the image of
+the tests' /tests/cxx/check, prints one line of results per area, between
+its static and thread_local objects' lines, which must be these. It makes
+its files in /tmp.
 
-    test_cxx.py <vm> <check.wasm>
+    test_cxx.py <vm> <rootfs> <tests.img>
 """
-import os
 import subprocess
 import sys
-import tempfile
 
 EXPECTED = """\
 construct first
@@ -35,12 +34,9 @@ destroy first
 
 
 def main():
-    vm, check = sys.argv[1:3]
-
-    with tempfile.TemporaryDirectory() as root:
-        os.mkdir(os.path.join(root, "tmp"))
-        r = subprocess.run([vm, "run", "--root", root, "-a", "check", "--", check], capture_output=True, text=True,
-                           env={"PATH": "/bin"}, timeout=120)
+    vm, rootfs, image = sys.argv[1:4]
+    r = subprocess.run([vm, "run", "--disk", f"image={image}", "--", rootfs, "-c", "cd /tmp && exec /tests/cxx/check"],
+                       capture_output=True, text=True, timeout=120)
 
     if r.returncode != 0 or r.stdout != EXPECTED:
         got, want = r.stdout.splitlines(), EXPECTED.splitlines()

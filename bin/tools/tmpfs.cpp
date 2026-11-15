@@ -18,7 +18,8 @@
 //
 // A directory's entries have positions, each after those before it: a
 // READDIR gives the entries after one, so a reading that removes what it
-// read misses nothing. A node has the names that are links to it, a
+// read misses nothing; "." is at 1 and ".." at 2, the root's its own, the
+// names from 3 on. A node has the names that are links to it, a
 // directory one. dev is the tree's: the number of a pair it makes as it
 // makes its root, which no other pair in the kernel has. A node no name
 // and no open file has is gone, and a call by its node ENOENT.
@@ -233,7 +234,7 @@ namespace {
         // a directory's
         Node* parent = nullptr; // where ".." goes; none for the root
         Entry* entry = nullptr; // its name in parent
-        u64 entries = 0;        // the last position given out
+        u64 entries = 2;        // the last position given out, after "." and ".."
         u32 names = 0;          // the names in it
         u32 subdirs = 0;        // the directories among them
         u32 holes = 0;
@@ -933,12 +934,32 @@ static bool writeNode(Endpoint* ep, const Header& h, Body body, int fd) {
     return false;
 }
 
+// An entry of a READDIR's reply, at a position.
+static bool addEntry(Assembly& a, const Node* n, u64 pos, const char* name, usize length) {
+    if (!a.fits(17 + length + 1)) {
+        return false;
+    }
+    a.add(n->ino);
+    a.add(pos);
+    a.add(dtype(n));
+    a.add(name, length);
+    a.add(u8(0));
+    return true;
+}
+
 // The entries after a position, in order, as many as one reply holds.
 static bool readdirNode(const Node* node, Body body, int fd) {
     if (node->kind != Kind::Dir) {
         return error(fd, ENOTDIR);
     }
     const u64 after = body.take<u64>();
+    Assembly a;
+    if (after < 1) {
+        addEntry(a, node, 1, ".", 1);
+    }
+    if (after < 2) {
+        addEntry(a, node->parent ? node->parent : node, 2, "..", 2);
+    }
     const Slot* slots = node->order.data();
     const usize count = node->order.size();
     usize lo = 0;
@@ -951,20 +972,11 @@ static bool readdirNode(const Node* node, Body body, int fd) {
             hi = mid;
         }
     }
-    Assembly a;
     for (usize i = lo; i < count; ++i) {
         const Entry* e = slots[i].entry;
-        if (!e) {
-            continue;
-        }
-        if (!a.fits(17 + e->name.length + 1)) {
+        if (e && !addEntry(a, e->node, e->pos, e->name.at, e->name.length)) {
             break;
         }
-        a.add(e->node->ino);
-        a.add(e->pos);
-        a.add(dtype(e->node));
-        a.add(e->name.at, e->name.length);
-        a.add(u8(0));
     }
     ok(fd, out, a.size);
     return false;

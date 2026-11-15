@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Faults exercise real AOT/VM commands; production executables ignore them.
 
-    test_chaos.py <vm> <vm-chaos> <native-aot> <native-aot-chaos> <guest.wasm> <guest>
+    test_chaos.py <vm> <vm-chaos> <native-aot> <native-aot-chaos> <guest.wasm>
 """
 import os
 from pathlib import Path
@@ -21,7 +21,7 @@ def call(command, *, data=None, **variables):
 
 
 def main():
-    vm, vm_chaos, native, native_chaos, guest, executable = sys.argv[1:]
+    vm, vm_chaos, native, native_chaos, guest = sys.argv[1:]
     reference = call([native], data=EMPTY)
     assert reference.returncode == 0, reference.stderr
     assert call([native_chaos], data=EMPTY).stdout == reference.stdout
@@ -83,38 +83,7 @@ def main():
         result = call([vm, "-o", str(embedded), guest])
         assert result.returncode == 0 and embedded.read_bytes() == compiled.stdout, result.stderr
 
-        def run_guest(binary, image, operation, failures, rule=""):
-            result = call([binary, "run", "--root", str(work), "--", str(image), operation],
-                          data=b"x" * 32, PIZDOS_VM_CHAOS=rule)
-            expected = f"{operation}: failures={failures}\n".encode()
-            assert (result.returncode, result.stdout, result.stderr) == (0, expected, b""), (operation, rule, result)
-
-        # The guest is the executable; it is also /bin/sh, for system and
-        # the rest that run a shell.
-        image = Path(executable)
-        (work / "bin").mkdir(exist_ok=True)
-        shell = work / "bin/sh"
-        shell.write_bytes(image.read_bytes())
-        shell.chmod(0o700)
-        for operation in ("read", "write", "openat", "fork", "memory-grow", "fstat", "fstatat", "stat", "lstat", "fdopendir", "msync",
-                          "chdir", "relative-open", "fexecve", "ttyname", "system", "daemon", "forkpty"):
-            skip = 8 if operation in ("openat", "daemon") else 2
-            point = "file-stat" if operation in ("fstat", "fstatat", "stat", "lstat", "fdopendir", "msync", "chdir") else operation
-            if operation == "system":
-                point, skip = "openat", 1
-            elif operation == "daemon":
-                point = "openat"
-            elif operation == "forkpty":
-                point = "fork"
-            if operation in ("relative-open", "fexecve", "ttyname"):
-                point, skip = "readlink", 1
-            rule = f"{point}@{skip}"
-            run_guest(vm, image, operation, 0, rule)
-            run_guest(vm_chaos, image, operation, 0)
-            run_guest(vm_chaos, image, operation, 1, rule)
-            run_guest(vm_chaos, image, operation, 0, f"{point}@4294967295")
-
-    print("chaos: native/Wasm AOT and VM faults, guest recovery, atomic output and production no-ops passed")
+    print("chaos: native/Wasm AOT and VM faults, atomic output and production no-ops passed")
 
 
 if __name__ == "__main__":

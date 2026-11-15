@@ -1,3 +1,4 @@
+//@ root: own
 //@ host: false
 //@ compile-flags: -g -D_GNU_SOURCE
 //@ stdout: "process execution: ok\n"

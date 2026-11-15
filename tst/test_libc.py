@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
-"""lib/c's functions under `vm run`: tst/libc/check.c prints one line
-of results per area, which must be these. Its root has /etc/passwd,
-/etc/group, /etc/hosts and /etc/services, so no name goes to the host's
-resolver, a /tmp to make files and sockets in, and the program as
-/bin/check, the path dladdr names.
+"""lib/c's functions in the system: tst/libc/check.c prints one line of
+results per area, which must be these. It runs as /bin/check of a root of
+its own under /tmp, chroot's, whose /etc has tst/libc/etc's passwd,
+group, hosts and services, the image of the tests' /tests/libc/etc, so no
+name goes to a resolver, and whose /tmp it makes files and sockets in;
+/bin/check is the path dladdr names.
 
-    test_libc.py <vm> <check.wasm>
+    test_libc.py <vm> <rootfs> <tests.img>
 """
-import shutil
 import subprocess
 import sys
-import tempfile
-from pathlib import Path
-
-PASSWD = "root:x:0:0:root:/root:/bin/sh\nuser:x:1000:100:User:/home/user:/bin/sh\n"
-GROUP = "root:x:0:\nwheel:x:10:root,user\nusers:x:100:\nstaff:x:50:user\n"
-HOSTS = "127.0.0.1 localhost\n10.0.0.7 box box.example\n::1 localhost\n"
-SERVICES = "ssh 22/tcp\nhttp 80/tcp www\ndomain 53/tcp\ndomain 53/udp\n"
 
 EXPECTED = """\
 strtok 3 a b c
@@ -66,20 +59,11 @@ fenv 0 0 0 0 0 gethostname 1 confstr 14 sysconf 1 pathconf 255
 
 
 def main():
-    vm, check = sys.argv[1:3]
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        (root / "etc").mkdir()
-        (root / "tmp").mkdir()
-        (root / "etc" / "passwd").write_text(PASSWD)
-        (root / "etc" / "group").write_text(GROUP)
-        (root / "etc" / "hosts").write_text(HOSTS)
-        (root / "etc" / "services").write_text(SERVICES)
-        (root / "bin").mkdir()
-        shutil.copy(check, root / "bin" / "check")
-        r = subprocess.run([vm, "run", "--root", str(root), "-a", "check", "--", str(root / "bin" / "check")],
-                           capture_output=True, text=True, env={"PATH": "/bin"}, timeout=120)
+    vm, rootfs, image = sys.argv[1:4]
+    script = ("mkdir -p /tmp/root/bin /tmp/root/tmp && cp -r /tests/libc/etc /tmp/root/etc && "
+              "cp /tests/libc/check /tmp/root/bin/check && exec chroot /tmp/root /bin/check")
+    r = subprocess.run([vm, "run", "--disk", f"image={image}", "--", rootfs, "-c", script],
+                       capture_output=True, text=True, timeout=120)
 
     if r.returncode != 0 or r.stdout != EXPECTED:
         got, want = r.stdout.splitlines(), EXPECTED.splitlines()

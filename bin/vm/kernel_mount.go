@@ -2,7 +2,10 @@
 
 package main
 
-import "syscall"
+import (
+	"sync/atomic"
+	"syscall"
+)
 
 const umountNofollow = 8
 
@@ -27,7 +30,7 @@ func (p *Process) libcMount(source, target, fstype, flags, data uint32) uint32 {
 			return v.mountPath(p, to, from, nil)
 		}
 
-		conn, err := p.connectUnix(v, from, false)
+		conn, err := p.connectUnix(v, from, sockSeqpacket, false, new(atomic.Int64))
 
 		if err != nil {
 			return err

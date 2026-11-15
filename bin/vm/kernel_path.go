@@ -513,6 +513,10 @@ func (p *Process) open(dirfd int32, path string, flags, va uint32) (int, error) 
 		mode = p.varArg(va, 0) & 0o7777 &^ p.umask
 	}
 
+	if err := p.descriptorFree(); err != nil {
+		return 0, err
+	}
+
 	f, err := p.openAt(dirfd, path, int(flags&^syscall.O_CLOEXEC), mode)
 
 	if err != nil {
@@ -1256,9 +1260,16 @@ func (p *Process) libcReadlinkat(dirfd, path, buf, size uint32) uint32 {
 
 		n, err := 0, error(syscall.ENOENT)
 
-		if node, ok := obj.(Node); ok {
-			if n, err = node.readlink(p.span(buf, size)); err == syscall.EINVAL {
+		switch o := obj.(type) {
+		case Node:
+			if n, err = o.readlink(p.span(buf, size)); err == syscall.EINVAL {
 				err = syscall.ENOENT
+			}
+		case *remoteDir:
+			var target string
+
+			if target, err = o.readlinkPath(p, ""); err == nil {
+				n = copy(p.span(buf, size), target)
 			}
 		}
 
@@ -1527,9 +1538,7 @@ func (p *Process) libcSeekdir(dir, at uint32) {
 
 func (p *Process) libcMkdtemp(template uint32) uint32 {
 	err := p.temporary(template, 0, func(path string) error {
-		return p.makeAt(atFdcwd, path, true, func(d Dir, name string) error {
-			return d.mkdir(p, name, 0o700)
-		})
+		return p.mkdir(atFdcwd, path, 0o700)
 	})
 
 	return p.pointer(template, err)

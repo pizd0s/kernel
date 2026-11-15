@@ -9,24 +9,25 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 )
 
-// AF_UNIX's SOCK_SEQPACKET sockets of a process of the system's, whose
-// root is the VFS's: the kernel's own, as its socketpairs are
-// (kernel_endpoint.go), so a message carries the files of the kernel as
-// well as the host's. bind names a socket with a path of the VFS's: the
-// file system of the path's directory makes a socket node there, which
-// holds the socket's listener (BIND, kernel_vfs.go). connect walks a path
-// to such a node and takes the listener its file system gives back
-// (CONNECT): one end of a new pair goes into the listener's queue, accept
-// takes it from there, and the other is the connecting socket's from then
-// on. A listener whose socket closed, or that does not listen, refuses:
-// ECONNREFUSED. An abstract name is none of the VFS's, EOPNOTSUPP; the
-// other kinds of socket, and a process of the host's, have the host's
-// (kernel_socket.go).
+// AF_UNIX's sockets are the kernel's own, as its socketpairs are
+// (kernel_endpoint.go): SOCK_STREAM and SOCK_SEQPACKET ones here, SOCK_DGRAM
+// ones unixDgram. bind names a socket with a path of the VFS's: the file
+// system of the path's directory makes a socket node there, which holds
+// what the socket's name stands for (BIND, kernel_vfs.go), the listener
+// of a socket of a connection. connect walks a path to such a node and
+// takes what its file system gives back (CONNECT): one end of a new pair
+// of the socket's kind goes into the listener's queue, accept takes it
+// from there, and the other is the connecting socket's from then on. A
+// listener whose socket closed, or that does not listen, refuses:
+// ECONNREFUSED; one of another kind, or a datagram socket's name, is
+// EPROTOTYPE. An abstract name is none of the VFS's: EOPNOTSUPP.
 type unixSocket struct {
 	refs     atomic.Int32
 	nonblock atomic.Bool
+	kind     int
 	mu       sync.Mutex
 	name     string
 	listener *unixListener
@@ -35,6 +36,10 @@ type unixSocket struct {
 	// subs are the socket's subscriptions, which go on to its connection
 	// or its listener as it gets one.
 	subs []socketSub
+	// The options are the socket's until it is connected, and its
+	// connection's then, which gets them, as a connection accept takes
+	// gets the listening socket's.
+	sockOptions
 }
 
 type socketSub struct {
@@ -45,8 +50,8 @@ type socketSub struct {
 
 // unixListener is a bound socket's: the connections that wait for accept,
 // as many as listen's backlog lets, while its socket is open and listens,
-// in a channel (kernel_queue.go) whose messages are the connections' ends.
-// The socket node of its name holds it too.
+// in a channel (kernel_queue.go) whose messages are the connections' ends,
+// of its socket's kind. The socket node of its name holds it too.
 type unixListener struct {
 	refs      atomic.Int32
 	mu        sync.Mutex
@@ -54,6 +59,7 @@ type unixListener struct {
 	listening bool
 	closed    bool
 	ino       uint64
+	kind      int
 }
 
 var (
@@ -65,20 +71,12 @@ var (
 // somaxconn is the most connections a listener holds, Linux's default.
 const somaxconn = 4096
 
-func newUnixSocket(nonblock bool) *unixSocket {
-	s := &unixSocket{}
+func newUnixSocket(kind int, nonblock bool) *unixSocket {
+	s := &unixSocket{kind: kind}
 	s.refs.Store(1)
 	s.nonblock.Store(nonblock)
 
 	return s
-}
-
-// systemSocket tells whether a socket of a kind is the kernel's: an
-// AF_UNIX SOCK_SEQPACKET one of a process whose root is the VFS's.
-func (p *Process) systemSocket(domain, kind uint32) bool {
-	_, system := p.root.(*remoteDir)
-
-	return system && domain == afUnix && kind&^(sockNonblock|sockCloexec) == sockSeqpacket
 }
 
 // unixSocketPath is the path of a guest's sockaddr_un: an abstract name is
@@ -236,7 +234,7 @@ func (s *unixSocket) bind(p *Process, at, n uint32) error {
 		return syscall.EINVAL
 	}
 
-	l := &unixListener{ino: pairInodes.Add(1), conns: newMsgChannel(1)}
+	l := &unixListener{ino: pairInodes.Add(1), conns: newMsgChannel(1), kind: s.kind}
 	l.refs.Store(1)
 	handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
 		return v.bindPath(p, path, 0o777&^p.umask, l)
@@ -293,6 +291,7 @@ func (s *unixSocket) accept(p *Process, flags uint32) (File, []byte, error) {
 	for {
 		if e := l.pop(); e != nil {
 			e.nonblock.Store(flags&sockNonblock != 0)
+			e.copyOptions(&s.sockOptions)
 
 			return e, unixAddress(nil), nil
 		}
@@ -324,7 +323,7 @@ func (s *unixSocket) connect(p *Process, at, n uint32) error {
 	var conn *pairEnd
 	handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
 		var err error
-		conn, err = p.connectUnix(v, path, s.nonblock.Load())
+		conn, err = p.connectUnix(v, path, s.kind, s.nonblock.Load(), &s.sndTimeout)
 
 		return err
 	})
@@ -337,6 +336,7 @@ func (s *unixSocket) connect(p *Process, at, n uint32) error {
 		return err
 	}
 
+	conn.copyOptions(&s.sockOptions)
 	s.mu.Lock()
 	s.conn, s.peer = conn, path
 	subs := slices.Clone(s.subs)
@@ -346,11 +346,12 @@ func (s *unixSocket) connect(p *Process, at, n uint32) error {
 	return nil
 }
 
-// connectUnix makes a connection to the socket a path of the VFS's names:
-// the end of the pair that is the caller's; the other is in the queue of
-// the socket's listener. A full queue is EAGAIN for nonblock, else a wait
-// for room.
-func (p *Process) connectUnix(v *remoteDir, path string, nonblock bool) (*pairEnd, error) {
+// connectUnix makes a connection of a kind to the socket a path of the
+// VFS's names: the end of the pair that is the caller's; the other is in
+// the queue of the socket's listener. A full queue is EAGAIN for nonblock,
+// else a wait for room, which the timeout of to ends, SO_SNDTIMEO's,
+// EAGAIN too.
+func (p *Process) connectUnix(v *remoteDir, path string, kind int, nonblock bool, to *atomic.Int64) (*pairEnd, error) {
 	f, err := v.connectPath(p, path)
 
 	if err != nil {
@@ -359,14 +360,18 @@ func (p *Process) connectUnix(v *remoteDir, path string, nonblock bool) (*pairEn
 
 	l, ok := f.(*unixListener)
 
-	if !ok {
+	if !ok || l.kind != kind {
 		f.unref()
+
+		if _, dgram := f.(*pairEnd); dgram || ok {
+			return nil, syscall.EPROTOTYPE
+		}
 
 		return nil, syscall.ECONNREFUSED
 	}
 
 	defer l.unref()
-	mine, theirs := newPair(nonblock)
+	mine, theirs := newPairOf(kind, nonblock)
 
 	for {
 		queued, refused := l.push(theirs)
@@ -376,8 +381,18 @@ func (p *Process) connectUnix(v *remoteDir, path string, nonblock bool) (*pairEn
 		}
 
 		if !refused && !nonblock {
-			if _, err = p.waitObject(l, pollOut, -1, true); err == nil {
+			timeout := -1
+
+			if ns := to.Load(); ns > 0 {
+				timeout = waitMs(time.Duration(ns))
+			}
+
+			var ready int
+
+			if ready, err = p.waitObject(l, pollOut, timeout, timeout < 0); err == nil && ready > 0 {
 				continue
+			} else if err == nil {
+				err = syscall.EAGAIN
 			}
 		} else if refused {
 			err = syscall.ECONNREFUSED
@@ -454,20 +469,15 @@ func (s *unixSocket) getsockopt(p *Process, level, name, at, lenAt uint32) error
 		return nil
 	}
 
-	// Unconnected, the options are those of an end of a pair.
-	unconnected, other := newPair(false)
-	defer unconnected.unref()
-	defer other.unref()
-
-	return unconnected.getsockopt(p, level, name, at, lenAt)
+	return s.sockOptions.get(p, s.kind, level, name, at, lenAt)
 }
 
 func (s *unixSocket) setsockopt(p *Process, level, name, at, n uint32) error {
-	if level != solSocket {
-		return syscall.ENOPROTOOPT
+	if _, c := s.state(); c != nil {
+		return c.setsockopt(p, level, name, at, n)
 	}
 
-	return nil
+	return s.sockOptions.set(p, level, name, at, n)
 }
 
 func (s *unixSocket) sendmsg(p *Process, at, flags uint32) (int, error) {
@@ -665,4 +675,403 @@ func (l *unixListener) flags() (int, error) {
 
 func (l *unixListener) setFlags(fl int) error {
 	return nil
+}
+
+// unixDgram is an AF_UNIX SOCK_DGRAM socket of the kernel's. It reads
+// inbox, the far end of a datagram pair whose near end, mouth, takes
+// what is sent to it: bind gives mouth to the socket node of its path,
+// which gives it to a sender that walks there (CONNECT). A datagram goes
+// to the mouth of the path sendto names, or of the one connect named,
+// target, as the packet of a pair does, the sender's name its address;
+// one to a socket that closed is ECONNREFUSED. The options are those of
+// inbox, the socket's end: SO_SNDTIMEO is its sends'.
+type unixDgram struct {
+	refs         atomic.Int32
+	nonblock     atomic.Bool
+	inbox, mouth *pairEnd
+	mu           sync.Mutex
+	name, peer   string
+	target       *pairEnd
+	subs         []socketSub
+}
+
+var (
+	_ Socket   = (*unixDgram)(nil)
+	_ Transfer = (*unixDgram)(nil)
+)
+
+func newUnixDgram(nonblock bool) *unixDgram {
+	s := &unixDgram{}
+	s.refs.Store(1)
+	s.nonblock.Store(nonblock)
+	s.inbox, s.mouth = newPairOf(sockDgram, false)
+
+	return s
+}
+
+func (s *unixDgram) ref() {
+	s.refs.Add(1)
+}
+
+// unref closes the socket with its last reference: what it has not read
+// goes, and what is sent to its name from then on is refused.
+func (s *unixDgram) unref() {
+	if s.refs.Add(-1) != 0 {
+		return
+	}
+
+	s.mu.Lock()
+	t := s.target
+	s.target = nil
+	s.mu.Unlock()
+
+	if t != nil {
+		t.unref()
+	}
+
+	s.inbox.unref()
+	s.mouth.unref()
+}
+
+// targetEnd is connect's target, with a reference of its own, or nil.
+func (s *unixDgram) targetEnd() *pairEnd {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.target != nil {
+		s.target.ref()
+	}
+
+	return s.target
+}
+
+func (s *unixDgram) stat(p *Process, st *syscall.Stat_t) error {
+	return s.inbox.stat(p, st)
+}
+
+// poll: input is inbox's, room the target's, always without one.
+func (s *unixDgram) poll(events int16) int16 {
+	out := events & (pollOut | pollWrnorm)
+	ready := s.inbox.poll(events) &^ (pollOut | pollWrnorm)
+
+	if t := s.targetEnd(); t != nil {
+		defer t.unref()
+
+		return ready | t.poll(out)&out
+	}
+
+	return ready | out
+}
+
+func (s *unixDgram) subscribe(to waker, id uint64, events int16) bool {
+	s.mu.Lock()
+	s.subs = append(s.subs, socketSub{to, id, events})
+	s.mu.Unlock()
+	s.inbox.subscribe(to, id, events)
+
+	if t := s.targetEnd(); t != nil {
+		t.subscribe(to, id, pollOut)
+		t.unref()
+	}
+
+	return true
+}
+
+func (s *unixDgram) unsubscribe(to waker, id uint64) {
+	s.mu.Lock()
+	s.subs = slices.DeleteFunc(s.subs, func(sub socketSub) bool { return sub.to == to && sub.id == id })
+	s.mu.Unlock()
+	s.inbox.unsubscribe(to, id)
+
+	if t := s.targetEnd(); t != nil {
+		t.unsubscribe(to, id)
+		t.unref()
+	}
+}
+
+func (s *unixDgram) flags() (int, error) {
+	fl := syscall.O_RDWR
+
+	if s.nonblock.Load() {
+		fl |= syscall.O_NONBLOCK
+	}
+
+	return fl, nil
+}
+
+func (s *unixDgram) setFlags(fl int) error {
+	s.nonblock.Store(fl&syscall.O_NONBLOCK != 0)
+
+	return nil
+}
+
+// bind names the socket with a path of the VFS's, as a socket of a
+// connection is named.
+func (s *unixDgram) bind(p *Process, at, n uint32) error {
+	path, err := p.unixSocketPath(at, n)
+
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	named := s.name != ""
+	s.mu.Unlock()
+
+	if named {
+		return syscall.EINVAL
+	}
+
+	handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
+		return v.bindPath(p, path, 0o777&^p.umask, s.mouth)
+	})
+
+	if !handled {
+		err = syscall.EOPNOTSUPP
+	}
+
+	if err == syscall.EEXIST {
+		err = syscall.EADDRINUSE
+	}
+
+	if err == nil {
+		s.mu.Lock()
+		s.name = path
+		s.mu.Unlock()
+	}
+
+	return err
+}
+
+// mouthOf is the mouth of the datagram socket a path names, held.
+func (p *Process) mouthOf(path string) (*pairEnd, error) {
+	var mouth *pairEnd
+	handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
+		f, err := v.connectPath(p, path)
+
+		if err != nil {
+			return err
+		}
+
+		if e, ok := f.(*pairEnd); ok && e.shared.kind == sockDgram {
+			mouth = e
+
+			return nil
+		}
+
+		f.unref()
+
+		return syscall.EPROTOTYPE
+	})
+
+	if !handled {
+		err = syscall.EOPNOTSUPP
+	}
+
+	return mouth, err
+}
+
+// connect makes the socket a path names the target of the socket's sends.
+func (s *unixDgram) connect(p *Process, at, n uint32) error {
+	path, err := p.unixSocketPath(at, n)
+
+	if err != nil {
+		return err
+	}
+
+	mouth, err := p.mouthOf(path)
+
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	old := s.target
+	s.target, s.peer = mouth, path
+	subs := slices.Clone(s.subs)
+	s.mu.Unlock()
+
+	if old != nil {
+		for _, sub := range subs {
+			old.unsubscribe(sub.to, sub.id)
+		}
+
+		old.unref()
+	}
+
+	for _, sub := range subs {
+		mouth.subscribe(sub.to, sub.id, pollOut)
+		sub.to.wake(sub.id)
+	}
+
+	return nil
+}
+
+func (s *unixDgram) listen(backlog int) error {
+	return syscall.EOPNOTSUPP
+}
+
+func (s *unixDgram) accept(p *Process, flags uint32) (File, []byte, error) {
+	return nil, nil, syscall.EOPNOTSUPP
+}
+
+func (s *unixDgram) sockname(p *Process) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return unixAddress([]byte(s.name)), nil
+}
+
+func (s *unixDgram) peername(p *Process) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.target == nil {
+		return nil, syscall.ENOTCONN
+	}
+
+	return unixAddress([]byte(s.peer)), nil
+}
+
+func (s *unixDgram) shutdown(how int) error {
+	return s.inbox.shutdown(how)
+}
+
+func (s *unixDgram) getsockopt(p *Process, level, name, at, lenAt uint32) error {
+	return s.inbox.getsockopt(p, level, name, at, lenAt)
+}
+
+func (s *unixDgram) setsockopt(p *Process, level, name, at, n uint32) error {
+	return s.inbox.setsockopt(p, level, name, at, n)
+}
+
+// send sends a datagram of data, which it keeps, with files and cred to
+// the socket of path, or to the target without one: ENOTCONN when there
+// is none, EPIPE after shutdown's SHUT_WR.
+func (s *unixDgram) send(p *Process, data []byte, files []File, cred *ucred, nonblock bool, path string) (int, error) {
+	if s.inbox.noWrite.Load() {
+		return 0, syscall.EPIPE
+	}
+
+	if len(data) > packetMax {
+		return 0, syscall.EMSGSIZE
+	}
+
+	var to *pairEnd
+
+	if path != "" {
+		var err error
+
+		if to, err = p.mouthOf(path); err != nil {
+			return 0, err
+		}
+	} else if to = s.targetEnd(); to == nil {
+		return 0, syscall.ENOTCONN
+	}
+
+	defer to.unref()
+
+	if cred == nil && to.peer.passcred.Load() {
+		cred = &ucred{uint32(p.pid), uint32(syscall.Getuid()), uint32(syscall.Getgid())}
+	}
+
+	s.mu.Lock()
+	name := s.name
+	s.mu.Unlock()
+
+	for _, f := range files {
+		f.ref()
+	}
+
+	pk := packet{data: data, files: files, cred: cred}
+
+	if name != "" {
+		pk.addr = []byte(name)
+	}
+
+	if err := to.queueAs(p, pk, nonblock || s.nonblock.Load(), &s.inbox.sndTimeout); err != nil {
+		dropFiles(files)
+
+		return 0, err
+	}
+
+	return len(data), nil
+}
+
+// destination is the path of sendto's or sendmsg's address, none without
+// one.
+func (p *Process) destination(addr, alen uint32) (string, error) {
+	if addr == 0 {
+		return "", nil
+	}
+
+	return p.unixSocketPath(addr, alen)
+}
+
+func (s *unixDgram) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, error) {
+	path, err := p.destination(addr, alen)
+
+	if err != nil {
+		return 0, err
+	}
+
+	return s.send(p, slices.Clone(p.span(buf, n)), nil, nil, flags&msgDontwait != 0, path)
+}
+
+func (s *unixDgram) sendmsg(p *Process, at, flags uint32) (int, error) {
+	h := p.span(at, sizeofMsghdr)
+	path, err := p.destination(binary.LittleEndian.Uint32(h), binary.LittleEndian.Uint32(h[4:]))
+
+	if err != nil {
+		return 0, err
+	}
+
+	files, cred, err := p.rights(binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
+
+	if err != nil {
+		return 0, err
+	}
+
+	data, err := p.gather(binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]), packetMax)
+
+	if err != nil {
+		return 0, err
+	}
+
+	return s.send(p, data, files, cred, flags&msgDontwait != 0, path)
+}
+
+func (s *unixDgram) recvmsg(p *Process, at, flags uint32) (int, error) {
+	return s.inbox.recvmsg(p, at, flags|s.dontwait())
+}
+
+func (s *unixDgram) recvfrom(p *Process, buf, n, flags uint32) (int, []byte, error) {
+	return s.inbox.recvfrom(p, buf, n, flags|s.dontwait())
+}
+
+// dontwait is MSG_DONTWAIT for a nonblocking socket, whose inbox blocks.
+func (s *unixDgram) dontwait() uint32 {
+	if s.nonblock.Load() {
+		return msgDontwait
+	}
+
+	return 0
+}
+
+func (s *unixDgram) read(p *Process, b []byte, mode ioMode) (int, error) {
+	n, _, _, _, err := s.inbox.receive(p, [][]byte{b}, s.dontwait()|bit(mode.nonblock)*msgDontwait, 0, 0)
+
+	return n, err
+}
+
+func (s *unixDgram) write(p *Process, b []byte, mode ioMode) (int, error) {
+	return s.send(p, slices.Clone(b), nil, nil, mode.nonblock, "")
+}
+
+func (s *unixDgram) pread(p *Process, b []byte, off int64) (int, error) {
+	return 0, syscall.ESPIPE
+}
+
+func (s *unixDgram) pwrite(p *Process, b []byte, off int64) (int, error) {
+	return 0, syscall.ESPIPE
 }

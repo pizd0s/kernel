@@ -1,16 +1,32 @@
 #!/usr/bin/env python3
 """Compile a C++ program, check that both AOT executables compile it to the
-same object, and check its behaviour natively and as a module the kernel
-compiles and runs.
+same object, check its behaviour natively, and run it inside the system.
 
-    run.py <case.cpp> <output-prefix> <toolchain-json>
+    run.py build <case.cpp> <output-prefix> <toolchain-json>
+    run.py run <case.cpp> <output-prefix> <name> <toolchain-json>
+    run.py all <case.cpp> <output-prefix> <name> <toolchain-json>
+
+build compiles the case to <prefix>.wasm, checks that aot and vm -o make
+the same object of it and that the native reference behaves as expected,
+and packs <prefix>.exe, the image of the tests' /tests/unit/<name>. run
+boots rootfs from that image (--disk image=) and runs the program there,
+in /tmp, its environment rootfs's with the env directives; with root:
+own, in a root of its own under /tmp instead, chroot's, which has /bin/check,
+the program, and /tmp, its working directory the root, for a program
+that makes /etc's files or execs itself as /bin/check. A program of WASI
+(freestanding: true) is no process of the kernel: vm runs it on its own.
+all is build and run, as coverage runs a case with its own vm and aot.
 
 Directives use trustme's //@ spelling. stdout/stderr are JSON strings;
 compile-flags, aot-flags, run-flags and args use shell quoting. host: false
 disables the native reference for programs that depend on this kernel.
-$ROOT in an env directive names the reference's working directory or the
-VM's isolated root, so host services can read files the guest creates; in
-run-flags, the VM's root, where bin/check is the program's executable.
+run-flags are --asan and --disk <name>=<path>: a disk is /dev/<name> in
+the system, which the program gets open to read and write as its
+descriptors after 2, in order, their names in DISKS, as the first process
+gets vm's disks. $ROOT in a disk's path is a directory of the host with
+the program's executable as bin/check, in args of a program of WASI the
+directory it runs in, and in an env directive the reference's working
+directory.
 """
 import json
 import os
@@ -29,7 +45,7 @@ import exe
 
 LINK = ["--stack-first", "-z", "stack-size=1049600", "--max-memory=4294967296",
         "--export=__heap_base", "--export=__stack_pointer", "--gc-sections"]
-DIRECTIVES = {"compile-flags", "aot-flags", "run-flags", "args", "env", "stdout", "stderr", "stderr-pattern", "exit-code", "host", "timeout", "freestanding", "max-memory"}
+DIRECTIVES = {"compile-flags", "aot-flags", "run-flags", "args", "env", "stdout", "stderr", "stderr-pattern", "exit-code", "host", "timeout", "freestanding", "max-memory", "root"}
 
 
 def directives(source):
@@ -48,7 +64,17 @@ def directives(source):
         else:
             result[key] = value
 
+    for key in ("host", "freestanding"):
+        if case_flag(result, key, "true" if key == "host" else "false") not in (True, False):
+            raise ValueError(f"{key} must be true or false")
+    if result.get("root", "system") not in ("system", "own"):
+        raise ValueError("root must be system or own")
+
     return result
+
+
+def case_flag(case, key, default):
+    return {"true": True, "false": False}.get(case.get(key, default))
 
 
 def invoke(command, *, env, timeout, stdin=None, cwd=None):
@@ -79,19 +105,26 @@ def check(result, case, phase):
         raise RuntimeError(f"{phase}: got exit/stdout/stderr {actual!r}; expected {expected!r}")
 
 
-def run(source, prefix, tools):
+def environment(case):
+    env = dict(os.environ)
+    # The native AOT command and the embedded reactor use the same mode.
+    env["W2X_MEMORY_TAIL"] = "strict" if aot_flags(case) == ["--strict"] else "optimized"
+    env["W2X_TAIL_PROFILE"] = ""
+    return env
+
+
+def aot_flags(case):
+    flags = shlex.split(case.get("aot-flags", ""))
+    if flags not in ([], ["--strict"], ["--asan"]):
+        raise ValueError("aot-flags must be empty, --strict or --asan")
+    return flags
+
+
+def build(source, prefix, tools):
     case = directives(source)
     timeout = float(case.get("timeout", "60"))
-    env = dict(os.environ, **case.get("env", {}))
-    # The native AOT command and the embedded reactor use the same mode.
-    env["W2X_MEMORY_TAIL"] = "optimized"
-    env["W2X_TAIL_PROFILE"] = ""
-    aot_flags = shlex.split(case.get("aot-flags", ""))
-    if aot_flags not in ([], ["--strict"], ["--asan"]):
-        raise ValueError("aot-flags must be empty, --strict or --asan")
-    if aot_flags == ["--strict"]:
-        env["W2X_MEMORY_TAIL"] = "strict"
-    run_flags = shlex.split(case.get("run-flags", ""))
+    env = environment(case)
+    flags = aot_flags(case)
     args = shlex.split(case.get("args", ""))
     cflags = ["-O2", "-std=c++23", "-fno-exceptions", "-fno-rtti", *shlex.split(case.get("compile-flags", ""))]
     maximum = int(case.get("max-memory", "4294967296"))
@@ -103,11 +136,7 @@ def run(source, prefix, tools):
 
     with tempfile.TemporaryDirectory(prefix="pizdos-case-") as temporary:
         work = Path(temporary)
-        if case.get("host", "true") not in ("true", "false"):
-            raise ValueError("host must be true or false")
-        if case.get("freestanding", "false") not in ("true", "false"):
-            raise ValueError("freestanding must be true or false")
-        if case.get("host", "true") == "true":
+        if case_flag(case, "host", "true"):
             reference = work / "reference"
             successful([tools["cc"], *tools["host_cflags"], "-x", "c++", *cflags, source,
                         "-o", reference, *tools["host_ldflags"]], env=env, timeout=timeout)
@@ -120,31 +149,68 @@ def run(source, prefix, tools):
         successful([tools["cc"], *wasm.CFLAGS, *cflags, "-nostdinc++",
                     "-isystem", work / "cxx/include/c++/v1", "-isystem", tools["c_headers"],
                     "-c", source, "-o", obj], env=env, timeout=timeout)
-        libraries = [] if case.get("freestanding", "false") == "true" else [tools["libcxx"], tools["libc"]]
+        libraries = [] if case_flag(case, "freestanding", "false") else [tools["libcxx"], tools["libc"]]
         successful([tools["ld"], *link, "-o", module, obj, *libraries], env=env, timeout=timeout)
 
-        native = Path(str(prefix) + ".native.o")
-        embedded = Path(str(prefix) + ".embedded.o")
-        asan = ["--asan"] if aot_flags == ["--asan"] else []
-        compiled = successful([tools["aot"], *aot_flags], stdin=module.read_bytes(), env=env, timeout=timeout)
-        native.write_bytes(compiled.stdout)
-        successful([tools["vm"], *asan, "-o", embedded, module], env=env, timeout=timeout)
-        if native.read_bytes() != embedded.read_bytes():
-            raise RuntimeError("native and Wasm AOT produced different objects")
+    native = Path(str(prefix) + ".native.o")
+    embedded = Path(str(prefix) + ".embedded.o")
+    asan = ["--asan"] if flags == ["--asan"] else []
+    compiled = successful([tools["aot"], *flags], stdin=module.read_bytes(), env=env, timeout=timeout)
+    native.write_bytes(compiled.stdout)
+    successful([tools["vm"], *asan, "-o", embedded, module], env=env, timeout=timeout)
+    if native.read_bytes() != embedded.read_bytes():
+        raise RuntimeError("native and Wasm AOT produced different objects")
+    executable = Path(str(prefix) + ".exe")
+    executable.write_bytes(exe.pack(module.read_bytes()))
+    executable.chmod(0o755)
 
-        with tempfile.TemporaryDirectory(prefix="pizdos-root-") as directory:
-            root = Path(directory)
-            (root / "bin").mkdir()
+
+def disks(case):
+    flags = shlex.split(case.get("run-flags", ""))
+    asan, named = [], []
+    while flags:
+        match flags:
+            case ["--asan", *rest]:
+                asan = ["--asan"]
+            case ["--disk", disk, *rest] if re.fullmatch(r"[A-Za-z0-9_.-]+=.+", disk):
+                named.append(tuple(disk.split("=", 1)))
+            case _:
+                raise ValueError(f"run-flags: {shlex.join(flags)}: --asan and --disk <name>=<path> only")
+        flags = rest
+    return asan, named
+
+
+def run(source, prefix, name, tools):
+    case = directives(source)
+    timeout = float(case.get("timeout", "60"))
+    env = environment(case)
+    args = shlex.split(case.get("args", ""))
+    executable = Path(str(prefix) + ".exe")
+
+    with tempfile.TemporaryDirectory(prefix="pizdos-root-") as directory:
+        root = Path(directory)
+        (root / "bin").mkdir()
+        shutil.copy(executable, root / "bin/check")
+        if case_flag(case, "freestanding", "false"):
             (root / "tmp").mkdir()
-            executable = root / "bin/check"
-            executable.write_bytes(exe.pack(module.read_bytes()))
-            executable.chmod(0o755)
             run_args = [argument.replace("$ROOT", str(root)) for argument in args]
-            run_env = dict(env, **{name: value.replace("$ROOT", str(root)) for name, value in case.get("env", {}).items()})
-            flags = [flag.replace("$ROOT", str(root)) for flag in run_flags]
-            result = invoke([tools["vm"], "run", "--root", root, "-a", "check", *flags,
-                             "--", executable, *run_args], env=run_env, timeout=timeout)
-            check(result, case, "kernel")
+            result = invoke([tools["vm"], "run", "-a", "check", "--", root / "bin/check", *run_args], env=env, timeout=timeout)
+        else:
+            asan, named = disks(case)
+            flags = [*asan, *(arg for disk, path in named for arg in ("--disk", f"{disk}={path.replace('$ROOT', str(root))}"))]
+            opened = " ".join(f"{3 + i}<>/dev/{disk}" for i, (disk, _) in enumerate(named))
+            variables = [f"{key}={value}" for key, value in case.get("env", {}).items()]
+            if named:
+                variables.append("DISKS=" + " ".join(disk for disk, _ in named))
+            if case.get("root", "system") == "own":
+                setup = f"mkdir /tmp/root /tmp/root/bin /tmp/root/tmp && cp /tests/unit/{name} /tmp/root/bin/check"
+                program = ["chroot", "/tmp/root", "/bin/check"]
+            else:
+                setup, program = "cd /tmp", ["/tests/unit/" + name]
+            script = f"{setup} && " + (f"exec {opened} && " if opened else "") + shlex.join(["exec", "env", *variables, *program, *args])
+            result = invoke([tools["vm"], "run", *flags, "--disk", f"image={tools['image']}", "--", tools["rootfs"], "-c", script],
+                            env=env, timeout=timeout)
+        check(result, case, "kernel")
 
     Path(str(prefix) + ".stamp").write_text("native reference, native and Wasm AOT objects, kernel: passed\n")
     print(f"{source.stem}: native/Wasm AOT behaviour agrees", flush=True)
@@ -152,6 +218,15 @@ def run(source, prefix, tools):
 
 if __name__ == "__main__":
     try:
-        run(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve(), json.loads(sys.argv[3]))
+        match sys.argv[1:]:
+            case ["build", source, prefix, tools]:
+                build(Path(source).resolve(), Path(prefix).resolve(), json.loads(tools))
+            case ["run", source, prefix, name, tools]:
+                run(Path(source).resolve(), Path(prefix).resolve(), name, json.loads(tools))
+            case ["all", source, prefix, name, tools]:
+                build(Path(source).resolve(), Path(prefix).resolve(), json.loads(tools))
+                run(Path(source).resolve(), Path(prefix).resolve(), name, json.loads(tools))
+            case _:
+                sys.exit(__doc__)
     except (RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
         sys.exit(str(error))

@@ -98,9 +98,10 @@ const (
 type remoteNode struct {
 	end  *pairEnd
 	refs atomic.Int32
-	// accmode is the O_ACCMODE it was opened with, append its O_APPEND.
+	// accmode is the O_ACCMODE it was opened with, append its O_APPEND,
+	// which F_SETFL sets as well as O_NONBLOCK.
 	accmode  int
-	append   bool
+	append   atomic.Bool
 	nonblock atomic.Bool
 	// pos is the position of read, write and seek; after the position of
 	// the last entry readdir gave.
@@ -189,7 +190,7 @@ func (n *remoteNode) poll(events int16) int16 {
 func (n *remoteNode) flags() (int, error) {
 	fl := n.accmode
 
-	if n.append {
+	if n.append.Load() {
 		fl |= syscall.O_APPEND
 	}
 
@@ -202,6 +203,7 @@ func (n *remoteNode) flags() (int, error) {
 
 func (n *remoteNode) setFlags(fl int) error {
 	n.nonblock.Store(fl&syscall.O_NONBLOCK != 0)
+	n.append.Store(fl&syscall.O_APPEND != 0)
 
 	return nil
 }
@@ -771,10 +773,11 @@ func (f *remoteFile) write(p *Process, b []byte, mode ioMode) (int, error) {
 	}
 
 	off := atomic.LoadInt64(&f.pos)
-	n, at, err := f.put(p, b, off, f.append)
+	atEnd := f.append.Load()
+	n, at, err := f.put(p, b, off, atEnd)
 
 	if err == nil {
-		if !f.append {
+		if !atEnd {
 			at = off
 		}
 

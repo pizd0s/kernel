@@ -331,9 +331,7 @@ func (p *Process) lockerAt(fd uint32) (Locker, error) {
 // install puts an object at the lowest free descriptor from min; the
 // descriptor takes the reference.
 func (p *Process) install(obj File, min int, cloexec bool) (int, error) {
-	limit := int(min64(p.limits[rlimitNofile].cur, 1<<20))
-
-	if fd := p.files.lowest(min); fd < limit {
+	if fd := p.files.lowest(min); fd < p.fdLimit() {
 		p.files.put(fd, obj, cloexec)
 
 		return fd, nil
@@ -342,6 +340,21 @@ func (p *Process) install(obj File, min int, cloexec bool) (int, error) {
 	obj.unref()
 
 	return -1, syscall.EMFILE
+}
+
+func (p *Process) fdLimit() int {
+	return int(min64(p.limits[rlimitNofile].cur, 1<<20))
+}
+
+// descriptorFree is EMFILE when the process has no descriptor free: what
+// takes one checks first, as Linux takes one before the rest of the call,
+// so open makes no file and accept takes no connection then.
+func (p *Process) descriptorFree() error {
+	if p.files.lowest(0) >= p.fdLimit() {
+		return syscall.EMFILE
+	}
+
+	return nil
 }
 
 func min64(a, b uint64) uint64 {

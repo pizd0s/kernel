@@ -1,7 +1,6 @@
 //@ compile-flags: -g -D_GNU_SOURCE -fno-builtin
 //@ stdout: "socket errors: ok\n"
 
-#include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -27,29 +26,30 @@ int main() {
     assert(socketpair(AF_INET, SOCK_STREAM, 0, pair) == -1 && errno == EOPNOTSUPP);
     assert(socketpair(AF_UNIX, -1, 0, pair) == -1 && errno == EINVAL);
 
-    int udp = socket(AF_INET, SOCK_DGRAM, 0);
-    assert(udp >= 0);
-    int value = 0;
-    length = sizeof(value);
-    assert(getsockopt(udp, SOL_SOCKET, 0x7fffffff, &value, &length) == -1 && errno == ENOPROTOOPT);
-    assert(sockatmark(udp) == -1 && errno == ENOTTY);
-    unsigned char tooLarge[129]{};
-    assert(bind(udp, reinterpret_cast<sockaddr*>(tooLarge), sizeof(tooLarge)) == -1 && errno == EINVAL);
-#ifdef __wasm__
-    unsigned char option[1025]{};
-    assert(setsockopt(udp, SOL_SOCKET, SO_REUSEADDR, option, sizeof(option)) == -1 && errno == EINVAL);
     int local = socket(AF_UNIX, SOCK_DGRAM, 0);
     assert(local >= 0);
+    int value = 0;
+    length = sizeof(value);
+    assert(getsockopt(local, SOL_SOCKET, 0x7fffffff, &value, &length) == -1 && errno == ENOPROTOOPT);
+    assert(sockatmark(local) == -1 && errno == EOPNOTSUPP);
+    unsigned char tooLarge[129]{};
+    tooLarge[0] = AF_UNIX;
+    assert(bind(local, reinterpret_cast<sockaddr*>(tooLarge), sizeof(tooLarge)) == -1 && errno == EINVAL);
     sockaddr_un name{};
     name.sun_family = AF_UNIX;
+    assert(connect(local, reinterpret_cast<sockaddr*>(&name), offsetof(sockaddr_un, sun_path)) == -1 && errno == EINVAL);
+    strcpy(name.sun_path, "missing/socket");
+    assert(connect(local, reinterpret_cast<sockaddr*>(&name), sizeof(name)) == -1 && errno == ENOENT);
+    assert(sendto(local, "x", 1, 0, reinterpret_cast<sockaddr*>(&name), sizeof(name)) == -1 && errno == ENOENT);
+    assert(listen(local, 1) == -1 && errno == EOPNOTSUPP);
+#ifdef __wasm__
+    // A name is one of the VFS's: there is no abstract one.
+    memset(name.sun_path, 0, sizeof(name.sun_path));
     memset(name.sun_path + 1, 'x', sizeof(name.sun_path) - 1);
-    assert(bind(local, reinterpret_cast<sockaddr*>(&name), sizeof(name)) == -1 && errno == EINVAL);
-    memset(name.sun_path, 'x', 100);
-    name.sun_path[100] = 0;
-    assert(bind(local, reinterpret_cast<sockaddr*>(&name), offsetof(sockaddr_un, sun_path) + 101) == -1 && errno == ENAMETOOLONG);
-    assert(close(local) == 0);
+    assert(bind(local, reinterpret_cast<sockaddr*>(&name), sizeof(name)) == -1 && errno == EOPNOTSUPP);
+    assert(socket(AF_INET, SOCK_DGRAM, 0) == -1 && errno == EAFNOSUPPORT);
 #endif
-    assert(close(udp) == 0);
+    assert(close(local) == 0);
 
     rlimit saved{};
     assert(getrlimit(RLIMIT_NOFILE, &saved) == 0);
@@ -59,34 +59,42 @@ int main() {
         assert(setrlimit(RLIMIT_NOFILE, &limited) == 0);
         assert(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == -1 && errno == EMFILE);
         if (count == 4) {
-            int fd = socket(AF_INET, SOCK_DGRAM, 0);
+            int fd = socket(AF_UNIX, SOCK_DGRAM, 0);
             assert(fd == 3 && close(fd) == 0);
         }
     }
     assert(setrlimit(RLIMIT_NOFILE, &saved) == 0);
 
-    int listener = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
-    sockaddr_in endpoint{};
-    endpoint.sin_family = AF_INET;
-    endpoint.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    int listener = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    sockaddr_un endpoint{};
+    endpoint.sun_family = AF_UNIX;
+    strcpy(endpoint.sun_path, "listener.sock");
     assert(listener >= 0 && bind(listener, reinterpret_cast<sockaddr*>(&endpoint), sizeof(endpoint)) == 0);
-    length = sizeof(endpoint);
-    assert(getsockname(listener, reinterpret_cast<sockaddr*>(&endpoint), &length) == 0 && listen(listener, 2) == 0);
+    sockaddr_un second = endpoint;
+    strcpy(second.sun_path, "second.sock");
+    assert(bind(listener, reinterpret_cast<sockaddr*>(&second), sizeof(second)) == -1 && errno == EINVAL);
+    int again = socket(AF_UNIX, SOCK_STREAM, 0);
+    assert(again >= 0 && bind(again, reinterpret_cast<sockaddr*>(&endpoint), sizeof(endpoint)) == -1 && errno == EADDRINUSE);
+    assert(close(again) == 0 && listen(listener, 2) == 0);
     int clients[2];
     for (int& client : clients) {
-        client = socket(AF_INET, SOCK_STREAM, 0);
+        client = socket(AF_UNIX, SOCK_STREAM, 0);
         assert(client >= 0 && connect(client, reinterpret_cast<sockaddr*>(&endpoint), sizeof(endpoint)) == 0);
     }
     limited.rlim_cur = 3;
     assert(setrlimit(RLIMIT_NOFILE, &limited) == 0);
     assert(accept(listener, nullptr, nullptr) == -1 && errno == EMFILE);
     assert(setrlimit(RLIMIT_NOFILE, &saved) == 0);
-    int accepted = accept(listener, nullptr, nullptr);
-    assert(accepted >= 0 && close(accepted) == 0);
+    // EMFILE took no connection: both are there to accept.
+    for (int i = 0; i != 2; ++i) {
+        int accepted = accept(listener, nullptr, nullptr);
+        assert(accepted >= 0 && close(accepted) == 0);
+    }
+    assert(accept(listener, nullptr, nullptr) == -1 && errno == EAGAIN);
     for (int client : clients) {
         assert(close(client) == 0);
     }
-    assert(close(listener) == 0);
+    assert(close(listener) == 0 && unlink("listener.sock") == 0);
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
     message.msg_iovlen = 1025;
     assert(sendmsg(pair[0], &message, 0) == -1 && (errno == EINVAL || errno == EMSGSIZE));

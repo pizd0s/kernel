@@ -1,60 +1,25 @@
 #!/usr/bin/env python3
-"""Propagate real Linux syscall failures through guest libc calls.
+"""Propagate real Linux syscall failures of vm's own: its read of the
+program it starts, and the host's calls of the WASI commands it runs on
+their own. The guest's calls are the kernel's, none of the host's.
 
-    test_host_syscalls.py <vm> <native-aot> <fixture.wasm> <fixture> <filter> <interrupt>
+    test_host_syscalls.py <vm> <native-aot> <filter>
 
 A seccomp filter restricts only each child VM process. It returns selected error numbers for
 selected syscalls, leaving the parent and later commands unaffected.
-Ptrace supplies one EINTR, routes DNS packets to a local test responder,
-or occupies the first mktemp candidate with a real file.
 """
 import errno
-import contextlib
 import os
 from pathlib import Path
-import resource
-import select
 import socket
 import stat
-import struct
 import subprocess
 import sys
 import tempfile
-import threading
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dev"))
 
-@contextlib.contextmanager
-def refusing_dns():
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as ipv4, socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as ipv6:
-        ipv4.bind(("127.0.0.1", 0))
-        port = ipv4.getsockname()[1]
-        ipv6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-        ipv6.bind(("::1", port))
-        stop, answered = threading.Event(), []
-
-        def serve():
-            while not stop.is_set():
-                ready, _, _ = select.select([ipv4, ipv6], [], [], 0.05)
-                for server in ready:
-                    query, peer = server.recvfrom(4096)
-                    assert len(query) >= 12 and query[4:6] == b"\0\1", query
-                    end = 12
-                    while query[end]:
-                        end += query[end] + 1
-                    end += 5  # NUL, question type and class.
-                    # Echo the question with QR/RD/RA and FORMERR, no records.
-                    reply = query[:2] + struct.pack("!HHHHH", 0x8181, 1, 0, 0, 0) + query[12:end]
-                    server.sendto(reply, peer)
-                    answered.append(query[:2])
-
-        thread = threading.Thread(target=serve)
-        thread.start()
-        try:
-            yield port
-        finally:
-            stop.set()
-            thread.join(timeout=2)
-            assert not thread.is_alive() and answered, "DNS responder was not used"
+from exe import pack  # noqa: E402
 
 
 def leb(value, signed=False):
@@ -118,94 +83,22 @@ def wasi_directory(path, name, filetype):
     return module + section(10, b"\1" + leb(len(body)) + body) + section(11, b"\1\0" + integer(1024) + b"\x0b" + leb(len(path)) + path)
 
 
+def kernel_program():
+    """A program of the kernel that ends at once: it imports getpid."""
+    module = b"\0asm\1\0\0\0" + section(1, b"\2\x60\0\1\x7f\x60\0\0") + section(2, b"\1\6kernel\6getpid\0\0")
+    return module + section(3, b"\1\1") + section(7, b"\1\6_start\0\1") + section(10, b"\1\5\0\x10\0\x1a\x0b")
+
+
 def main():
-    vm, native, fixture, program, wrapper, interrupt = sys.argv[1:]
-    # Linux amd64 syscall numbers: uname, sysinfo, getrusage, getgroups;
-    # fstatfs, utimensat, syncfs, sync, pwrite64; prlimit64, getrlimit.
-    cases = [("system", errno.EIO, (63, 99, 98, 115, 100)), ("filesystem", errno.EIO, (138, 280, 306, 162, 18)),
-             ("limits", errno.EIO, (302, 97)), ("network", errno.EIO, (41,)), ("retry", errno.EAGAIN, (41,)),
-             ("socket-names", errno.EIO, (51, 52)), ("connect-status", errno.EIO, (55,)),
-             ("recv-message", errno.EIO, (47,)),
-             ("locks", errno.EIO, ("fcntl",)), ("descriptor-flags", errno.EIO, ("getfl",)), ("access", errno.EIO, (439,)),
-             ("pty-attributes", errno.EIO, ("pty-attributes",)),
-             ("temp-files", errno.EEXIST, (437,)), ("temp-directories", errno.EEXIST, (258,))]
+    vm, native, wrapper = sys.argv[1:]
     env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-host-syscalls-") as directory:
         work = Path(directory)
-        (work / "tmp").mkdir()
         (work / "directory").mkdir()
         os.mkfifo(work / "directory/pipe")
-        parts = [f"part{index:02d}-" + "x" * 233 for index in range(20)]
-        descriptors = [os.open(work, os.O_RDONLY | os.O_DIRECTORY)]
-        try:
-            for part in parts:
-                os.mkdir(part, dir_fd=descriptors[-1])
-                descriptors.append(os.open(part, os.O_RDONLY | os.O_DIRECTORY, dir_fd=descriptors[-1]))
-            os.close(os.open("leaf", os.O_WRONLY | os.O_CREAT, 0o600, dir_fd=descriptors[-1]))
-            # Each symlink target is below PATH_MAX; their resolved path is longer.
-            os.symlink("/".join(parts[:10]), "jump", dir_fd=descriptors[0])
-            os.symlink("/".join(parts[10:]), "more", dir_fd=descriptors[10])
-        finally:
-            for descriptor in reversed(descriptors):
-                os.close(descriptor)
-        plain = b"\0asm\1\0\0\0" + section(1, b"\1\x60\0\0") + section(3, b"\1\0")
-        plain += section(7, b"\1\6_start\0\0") + section(10, b"\1\2\0\x0b")
-        result = subprocess.run([native, "--strict"], input=plain, capture_output=True, env=env, timeout=60)
-        assert result.returncode == 0, result.stderr
-        (work / "wasi.o").write_bytes(result.stdout)
-        (work / "wasi.wasm").write_bytes(plain)
-        (work / "bad.wasm").write_bytes(b"\0asm\1\0\0\0\1\1\x80")
-        for name in ("wasi.o", "wasi.wasm", "bad.wasm"):
-            (work / name).chmod(0o700)
+        program = work / "program"
+        program.write_bytes(pack(kernel_program()))
         compiled, embedded = work / "native.o", work / "embedded.o"
-        result = subprocess.run([native, "--strict"], input=Path(fixture).read_bytes(), capture_output=True, env=env, timeout=60)
-        assert result.returncode == 0, result
-        compiled.write_bytes(result.stdout)
-        result = subprocess.run([vm, "-o", str(embedded), fixture], capture_output=True, env=env, timeout=60)
-        assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), result
-        result = subprocess.run([wrapper, f"{errno.EPERM}/stop", "--", vm, "run", "--root", str(work), "--", str(program), "stop"],
-                                capture_output=True, env=env, timeout=30)
-        assert result.returncode == 1 and result.stdout == b"", ("stop", result)
-        assert b"[1]: operation not permitted\n" in result.stderr and b"panic:" not in result.stderr, result
-        with refusing_dns() as port:
-            result = subprocess.run([interrupt, f"dns/{port}", "--", vm, "run", "--root", str(work), "--", str(program), "permanent-dns-error"],
-                                    capture_output=True, env=dict(env, GODEBUG="netdns=go"), timeout=30)
-            assert (result.returncode, result.stdout, result.stderr) == (0, b"host syscall errors: ok\n", b""), ("permanent-dns-error", result)
-        for operation, number in (("retry-open", 437), ("retry-read", 0), ("retry-connect", 42), ("temp-collision", "collision")):
-            result = subprocess.run([interrupt, str(number), "--", vm, "run", "--root", str(work), "--", str(program), operation],
-                                    input=b"x", capture_output=True, env=env, timeout=30)
-            assert (result.returncode, result.stdout, result.stderr) == (0, b"host syscall errors: ok\n", b""), (operation, result)
-        for operation in ("host-abstract", "host-pathname"):
-            with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as inherited:
-                if operation == "host-abstract":
-                    inherited.bind("\0pizdos-host-" + work.name)
-                else:
-                    with contextlib.chdir(work):
-                        inherited.bind("host.socket")
-                result = subprocess.run([vm, "run", "--root", str(work), "--", str(program), operation],
-                                        stdin=inherited, capture_output=True, env=env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"host syscall errors: ok\n", b""), (operation, result)
-            if operation == "host-pathname":
-                (work / "host.socket").unlink()
-        for operation in ("long-realpath", "exec-wasi", "early-kill"):
-            result = subprocess.run([vm, "run", "--root", str(work), "--", str(program), operation],
-                                    capture_output=True, env=env, timeout=30)
-            assert (result.returncode, result.stdout, result.stderr) == (0, b"host syscall errors: ok\n", b""), (operation, result)
-        reader, writer = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
-        try:
-            # Keep the writer open and empty: reading this inherited
-            # nonblocking input must report EAGAIN rather than EOF.
-            result = subprocess.run([vm, "run", "--root", str(work), "--", str(program), "nonblocking-input"],
-                                    stdin=reader, capture_output=True, env=env, timeout=30)
-            assert (result.returncode, result.stdout, result.stderr) == (0, b"host syscall errors: ok\n", b""), result
-        finally:
-            os.close(reader)
-            os.close(writer)
-        for operation, error, numbers in cases:
-            result = subprocess.run([wrapper, str(error) + "/" + ",".join(map(str, numbers)), "--", vm, "run", "--root", str(work), "--", str(program), operation], capture_output=True,
-                                    env=env, timeout=30,
-                                    preexec_fn=(lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))) if operation == "pty-attributes" else None)
-            assert (result.returncode, result.stdout, result.stderr) == (0, b"host syscall errors: ok\n", b""), (operation, result)
         # Startup reads the module using fstat and pread, as exec does.
         # Returning zero from a suppressed pread models EOF after its
         # recorded size.
@@ -283,7 +176,7 @@ def main():
                 result = subprocess.run([wrapper, f"{error}/{preset}", "--", vm, "run", "--", str(source)],
                                         capture_output=True, env=env, timeout=30)
                 assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (name, preset, result)
-    print("host syscalls: kernel and WASI system, file, polling, DNS, socket, clock and limit errors propagate through both AOTs")
+    print("host syscalls: vm's read of its program and the WASI system, file, polling and clock errors propagate through both AOTs")
 
 
 if __name__ == "__main__":

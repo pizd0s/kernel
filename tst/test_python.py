@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
-"""CPython under `vm run`: python3, its executable, is /bin/python3 of a root whose shell
-is busybox's, laid out as the system's, every program in /bin; its standard
-library is its own file's.
-A script prints what the interpreter computes and what it gets from the
-kernel: processes, pipes, a pseudoterminal, signals, timers, locks,
-mappings written back, the user database, locales and the tokenizer's
-positions. Then a set of CPython's own tests, from the release tarball's
-Lib/test, runs with its regrtest.
+"""CPython in the system: python3 is the image's /bin/python3, its
+standard library its own file's. A script, its standard input, prints what
+the interpreter computes and what it gets from the kernel: processes,
+pipes, signals, timers, locks, mappings written back, the user database,
+locales and the tokenizer's positions. Then a set of CPython's own tests,
+from the release tarball's Lib/test, the image of the tests' /lib/python3.14/test,
+which python searches after its file, runs with its regrtest. Each boots
+rootfs from the image of the tests and runs in /tmp.
 
-    test_python.py <vm> <python3> <Python.tgz> <busybox> <busybox.wasm> <busybox.links>
+    test_python.py <vm> <rootfs> <tests.img>
 """
-import os
-import shutil
 import subprocess
 import sys
-import tarfile
-import tempfile
-from pathlib import Path
 
 # CPython's tests that need nothing the build leaves out: no sockets, no
 # threads, no test modules of the C API.
@@ -27,7 +22,7 @@ TESTS = [
 ]
 
 SCRIPT = r'''
-import errno, fcntl, hashlib, io, json, locale, math, mmap, os, pty, pwd, random, re, resource, select, signal
+import errno, fcntl, hashlib, io, json, locale, math, mmap, os, pwd, random, re, resource, select, signal
 import struct, subprocess, sys, time, tokenize
 
 print(sys.version.split()[0], sys.platform, len(sys.builtin_module_names))
@@ -61,22 +56,6 @@ print("select", select.select([rd], [], [], 0)[0], end=" ")
 os.write(wr, b"x")
 print(select.select([rd], [], [], 1)[0] == [rd], os.read(rd, 1))
 
-# a pseudoterminal: forkpty's child writes to its terminal
-pid, master = pty.fork()
-if pid == 0:
-    os.write(1, b"from the child\n")
-    os._exit(0)
-out = b""
-while True:
-    try:
-        chunk = os.read(master, 100)
-    except OSError:
-        break
-    if not chunk:
-        break
-    out += chunk
-os.waitpid(pid, 0)
-print("pty", out.replace(b"\r", b"").decode().strip(), os.isatty(master))
 
 # signals and timers
 got = []
@@ -108,7 +87,7 @@ print("utime", os.stat(path).st_mtime, os.path.getsize(path))
 os.close(fd)
 
 # the system: limits, users, scheduling, locale, clocks
-print("rlimit", resource.getrlimit(resource.RLIMIT_NOFILE)[0] > 0, pwd.getpwuid(os.getuid()).pw_name)
+print("rlimit", resource.getrlimit(resource.RLIMIT_NOFILE)[0] > 0, pwd.getpwnam("root").pw_uid, pwd.getpwuid(0).pw_name)
 print("sched", os.sched_getscheduler(0), os.getpriority(os.PRIO_PROCESS, 0))
 print("locale", locale.setlocale(locale.LC_ALL, ""), locale.getpreferredencoding())
 t = time.process_time()
@@ -127,75 +106,37 @@ sh 42
 python 1024
 waitid 3 True
 select [] True b'x'
-pty from the child True
 alarm True
 kill True
 sigwait True
 mmap b'HELLO world'
 utime 1000000000.0 11
-rlimit True user
+rlimit True 0 root
 sched 0 0
 locale C.UTF-8;C;C;C;C;C UTF-8
 clock True True
 '''
 
 
-def make_root(root, python, tarball, busybox, links):
-    (root / "bin").mkdir(parents=True)
-    shutil.copy(busybox, root / "bin" / "busybox")
-    (root / "bin" / "busybox").chmod(0o755)
+def python(vm, rootfs, image, args, timeout, stdin=None):
+    command = [vm, "run", "--disk", f"image={image}", "--", rootfs, "-c",
+               "cd /tmp && exec env HOME=/tmp TZ=UTC python3 " + " ".join(args)]
 
-    for link in links.split():
-        path = root / "bin" / Path(link).name
-
-        if not path.exists():
-            path.symlink_to("busybox")
-
-    (root / "usr").symlink_to("/")
-    shutil.copy(python, root / "bin" / "python3")
-    (root / "bin" / "python3").chmod(0o755)
-    (root / "bin" / "python").symlink_to("python3")
-
-    # CPython's own tests are in the standard library's directory, which
-    # python searches after its file.
-    with tarfile.open(tarball) as archive:
-        members = [m for m in archive.getmembers() if "/Lib/test/" in m.name]
-        archive.extractall(root / "src", members=members, filter="data")
-
-    lib = root / "lib" / "python3.14"
-    lib.mkdir(parents=True)
-    shutil.move(next((root / "src").glob("Python-*")) / "Lib" / "test", lib / "test")
-    shutil.rmtree(root / "src")
-    (root / "etc").mkdir()
-    (root / "etc" / "passwd").write_text(f"root:x:0:0:root:/root:/bin/sh\nuser:x:{os.getuid()}:{os.getgid()}:User:/tmp:/bin/sh\n")
-    (root / "etc" / "group").write_text(f"root:x:0:\nuser:x:{os.getgid()}:user\n")
-    (root / "tmp").mkdir()
-
-
-def python(vm, root, args, timeout):
-    command = [vm, "run", "--root", str(root), "-a", "/bin/python3", "--", str(root / "bin" / "python3"), *args]
-    environment = {"PATH": "/bin", "HOME": "/tmp", "TZ": "UTC"}
-
-    return subprocess.run(command, capture_output=True, text=True, cwd=root / "tmp", env=environment, timeout=timeout)
+    return subprocess.run(command, input=stdin, capture_output=True, text=True, timeout=timeout)
 
 
 def main():
-    vm, interpreter, tarball, busybox, _, links = sys.argv[1:7]
+    vm, rootfs, image = sys.argv[1:4]
     failures = []
+    r = python(vm, rootfs, image, ["-"], 300, SCRIPT)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp) / "root"
-        make_root(root, interpreter, tarball, busybox, Path(links).read_text())
-        (root / "tmp" / "check.py").write_text(SCRIPT)
-        r = python(vm, root, ["/tmp/check.py"], 300)
+    if r.returncode != 0 or r.stdout != EXPECTED:
+        failures.append(f"check.py: exit {r.returncode}\n--- stdout\n{r.stdout}\n--- expected\n{EXPECTED}\n--- stderr\n{r.stderr[-3000:]}")
 
-        if r.returncode != 0 or r.stdout != EXPECTED:
-            failures.append(f"check.py: exit {r.returncode}\n--- stdout\n{r.stdout}\n--- expected\n{EXPECTED}\n--- stderr\n{r.stderr[-3000:]}")
+    r = python(vm, rootfs, image, ["-m", "test", *TESTS], 1800)
 
-        r = python(vm, root, ["-m", "test", *TESTS], 1800)
-
-        if r.returncode != 0 or "Result: SUCCESS" not in r.stdout:
-            failures.append(f"regrtest: exit {r.returncode}\n{r.stdout[-5000:]}\n{r.stderr[-2000:]}")
+    if r.returncode != 0 or "Result: SUCCESS" not in r.stdout:
+        failures.append(f"regrtest: exit {r.returncode}\n{r.stdout[-5000:]}\n{r.stderr[-2000:]}")
 
     for f in failures:
         print(f"FAIL {f}")

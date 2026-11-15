@@ -11,10 +11,10 @@ outputs must be identical; decode must agree on status, dimensions and
 page count, and the report counts the files whose pixels match exactly:
 native pixels may differ with libm and floating-point arithmetic. CPython's
 workloads are the benchmarks of dev/stand/pybench.py, pure Python timed
-inside the interpreter, the native CPython and python3, the executable whose
-module the kernel compiles as it starts, each in a root with the same
-standard library, the zip python3 ends with; their digests of the results
-must be equal.
+inside the interpreter, the native CPython, in a root with the standard
+library python3 ends with, and python3 of the system, the executable whose
+module the kernel compiles as it starts, which rootfs runs, the benchmark
+its standard input; their digests of the results must be equal.
 The suite counts as one workload in the geometric mean, by its own.
 
 The original positional form is accepted for compiler workloads alone:
@@ -187,32 +187,31 @@ def decode_work(build, vm, kinds, runs, minimum, work, objects=None):
     return rows
 
 
-def python_root(root, interpreter, build, native=False):
-    """A root of the Python workload and the benchmark: ours is /bin/python3,
-    its standard library in its own file; the native CPython is
-    /usr/bin/python3 with the same library as its lib/python314.zip, which
-    is python3 itself, a zip to zipimport from its end."""
-    if native:
-        (root / "usr/bin").mkdir(parents=True)
-        (root / "usr/lib/python3.14/lib-dynload").mkdir(parents=True)
-        shutil.copy(interpreter, root / "usr/bin/python3")
-        (root / "usr/bin/python3").chmod(0o755)
-        shutil.copy(build / "bin/python/python3", root / "usr/lib/python314.zip")
-    else:
-        (root / "bin").mkdir(parents=True)
-        shutil.copy(interpreter, root / "bin/python3")
-        (root / "bin/python3").chmod(0o755)
+PYBENCH = Path(__file__).resolve().parent / "stand" / "pybench.py"
 
-    shutil.copy(Path(__file__).resolve().parent / "stand" / "pybench.py", root / "pybench.py")
+
+def python_root(root, build):
+    """The native CPython of the Python workload: /usr/bin/python3 with the
+    same library as ours, its lib/python314.zip, which is python3 itself, a
+    zip to zipimport from its end. Ours is the system's /bin/python3, which
+    rootfs runs, the benchmark its standard input."""
+    (root / "usr/bin").mkdir(parents=True)
+    (root / "usr/lib/python3.14/lib-dynload").mkdir(parents=True)
+    shutil.copy(build / "stand/python/native", root / "usr/bin/python3")
+    (root / "usr/bin/python3").chmod(0o755)
+    shutil.copy(build / "bin/python/python3", root / "usr/lib/python314.zip")
+    shutil.copy(PYBENCH, root / "pybench.py")
 
     return root
 
 
 def python_run(command, repeat):
+    """A run of the benchmark, command(repeat) and its standard input."""
     env = {"PYTHONHASHSEED": "0", **{k: environment()[k] for k in ("GOMAXPROCS", "MAGICK_THREAD_LIMIT", "OMP_NUM_THREADS")}}
+    command, stdin = command(repeat)
 
     try:
-        r = subprocess.run([*command, str(repeat)], env=env, capture_output=True, text=True, check=True)
+        r = subprocess.run(command, input=stdin, env=env, capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError as error:
         raise SystemExit(f"py: {command[0]} exited {error.returncode}\n{error.stderr}") from None
 
@@ -227,8 +226,8 @@ def python_run(command, repeat):
 def python_work(build, vm, runs, minimum, work, only=None):
     """Every benchmark of the suite: its repeat calibrated on native to the
     minimum time, A and C interleaved, their digests equal."""
-    native = python_root(work / "python-A", build / "stand/python/native", build, native=True)
-    aot = python_root(work / "python-C", build / "bin/python/python3", build)
+    native = python_root(work / "python-A", build)
+    rootfs = build / "bin/rootfs/rootfs"
     names = subprocess.run([str(native / "usr/bin/python3"), "-S", str(native / "pybench.py"), "--list"],
                            env={"PYTHONHASHSEED": "0"}, capture_output=True, text=True, check=True).stdout.split()
     rows = []
@@ -238,8 +237,9 @@ def python_work(build, vm, runs, minimum, work, only=None):
             continue
 
         commands = {
-            "A": [str(native / "usr/bin/python3"), "-S", str(native / "pybench.py"), bench],
-            "C": [str(vm), "run", "--root", str(aot), "-a", "/bin/python3", "--", str(aot / "bin/python3"), "-S", "/pybench.py", bench],
+            "A": lambda repeat, bench=bench: ([str(native / "usr/bin/python3"), "-S", str(native / "pybench.py"), bench, str(repeat)], None),
+            "C": lambda repeat, bench=bench: ([str(vm), "run", "--", str(rootfs), "-c",
+                                               f"exec env PYTHONHASHSEED=0 python3 -S - {bench} {repeat}"], PYBENCH.read_text()),
         }
         native_time, _ = python_run(commands["A"], 1)
         repeat = max(1, math.ceil(minimum / max(native_time, 0.000001)))

@@ -4,7 +4,8 @@ directories it expects, in a layout of its own, which rootfs has linked
 into it and erofs serves (bin/tools), with nothing to build at start.
 
     image.py <rootfs.img> --busybox <busybox> <busybox.links> --python <python3> [--program <name> <path>]...
-             [--link <name> <target>]... --server <name>
+             [--link <name> <target>]... [--file <path> <host path>]... [--tree <path> <host directory>]...
+             [--tar <path> <tarball> <member>]... --server <name>
 
 The programs are executables (dev/exe.py), whose modules the kernel
 unpacks and compiles as they are executed, and every one is in /bin:
@@ -12,8 +13,11 @@ busybox is /bin/busybox, and each name of busybox.links, wherever busybox
 would install it, a link to it in /bin; python is /bin/python3, its
 standard library the tail of its executable; each --program is
 /bin/<name>, each --link a link /bin/<name> to target, as the tools of the
-system are to /bin/tools. /usr is a link to the root, for what names
-/usr/bin and the like: /usr/bin is /bin. The --server program serves the
+system are to /bin/tools. A --file is the image's file at path, of the
+host file's bytes and its mode, a --tree the host directory's files and
+links under path, as the image of the tests has them, and a --tar the
+files and links of a tarball under its member, a directory, under path. /usr is a link to
+the root, for what names /usr/bin and the like: /usr/bin is /bin. The --server program serves the
 image: rootfs runs it from the image itself, as erofs. No times, no
 owners: the same inputs are the same image.
 
@@ -41,6 +45,7 @@ import os
 import stat
 import struct
 import sys
+import tarfile
 from pathlib import Path
 
 DIRS = {"bin", "dev", "etc", "tmp", "var"}
@@ -167,6 +172,32 @@ def main():
                 files["bin/" + name] = (Path(program).read_bytes(), 0o755)
             case ["--link", name, target, *rest]:
                 symlinks["bin/" + name] = target
+            case ["--file", path, host, *rest]:
+                files[path.strip("/")] = (Path(host).read_bytes(), stat.S_IMODE(os.stat(host).st_mode))
+            case ["--tree", path, host, *rest]:
+                for entry in sorted(Path(host).rglob("*")):
+                    inside = path.strip("/") + "/" + entry.relative_to(host).as_posix()
+
+                    if entry.is_symlink():
+                        symlinks[inside] = os.readlink(entry)
+                    elif entry.is_dir():
+                        dirs.add(inside)
+                    else:
+                        files[inside] = (entry.read_bytes(), stat.S_IMODE(entry.stat().st_mode))
+            case ["--tar", path, tarball, member, *rest]:
+                with tarfile.open(tarball) as archive:
+                    for entry in archive.getmembers():
+                        if not entry.name.startswith(member.rstrip("/") + "/"):
+                            continue
+
+                        inside = path.strip("/") + "/" + entry.name[len(member.rstrip("/")) + 1:].rstrip("/")
+
+                        if entry.issym():
+                            symlinks[inside] = entry.linkname
+                        elif entry.isdir():
+                            dirs.add(inside)
+                        elif entry.isfile():
+                            files[inside] = (archive.extractfile(entry).read(), stat.S_IMODE(entry.mode))
             case ["--server", name, *rest]:
                 server = "bin/" + name
             case _:

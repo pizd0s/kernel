@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Paths resolve as Linux resolves them. One probe of the walk, run by
-python in rootfs and under a root of the host, gives what Linux gives:
+python in rootfs, gives what Linux gives:
 slashes at the end, symbolic links (followed, not, created through, too
 many), "." and ".." (at a mount's root, past the root, after a link),
 names that are mounts, the working directory and directory descriptors
@@ -10,15 +10,13 @@ and what the VFS keeps, which holds no longer than its name, its node
 and its directory do. Every case starts in a directory of its own under
 /tmp.
 
-    test_vfs.py <vm> <rootfs> <python3>
+    test_vfs.py <vm> <rootfs>
     test_vfs.py --linux
 
 LINUX is what Linux answers: `test_vfs.py --linux` runs the probe in a
 chroot of a user namespace whose root, read-only, has the image's /etc
 and /usr -> /, and a tmpfs at /tmp, with the host's python. rootfs must
-answer it line for line. A root of the host has no mount at /tmp and
-keeps its names by permissions, not by a read-only mount: there the
-cases of HOST_ROOT answer as it says.
+answer it line for line.
 """
 import os
 from pathlib import Path
@@ -444,17 +442,6 @@ I15 stat d ; mkdir d: EEXIST
 I16 stat f ; append to f ; stat f: ok (1, 3)
 """
 
-# The cases a root of the host answers otherwise, for what it is: /tmp is
-# no mount there, and / and /etc are closed by their modes.
-HOST_ROOT = {
-    "B23": "EACCES",
-    "C13": "ok False",
-    "F07": "EACCES",
-    "F08": "EACCES",
-    "F09": "EACCES",
-    "F10": "EACCES",
-}
-
 FILES = {"etc/motd": "pizdos\n", "etc/passwd": "root:x:0:0:root:/:/bin/sh\n", "etc/group": "root:x:0:\n"}
 
 
@@ -462,14 +449,6 @@ def compare(got, want, where):
     got, want = got.splitlines(), want.splitlines()
     differ = [f"{w}\n    {where}: {g.partition(': ')[2]}" for g, w in zip(got, want) if g != w]
     assert len(got) == len(want) and not differ, (where, len(got), len(want), "\n".join(differ))
-
-
-def host_root(want):
-    lines = []
-    for line in want.splitlines():
-        name, _, answer = line.partition(": ")
-        lines.append(f"{name}: {HOST_ROOT.get(name[:3], answer)}")
-    return "\n".join(lines) + "\n"
 
 
 def linux():
@@ -498,35 +477,13 @@ def main():
     if sys.argv[1:] == ["--linux"]:
         print(linux(), end="")
         return
-    vm, rootfs, python = sys.argv[1:4]
+    vm, rootfs = sys.argv[1:3]
     env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
-    with tempfile.TemporaryDirectory(prefix="pizdos-vfs-") as work:
-        script = "python3 - <<'PROBE_EOF'\n" + PROBE + "PROBE_EOF\nexit 0\n"
-        result = subprocess.run([vm, "run", "--", rootfs], input=script.encode(), capture_output=True, cwd=work, env=env,
-                                timeout=600)
-        assert result.returncode == 0 and result.stderr == b"", result
-        compare(result.stdout.decode(), LINUX, "rootfs")
-
-        root = Path(work) / "root"
-        for d in ("bin", "etc", "tmp"):
-            (root / d).mkdir(parents=True)
-        for name, text in FILES.items():
-            (root / name).write_text(text)
-        (root / "usr").symlink_to("/")
-        (root / "bin/python3").write_bytes(Path(python).read_bytes())
-        (root / "bin/python3").chmod(0o755)
-        (root / "probe.py").write_text(PROBE)
-        for d in (root, root / "etc"):
-            d.chmod(0o555)
-        try:
-            result = subprocess.run([vm, "run", "--root", root, "-a", "/bin/python3", "--", root / "bin/python3", "/probe.py"],
-                                    capture_output=True, cwd=work, env=env, timeout=600)
-        finally:
-            for d in (root, root / "etc"):
-                d.chmod(0o755)
-        assert result.returncode == 0 and result.stderr == b"", result
-        compare(result.stdout.decode(), host_root(LINUX), "host root")
-    print(f"vfs: {len(LINUX.splitlines())} cases of the walk answer as Linux's in rootfs and under a root of the host")
+    script = "python3 - <<'PROBE_EOF'\n" + PROBE + "PROBE_EOF\nexit 0\n"
+    result = subprocess.run([vm, "run", "--", rootfs], input=script.encode(), capture_output=True, env=env, timeout=600)
+    assert result.returncode == 0 and result.stderr == b"", result
+    compare(result.stdout.decode(), LINUX, "rootfs")
+    print(f"vfs: {len(LINUX.splitlines())} cases of the walk answer as Linux's in rootfs")
 
 
 if __name__ == "__main__":

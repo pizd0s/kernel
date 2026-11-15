@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """The kernel's address sanitizer under `vm run --asan`: tst/asan/check.c,
-built with `-g`, which the kernel compiles with the shadow map's checks,
-runs each of its memory errors as /bin/check of a root with a /tmp, and the
-report names the error, where the shadow map puts it and the source line of
-the fault, through the kernel's own frames when the kernel caught it; its
-clean case runs through, and runs without the flag too, compiled without
-the checks.
+built with `-g`, the image of the tests' /tests/asan/check, which the
+kernel compiles with the shadow map's checks, as it does the whole
+system then, runs each of its memory errors, and the report names the
+error, where the shadow map puts it and the source line of the fault,
+through the kernel's own frames when the kernel caught it; its clean case
+runs through, and runs without the flag too, compiled without the checks.
 
-    test_asan.py <vm> <check.wasm>
+    test_asan.py <vm> <rootfs> <tests.img>
 """
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
-from pathlib import Path
 
 SEGV, ABRT = 128 + 11, 128 + 6
 HEX = r"0x[0-9a-f]+"
@@ -37,42 +34,35 @@ CASES = {
 }
 
 
-def run(vm, root, program, args, asan=True):
-    command = [vm, "run", *(["--asan"] if asan else []), "--root", str(root), "-a", "check", "--", str(root / "bin" / program), *args]
+def run(vm, rootfs, image, args, asan=True):
+    command = [vm, "run", *(["--asan"] if asan else []), "--disk", f"image={image}", "--", rootfs, "-c",
+               "cd /tmp && exec /tests/asan/check " + " ".join(args)]
 
-    return subprocess.run(command, capture_output=True, text=True, env={"PATH": "/bin"}, timeout=120)
+    return subprocess.run(command, capture_output=True, text=True, timeout=120)
 
 
 def main():
-    vm, check = sys.argv[1:3]
+    vm, rootfs, image = sys.argv[1:4]
     failed = 0
+    r = run(vm, rootfs, image, ["ok"])
 
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        (root / "bin").mkdir()
-        (root / "tmp").mkdir()
-        shutil.copy(check, root / "bin" / "check")
+    if r.returncode != 0 or r.stdout != "ok 14 data\n":
+        print(f"FAIL ok: exit {r.returncode}\n{r.stdout}{r.stderr}")
+        failed += 1
 
-        r = run(vm, root, "check", ["ok"])
+    for name, (code, patterns) in CASES.items():
+        r = run(vm, rootfs, image, [name])
+        missing = [p for p in patterns if not re.search(p, r.stderr)]
 
-        if r.returncode != 0 or r.stdout != "ok 14 data\n":
-            print(f"FAIL ok: exit {r.returncode}\n{r.stdout}{r.stderr}")
+        if r.returncode != code or missing:
+            print(f"FAIL {name}: exit {r.returncode}, want {code}; missing {missing}\n{r.stderr}")
             failed += 1
 
-        for name, (code, patterns) in CASES.items():
-            r = run(vm, root, "check", [name])
-            missing = [p for p in patterns if not re.search(p, r.stderr)]
+    r = run(vm, rootfs, image, ["ok"], asan=False)
 
-            if r.returncode != code or missing:
-                print(f"FAIL {name}: exit {r.returncode}, want {code}; missing {missing}\n{r.stderr}")
-                failed += 1
-
-        r = run(vm, root, "check", ["ok"], asan=False)
-
-        if r.returncode != 0 or r.stdout != "ok 14 data\n":
-            print(f"FAIL ok without --asan: exit {r.returncode}\n{r.stdout}{r.stderr}")
-            failed += 1
-
+    if r.returncode != 0 or r.stdout != "ok 14 data\n":
+        print(f"FAIL ok without --asan: exit {r.returncode}\n{r.stdout}{r.stderr}")
+        failed += 1
 
     if failed:
         sys.exit(1)

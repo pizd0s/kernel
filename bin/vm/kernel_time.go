@@ -178,52 +178,95 @@ func (p *Process) stopTimers() {
 	}
 }
 
-// Time of the C locale. The zone is the guest's TZ at each call: a zoneinfo
-// name, or a POSIX zone whose standard offset is taken; without TZ it is
-// the host's.
+// Time of the C locale. The zone is the guest's TZ at each call, as musl
+// reads it, /etc/localtime without one: a zoneinfo file of the root for
+// TZ that begins with a colon or has a slash before any comma, a path
+// for one that begins with a slash or a dot, else a name under the
+// directories of zoneDirs; UTC when there is no such file. Any other TZ
+// is a POSIX zone, whose standard offset is taken. A process keeps the
+// zone it read last, as musl does, until TZ changes.
 
-var zones sync.Map
-
-func zoneOf(tz string) *time.Location {
-	if loc, ok := zones.Load(tz); ok {
-		return loc.(*time.Location)
-	}
-
-	loc := parseZone(tz)
-	zones.Store(tz, loc)
-
-	return loc
+type zoneCache struct {
+	tz  string
+	loc *time.Location
 }
 
-func parseZone(tz string) *time.Location {
-	name := strings.TrimPrefix(tz, ":")
+var zoneDirs = []string{"/usr/share/zoneinfo/", "/share/zoneinfo/", "/etc/zoneinfo/"}
 
-	if name == "" {
+// zoneMax is the most bytes of a zoneinfo file read.
+const zoneMax = 1 << 20
+
+func (p *Process) location() *time.Location {
+	tz, ok := p.getenv("TZ")
+
+	if !ok {
+		tz = "/etc/localtime"
+	}
+
+	if p.zone.loc == nil || p.zone.tz != tz {
+		p.zone = zoneCache{tz, p.parseZone(tz)}
+	}
+
+	return p.zone.loc
+}
+
+func (p *Process) parseZone(tz string) *time.Location {
+	if tz == "" {
 		return time.UTC
 	}
 
-	if loc, err := time.LoadLocation(name); err == nil {
-		return loc
+	if slash := strings.IndexByte(tz, '/'); tz[0] == ':' || slash >= 0 && !strings.Contains(tz[:slash], ",") {
+		return p.zoneFile(strings.TrimPrefix(tz, ":"))
 	}
 
-	// std offset[dst...]: the name, <quoted> or letters, then hh[:mm[:ss]]
-	// west of UTC
+	return posixZone(tz)
+}
+
+// zoneFile is the zone of a zoneinfo file a TZ names, or UTC.
+func (p *Process) zoneFile(name string) *time.Location {
+	var paths []string
+
+	switch {
+	case strings.HasPrefix(name, "/") || strings.HasPrefix(name, "."):
+		paths = []string{name}
+	case len(name) <= 255 && !strings.Contains(name, "."):
+		for _, dir := range zoneDirs {
+			paths = append(paths, dir+name)
+		}
+	}
+
+	for _, path := range paths {
+		if data, err := p.readPath(path, zoneMax); err == nil && len(data) >= 44 && string(data[:4]) == "TZif" {
+			if loc, err := time.LoadLocationFromTZData(name, data); err == nil {
+				return loc
+			}
+		}
+	}
+
+	return time.UTC
+}
+
+// posixZone is the zone of a POSIX TZ, std offset[dst[offset][,rule]]:
+// the standard time's name, <quoted> or letters, then hh[:mm[:ss]] west of
+// UTC, as leniently as musl reads them; with a daylight saving time, as Go
+// reads the footer of a zoneinfo file (footerZone).
+func posixZone(tz string) *time.Location {
 	i := 0
 
-	if strings.HasPrefix(name, "<") {
-		i = strings.IndexByte(name, '>') + 1
+	if strings.HasPrefix(tz, "<") {
+		i = strings.IndexByte(tz, '>') + 1
 
 		if i == 0 {
 			return time.UTC
 		}
 	} else {
-		for i < len(name) && (name[i] >= 'A' && name[i] <= 'Z' || name[i] >= 'a' && name[i] <= 'z') {
+		for i < len(tz) && (tz[i] >= 'A' && tz[i] <= 'Z' || tz[i] >= 'a' && tz[i] <= 'z') {
 			i++
 		}
 	}
 
-	std := strings.Trim(name[:i], "<>")
-	rest := name[i:]
+	std := strings.Trim(tz[:i], "<>")
+	rest := tz[i:]
 	sign := 1
 
 	if rest != "" && (rest[0] == '+' || rest[0] == '-') {
@@ -262,17 +305,36 @@ func parseZone(tz string) *time.Location {
 		rest = rest[1:]
 	}
 
+	if rest != "" {
+		if loc, err := footerZone(tz); err == nil {
+			return loc
+		}
+	}
+
 	return time.FixedZone(std, -sign*offset)
 }
 
-func (p *Process) location() *time.Location {
-	tz, ok := p.getenv("TZ")
+// footerZone is the zone of a TZ with a daylight saving time, as Go reads
+// the footer of a zoneinfo file: that of a file of one type, UTC's, and no
+// transition, whose footer holds for all time, the rules of daylight
+// saving time the United States' when TZ has none, as musl's.
+func footerZone(tz string) (*time.Location, error) {
+	var data []byte
 
-	if !ok {
-		return time.Local
+	for range 2 {
+		data = append(data, "TZif2"...)
+		data = append(data, make([]byte, 15)...)
+
+		// isutcnt, isstdcnt, leapcnt, timecnt, typecnt, charcnt
+		for _, n := range []uint32{0, 0, 0, 0, 1, 4} {
+			data = binary.BigEndian.AppendUint32(data, n)
+		}
+
+		data = append(data, 0, 0, 0, 0, 0, 0)
+		data = append(data, "UTC\x00"...)
 	}
 
-	return zoneOf(tz)
+	return time.LoadLocationFromTZData(tz, append(append(append(data, '\n'), tz...), '\n'))
 }
 
 // tzset sets tzname, timezone and daylight for the zone: its standard

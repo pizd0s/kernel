@@ -90,17 +90,12 @@ def main():
               ("no-linear-memory", "getpid", [], {"memory": False, "expected": 1}, 0, ""),
               ("environment-without-CRT", "getenv", [4096], {"expected": 0}, 0, ""),
               ("exec-without-CRT", "execv", [4096, 4096], {"expected": 0xffffffff}, 0, "")]
-    cases += [("program-short-buffer", "__kernel_program", [4096, 0], {"expected": 0, "error": 34, "rooted": "/"}, 0, ""),
-              ("program-outside-root", "__kernel_program", [4096, 1024], {"expected": 0, "error": 2, "rooted": True}, 0, ""),
-              ("program-without-root", "__kernel_program", [4096, 1024], {"expected": 0, "error": 2}, 0, "")]
+    cases += [("program-without-root", "__kernel_program", [4096, 1024], {"expected": 0, "error": 2}, 0, "")]
     env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-runtime-safety-") as directory:
         work = Path(directory)
-        (work / "root").mkdir()
         source, executable, compiled, embedded = [work / name for name in ("input.wasm", "input", "native.o", "embedded.o")]
         for label, name, args, options, status, diagnostic in cases:
-            options = dict(options)
-            rooted = options.pop("rooted", False)
             data = program(name, args, **options)
             source.write_bytes(data)
             executable.write_bytes(pack(data))
@@ -111,9 +106,7 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (label, result)
-            root = rooted if isinstance(rooted, str) else str(work / "root")
-            result = subprocess.run([vm, "run", *(["--root", root] if rooted else []), "-a", "runtime-safety", "--", str(executable)],
-                                    capture_output=True, env=env, timeout=30)
+            result = subprocess.run([vm, "run", "-a", "runtime-safety", "--", str(executable)], capture_output=True, env=env, timeout=30)
             assert result.returncode == status and result.stdout == b"" and b"panic:" not in result.stderr, (label, result)
             if status:
                 lines = result.stderr.decode().splitlines()

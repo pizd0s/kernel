@@ -351,7 +351,7 @@ func (f *remoteFile) readWindow(p *Process, w *memfdFile, woff uint32, n int, fr
 // the server's file at to, or at its position, which moves. A file open
 // to append is EBADF, as Linux has it.
 func (f *remoteFile) writeWindow(p *Process, w *memfdFile, woff uint32, n int, to *int64) (int, error) {
-	if f.append {
+	if f.append.Load() {
 		return 0, syscall.EBADF
 	}
 

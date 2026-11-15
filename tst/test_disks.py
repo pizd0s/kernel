@@ -66,6 +66,7 @@ os.fsync(p)
 """
 
 WANT = """\
+full
 init
 null
 random

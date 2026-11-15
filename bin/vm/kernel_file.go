@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/binary"
+	"math"
 	"syscall"
 	"time"
 	"unsafe"
@@ -347,8 +348,9 @@ func (p *Process) libcPwrite(fd, buf, n uint32, off uint64) uint32 {
 }
 
 // copy_file_range copies between two files of the host, which the host
-// copies, or between a memfd and another file (copyWindow); an offset
-// given is read from the guest's memory and written back.
+// copies, between a memfd and another file (copyWindow), or between files
+// of servers (copyFiles); an offset given is read from the guest's memory
+// and written back.
 func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) uint32 {
 	src, err := p.fd(in)
 
@@ -367,7 +369,7 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 	srcNode, srcIsNode := src.(Node)
 	dstNode, dstIsNode := dst.(Node)
 
-	if !fromWindow && !toWindow && !(srcIsNode && dstIsNode) || (fromWindow || toWindow) && flags != 0 {
+	if srcIsNode != dstIsNode && !fromWindow && !toWindow || !(srcIsNode && dstIsNode) && flags != 0 {
 		return p.result(0, syscall.EINVAL)
 	}
 
@@ -385,10 +387,13 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 
 	var r int
 
-	if fromWindow || toWindow {
+	switch {
+	case fromWindow || toWindow:
 		r, err = copyWindow(p, src, dst, from, to, int(n))
-	} else {
+	case srcIsNode:
 		r, err = srcNode.copyRange(dstNode, from, to, int(n), int(flags))
+	default:
+		r, err = copyFiles(p, src, dst, from, to, int(n))
 	}
 
 	if err != nil {
@@ -404,6 +409,86 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 	}
 
 	return p.result(r, nil)
+}
+
+// copyFiles copies up to n bytes between files of servers, through a
+// buffer of the kernel's, as far as src has them: from its position, or
+// *from, to dst's, or *to, which move by what is copied. Both are regular
+// files, src open to read and dst to write, not to append: Linux's errors
+// else.
+func copyFiles(p *Process, src, dst File, from, to *int64, n int) (int, error) {
+	in, out := src.(Transfer), dst.(Transfer)
+	inFlags, _ := src.flags()
+	outFlags, _ := dst.flags()
+
+	if in == nil || out == nil || inFlags&syscall.O_ACCMODE == syscall.O_WRONLY || outFlags&syscall.O_ACCMODE == syscall.O_RDONLY ||
+		outFlags&syscall.O_APPEND != 0 {
+		return 0, syscall.EBADF
+	}
+
+	for _, f := range []File{src, dst} {
+		var st syscall.Stat_t
+
+		if err := f.stat(p, &st); err != nil {
+			return 0, err
+		}
+
+		if st.Mode&syscall.S_IFMT == syscall.S_IFDIR {
+			return 0, syscall.EISDIR
+		}
+
+		if st.Mode&syscall.S_IFMT != syscall.S_IFREG {
+			return 0, syscall.EINVAL
+		}
+	}
+
+	buf := make([]byte, min(n, packetMax))
+	done := 0
+
+	for done < n {
+		chunk := buf[:min(len(buf), n-done)]
+		var got int
+		var err error
+
+		if from != nil {
+			got, err = in.pread(p, chunk, *from)
+		} else {
+			got, err = in.read(p, chunk, ioMode{})
+		}
+
+		if err != nil || got == 0 {
+			if done > 0 {
+				err = nil
+			}
+
+			return done, err
+		}
+
+		var put int
+
+		if to != nil {
+			put, err = out.pwrite(p, chunk[:got], *to)
+			*to += int64(put)
+		} else {
+			put, err = out.write(p, chunk[:got], ioMode{})
+		}
+
+		if from != nil {
+			*from += int64(put)
+		}
+
+		done += put
+
+		if err != nil || put < got {
+			if done > 0 {
+				err = nil
+			}
+
+			return done, err
+		}
+	}
+
+	return done, nil
 }
 
 func (p *Process) libcFdatasync(fd uint32) uint32 {
@@ -479,33 +564,85 @@ func (p *Process) libcLockf(fd, cmd uint32, n uint64) uint32 {
 	return p.result(0, err)
 }
 
-// posix_fadvise and posix_fallocate return an error number.
+// posix_fadvise and posix_fallocate return an error number. A file of a
+// server takes advice as a file system of Linux's without a page cache
+// does, all of it ignored, and has the space fallocate asks for as its
+// size reaches the end of it, as a file of tmpfs has.
 func (p *Process) libcPosix_fadvise(fd uint32, off, n uint64, advice uint32) uint32 {
-	node, err := p.nodeAt(fd)
+	obj, err := p.fd(fd)
 
 	if err != nil {
 		return uint32(errnoOf(err))
 	}
 
-	if err := node.fadvise(int64(off), int64(n), int(advice)); err != nil {
+	if node, ok := obj.(Node); ok {
+		return uint32(errnoOf(node.fadvise(int64(off), int64(n), int(advice))))
+	}
+
+	var st syscall.Stat_t
+
+	if err := obj.stat(p, &st); err != nil {
 		return uint32(errnoOf(err))
+	}
+
+	switch {
+	case st.Mode&syscall.S_IFMT == syscall.S_IFIFO:
+		return uint32(syscall.ESPIPE)
+	case int64(n) < 0 || advice > posixFadvNoreuse:
+		return uint32(syscall.EINVAL)
 	}
 
 	return 0
 }
 
+const posixFadvNoreuse = 5
+
 func (p *Process) libcPosix_fallocate(fd uint32, off, n uint64) uint32 {
-	node, err := p.nodeAt(fd)
+	obj, err := p.fd(fd)
 
 	if err != nil {
 		return uint32(errnoOf(err))
 	}
 
-	if err := node.fallocate(int64(off), int64(n)); err != nil {
-		return uint32(errnoOf(err))
+	if node, ok := obj.(Node); ok {
+		return uint32(errnoOf(node.fallocate(int64(off), int64(n))))
 	}
 
-	return 0
+	return uint32(errnoOf(p.fallocate(obj, int64(off), int64(n))))
+}
+
+// fallocate of a file of a server, with Linux's errors in Linux's order.
+func (p *Process) fallocate(obj File, off, n int64) error {
+	if off < 0 || n <= 0 {
+		return syscall.EINVAL
+	}
+
+	if fl, err := obj.flags(); err != nil || fl&syscall.O_ACCMODE == syscall.O_RDONLY {
+		return syscall.EBADF
+	}
+
+	var st syscall.Stat_t
+
+	if err := obj.stat(p, &st); err != nil {
+		return err
+	}
+
+	a, ok := obj.(Attrs)
+
+	switch {
+	case st.Mode&syscall.S_IFMT == syscall.S_IFIFO:
+		return syscall.ESPIPE
+	case st.Mode&syscall.S_IFMT == syscall.S_IFDIR:
+		return syscall.EISDIR
+	case st.Mode&syscall.S_IFMT != syscall.S_IFREG || !ok:
+		return syscall.ENODEV
+	case off > math.MaxInt64-n:
+		return syscall.EFBIG
+	case off+n <= st.Size:
+		return nil
+	}
+
+	return a.truncate(p, off+n)
 }
 
 // select writes back the time left, as Linux's.

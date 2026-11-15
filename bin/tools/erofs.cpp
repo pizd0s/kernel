@@ -302,25 +302,39 @@ static bool readlinkNode(const Node* n, int fd) {
     return false;
 }
 
+// An entry of a READDIR's reply, at a position.
+static bool addEntry(Assembly& a, const Node* n, u64 pos, const char* name, usize length) {
+    if (!a.fits(17 + length + 1)) {
+        return false;
+    }
+    a.add(inoOf(n));
+    a.add(pos);
+    a.add(dtype(n));
+    a.add(name, length);
+    a.add(u8(0));
+    return true;
+}
+
 // The entries after a position, in order, as many as one reply holds:
-// an entry's position is its place among its directory's plus one.
+// "." at 1, ".." at 2, the root's its own, and then the directory's, an
+// entry's position its place among them plus three.
 static bool readdirNode(const Node* node, Body body, int fd) {
     if (!isDirNode(node)) {
         return error(fd, ENOTDIR);
     }
     const u64 after = body.take<u64>();
     Assembly a;
-    for (u64 i = MIN(after, u64(node->size)); i < node->size; ++i) {
+    if (after < 1) {
+        addEntry(a, node, 1, ".", 1);
+    }
+    if (after < 2) {
+        addEntry(a, parentOf(node), 2, "..", 2);
+    }
+    for (u64 i = MIN(after < 2 ? 0 : after - 2, u64(node->size)); i < node->size; ++i) {
         const Entry& e = image.entries[node->data + i];
-        const Node* n = &image.nodes[e.node];
-        if (!a.fits(17 + e.length + 1)) {
+        if (!addEntry(a, &image.nodes[e.node], i + 3, image.names + e.name, e.length)) {
             break;
         }
-        a.add(inoOf(n));
-        a.add(i + 1);
-        a.add(dtype(n));
-        a.add(image.names + e.name, e.length);
-        a.add(u8(0));
     }
     ok(fd, out, a.size);
     return false;

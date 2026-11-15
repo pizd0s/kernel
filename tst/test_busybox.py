@@ -1,26 +1,20 @@
 #!/usr/bin/env python3
-"""busybox under `vm run`: the kernel of lib/c runs its applets inside a
-root made like the system's, /bin/busybox the executable, each name of
-busybox.links a symbolic link to it in /bin and /usr a link to /.
-The shell's errors, exit and SIGINT are longjmps, one of them out of a
-signal handler; its commands, pipes, substitutions and jobs are forks,
-which a terminal stops and continues; xargs, find -exec and awk's pipes
-are vforks; a loop without system calls is interrupted for its signals.
+"""busybox in the system: the image's /bin/busybox, each name of
+busybox.links a symbolic link to it in /bin and /usr a link to /, runs
+its applets, each case a boot of rootfs from the image of the tests, in
+/tmp with tst/busybox's files, the image's /tests/busybox. The shell's
+errors, exit and SIGINT are longjmps, one of them out of a signal handler;
+its commands, pipes, substitutions and jobs are forks; xargs, find -exec
+and awk's pipes are vforks; a loop without system calls is interrupted for
+its signals.
 
-    test_busybox.py <vm> <busybox> <busybox.wasm> <busybox.links>
+    test_busybox.py <vm> <rootfs> <tests.img>
 """
-import gzip
 import hashlib
-import os
-import pty
-import select
-import shutil
-import signal
+import shlex
 import subprocess
 import sys
-import tempfile
 import time
-from pathlib import Path
 
 DATA = "banana\napple\ncherry\napple\n10\n9\n"
 
@@ -45,7 +39,7 @@ CASES = [
     (["expr", "3", "*", "4", "+", "1"], "", "13\n", 0),
     (["printf", "%s-%03d\\n", "a", "7"], "", "a-007\n", 0),
     (["date", "-u", "-d", "@1700000000", "+%F %T %z %j %a"], "", "2023-11-14 22:13:20 +0000 318 Tue\n", 0),
-    (["date", "-d", "@0", "+%H"], "", "03\n", 0, {"TZ": "Europe/Moscow"}),
+    (["date", "-d", "@0", "+%H"], "", "03\n", 0, {"TZ": "MSK-3"}),
     (["basename", "/a/b/c.txt", ".txt"], "", "c\n", 0),
     (["dirname", "/a/b/c.txt"], "", "/a/b\n", 0),
     (["false"], "", "", 1),
@@ -98,70 +92,34 @@ INTERRUPTS = [
 ]
 
 
-def make_root(root, program, links):
-    (root / "bin").mkdir(parents=True)
-    shutil.copy(program, root / "bin" / "busybox")
-    (root / "bin" / "busybox").chmod(0o755)
-
-    for link in links.split():
-        path = root / "bin" / Path(link).name
-
-        if not path.exists():
-            path.symlink_to("busybox")
-
-    (root / "usr").symlink_to("/")
-
-    tmp = root / "tmp"
-    tmp.mkdir()
-    script = tmp / "script.sh"
-    script.write_text("#!/bin/echo from\n")
-    script.chmod(0o755)
-    shell = tmp / "shell.sh"
-    shell.write_text('#!/bin/sh\necho $# "$@"\n${missing?gone}\necho no\n')
-    shell.chmod(0o755)
-    (tmp / "up").symlink_to("/")
+# Each boot of the system has a /tmp of its own: the files go there first,
+# and up, a link to the root.
+SETUP = "cp -a /tests/busybox/. /tmp && cd /tmp && ln -s / up"
 
 
-def run(vm, root, argv, stdin, env=None):
-    command = [vm, "run", "--root", str(root), "-a", argv[0], "--", str(root / "bin" / "busybox"), *argv[1:]]
-    environment = {"PATH": "/bin", "TZ": "UTC", **(env or {})}
-
-    return subprocess.run(command, input=stdin.encode(), capture_output=True, cwd=root / "tmp", env=environment, timeout=60)
+def boot(vm, rootfs, image, script):
+    return [vm, "run", "--disk", f"image={image}", "--", rootfs, "-c", f"{SETUP} && {script}"]
 
 
-def until(fd, marker, seconds):
-    """What fd gives until it has given marker, or seconds pass: the shell
-    reads its input once it is compiled and its first prompt is out."""
-    out, end = b"", time.monotonic() + seconds
+def run(vm, rootfs, image, argv, stdin, env=None):
+    environment = {"TZ": "UTC", **(env or {})}
+    script = shlex.join(["exec", "env", *(f"{k}={v}" for k, v in environment.items()), *argv])
 
-    while marker not in out and time.monotonic() < end:
-        if select.select([fd], [], [], 0.05)[0]:
-            try:
-                chunk = os.read(fd, 4096)
-            except OSError:
-                break
-
-            if not chunk:
-                break
-
-            out += chunk
-
-    return out
+    return subprocess.run(boot(vm, rootfs, image, script), input=stdin.encode(), capture_output=True, timeout=60)
 
 
-def interrupt(vm, root, first):
-    command = [vm, "run", "--root", str(root), "-a", "sh", "--", str(root / "bin" / "busybox"), "-i"]
-    p = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=root / "tmp",
-                         env={"PATH": "/bin", "PS1": "$ "})
-    prompt = until(p.stdout.fileno(), b"$ ", 60)
+def interrupt(vm, rootfs, image, first):
+    """An interactive shell, whose standard output is a pipe nobody reads
+    yet, gets SIGINT from a process of the system two seconds on, none of
+    its children: after first, then the line that ends it."""
+    script = "( (sleep 2; kill -INT $$) & ); exec env PS1='$ ' sh -i"
+    p = subprocess.Popen(boot(vm, rootfs, image, script), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     if first:
         p.stdin.write(first.encode() + b"\n")
         p.stdin.flush()
 
-    time.sleep(0.5)
-    p.send_signal(signal.SIGINT)
-    time.sleep(0.3)
+    time.sleep(3)
     p.stdin.write(b"echo after; exit 5\n")
     p.stdin.flush()
 
@@ -171,113 +129,50 @@ def interrupt(vm, root, first):
         p.kill()
         out, _ = p.communicate()
 
-    return (prompt + out).decode(errors="replace"), p.returncode
+    return out.decode(errors="replace"), p.returncode
 
 
-def job_control(vm, root):
-    """Ctrl-Z stops a command on a terminal, jobs lists it, fg continues it
-    and Ctrl-C ends it."""
-    pid, fd = pty.fork()
-
-    if pid == 0:
-        os.chdir(root / "tmp")
-        os.execve(vm, [vm, "run", "--root", str(root), "-a", "sh", "--", str(root / "bin" / "busybox"), "-i"],
-                  {"PATH": "/bin", "PS1": "$ ", "TERM": "dumb"})
-
-    out = b""
-
-    def pump(seconds):
-        nonlocal out
-        end = time.time() + seconds
-
-        while time.time() < end:
-            if select.select([fd], [], [], 0.05)[0]:
-                try:
-                    out += os.read(fd, 4096)
-                except OSError:
-                    return
-
-    out = until(fd, b"$ ", 60)
-    pump(0.3)
-
-    for keys in [b"cat\r", b"\x1a", b"jobs\r", b"fg\r", b"\x03", b"echo after $?\r", b"exit 6\r"]:
-        os.write(fd, keys)
-        pump(0.6)
-
-    _, status = os.waitpid(pid, 0)
-    os.close(fd)
-
-    return out.decode(errors="replace").replace("\r", ""), os.waitstatus_to_exitcode(status)
+# files: a tree made, archived, compressed and read back, in one boot
+FILES = """\
+mkdir -p /tmp/d/e && cp /tmp/script.sh /tmp/d/e/copy && ln -s e/copy /tmp/d/link &&
+tar cf /tmp/d.tar -C /tmp d && gzip -k /tmp/d.tar && mv /tmp/d /tmp/old && tar xf /tmp/d.tar -C /tmp &&
+gzip -dc /tmp/d.tar.gz | cmp - /tmp/d.tar && readlink /tmp/d/link && cat /tmp/d/e/copy && find /tmp/d -type f"""
 
 
 def main():
-    vm, program, _, links = sys.argv[1:5]
+    vm, rootfs, image = sys.argv[1:4]
     failed = []
 
-    with tempfile.TemporaryDirectory(prefix="busybox-") as work:
-        root = Path(work) / "root"
-        make_root(root, program, Path(links).read_text())
+    for case in CASES:
+        argv, stdin, want, code = case[:4]
+        env = case[4] if len(case) > 4 else None
+        r = run(vm, rootfs, image, argv, stdin, env)
+        got = r.stdout.decode(errors="replace")
 
-        for case in CASES:
-            argv, stdin, want, code = case[:4]
-            env = case[4] if len(case) > 4 else None
-            r = run(vm, root, argv, stdin, env)
-            got = r.stdout.decode(errors="replace")
+        if got != want or r.returncode != code:
+            failed.append(f"{argv}: exit {r.returncode}, stdout {got!r}, stderr {r.stderr.decode(errors='replace')!r}; want exit {code}, stdout {want!r}")
 
-            if got != want or r.returncode != code:
-                failed.append(f"{argv}: exit {r.returncode}, stdout {got!r}, stderr {r.stderr.decode(errors='replace')!r}; want exit {code}, stdout {want!r}")
+    r = subprocess.run(boot(vm, rootfs, image, FILES), capture_output=True, timeout=60)
 
-        # files: a tree made, archived, compressed and read back
-        steps = [
-            ["mkdir", "-p", "/tmp/d/e"],
-            ["cp", "/tmp/script.sh", "/tmp/d/e/copy"],
-            ["ln", "-s", "e/copy", "/tmp/d/link"],
-            ["tar", "cf", "/tmp/d.tar", "-C", "/tmp", "d"],
-            ["gzip", "-k", "/tmp/d.tar"],
-            ["mv", "/tmp/d", "/tmp/old"],
-            ["tar", "xf", "/tmp/d.tar", "-C", "/tmp"],
-        ]
+    if (r.returncode, r.stdout) != (0, b"e/copy\n#!/bin/echo from\n/tmp/d/e/copy\n"):
+        failed.append(f"files: exit {r.returncode}, stdout {r.stdout!r}, stderr {r.stderr!r}")
 
-        for argv in steps:
-            r = run(vm, root, argv, "")
+    r = run(vm, rootfs, image, ["cat", "/tmp/missing"], "")
 
-            if r.returncode != 0:
-                failed.append(f"{argv}: exit {r.returncode}, stderr {r.stderr.decode(errors='replace')!r}")
+    if r.returncode != 1 or b"No such file or directory" not in r.stderr:
+        failed.append(f"cat of a missing file: exit {r.returncode}, stderr {r.stderr!r}")
 
-        tmp = root / "tmp"
+    for first, tail in INTERRUPTS:
+        out, code = interrupt(vm, rootfs, image, first)
 
-        if gzip.decompress((tmp / "d.tar.gz").read_bytes()) != (tmp / "d.tar").read_bytes():
-            failed.append("gzip -k: the .gz does not decompress to the tar")
-
-        if os.readlink(tmp / "d" / "link") != "e/copy" or (tmp / "d" / "e" / "copy").read_text() != "#!/bin/echo from\n":
-            failed.append("tar xf: the tree differs")
-
-        r = run(vm, root, ["find", "/tmp/d", "-type", "f"], "")
-
-        if r.stdout.decode() != "/tmp/d/e/copy\n":
-            failed.append(f"find: {r.stdout!r}")
-
-        r = run(vm, root, ["cat", "/tmp/missing"], "")
-
-        if r.returncode != 1 or b"No such file or directory" not in r.stderr:
-            failed.append(f"cat of a missing file: exit {r.returncode}, stderr {r.stderr!r}")
-
-        for first, tail in INTERRUPTS:
-            out, code = interrupt(vm, root, first)
-
-            if not out.endswith(tail) or code != 5:
-                failed.append(f"SIGINT to sh -i after {first!r}: exit {code}, stdout ends {out[-60:]!r}; want exit 5, {tail!r}")
-
-        out, code = job_control(vm, root)
-
-        if out.count("Stopped") != 2 or "after 130" not in out or code != 6:
-            failed.append(f"job control: exit {code}, terminal {out!r}")
+        if not out.endswith(tail) or code != 5:
+            failed.append(f"SIGINT to sh -i after {first!r}: exit {code}, stdout ends {out[-60:]!r}; want exit 5, {tail!r}")
 
     for f in failed:
         print(f)
 
     assert not failed, f"{len(failed)} of the busybox cases failed"
-    print(f"{len(CASES) + len(steps) + 4 + len(INTERRUPTS)} cases passed")
+    print(f"{len(CASES) + 2 + len(INTERRUPTS)} cases passed")
 
 
 if __name__ == "__main__":

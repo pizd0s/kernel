@@ -50,9 +50,6 @@ const (
 	hostNotFound  = 1
 	tryAgain      = 2
 	noRecovery    = 3
-	sockStream    = 1
-	sockDgram     = 2
-	sockRaw       = 3
 	ipprotoTCP    = 6
 	ipprotoUDP    = 17
 	resolveWait   = 10 * time.Second

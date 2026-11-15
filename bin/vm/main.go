@@ -12,7 +12,7 @@ import (
 )
 
 func usage() {
-	throwFmt("usage: vm [-v] [--asan] -o output.o input.wasm\n       vm run [--root dir] [-a argv0] [--asan] [--disk name=file]... -- module.wasm [arg...]\n       vm spec test.json\n       vm stand [--repeat N] im|pdf|djvu|svg|magic object.o file...")
+	throwFmt("usage: vm [-v] [--asan] -o output.o input.wasm\n       vm run [-a argv0] [--asan] [--disk name=file]... -- module.wasm [arg...]\n       vm spec test.json\n       vm stand [--repeat N] im|pdf|djvu|svg|magic object.o file...")
 }
 
 func main() {
@@ -113,14 +113,13 @@ func compileCommand(args []string) {
 
 // runCommand runs module.wasm, a program of the kernel, or a WASI command,
 // compiled as it starts: the options come first, then -- and the module
-// with its arguments. The program's root is the host directory of --root,
-// or nothing without it: a server of its own files, or a program that
-// needs none, runs so. argv0 is by default the module's path. --asan
-// compiles the programs with the checks of the kernel's address sanitizer
-// (kernel_asan.go). Each --disk gives a program of the kernel a file of
-// the host as a disk (runKernel).
+// with its arguments. The first process has no root: it serves the VFS
+// the others have theirs from, rootfs, or needs none. argv0 is by default
+// the module's path. --asan compiles the programs with the checks of the
+// kernel's address sanitizer (kernel_asan.go). Each --disk gives a program
+// of the kernel a file of the host as a disk (runKernel).
 func runCommand(args []string) int {
-	root, argv0, asan := "", "", false
+	argv0, asan := "", false
 	var disks []disk
 
 	for len(args) > 0 && args[0] != "--" {
@@ -128,9 +127,6 @@ func runCommand(args []string) int {
 		case args[0] == "--asan":
 			asan = true
 			args = args[1:]
-		case len(args) > 1 && args[0] == "--root":
-			root = args[1]
-			args = args[2:]
 		case len(args) > 1 && args[0] == "-a":
 			argv0 = args[1]
 			args = args[2:]
@@ -160,5 +156,5 @@ func runCommand(args []string) int {
 
 	argv := append([]string{argv0}, args[1:]...)
 
-	return runModule(args[0], root, argv, asan, disks)
+	return runModule(args[0], argv, asan, disks)
 }

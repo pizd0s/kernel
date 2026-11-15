@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Guest calls under a real host descriptor limit must fail and recover.
+"""vm starts its first process under a host descriptor limit of a few:
+the guest's objects are the kernel's and take none of the host's.
 
-    test_host_resources.py <vm> <native-aot> <fixture.wasm> <fixture>
+    test_host_resources.py <vm> <native-aot>
 """
 import os
 from pathlib import Path
@@ -25,23 +26,11 @@ def bootstrap_program():
 
 
 def main():
-    vm, native, fixture, program = sys.argv[1:]
+    vm, native = sys.argv[1:]
     env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-host-resources-") as directory:
         work = Path(directory)
         compiled, embedded = work / "native.o", work / "embedded.o"
-        result = subprocess.run([native, "--strict"], input=Path(fixture).read_bytes(), capture_output=True, env=env, timeout=60)
-        assert result.returncode == 0, result
-        compiled.write_bytes(result.stdout)
-        result = subprocess.run([vm, "-o", str(embedded), fixture], capture_output=True, env=env, timeout=60)
-        assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), result
-        for soft in (8, 64):
-            def restrict():
-                resource.setrlimit(resource.RLIMIT_NOFILE, (soft, 64))
-            for operation in ("objects", "fork", "vfork", "forkpty"):
-                result = subprocess.run([vm, "run", "--root", str(work), "--", str(program), operation], capture_output=True,
-                                        env=env, preexec_fn=restrict, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"host resource recovery: ok\n", b""), (soft, operation, result)
         source, bootstrap = work / "bootstrap.wasm", work / "bootstrap"
         data = bootstrap_program()
         source.write_bytes(data)
@@ -57,7 +46,7 @@ def main():
             result = subprocess.run([vm, "run", "--", str(bootstrap)], capture_output=True,
                                     env=env, preexec_fn=restrict, timeout=30)
             assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (limit, result)
-    print("host resources: pipes, sockets, PTYs and process creation recover from real descriptor exhaustion with both AOTs")
+    print("host resources: the first process starts under a limit of a few host descriptors with both AOTs")
 
 
 if __name__ == "__main__":

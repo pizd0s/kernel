@@ -1,7 +1,8 @@
 // devices: the devices every system has, a service of rootfs's /dev/init
 // (lib/protocol/service.h): null, which reads nothing; zero, which reads
-// zeros; random and urandom, which read the kernel's entropy. Each takes
-// everything written to it. An open of one is an endpoint of this process,
+// zeros; full, which reads zeros and has no room for a write, ENOSPC;
+// random and urandom, which read the kernel's entropy. The others take
+// everything written to them. An open of one is an endpoint of this process,
 // rootfs hands it on: a READ's bytes go straight into the reader's
 // memory, through the memfd it brings, and a WRITE's are never looked at.
 //
@@ -25,6 +26,7 @@ namespace {
     enum class Kind {
         Null,
         Zero,
+        Full,
         Random,
     };
 
@@ -38,6 +40,7 @@ namespace {
 static Source sources[] = {
     {"null", Kind::Null, {}},
     {"zero", Kind::Zero, {}},
+    {"full", Kind::Full, {}},
     {"random", Kind::Random, {}},
     {"urandom", Kind::Random, {}},
 };
@@ -75,8 +78,8 @@ static void readSource(const Source& s, const Endpoint& e, const Request& r) {
     answer(r.reply(), opOk, 0, &count, sizeof count);
 }
 
-// Everything written is taken, where it was written.
-static void writeSource(const Endpoint& e, const Request& r) {
+// Everything written is taken, where it was written, but by full.
+static void writeSource(const Source& s, const Endpoint& e, const Request& r) {
     uint64_t off;
     uint32_t length;
     if (!e.writes) {
@@ -84,6 +87,9 @@ static void writeSource(const Endpoint& e, const Request& r) {
     }
     if (!r.at(0, off) || !r.at(8, length)) {
         return fail(r.reply(), EINVAL);
+    }
+    if (s.kind == Kind::Full) {
+        return fail(r.reply(), ENOSPC);
     }
     unsigned char taken[12];
     memcpy(taken, &length, 4);
@@ -103,7 +109,7 @@ static bool handle(Endpoint& e, Request& r) {
             readSource(s, e, r);
             break;
         case opWrite:
-            writeSource(e, r);
+            writeSource(s, e, r);
             break;
         case opFstat:
             answer(r.reply(), opOk, 0, &st, sizeof st);

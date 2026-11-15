@@ -17,6 +17,15 @@ static void waitFor(pid_t pid, int code) {
     assert(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == code);
 }
 
+// The system's first process, rootfs, adopts orphans and reaps them: one
+// is gone once kill finds it no more.
+static void waitGone(pid_t pid) {
+    while (kill(pid, 0) == 0) {
+        usleep(1000);
+    }
+    assert(errno == ESRCH);
+}
+
 static void transfer(int fd, void* data, size_t length, bool writing) {
     auto* bytes = static_cast<char*>(data);
     while (length) {
@@ -28,37 +37,9 @@ static void transfer(int fd, void* data, size_t length, bool writing) {
 }
 
 int main() {
-    setusershell();
-    assert(strcmp(getusershell(), "/bin/sh") == 0);
-    assert(strcmp(getusershell(), "/bin/csh") == 0);
-    assert(getusershell() == nullptr);
-    endusershell();
-    assert(strcmp(getusershell(), "/bin/sh") == 0);
-    assert(mkdir("/etc", 0755) == 0);
-    FILE* file = fopen("/etc/shells", "w");
-    assert(file);
-    fputc('#', file);
-    for (unsigned i = 0; i < 5000; ++i) {
-        fputc('x', file);
-    }
-    fputs("\n\n   # ignored\n  /bin/first  \n\t/bin/second\n", file);
-    assert(fclose(file) == 0);
-    setusershell();
-    assert(strcmp(getusershell(), "/bin/first") == 0);
-    assert(strcmp(getusershell(), "/bin/second") == 0);
-    assert(getusershell() == nullptr && getusershell() == nullptr);
-    setusershell();
-    assert(strcmp(getusershell(), "/bin/first") == 0);
-    endusershell();
-    assert(strcmp(getusershell(), "/bin/first") == 0);
-    assert(unlink("/etc/shells") == 0 && mkdir("/etc/shells", 0755) == 0);
-    setusershell();
-    assert(getusershell() == nullptr);
-    assert(rmdir("/etc/shells") == 0);
-
+    alarm(10);
     int reports[2], release[2];
     assert(pipe(reports) == 0 && pipe(release) == 0);
-    pid_t original = getpid();
     assert(chdir("/tmp") == 0);
     pid_t child = fork();
     assert(child >= 0);
@@ -69,12 +50,12 @@ int main() {
         if (grandchild == 0) {
             char byte;
             transfer(release[0], &byte, 1, false);
-            assert(byte == 'x' && getppid() == original);
+            assert(byte == 'x' && getppid() == 1);
             _exit(19);
         }
         assert(daemon(0, 0) == 0);
         assert(getpid() != old && getsid(0) == getpid() && getpgrp() == getpid());
-        assert(getppid() == original);
+        assert(getppid() == 1);
         char cwd[16], byte;
         assert(getcwd(cwd, sizeof(cwd)) && strcmp(cwd, "/") == 0);
         assert(read(0, &byte, 1) == 0);
@@ -87,10 +68,10 @@ int main() {
     transfer(reports[0], report, sizeof(report), false);
     assert(report[0] != child && report[1] != child && report[0] != report[1]);
     waitFor(child, 0);
-    waitFor(report[0], 17);
+    waitGone(report[0]);
     char byte = 'x';
     transfer(release[1], &byte, 1, true);
-    waitFor(report[1], 19);
+    waitGone(report[1]);
 
     assert(signal(SIGCHLD, SIG_IGN) != SIG_ERR);
     child = fork();
@@ -112,9 +93,36 @@ int main() {
     for (int fd : release) {
         assert(close(fd) == 0);
     }
-    // The initial process remains the VM's lifetime owner after daemon().
-    assert(daemon(0, 1) == 0);
-    char cwd[16];
-    assert(getcwd(cwd, sizeof(cwd)) && strcmp(cwd, "/") == 0);
+
+    // The system has no /etc/shells: the shells are those of musl. Then
+    // in a root of our own, its /etc ours, they are those it names.
+    setusershell();
+    assert(strcmp(getusershell(), "/bin/sh") == 0);
+    assert(strcmp(getusershell(), "/bin/csh") == 0);
+    assert(getusershell() == nullptr);
+    endusershell();
+    assert(strcmp(getusershell(), "/bin/sh") == 0);
+    assert(mkdir("/tmp/shells", 0755) == 0 && chroot("/tmp/shells") == 0 && chdir("/") == 0);
+    assert(mkdir("/etc", 0755) == 0);
+    FILE* file = fopen("/etc/shells", "w");
+    assert(file);
+    fputc('#', file);
+    for (unsigned i = 0; i < 5000; ++i) {
+        fputc('x', file);
+    }
+    fputs("\n\n   # ignored\n  /bin/first  \n\t/bin/second\n", file);
+    assert(fclose(file) == 0);
+    setusershell();
+    assert(strcmp(getusershell(), "/bin/first") == 0);
+    assert(strcmp(getusershell(), "/bin/second") == 0);
+    assert(getusershell() == nullptr && getusershell() == nullptr);
+    setusershell();
+    assert(strcmp(getusershell(), "/bin/first") == 0);
+    endusershell();
+    assert(strcmp(getusershell(), "/bin/first") == 0);
+    assert(unlink("/etc/shells") == 0 && mkdir("/etc/shells", 0755) == 0);
+    setusershell();
+    assert(getusershell() == nullptr);
+    assert(rmdir("/etc/shells") == 0);
     puts("daemon and shells: ok");
 }

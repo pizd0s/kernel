@@ -1,3 +1,4 @@
+//@ root: own
 //@ host: false
 //@ compile-flags: -g
 //@ stdout: "network databases: ok\n"

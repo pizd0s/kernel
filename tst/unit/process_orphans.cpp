@@ -3,6 +3,7 @@
 //@ stdout: "process orphans: ok\n"
 
 #include <assert.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <sys/prctl.h>
@@ -15,6 +16,17 @@ static void waitFor(pid_t child, int code) {
     assert(WIFEXITED(status) && WEXITSTATUS(status) == code);
 }
 
+// An orphan's parent is the system's first process, rootfs, which reaps
+// it: one is gone once kill finds it no more.
+static void waitGone(pid_t pid) {
+    while (kill(pid, 0) == 0) {
+        usleep(1000);
+    }
+    assert(errno == ESRCH);
+}
+
+// A child whose parent ends goes to the first process, with the signal of
+// PR_SET_PDEATHSIG, and so does a zombie, which it reaps.
 static void checkAdoption(bool zombie) {
     int reports[2], ready[2], release[2];
     assert(pipe(reports) == 0 && pipe(ready) == 0 && pipe(release) == 0);
@@ -36,7 +48,7 @@ static void checkAdoption(bool zombie) {
             assert(getppid() == intermediate);
             assert(write(ready[1], "r", 1) == 1);
             assert(sigwaitinfo(&set, nullptr) == SIGUSR1);
-            assert(getppid() == original);
+            assert(getppid() == 1);
             assert(write(reports[1], "s", 1) == 1);
             _exit(19);
         }
@@ -62,7 +74,7 @@ static void checkAdoption(bool zombie) {
         char byte;
         assert(read(reports[0], &byte, 1) == 1 && byte == 's');
     }
-    waitFor(child, zombie ? 23 : 19);
+    waitGone(child);
     for (int fd : reports) {
         assert(close(fd) == 0);
     }

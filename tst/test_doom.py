@@ -1,46 +1,23 @@
 #!/usr/bin/env python3
-"""doom under `vm run`: doomgeneric's frame is ANSI half blocks on a
-terminal the kernel owns, its keys the terminal's in raw mode, its clock
+"""doom in the system: doomgeneric's frame is ANSI half blocks, its clock
 the kernel's monotonic time. Headless it plays the shareware demo from the
-wad and hashes each second of frames; on a pty it draws truecolor cells,
-and Ctrl-C, which the raw terminal no longer turns into a signal, still
-ends it with the terminal restored.
+wad, both the image of the tests' /tests/doom, and hashes each second of
+frames, which are the same in two runs.
 
-    test_doom.py <vm> <doom> <doom1.wad>
+    test_doom.py <vm> <rootfs> <tests.img>
 """
-import os
-import pty
-import select
-import shutil
 import subprocess
 import sys
-import tempfile
-import time
-from pathlib import Path
 
-IWAD = "/usr/share/games/doom/doom1.wad"
+COMMAND = "cd /tmp && exec env DG_HEADLESS=1 HOME=/tmp /tests/doom/doom -iwad /tests/doom/doom1.wad -nosound -timedemo demo1"
 
 
-def make_root(root, program, wad):
-    (root / "bin").mkdir(parents=True)
-    shutil.copy(program, root / "bin" / "doom")
-    (root / "bin" / "doom").chmod(0o755)
-    (root / "usr" / "share" / "games" / "doom").mkdir(parents=True)
-    shutil.copy(wad, root / IWAD.lstrip("/"))
-    (root / "tmp").mkdir()
-
-
-def timedemo(vm, root, work):
+def timedemo(vm, rootfs, image):
     """The shareware demo plays twice, headless: the frames hash the same."""
     hashes = []
 
     for _ in range(2):
-        r = subprocess.run(
-            [vm, "run", "--root", str(root), "-a", "doom", "--", str(root / "bin" / "doom"),
-             "-iwad", IWAD, "-nosound", "-timedemo", "demo1"],
-            capture_output=True, cwd=work, timeout=300,
-            env={"PATH": "/bin:/usr/bin", "DG_HEADLESS": "1", "HOME": "/tmp"},
-        )
+        r = subprocess.run([vm, "run", "--disk", f"image={image}", "--", rootfs, "-c", COMMAND], capture_output=True, timeout=300)
         out = r.stdout.decode(errors="replace")
         err = r.stderr.decode(errors="replace")
 
@@ -55,77 +32,15 @@ def timedemo(vm, root, work):
     return hashes[0], None
 
 
-def terminal(vm, root):
-    """On a pty doom takes the alternate screen, draws truecolor cells and
-    leaves the terminal as it found it."""
-    pid, fd = pty.fork()
-
-    if pid == 0:
-        os.chdir(root / "tmp")
-        os.execve(vm, [vm, "run", "--root", str(root), "-a", "doom", "--", str(root / "bin" / "doom"),
-                           "-iwad", IWAD, "-nosound"],
-                  {"PATH": "/bin:/usr/bin", "TERM": "xterm-256color", "HOME": "/tmp",
-                   "DG_COLS": "80", "DG_ROWS": "50"})
-
-    out = b""
-
-    def pump(seconds):
-        nonlocal out
-        end = time.time() + seconds
-
-        while time.time() < end:
-            if select.select([fd], [], [], 0.05)[0]:
-                try:
-                    out += os.read(fd, 65536)
-                except OSError:
-                    return
-
-    try:
-        pump(8)
-        os.write(fd, b"\x03")
-        pump(3)
-    finally:
-        os.close(fd)
-
-    _, status = os.waitpid(pid, 0)
-
-    return out, os.waitstatus_to_exitcode(status)
-
-
 def main():
-    vm, program, wad = sys.argv[1:4]
-    failed = []
+    vm, rootfs, image = sys.argv[1:4]
+    frames, error = timedemo(vm, rootfs, image)
 
-    with tempfile.TemporaryDirectory(prefix="doom-") as work:
-        root = Path(work) / "root"
-        make_root(root, program, Path(wad))
+    if not error and len(frames) < 10:
+        error = f"timedemo hashed only {len(frames)} seconds of frames"
 
-        frames, error = timedemo(vm, root, work)
-
-        if error:
-            failed.append(error)
-        elif len(frames) < 10:
-            failed.append(f"timedemo hashed only {len(frames)} seconds of frames")
-
-        out, code = terminal(vm, root)
-        colors = out.count(b"\x1b[38;2;")
-
-        if b"\x1b[?1049h" not in out:
-            failed.append(f"the alternate screen is not taken: {out[:120]!r}")
-        if colors < 10:
-            failed.append(f"too few truecolor cells drawn: {colors}")
-        if out.count(b"\xe2\x96\x80") < 1000:
-            failed.append("too few half blocks drawn")
-        if b"\x1b[?1049l" not in out:
-            failed.append("the alternate screen is not given back")
-        if code != 0:
-            failed.append(f"Ctrl-C: exit {code}, not 0")
-
-    for f in failed:
-        print(f)
-
-    assert not failed, f"{len(failed)} of the doom cases failed"
-    print(f"{len(frames or [])} seconds of frames, identical runs passed")
+    assert not error, error
+    print(f"{len(frames)} seconds of frames, identical runs passed")
 
 
 if __name__ == "__main__":

@@ -67,6 +67,7 @@ ls /dev/hello 2>&1
 """
 
 WANT = """\
+full
 init
 null
 random

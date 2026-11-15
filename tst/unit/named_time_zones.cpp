@@ -1,5 +1,4 @@
 //@ compile-flags: -g -D_GNU_SOURCE -fno-builtin
-//@ env: ZONEINFO=$ROOT/zones
 //@ env: TZ=UTC0
 //@ stdout: "named time zones: ok\n"
 
@@ -79,13 +78,9 @@ int main() {
     for (unsigned hemisphere = 0; hemisphere != 2; ++hemisphere) {
         bool south = hemisphere != 0;
         const char* name = south ? "south" : "north";
-#ifdef __wasm__
-        assert(setenv("TZ", name, 1) == 0);
-#else
         char path[8192];
         assert(snprintf(path, sizeof(path), ":%s/zones/%s", directory, name) > 0);
         assert(setenv("TZ", path, 1) == 0);
-#endif
         tzset();
         assert(timezone == (south ? -36000 : 18000) && daylight != 0);
         assert(strcmp(tzname[0], south ? "SSTD" : "NSTD") == 0);

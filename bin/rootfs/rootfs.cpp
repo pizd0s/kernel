@@ -2146,10 +2146,28 @@ static Task statCall(Header h, int fd, Place root, Place from, Name path) {
     }
 }
 
+// The target of the link t: known, or its file system's.
+static void linkTarget(Header h, int fd, const Place& t) {
+    if (const Known* k = knownAt(t); k && k->linked) {
+        ok(fd, k->target.data(), k->target.size());
+    } else {
+        hand(t, h, fsReadlink, 0, nullptr, 0, {}, fd);
+    }
+}
+
 // READLINK: a last link's target; what is no link is EINVAL, a slash
-// after one follows it.
+// after one follows it. With no path, the target of the handle's own
+// link, as readlinkat reads a descriptor's: what is no link is ENOENT.
 static Task readlinkCall(Header h, int fd, Place root, Place from, Name path) {
     Reply r{fd};
+    if (path.empty()) {
+        if (!isLink(from)) {
+            error(fd, ENOENT);
+        } else {
+            linkTarget(h, fd, from);
+        }
+        co_return;
+    }
     Walk w;
     w.start(h, from, root, path, true, false, false);
     for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
@@ -2161,10 +2179,8 @@ static Task readlinkCall(Header h, int fd, Place root, Place from, Name path) {
     const Place& t = w.target;
     if (w.kind != lastName || !isLink(t)) {
         error(fd, EINVAL);
-    } else if (const Known* k = knownAt(t); k && k->linked) {
-        ok(fd, k->target.data(), k->target.size());
     } else {
-        hand(t, h, fsReadlink, 0, nullptr, 0, {}, fd);
+        linkTarget(h, fd, t);
     }
 }
 
@@ -3061,12 +3077,19 @@ constexpr int maxKept = 2 + 32;
 // an end of a pair of ours: the child asks us, who serve when it does;
 // with no root, rootfs's own, which has no path. The descriptors kept
 // are the child's 3 and on, in order. The program is the file path
-// names, or the one of the descriptor program.
-static pid_t spawn(const char* path, char* const* argv, char* const* env, int root, const int* kept = nullptr, int count = 0, int program = -1) {
+// names, or the one of the descriptor program. A session's leads one of
+// its own, as the shell does, whose signals to its group are none of
+// the system's.
+static pid_t spawn(const char* path, char* const* argv, char* const* env, int root, const int* kept = nullptr, int count = 0, int program = -1,
+                   bool session = false) {
     const pid_t pid = fork();
     if (pid == 0) {
         if (waitMasked) {
             sigprocmask(SIG_SETMASK, &waitMask, nullptr);
+        }
+        if (session && setsid() < 0) {
+            dprintf(STDERR_FILENO, "rootfs: setsid: errno %d\n", errno);
+            _exit(127);
         }
         if (root >= 0 && (fchdir(root) != 0 || chroot(".") != 0)) {
             dprintf(STDERR_FILENO, "rootfs: chroot: errno %d\n", errno);
@@ -3130,33 +3153,63 @@ static Mount* mountStarted(int channel, const Stat& point, Name name, u32 perm) 
     return mountAt(started(channel), top, theirPlace(rootMount, point), rootOf(rootMount), name);
 }
 
-// The image's header: where erofs's program is in it, the file of
-// /bin/tools, its offset and size.
-static void serverOf(u32& offset, u32& size) {
-    u32 header[11];
-    if (rootfs_image_size < sizeof header) {
-        fatal("rootfs: no image");
-    }
-    memcpy(header, rootfs_image, sizeof header);
-    if (memcmp(header, "PZIM", 4) != 0 || header[1] != 2 || header[8] != rootfs_image_size || header[9] > rootfs_image_size || header[10] == 0 || header[10] > rootfs_image_size - header[9]) {
+// The image's header, of size bytes: where erofs's program is in it, the
+// file of /bin/tools, its offset and size.
+static void serverOf(const u32* header, u32 imageSize, u32& offset, u32& size) {
+    if (memcmp(header, "PZIM", 4) != 0 || header[1] != 2 || header[8] != imageSize || header[9] > imageSize || header[10] == 0 || header[10] > imageSize - header[9]) {
         fatal("rootfs: the image is none of image.py's");
     }
     offset = header[9];
     size = header[10];
 }
 
-// Starts the system. erofs serves the image, its descriptor 3 a memfd
-// of it, its 4 the channel of the root, its program a memfd of its bytes
-// there; it has no root and walks no path. erofs tells the root's stat,
+// The image erofs serves, a descriptor of it, and a memfd of erofs's
+// program in it: the disk vm gave us named image, when it gave one, its
+// program read into memory that stays, as a memfd is of the memory
+// itself, else the image linked into us.
+static void imageOf(int disk, int& served, int& program) {
+    u32 header[11];
+    u32 offset;
+    u32 size;
+    if (disk >= 0) {
+        struct stat st;
+        if (fstat(disk, &st) != 0 || pread(disk, header, sizeof header, 0) != ssize_t(sizeof header)) {
+            fatal("rootfs: the image disk reads not: errno %d", errno);
+        }
+        serverOf(header, u32(st.st_size), offset, size);
+        u8* bytes = static_cast<u8*>(allocate(size));
+        if (pread(disk, bytes, size, off_t(offset)) != ssize_t(size)) {
+            fatal("rootfs: the image disk reads not: errno %d", errno);
+        }
+        served = disk;
+        program = memfd_create(bytes, size, O_RDONLY | O_CLOEXEC);
+    } else {
+        if (rootfs_image_size < sizeof header) {
+            fatal("rootfs: no image");
+        }
+        memcpy(header, rootfs_image, sizeof header);
+        serverOf(header, rootfs_image_size, offset, size);
+        auto* bytes = const_cast<u8*>(rootfs_image);
+        served = memfd_create(bytes, rootfs_image_size, O_RDONLY | O_CLOEXEC);
+        program = memfd_create(bytes + offset, size, O_RDONLY | O_CLOEXEC);
+    }
+    if (served < 0 || program < 0) {
+        fatal("rootfs: memfd_create: errno %d", errno);
+    }
+}
+
+// Starts the system. erofs serves the image (imageOf), its descriptor 3 a
+// memfd of it or the disk named image, its 4 the channel of the root, its
+// program a memfd of its bytes there; it has no root and walks no path. erofs tells the root's stat,
 // then where /tmp and /dev are. The file systems and the services of
 // the system start next, the far end of a pair of ours their descriptor
 // 3: they close it once they are up, after the services they start
 // have it, and when the last one has, the shell starts (booted).
 // /bin/tmpfs is /tmp, its channel its descriptor 3. /bin/devfs is /dev,
-// its channel its descriptor 4, and it gets the disks vm gave us, our
-// descriptors after 2, in order, named by DISKS: its 5 and on, and it
-// starts their services and every system's devices. Each is mounted
-// before it starts: what it starts finds it there.
+// its channel its descriptor 4, and it gets the disks vm gave us but the
+// image, our descriptors after 2, in order, named by DISKS: its 5 and on,
+// and it starts their services and every system's devices. Each is
+// mounted before it starts: what it starts finds it there.
 static Task boot() {
     int ends[2];
     int tmp[2];
@@ -3187,24 +3240,24 @@ static Task boot() {
     argv[args++] = option;
     argv[args++] = three;
     argv[args++] = four;
-    for (char* name = strtok(disks, " "); name && count < maxKept; name = strtok(nullptr, " ")) {
-        fcntl(3 + count - 2, F_SETFD, FD_CLOEXEC);
-        kept[count] = 3 + count - 2;
+    int imageDisk = -1;
+    int disk = 3;
+    for (char* name = strtok(disks, " "); name && count < maxKept; name = strtok(nullptr, " "), ++disk) {
+        fcntl(disk, F_SETFD, FD_CLOEXEC);
+        if (strcmp(name, "image") == 0) {
+            imageDisk = disk;
+            continue;
+        }
+        kept[count] = disk;
         snprintf(numbers[count], sizeof numbers[count], "%d", 3 + count);
         argv[args++] = name;
         argv[args++] = numbers[count];
         ++count;
     }
     argv[args] = nullptr;
-    u32 offset;
-    u32 size;
-    serverOf(offset, size);
-    auto* bytes = const_cast<u8*>(rootfs_image);
-    const int served[] = {memfd_create(bytes, rootfs_image_size, O_RDONLY | O_CLOEXEC), image[1]};
-    const int program = memfd_create(bytes + offset, size, O_RDONLY | O_CLOEXEC);
-    if (served[0] < 0 || program < 0) {
-        fatal("rootfs: memfd_create: errno %d", errno);
-    }
+    int served[] = {-1, image[1]};
+    int program = -1;
+    imageOf(imageDisk, served[0], program);
     char erofsName[] = "erofs";
     char* const erofsArgv[] = {erofsName, three, four, nullptr};
     spawn(erofsName, erofsArgv, environment, -1, served, 2, program);
@@ -3279,19 +3332,33 @@ static Task boot() {
     }
 }
 
-// The services are up: the shell starts on the terminal.
+// command is what vm gave us to run, the shell's arguments: none for the
+// shell on the terminal.
+static char** command;
+static int commandCount;
+
+// The services are up: the shell starts, with the command vm gave us, or
+// on the terminal, the leader of a session of its own.
 static void booted() {
     epoll_ctl(watcher, EPOLL_CTL_DEL, bootEnd, nullptr);
     close(bootEnd);
     bootEnd = -1;
     char sh[] = "sh";
-    char* const argv[] = {sh, nullptr};
-    shellPid = spawn("/bin/sh", argv, environment, rootEnd);
+    char** argv = static_cast<char**>(allocate(sizeof(char*) * (commandCount + 2)));
+    argv[0] = sh;
+    for (int i = 0; i < commandCount; ++i) {
+        argv[i + 1] = command[i];
+    }
+    argv[commandCount + 1] = nullptr;
+    shellPid = spawn("/bin/sh", argv, environment, rootEnd, nullptr, 0, -1, true);
+    free(argv);
     close(rootEnd);
     rootEnd = -1;
 }
 
-int main() {
+int main(int argc, char** argv) {
+    command = argv + 1;
+    commandCount = argc - 1;
     reapOnChild();
     watcher = epoll_create1(EPOLL_CLOEXEC);
     if (watcher < 0) {

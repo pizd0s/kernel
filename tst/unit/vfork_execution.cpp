@@ -12,11 +12,7 @@ int main(int argc, char** argv) {
         return 23;
     }
     char* arguments[] = {argv[0], const_cast<char*>("child"), nullptr};
-#ifdef __wasm__
-    const char* executable = "/bin/check";
-#else
     const char* executable = argv[0];
-#endif
     for (unsigned variant = 0; variant < 3; ++variant) {
         pid_t child = vfork();
         assert(child >= 0);

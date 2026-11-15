@@ -32,13 +32,10 @@ const (
 	sockNonblock   = 0o4000
 	sockCloexec    = 0o2000000
 	msgDontwait    = 0x40
-	msgWaitall     = 0x100
 	msgNosignal    = 0x4000
 	msgCtrunc      = 0x8
 	msgCmsgCloexec = 0x40000000
 	solSocket      = 1
-	soRcvtimeo     = 20
-	soSndtimeo     = 21
 	soAcceptconn   = 30
 	sockStreamType = 1
 	scmRights      = 1
@@ -85,7 +82,11 @@ func socketInboxKind(fd int) inboxKind {
 }
 
 func unixAddress(path []byte) []byte {
-	return append([]byte{afUnix, 0}, path...)
+	if len(path) == 0 {
+		return []byte{afUnix, 0}
+	}
+
+	return append(append([]byte{afUnix, 0}, path...), 0)
 }
 
 // withAddress runs a call with the host's address of a guest's: for bind
@@ -680,93 +681,88 @@ func (s *hostSocket) shutdown(how int) error {
 	return syscall.Shutdown(s.fd, how)
 }
 
+// socket makes a socket of the kernel's, of AF_UNIX (kernel_unix.go): the
+// system has no network, so no other domain.
 func (p *Process) libcSocket(domain, kind, protocol uint32) uint32 {
-	switch domain {
-	case afUnix, afInet, afInet6:
-	default:
+	if domain != afUnix {
 		return p.result(0, syscall.EAFNOSUPPORT)
 	}
 
-	if p.systemSocket(domain, kind) {
-		if protocol != 0 {
-			return p.result(0, syscall.EPROTONOSUPPORT)
-		}
-
-		return p.result(p.install(newUnixSocket(kind&sockNonblock != 0), 0, kind&sockCloexec != 0))
+	if kind&^(sockTypeMask|sockNonblock|sockCloexec) != 0 {
+		return p.result(0, syscall.EINVAL)
 	}
 
-	host, err := syscall.Socket(int(domain), int(kind&^(sockNonblock|sockCloexec))|syscall.SOCK_CLOEXEC, int(protocol))
-
-	if err != nil {
-		return p.result(0, err)
+	if protocol != 0 {
+		return p.result(0, syscall.EPROTONOSUPPORT)
 	}
 
-	return p.result(p.installSocket(host, kind))
+	nonblock, cloexec := kind&sockNonblock != 0, kind&sockCloexec != 0
+
+	switch kind & sockTypeMask {
+	case sockStream, sockSeqpacket:
+		return p.result(p.install(newUnixSocket(int(kind&sockTypeMask), nonblock), 0, cloexec))
+	case sockDgram, sockRaw:
+		return p.result(p.install(newUnixDgram(nonblock), 0, cloexec))
+	}
+
+	return p.result(0, syscall.ESOCKTNOSUPPORT)
 }
 
-// socketpair makes a pair of the kernel's for SOCK_SEQPACKET
-// (kernel_endpoint.go), of the host's for the other kinds.
+// socketpair makes a pair of the kernel's (kernel_endpoint.go): of
+// SOCK_STREAM, SOCK_DGRAM, which SOCK_RAW is to AF_UNIX as Linux has it,
+// or SOCK_SEQPACKET.
 func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 	if domain != afUnix {
 		return p.result(0, syscall.EOPNOTSUPP)
 	}
 
-	if kind&^(sockNonblock|sockCloexec) == sockSeqpacket {
-		if protocol != 0 {
-			return p.result(0, syscall.EPROTONOSUPPORT)
-		}
-
-		a, b := newPair(kind&sockNonblock != 0)
-		cloexec := kind&sockCloexec != 0
-		x, err := p.install(a, 0, cloexec)
-
-		if err != nil {
-			b.unref()
-
-			return p.result(0, err)
-		}
-
-		y, err := p.install(b, 0, cloexec)
-
-		if err != nil {
-			p.closeFd(x)
-
-			return p.result(0, err)
-		}
-
-		p.put32(at, uint32(x))
-		p.put32(at+4, uint32(y))
-
-		return p.result(0, nil)
+	if kind&^(sockTypeMask|sockNonblock|sockCloexec) != 0 {
+		return p.result(0, syscall.EINVAL)
 	}
 
-	pair, err := syscall.Socketpair(int(domain), int(kind&^(sockNonblock|sockCloexec))|syscall.SOCK_CLOEXEC, int(protocol))
-
-	if err != nil {
-		return p.result(0, err)
+	if protocol != 0 {
+		return p.result(0, syscall.EPROTONOSUPPORT)
 	}
 
-	a, err := p.installSocket(pair[0], kind)
+	base := int(kind & sockTypeMask)
+
+	switch base {
+	case sockStream, sockDgram, sockSeqpacket:
+	case sockRaw:
+		base = sockDgram
+	default:
+		return p.result(0, syscall.ESOCKTNOSUPPORT)
+	}
+
+	a, b := newPairOf(base, kind&sockNonblock != 0)
+	cloexec := kind&sockCloexec != 0
+	x, err := p.install(a, 0, cloexec)
 
 	if err != nil {
-		syscall.Close(pair[1])
+		b.unref()
 
 		return p.result(0, err)
 	}
 
-	b, err := p.installSocket(pair[1], kind)
+	y, err := p.install(b, 0, cloexec)
 
 	if err != nil {
-		p.closeFd(a)
+		p.closeFd(x)
 
 		return p.result(0, err)
 	}
 
-	p.put32(at, uint32(a))
-	p.put32(at+4, uint32(b))
+	p.put32(at, uint32(x))
+	p.put32(at+4, uint32(y))
 
 	return p.result(0, nil)
 }
+
+// The bits of a socket's type that are its kind; SOCK_RAW.
+const (
+	sockTypeMask = 0xf
+	sockRaw      = 3
+)
 
 func (p *Process) libcBind(fd, addr, n uint32) uint32 {
 	s, err := p.socketAt(fd)
@@ -915,6 +911,17 @@ func (p *Process) libcSockatmark(fd uint32) uint32 {
 		return p.result(0, err)
 	}
 
+	switch s.(type) {
+	case *pairEnd, *unixSocket, *unixDgram:
+		// A socket of the kernel's has no out-of-band data: a stream is
+		// never at its mark, and the other kinds have none, as Linux's.
+		if kindOf(s) == sockStream {
+			return p.result(0, nil)
+		}
+
+		return p.result(0, syscall.EOPNOTSUPP)
+	}
+
 	i, ok := s.(Ioctl)
 
 	if !ok {
@@ -930,6 +937,20 @@ func (p *Process) libcSockatmark(fd uint32) uint32 {
 	return p.result(int(mark), nil)
 }
 
+// kindOf is the kind of a socket of the kernel's.
+func kindOf(s Socket) int {
+	switch s := s.(type) {
+	case *pairEnd:
+		return s.shared.kind
+	case *unixSocket:
+		return s.kind
+	case *unixDgram:
+		return sockDgram
+	}
+
+	return sockSeqpacket
+}
+
 func (p *Process) socketAccept(fd, addr, lenAt, flags uint32) uint32 {
 	s, err := p.socketAt(fd)
 
@@ -939,6 +960,10 @@ func (p *Process) socketAccept(fd, addr, lenAt, flags uint32) uint32 {
 
 	if flags&^(sockNonblock|sockCloexec) != 0 {
 		return p.result(0, syscall.EINVAL)
+	}
+
+	if err := p.descriptorFree(); err != nil {
+		return p.result(0, err)
 	}
 
 	conn, peer, err := s.accept(p, flags)

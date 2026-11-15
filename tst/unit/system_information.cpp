@@ -1,7 +1,7 @@
 //@ host: false
 //@ compile-flags: -g
 //@ stdout: "system information: ok\n"
-//@ stderr: "system: visible 7\nsystem: newline\nsystem[1]: pid\n"
+//@ stderr-pattern: "system: visible 7\nsystem: newline\nsystem\\[[0-9]+\\]: pid\n"
 
 #include <errno.h>
 #include <fcntl.h>

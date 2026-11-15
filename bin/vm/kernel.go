@@ -31,13 +31,12 @@ import (
 
 type Kernel struct {
 	FunctionImports
-	// root is the root directory `vm run` is given, rootPath its host
-	// path: the first process's, which chroot changes for its own.
-	root     Dir
-	rootPath string
-	mu       sync.Mutex
-	procs    map[int32]*Process
-	lastPid  int32
+	// root is the first process's root, none: rootfs, the VFS, serves the
+	// roots of the others.
+	root    Dir
+	mu      sync.Mutex
+	procs   map[int32]*Process
+	lastPid int32
 	// codes are the modules compiled, by the digest of their content;
 	// options are what they are compiled with, `vm run --asan` among them:
 	// then the processes run with the shadow map (kernel_asan.go).
@@ -111,6 +110,7 @@ type Process struct {
 	// envStrings are the strings of environ setenv made, mappings the
 	// lengths of mmap's blocks.
 	locale     [lcAll]string
+	zone       zoneCache
 	envStrings map[uint32]bool
 	mappings   map[uint32]mapping
 	timers     itimers
@@ -162,15 +162,9 @@ type procExit struct {
 // newKernel makes a kernel whose first process has a directory of the
 // host for its root, or with no root at all when root is empty: then it
 // is a server, or a program of none. Its programs compile with options.
-func newKernel(root string, options CompileOptions) *Kernel {
+func newKernel(options CompileOptions) *Kernel {
 	k := &Kernel{procs: map[int32]*Process{}, codes: map[[sha256.Size]byte]*codeEntry{}, options: options, fifos: map[fifoKey]*pipe{},
-		exit: make(chan int, 1), abstract: fmt.Sprintf("pizdos.%d.", os.Getpid())}
-
-	if root == "" {
-		k.root = newNoRoot()
-	} else {
-		k.root, k.rootPath = throw3(openHostRoot(root))
-	}
+		exit: make(chan int, 1), abstract: fmt.Sprintf("pizdos.%d.", os.Getpid()), root: newNoRoot()}
 
 	k.functions = k.functionTable()
 	// The kernel applies the processes' umasks itself.
@@ -219,8 +213,8 @@ type disk struct {
 // runKernel runs the first process of the kernel. Its descriptors 0, 1
 // and 2 are vm's, the disks those after them, in order, read and written,
 // and DISKS in its environment their names, by spaces.
-func runKernel(f File, path, root string, argv []string, options CompileOptions, data []byte, obj *Object, disks []disk) int {
-	k := newKernel(root, options)
+func runKernel(f File, path string, argv []string, options CompileOptions, data []byte, obj *Object, disks []disk) int {
+	k := newKernel(options)
 	p := throw2(k.newProcess(nil))
 	code, err := k.codeOf(p, data, path, obj)
 	throw(err)
@@ -280,7 +274,7 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 	if parent == nil {
 		p.pgid, p.sid = p.pid, p.pid
 		p.limits = hostLimits()
-		p.root, p.rootPath, p.cwd = k.root, k.rootPath, k.root
+		p.root, p.cwd = k.root, k.root
 	} else {
 		p.ppid, p.pgid, p.sid = parent.pid, parent.pgid, parent.sid
 		p.nice, p.policy = parent.nice, parent.policy
@@ -297,19 +291,8 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 }
 
 // firstCwd is the first process's working directory, held, and its path:
-// vm's own in a root of the host that has it, else the root. It is the
-// kernel's own doing, no call of the guest's.
+// its root, which is none.
 func (p *Process) firstCwd() (Dir, string) {
-	if _, ok := p.root.(*hostDir); ok && p.rootPath != "" {
-		host, err := os.Getwd()
-
-		if err == nil && (p.rootPath == "/" || host == p.rootPath || strings.HasPrefix(host, p.rootPath+"/")) {
-			if fd, err := syscall.Open(host, oPath|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0); err == nil {
-				return newHostDir(fd), p.guestPath(host)
-			}
-		}
-	}
-
 	p.root.ref()
 
 	return p.root, "/"

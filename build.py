@@ -466,31 +466,6 @@ vm_chaos_coverage = command(
     descr="GO", color="light-blue",
 )
 
-# python.wasm, its modules frozen by the freezer running in the kernel, and
-# the standard library as a zip; python3, the executable, ends with that
-# zip, which python imports from its own file.
-python = command(
-    name="python",
-    inputs=[*LIBC_HEADERS, "$(S)/bin/python/pyconfig.h", "$(S)/bin/python/make.py", "$(S)/bin/python/main.c", "$(S)/dev/wasm.py",
-            "$(S)/dev/exe.py"],
-    outputs=["$(B)/bin/python/python.wasm", "$(B)/bin/python/stdlib.zip"],
-    deps=[python_tarball, libc, python_core, vm],
-    cmd=[
-        "python3", "$(S)/bin/python/make.py", "python",
-        CLANG, WASM_LD, vm.outputs[0],
-        python_tarball.outputs[0],
-        "$(S)/bin/python/pyconfig.h",
-        "$(S)/lib/c/include",
-        libc.outputs[0],
-        *python_core.outputs,
-        "$(B)/bin/python/python.wasm",
-        "$(B)/bin/python/stdlib.zip",
-    ],
-    descr="PY",
-    color="yellow",
-)
-python_exe = executable("python_exe", python, "$(B)/bin/python/python3", tail=python.outputs[1])
-
 # The tools of the system, its services and the commands that speak to
 # them, in one multicall executable, /bin/tools, each a link to it in the
 # image (bin/tools).
@@ -550,36 +525,75 @@ fuse2fs = command(
 )
 fuse2fs_exe = executable("fuse2fs_exe", fuse2fs, "$(B)/bin/fuse2fs/fuse2fs")
 
-# A system from one executable: rootfs, the first process and the VFS, has
-# the image linked into it, the executables of busybox with its links,
-# python, the tools with theirs and fuse2fs, which erofs of the tools
-# serves at the root, with /dev and /tmp of its own, to the shell it
-# starts, and the kernel compiles each module as it is executed
-# (bin/rootfs).
-rootfs_image = command(
-    name="rootfs_image",
-    inputs=["$(S)/bin/rootfs/image.py"],
-    outputs=["$(B)/bin/rootfs/rootfs.img"],
-    deps=[busybox, busybox_exe, python_exe, tools, fuse2fs_exe],
-    cmd=["python3", "$(S)/bin/rootfs/image.py", "$(B)/bin/rootfs/rootfs.img",
-         "--busybox", busybox_exe.outputs[0], busybox.outputs[1], "--python", python_exe.outputs[0],
-         "--program", "tools", tools.outputs[0], *(arg for tool in TOOLS for arg in ("--link", tool, "tools")),
-         "--program", "fuse2fs", fuse2fs_exe.outputs[0], "--server", "tools"],
-    descr="IM",
-    color="cyan",
+# rootfs, the first process and the VFS, has its image linked into it: a
+# system of one executable (bin/rootfs). erofs of the tools serves the
+# image at the root, with /dev and /tmp of its own, to the shell rootfs
+# starts, and the kernel compiles each module as it is executed. The base
+# system's image has busybox's executable with its links, the tools with
+# theirs and fuse2fs: its rootfs runs python's freezer as python builds.
+BASE = [busybox, busybox_exe, tools, fuse2fs_exe]
+BASE_IMAGE = ["--busybox", busybox_exe.outputs[0], busybox.outputs[1],
+              "--program", "tools", tools.outputs[0], *(arg for tool in TOOLS for arg in ("--link", tool, "tools")),
+              "--program", "fuse2fs", fuse2fs_exe.outputs[0], "--server", "tools"]
+ROOTFS_INPUTS = ["$(S)/bin/rootfs/rootfs.cpp", "$(S)/lib/protocol/protocol.cpp", "$(S)/lib/protocol/protocol.h", "$(S)/bin/rootfs/make.py",
+                 "$(S)/dev/wasm.py", *LIBC_HEADERS]
+
+
+def system(name, nodes, arguments, directory):
+    """The image of a system and the rootfs of it."""
+    image = command(
+        name=name + "_image",
+        inputs=["$(S)/bin/rootfs/image.py"],
+        outputs=[f"$(B)/{directory}/rootfs.img"],
+        deps=nodes,
+        cmd=["python3", "$(S)/bin/rootfs/image.py", f"$(B)/{directory}/rootfs.img", *arguments],
+        descr="IM",
+        color="cyan",
+    )
+    module = command(
+        name=name + "_module",
+        inputs=ROOTFS_INPUTS,
+        outputs=[f"$(B)/{directory}/rootfs.wasm"],
+        deps=[libc, image],
+        cmd=["python3", "$(S)/bin/rootfs/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], image.outputs[0],
+             f"$(B)/{directory}/rootfs.wasm", "$(S)/bin/rootfs/rootfs.cpp", "$(S)/lib/protocol/protocol.cpp"],
+        descr="CC",
+        color="cyan",
+    )
+    return image, executable(name, module, f"$(B)/{directory}/rootfs")
+
+
+base_image, rootfs_base = system("rootfs_base", BASE, BASE_IMAGE, "bin/rootfs/base")
+
+# python.wasm, its modules frozen by the freezer running in the base system, and
+# the standard library as a zip; python3, the executable, ends with that
+# zip, which python imports from its own file.
+python = command(
+    name="python",
+    inputs=[*LIBC_HEADERS, "$(S)/bin/python/pyconfig.h", "$(S)/bin/python/make.py", "$(S)/bin/python/main.c", "$(S)/dev/wasm.py",
+            "$(S)/dev/exe.py"],
+    outputs=["$(B)/bin/python/python.wasm", "$(B)/bin/python/stdlib.zip"],
+    deps=[python_tarball, libc, python_core, vm, rootfs_base],
+    cmd=[
+        "python3", "$(S)/bin/python/make.py", "python",
+        CLANG, WASM_LD, vm.outputs[0], rootfs_base.outputs[0],
+        python_tarball.outputs[0],
+        "$(S)/bin/python/pyconfig.h",
+        "$(S)/lib/c/include",
+        libc.outputs[0],
+        *python_core.outputs,
+        "$(B)/bin/python/python.wasm",
+        "$(B)/bin/python/stdlib.zip",
+    ],
+    descr="PY",
+    color="yellow",
 )
-rootfs_module = command(
-    name="rootfs_module",
-    inputs=["$(S)/bin/rootfs/rootfs.cpp", "$(S)/lib/protocol/protocol.cpp", "$(S)/lib/protocol/protocol.h", "$(S)/bin/rootfs/make.py",
-            "$(S)/dev/wasm.py", *LIBC_HEADERS],
-    outputs=["$(B)/bin/rootfs/rootfs.wasm"],
-    deps=[libc, rootfs_image],
-    cmd=["python3", "$(S)/bin/rootfs/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], rootfs_image.outputs[0],
-         "$(B)/bin/rootfs/rootfs.wasm", "$(S)/bin/rootfs/rootfs.cpp", "$(S)/lib/protocol/protocol.cpp"],
-    descr="CC",
-    color="cyan",
-)
-rootfs = executable("rootfs", rootfs_module, "$(B)/bin/rootfs/rootfs")
+python_exe = executable("python_exe", python, "$(B)/bin/python/python3", tail=python.outputs[1])
+
+# The system: the base system and python.
+SYSTEM = [*BASE, python_exe]
+SYSTEM_IMAGE = [*BASE_IMAGE, "--python", python_exe.outputs[0]]
+rootfs_image, rootfs = system("rootfs", SYSTEM, SYSTEM_IMAGE, "bin/rootfs")
 
 # clang for this system: LLVM's multicall program of the release lib/cxx
 # comes from, compiled against lib/c and lib/cxx, and the headers clang
@@ -800,38 +814,6 @@ chaos_check = command(
     cmd=["python3", "$(S)/tst/libc/make.py", CLANG, WASM_LD, "$(S)/tst/chaos/check.c", "$(S)/lib/c/include", libc.outputs[0], "$(B)/tst/chaos/check.wasm", "-g"],
     descr="CC", color="green",
 )
-chaos_check_exe = executable("chaos_check_exe", chaos_check, "$(B)/tst/chaos/check")
-
-terminal_check = command(
-    name="terminal_check",
-    inputs=[*LIBC_HEADERS, "$(S)/tst/terminal/check.c", "$(S)/tst/libc/make.py", "$(S)/dev/wasm.py"],
-    outputs=["$(B)/tst/terminal/check.wasm"],
-    deps=[libc],
-    cmd=["python3", "$(S)/tst/libc/make.py", CLANG, WASM_LD, "$(S)/tst/terminal/check.c", "$(S)/lib/c/include", libc.outputs[0], "$(B)/tst/terminal/check.wasm", "-g"],
-    descr="CC", color="green",
-)
-terminal_check_exe = executable("terminal_check_exe", terminal_check, "$(B)/tst/terminal/check")
-
-host_resources_check = command(
-    name="host_resources_check",
-    inputs=[*LIBC_HEADERS, "$(S)/tst/host_resources/check.c", "$(S)/tst/libc/make.py", "$(S)/dev/wasm.py"],
-    outputs=["$(B)/tst/host_resources/check.wasm"],
-    deps=[libc],
-    cmd=["python3", "$(S)/tst/libc/make.py", CLANG, WASM_LD, "$(S)/tst/host_resources/check.c", "$(S)/lib/c/include", libc.outputs[0], "$(B)/tst/host_resources/check.wasm", "-g", "-D_GNU_SOURCE"],
-    descr="CC", color="green",
-)
-host_resources_check_exe = executable("host_resources_check_exe", host_resources_check, "$(B)/tst/host_resources/check")
-
-host_syscalls_check = command(
-    name="host_syscalls_check",
-    inputs=[*LIBC_HEADERS, "$(S)/tst/host_syscalls/check.c", "$(S)/tst/libc/make.py", "$(S)/dev/wasm.py"],
-    outputs=["$(B)/tst/host_syscalls/check.wasm"],
-    deps=[libc],
-    cmd=["python3", "$(S)/tst/libc/make.py", CLANG, WASM_LD, "$(S)/tst/host_syscalls/check.c", "$(S)/lib/c/include", libc.outputs[0], "$(B)/tst/host_syscalls/check.wasm", "-g", "-D_GNU_SOURCE"],
-    descr="CC", color="green",
-)
-host_syscalls_check_exe = executable("host_syscalls_check_exe", host_syscalls_check, "$(B)/tst/host_syscalls/check")
-
 host_syscalls_filter = command(
     name="host_syscalls_filter",
     inputs=["$(S)/tst/host_syscalls/filter.c"],
@@ -839,85 +821,6 @@ host_syscalls_filter = command(
     cmd=[CLANG, *build.cppflags, *build.cflags, "-O2", "$(S)/tst/host_syscalls/filter.c", "-o", "$(B)/tst/host_syscalls/filter", *build.ldflags],
     descr="CC", color="green",
 )
-
-host_syscalls_interrupt = command(
-    name="host_syscalls_interrupt",
-    inputs=["$(S)/tst/host_syscalls/interrupt.c"],
-    outputs=["$(B)/tst/host_syscalls/interrupt"],
-    cmd=[CLANG, *build.cppflags, *build.cflags, "-O2", "$(S)/tst/host_syscalls/interrupt.c", "-o", "$(B)/tst/host_syscalls/interrupt", *build.ldflags],
-    descr="CC", color="green",
-)
-
-E2E_TESTED = {
-    "aot": [aot, aot_command, wazero, vm, chaos_check],
-    "asan": [vm, asan_check_exe],
-    "asan_bounds": [vm, aot_native, wazero],
-    "bounded_copy_loops": [vm, aot_native, wazero],
-    "chaos": [vm, vm_chaos, aot_native, aot_native_chaos, chaos_check, chaos_check_exe],
-    "cli_errors": [vm, aot_native],
-    "compiler_modes": [vm, aot_native],
-    "compiler_rejections": [vm, aot_native, wazero],
-    "conditional_floats": [vm, aot_native, wazero],
-    "constant_arithmetic": [vm, aot_native, wazero],
-    "copy_loops": [vm, aot_native],
-    "cxx": [vm, cxx_check_exe],
-    "data_segments": [vm, aot_native],
-    "dead_instructions": [vm, aot_native, wazero],
-    "deep_control": [vm, aot_native, wazero],
-    "dispatch_loops": [vm, aot_native, wazero],
-    "fork_modes": [vm, aot_native, wazero],
-    "float_boundaries": [vm, aot_native, wazero],
-    "float_integer_phis": [vm, aot_native, wazero],
-    "float_permutations": [vm, aot_native, wazero],
-    "debug_lines": [vm, aot_native],
-    "debug_names": [vm, aot_native],
-    "import_abi": [vm, aot_native],
-    "import_errors": [vm, aot_native, wazero],
-    "initializers": [vm, aot_native, wazero],
-    "interleaved_float_selects": [vm, aot_native, wazero],
-    "integer_identities": [vm, aot_native, wazero],
-    "kernel_exhaustion": [vm, aot_native, wazero],
-    "invariant_loops": [vm, aot_native, wazero],
-    "invariant_results": [vm, aot_native, wazero],
-    "host_io": [vm, aot_native],
-    "host_resources": [vm, aot_native, host_resources_check, host_resources_check_exe],
-    "host_syscalls": [vm, aot_native, host_syscalls_check, host_syscalls_check_exe, host_syscalls_filter, host_syscalls_interrupt],
-    "runtime_abi": [vm, aot_native, *runtime_abi_vms],
-    "host_signals": [vm, aot_native, wazero],
-    "libc": [vm, libc_check_exe],
-    "large_functions": [vm, aot_native],
-    "large_switches": [vm, aot_native, wazero],
-    "loop_limits": [vm, aot_native, wazero],
-    "profile_artifacts": [vm, aot_native],
-    "runtime_errors": [vm, aot_native],
-    "runtime_safety": [vm, aot_native, wazero],
-    "spec_cli": [vm, aot_native],
-    "sparse_values": [vm, aot_native, wazero],
-    "stand": [vm, aot_native, stand_fixture],
-    "terminal": [vm, aot_native, terminal_check, terminal_check_exe, host_syscalls_filter],
-    "table_defaults": [vm, aot_native, wazero],
-    "tail_profile": [vm, aot_native],
-    "unary_loops": [vm, aot_native, wazero],
-    "vfork_traps": [vm, aot_native, wazero],
-    "wide_results": [vm, aot_native, wazero],
-    "vm": [vm, aot_native, aot, aot_command, wazero, chaos_check],
-}
-APPLICATION_TESTED = {
-    "rootfs": [vm, rootfs],
-    "devices": [vm, rootfs, devices_service],
-    "disks": [vm, rootfs],
-    "mounts": [vm, rootfs],
-    "unix_sockets": [vm, rootfs, unix_sockets],
-    "vfs": [vm, rootfs, python_exe],
-    "busybox_abi": [busybox],
-    "busybox": [vm, busybox_exe, busybox],
-    "clang": [vm, busybox_exe, busybox, llvm_exe, clang, libc, libc_headers, libcxx, pzd],
-    "doom": [vm, doom_exe, doom_wad],
-    "python": [vm, python_exe, python_tarball, busybox_exe, busybox],
-}
-TESTED = {**E2E_TESTED, **APPLICATION_TESTED}
-tests = []
-e2e_tests = []
 
 UNIT_TOOLS = json.dumps({
     "cc": CLANG,
@@ -945,23 +848,157 @@ def coverage_case(name, command_line, inputs, dependencies):
     coverage_inputs.extend(inputs)
     coverage_dependencies.extend(dependencies)
 
+# A unit test is built first, its executable /tests/unit/<name> of the
+# image of the tests, which every test of the system boots rootfs from:
+# the system's programs and the tests' own (tst/unit/run.py).
+unit_cases = []
 for source in build.glob("$(S)/tst/unit/**/*.cpp"):
     name = source[len("$(S)/tst/unit/"):-len(".cpp")]
     prefix = f"$(B)/tst/unit/{name}"
+    unit_cases.append((name, source, prefix, command(
+        name="unit_" + name.replace("/", "_") + "_exe",
+        inputs=[source, "$(S)/tst/unit/run.py", "$(S)/dev/wasm.py", "$(S)/dev/exe.py", *LIBC_HEADERS],
+        outputs=[prefix + suffix for suffix in (".exe", ".wasm", ".native.o", ".embedded.o")],
+        deps=[aot_native, vm, libc, libcxx],
+        cmd=["python3", "$(S)/tst/unit/run.py", "build", source, prefix, UNIT_TOOLS],
+        env={"PYTHONDONTWRITEBYTECODE": "1"},
+        descr="EE", color="green",
+    )))
+
+# The programs and data of the tests of the system, each test's under
+# /tests/<test> of the image of the tests: files from outputs, trees of
+# the source.
+TEST_FILES = [
+    ("/tests/libc/check", libc_check_exe),
+    ("/tests/cxx/check", cxx_check_exe),
+    ("/tests/asan/check", asan_check_exe),
+    ("/tests/doom/doom", doom_exe),
+    ("/tests/doom/doom1.wad", doom_wad),
+]
+TEST_TREES = [("/tests/libc/etc", "$(S)/tst/libc/etc"), ("/tests/busybox", "$(S)/tst/busybox")]
+# CPython's own tests, in the standard library's directory, which python
+# searches after its file.
+TEST_TARS = [("/lib/python3.14/test", python_tarball, f"Python-{PYTHON}/Lib/test")]
+
+tests_image = command(
+    name="tests_image",
+    inputs=["$(S)/bin/rootfs/image.py", *(path for _, tree in TEST_TREES for path in build.glob(tree + "/**/*"))],
+    outputs=["$(B)/tst/tests.img"],
+    deps=[*SYSTEM, *(built for _, _, _, built in unit_cases), *dict.fromkeys(node for _, node in TEST_FILES),
+          *(node for _, node, _ in TEST_TARS)],
+    cmd=["python3", "$(S)/bin/rootfs/image.py", "$(B)/tst/tests.img", *SYSTEM_IMAGE,
+         *(arg for name, _, prefix, _ in unit_cases for arg in ("--file", "/tests/unit/" + name, prefix + ".exe")),
+         *(arg for path, node in TEST_FILES for arg in ("--file", path, node.outputs[0])),
+         *(arg for path, tree in TEST_TREES for arg in ("--tree", path, tree)),
+         *(arg for path, node, member in TEST_TARS for arg in ("--tar", path, node.outputs[0], member))],
+    descr="IM",
+    color="cyan",
+)
+SYSTEM_TOOLS = {"vm": vm.outputs[0], "rootfs": rootfs.outputs[0], "image": tests_image.outputs[0]}
+
+# The image test_clang boots: the system's and clang's, LLVM's
+# multicall executable as /bin/llvm with clang, clang++ and wasm-ld links,
+# its resource headers, lib/c's and lib/cxx's headers and libraries, and
+# pzd. /usr is the root: they are /usr/include and /usr/lib to clang.
+clang_image = command(
+    name="clang_image",
+    inputs=["$(S)/bin/rootfs/image.py"],
+    outputs=["$(B)/tst/clang.img"],
+    deps=[*SYSTEM, llvm_exe, clang, libc, libc_headers, libcxx, pzd],
+    cmd=["python3", "$(S)/bin/rootfs/image.py", "$(B)/tst/clang.img", *SYSTEM_IMAGE,
+         "--program", "llvm", llvm_exe.outputs[0], *(arg for name in ("clang", "clang++", "wasm-ld") for arg in ("--link", name, "llvm")),
+         "--program", "pzd", pzd.outputs[0], "--tar", "/lib/clang", clang.outputs[1], "lib/clang",
+         "--tar", "/include", libc_headers.outputs[0], "include", "--tar", "/include/c++", libcxx.outputs[1], "include/c++",
+         "--file", "/lib/libc.a", libc.outputs[0], "--file", "/lib/libc++.a", libcxx.outputs[0]],
+    descr="IM",
+    color="cyan",
+)
+
+E2E_TESTED = {
+    "aot": [aot, aot_command, wazero, vm, chaos_check],
+    "asan": [vm, rootfs, tests_image],
+    "asan_bounds": [vm, aot_native, wazero],
+    "bounded_copy_loops": [vm, aot_native, wazero],
+    "chaos": [vm, vm_chaos, aot_native, aot_native_chaos, chaos_check],
+    "cli_errors": [vm, aot_native],
+    "compiler_modes": [vm, aot_native],
+    "compiler_rejections": [vm, aot_native, wazero],
+    "conditional_floats": [vm, aot_native, wazero],
+    "constant_arithmetic": [vm, aot_native, wazero],
+    "copy_loops": [vm, aot_native],
+    "cxx": [vm, rootfs, tests_image],
+    "data_segments": [vm, aot_native],
+    "dead_instructions": [vm, aot_native, wazero],
+    "deep_control": [vm, aot_native, wazero],
+    "dispatch_loops": [vm, aot_native, wazero],
+    "fork_modes": [vm, aot_native, wazero],
+    "float_boundaries": [vm, aot_native, wazero],
+    "float_integer_phis": [vm, aot_native, wazero],
+    "float_permutations": [vm, aot_native, wazero],
+    "debug_lines": [vm, aot_native],
+    "debug_names": [vm, aot_native],
+    "import_abi": [vm, aot_native],
+    "import_errors": [vm, aot_native, wazero],
+    "initializers": [vm, aot_native, wazero],
+    "interleaved_float_selects": [vm, aot_native, wazero],
+    "integer_identities": [vm, aot_native, wazero],
+    "kernel_exhaustion": [vm, aot_native, wazero],
+    "invariant_loops": [vm, aot_native, wazero],
+    "invariant_results": [vm, aot_native, wazero],
+    "host_io": [vm, aot_native],
+    "host_resources": [vm, aot_native],
+    "host_syscalls": [vm, aot_native, host_syscalls_filter],
+    "runtime_abi": [vm, aot_native, *runtime_abi_vms],
+    "host_signals": [vm, aot_native, wazero],
+    "libc": [vm, rootfs, tests_image],
+    "large_functions": [vm, aot_native],
+    "large_switches": [vm, aot_native, wazero],
+    "loop_limits": [vm, aot_native, wazero],
+    "profile_artifacts": [vm, aot_native],
+    "runtime_errors": [vm, aot_native],
+    "runtime_safety": [vm, aot_native, wazero],
+    "spec_cli": [vm, aot_native],
+    "sparse_values": [vm, aot_native, wazero],
+    "stand": [vm, aot_native, stand_fixture],
+    "table_defaults": [vm, aot_native, wazero],
+    "tail_profile": [vm, aot_native],
+    "unary_loops": [vm, aot_native, wazero],
+    "vfork_traps": [vm, aot_native, wazero],
+    "wide_results": [vm, aot_native, wazero],
+    "vm": [vm, aot_native, aot, aot_command, wazero, chaos_check],
+}
+APPLICATION_TESTED = {
+    "rootfs": [vm, rootfs],
+    "devices": [vm, rootfs, devices_service],
+    "disks": [vm, rootfs],
+    "mounts": [vm, rootfs],
+    "unix_sockets": [vm, rootfs, unix_sockets],
+    "vfs": [vm, rootfs],
+    "busybox_abi": [busybox],
+    "busybox": [vm, rootfs, tests_image],
+    "clang": [vm, rootfs, clang_image],
+    "doom": [vm, rootfs, tests_image],
+    "python": [vm, rootfs, tests_image],
+}
+TESTED = {**E2E_TESTED, **APPLICATION_TESTED}
+tests = []
+e2e_tests = []
+
+for name, source, prefix, built in unit_cases:
     unit_tests.append(command(
         name="unit_" + name.replace("/", "_"),
-        inputs=[source, "$(S)/tst/unit/run.py", "$(S)/dev/wasm.py", "$(S)/dev/exe.py", *LIBC_HEADERS],
-        outputs=[prefix + suffix for suffix in (".stamp", ".wasm", ".native.o", ".embedded.o")],
-        deps=[aot_native, vm, libc, libcxx],
-        cmd=["python3", "$(S)/tst/unit/run.py", source, prefix, UNIT_TOOLS],
+        inputs=[source, "$(S)/tst/unit/run.py"],
+        outputs=[prefix + ".stamp"],
+        deps=[vm, rootfs, tests_image, built],
+        cmd=["python3", "$(S)/tst/unit/run.py", "run", source, prefix, name, json.dumps(SYSTEM_TOOLS, sort_keys=True)],
         env={"PYTHONDONTWRITEBYTECODE": "1"},
         descr="EE", color="green",
     ))
-    coverage_tools = json.loads(UNIT_TOOLS)
+    coverage_tools = {**json.loads(UNIT_TOOLS), **SYSTEM_TOOLS}
     coverage_tools.update(vm="$VM", aot="$AOT")
     coverage_case("unit_" + name.replace("/", "_"),
-                  ["python3", "$(S)/tst/unit/run.py", source, "$OUT", json.dumps(coverage_tools)],
-                  [source, *LIBC_HEADERS], [libc, libcxx])
+                  ["python3", "$(S)/tst/unit/run.py", "all", source, "$OUT", name, json.dumps(coverage_tools)],
+                  [source, *LIBC_HEADERS], [libc, libcxx, rootfs, tests_image])
 
 for test in build.glob("$(S)/tst/test_*.py"):
     name = test.rsplit("/", 1)[-1][len("test_"):-len(".py")]
@@ -1099,4 +1136,4 @@ group("install", libcxx, libc_headers, clang, llvm_exe, busybox, busybox_exe, bu
 group("unit", *unit_tests)
 group("e2e", *e2e_tests, *unit_tests, vm_spec_test)
 group("test", *tests, *unit_tests, vm_spec_test)
-group("stand", vm, aot_native, aot, aot_aot, busybox, stand_corpus, *decode_stand, python_exe, stand_python_native)
+group("stand", vm, aot_native, aot, aot_aot, busybox, stand_corpus, *decode_stand, python_exe, rootfs, stand_python_native)

@@ -18,7 +18,6 @@ none needs more than lib/c: no sockets, no compression. An undefined symbol
 is a link error, as for every program of lib/c.
 """
 import calendar
-import concurrent.futures
 import io
 import os
 import posixpath
@@ -359,7 +358,7 @@ def stdlib_zip(tree, pyconfig):
     return out.getvalue()
 
 
-def python(cc, ld, vm, tarball, pyconfig, libc_include, libc, libpython, freeze, output, stdlib):
+def python(cc, ld, vm, rootfs, tarball, pyconfig, libc_include, libc, libpython, freeze, output, stdlib):
     work = Path(os.environ.get("TMPDIR") or "/tmp") / "python"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -372,20 +371,30 @@ def python(cc, ld, vm, tarball, pyconfig, libc_include, libc, libpython, freeze,
     frozen = work / "gen" / "frozen_modules"
     frozen.mkdir(parents=True)
     out = tree / "frozen"
-    out.mkdir()
     modules = list(frozen_modules(tree))
-    freezer = work / "freeze"
-    freezer.write_bytes(exe.pack(Path(freeze).read_bytes()))
 
-    # A module freezes in a kernel of its own, which compiles the freezer
-    # as it starts: the kernels run side by side.
-    def freeze_module(module):
-        name, source, header = module
-        subprocess.run([vm, "run", "--root", str(tree), "-a", "_freeze_module", "--", str(freezer),
-                        name, "/" + source, "/frozen/" + header], check=True, env={"PATH": "/bin"})
+    # The modules freeze in the system: rootfs, whose image has busybox and
+    # the tools, takes a tar of the freezer and the sources on its standard
+    # input, freezes each, side by side, in a directory of /tmp, and gives
+    # a tar of the headers back on its standard output.
+    payload = io.BytesIO()
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
-        list(pool.map(freeze_module, modules))
+    with tarfile.open(fileobj=payload, mode="w") as archive:
+        entry = tarfile.TarInfo("freeze")
+        program = exe.pack(Path(freeze).read_bytes())
+        entry.size, entry.mode = len(program), 0o755
+        archive.addfile(entry, io.BytesIO(program))
+
+        for name, source, header in modules:
+            archive.add(tree / source, source)
+
+    jobs = " ".join(f"./freeze {name} {source} frozen/{header} & pids=\"$pids $!\";" for name, source, header in modules)
+    script = (f"mkdir -p /tmp/t/frozen && cd /tmp/t && tar xf - || exit 1; pids=; {jobs} "
+              "for p in $pids; do wait $p || exit 1; done; tar cf - frozen")
+    frozen_tar = subprocess.run([vm, "run", "--", rootfs, "-c", script], input=payload.getvalue(), stdout=subprocess.PIPE, check=True)
+
+    with tarfile.open(fileobj=io.BytesIO(frozen_tar.stdout)) as archive:
+        archive.extractall(tree, filter="data")
 
     for name, source, header in modules:
         shutil.copy(out / header, frozen / header)
