@@ -149,7 +149,7 @@ func (p *Process) send(sig int) {
 	}
 
 	p.sig.mu.Unlock()
-	p.wakeUp()
+	p.ring()
 
 	if token != 0 {
 		runtime.Interrupt(token)
@@ -247,12 +247,12 @@ func (p *Process) interrupt() {
 	binary.LittleEndian.PutUint32(p.inst.block[at:], sp)
 }
 
-// wakeUp makes a blocking call of the process look again: for a signal, or
-// a change of its children.
-func (p *Process) wakeUp() {
-	select {
-	case p.wake <- struct{}{}:
-	default:
+// ring makes the wait the process is in look again: for a signal, a
+// change of its children or of its own state. Out of a wait there is
+// nothing to wake: a wait looks before it sleeps.
+func (p *Process) ring() {
+	if q := p.waiting.Load(); q != nil {
+		q.wake(ringID)
 	}
 }
 
@@ -446,12 +446,11 @@ func (p *Process) sigwait(set uint64, timeout time.Duration) (int, error) {
 		end = time.Now().Add(timeout)
 	}
 
-	for {
-		select {
-		case <-p.wake:
-		default:
-		}
+	q := p.pushWait()
+	defer p.popWait(q, nil)
 
+	for {
+		q.reset()
 		p.sig.mu.Lock()
 
 		if ready := p.sig.pending & set; ready != 0 {
@@ -471,7 +470,7 @@ func (p *Process) sigwait(set uint64, timeout time.Duration) (int, error) {
 			return 0, syscall.EINTR
 		}
 
-		if p.sleepUntil(end) {
+		if q.sleepUntil(end) {
 			return 0, syscall.EAGAIN
 		}
 	}

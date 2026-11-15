@@ -14,16 +14,16 @@ import (
 // An epoll is a set of files of the kernel, each a member subscribed to
 // the set (kernel_queue.go): a change of its file wakes the set with the
 // member's id, which marks it, in the order of the marks. epoll_wait asks
-// the marked members and no other, and sleeps on the set's one channel
-// while none of them is ready. A level-triggered member reported stays
-// marked, asked again by the next wait while it is ready; an
-// edge-triggered one is reported once a change of its file, a one-shot
-// one once until EPOLL_CTL_MOD. A file that is ready whenever asked and
-// never changes, a regular file, cannot be a member: EPERM, as on Linux.
-// A set can be a member of a set: a change of a member wakes those
-// subscribed to the set. The epoll keeps a reference to a member's file,
-// so a member is removed before its last close, or stays until the
-// epoll's.
+// the marked members and no other, and sleeps while none of them is ready
+// on the queue of the process's wait, which a mark wakes, as a signal
+// does. A level-triggered member reported stays marked, asked again by
+// the next wait while it is ready; an edge-triggered one is reported once
+// a change of its file, a one-shot one once until EPOLL_CTL_MOD. A file
+// that is ready whenever asked and never changes, a regular file, cannot
+// be a member: EPERM, as on Linux. A set can be a member of a set: a
+// change of a member wakes those subscribed to the set. The epoll keeps a
+// reference to a member's file, so a member is removed before its last
+// close, or stays until the epoll's.
 //
 // The guest's struct epoll_event is 16 bytes: events u32, data u64 at 8.
 
@@ -49,14 +49,14 @@ type epoll struct {
 	members map[epollKey]*epollMember
 	// order is the members as added, byID by the ids of their
 	// subscriptions; ready the marked ones, the oldest mark first, spare
-	// the list a wait gave back; ch the channel a mark closes for the
-	// waits asleep.
-	order  []*epollMember
-	byID   map[uint64]*epollMember
-	lastID uint64
-	ready  []*epollMember
-	spare  []*epollMember
-	ch     chan struct{}
+	// the list a wait gave back; sleepers the queues of the waits asleep,
+	// which a mark wakes and forgets.
+	order    []*epollMember
+	byID     map[uint64]*epollMember
+	lastID   uint64
+	ready    []*epollMember
+	spare    []*epollMember
+	sleepers []*waitQueue
 	// subs are the subscriptions to the set: of the waits it is asked by,
 	// of the sets it is a member of.
 	subs subscribers
@@ -210,10 +210,28 @@ func (ep *epoll) mark(m *epollMember) {
 	m.queued = true
 	ep.ready = append(ep.ready, m)
 
-	if ep.ch != nil {
-		close(ep.ch)
-		ep.ch = nil
+	for _, q := range ep.sleepers {
+		q.wake(epollMarkID)
 	}
+
+	clear(ep.sleepers)
+	ep.sleepers = ep.sleepers[:0]
+}
+
+// epollMarkID is the id a mark wakes a sleeping wait with, no entry's of
+// a wait of the process's.
+const epollMarkID = ringID - 1
+
+// forget takes the queue of a wait that sleeps no more out of the
+// sleepers, as the wait leaves without a mark.
+func (ep *epoll) forget(q *waitQueue) {
+	ep.mu.Lock()
+
+	if i := slices.Index(ep.sleepers, q); i >= 0 {
+		ep.sleepers = slices.Delete(ep.sleepers, i, i+1)
+	}
+
+	ep.mu.Unlock()
 }
 
 func (ep *epoll) flags() (int, error) {
@@ -424,10 +442,25 @@ func (ep *epoll) collect(buf []byte, max int) int {
 }
 
 // wait waits for up to max ready members until end, zero for never: on
-// the set's channel, which a mark closes, and the process's wake, a
-// signal's, which interrupts it.
+// a wait queue of the process's, among the sleepers of the set, so a mark
+// wakes it, and a signal, which interrupts it. A wait a mark woke is out
+// of the sleepers; one that leaves otherwise takes itself out.
 func (ep *epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, error) {
+	q := p.pushWait()
+	defer p.popWait(q, nil)
+	asleep := false
+
+	defer func() {
+		if asleep {
+			ep.forget(q)
+		}
+	}()
+
 	for {
+		if q.came(epollMarkID) {
+			asleep = false
+		}
+
 		if n := ep.collect(buf, max); n > 0 {
 			return n, nil
 		}
@@ -436,7 +469,7 @@ func (ep *epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, erro
 			return 0, nil
 		}
 
-		if p.wakeSignal() {
+		if p.sig.deliverable() != 0 {
 			return 0, syscall.EINTR
 		}
 
@@ -448,34 +481,14 @@ func (ep *epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, erro
 			continue
 		}
 
-		if ep.ch == nil {
-			ep.ch = make(chan struct{})
+		if !asleep {
+			ep.sleepers = append(ep.sleepers, q)
+			asleep = true
 		}
 
-		marked := ep.ch
 		ep.mu.Unlock()
-		var timer *time.Timer
-		var expired <-chan time.Time
 
-		if !end.IsZero() {
-			timer = time.NewTimer(time.Until(end))
-			expired = timer.C
-		}
-
-		fired := false
-
-		select {
-		case <-p.wake:
-		case <-marked:
-		case <-expired:
-			fired = true
-		}
-
-		if timer != nil {
-			timer.Stop()
-		}
-
-		if fired {
+		if q.sleepUntil(end) {
 			return 0, nil
 		}
 	}

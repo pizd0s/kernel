@@ -137,15 +137,14 @@ type Process struct {
 	// (kernel_signal.go).
 	token   atomic.Uintptr
 	chasing atomic.Bool
-	// wake is what a blocking call sleeps on: a signal sent to the
-	// process, a change of a file it waits for, of its children, of its
-	// own state, each put the wake in it, and the call looks again.
-	wake chan struct{}
 	// waitQueues are the queues of its waits (kernel_queue.go), as deep as
 	// they go, a wait in a signal handler's under another; waitDepth is how
-	// many are taken.
+	// many are taken. waiting is the innermost, the wait the process is
+	// in: a signal, a change of its children or of its own state wakes it
+	// (ring), and the wait looks again.
 	waitQueues []*waitQueue
 	waitDepth  int
+	waiting    atomic.Pointer[waitQueue]
 }
 
 // execImage is a program a process runs; panicked by exec, it unwinds the
@@ -279,7 +278,7 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 	defer k.mu.Unlock()
 
 	k.lastPid++
-	p := &Process{k: k, pid: k.lastPid, umask: 0o022, regexes: map[uint32]*posixRegex{}, seed: 0, wake: make(chan struct{}, 1)}
+	p := &Process{k: k, pid: k.lastPid, umask: 0o022, regexes: map[uint32]*posixRegex{}, seed: 0}
 
 	if parent == nil {
 		p.pgid, p.sid = p.pid, p.pid
@@ -565,7 +564,7 @@ func (p *Process) childChanged(sig int) {
 		p.send(sig)
 	}
 
-	p.wakeUp()
+	p.ring()
 }
 
 // hostCode is vm's exit code for a wait status.

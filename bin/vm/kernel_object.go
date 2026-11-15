@@ -3,7 +3,6 @@
 package main
 
 import (
-	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -386,40 +385,6 @@ func (p *Process) placeAt(obj File, fd uint32, cloexec bool) {
 	p.files.put(int(fd), obj, cloexec)
 }
 
-// A changed is the one wake a change gives everyone waiting on an object:
-// a channel the waiters select on, which the change closes and the next
-// wait replaces. Nobody waiting, nothing is made.
-type changed struct {
-	mu sync.Mutex
-	ch chan struct{}
-}
-
-// wait is the channel the next change closes.
-func (c *changed) wait() <-chan struct{} {
-	c.mu.Lock()
-
-	if c.ch == nil {
-		c.ch = make(chan struct{})
-	}
-
-	ch := c.ch
-	c.mu.Unlock()
-
-	return ch
-}
-
-// bump is a change: the waiters wake.
-func (c *changed) bump() {
-	c.mu.Lock()
-
-	if c.ch != nil {
-		close(c.ch)
-		c.ch = nil
-	}
-
-	c.mu.Unlock()
-}
-
 // closed tells whether a channel of wait has closed since.
 func closed(ch <-chan struct{}) bool {
 	select {
@@ -427,44 +392,6 @@ func closed(ch <-chan struct{}) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-// wakeSignal reports whether a signal interrupts a blocking call: one the
-// process would deliver now. It takes the wake first, so a wake after the
-// check ends the next sleep.
-func (p *Process) wakeSignal() bool {
-	select {
-	case <-p.wake:
-	default:
-	}
-
-	return p.sig.deliverable() != 0
-}
-
-// sleepUntil sleeps until the process is woken or a deadline passes, zero
-// for none; it tells whether the deadline passed.
-func (p *Process) sleepUntil(end time.Time) bool {
-	if end.IsZero() {
-		<-p.wake
-
-		return false
-	}
-
-	d := time.Until(end)
-
-	if d <= 0 {
-		return true
-	}
-
-	t := time.NewTimer(d)
-	defer t.Stop()
-
-	select {
-	case <-p.wake:
-		return false
-	case <-t.C:
-		return true
 	}
 }
 
@@ -495,11 +422,13 @@ type pollEntry struct {
 
 // waitObjects waits until an object is ready for its events: it
 // subscribes to them all, on a wait queue of the process's, asks them,
-// and sleeps on the queue's one channel, the process's wake and the
-// deadline of timeout milliseconds; woken, it asks the objects whose
-// subscriptions woke it, and no other. A signal interrupts it: then the
-// error is EINTR, after the handlers ran when all of them restart calls
-// and restart is set. It returns how many are ready.
+// and sleeps on the queue's one channel, which a signal rings too, until
+// the deadline of timeout milliseconds; woken, it asks the objects whose
+// subscriptions woke it, and no other. The ids are taken before the
+// signals are asked: one that comes after leaves its id for the sleep. A
+// signal interrupts it: then the error is EINTR, after the handlers ran
+// when all of them restart calls and restart is set. It returns how many
+// are ready.
 func (p *Process) waitObjects(entries []pollEntry, timeout int, restart bool) (int, error) {
 	end := deadline(timeout)
 	q := p.pushWait()
@@ -513,7 +442,9 @@ func (p *Process) waitObjects(entries []pollEntry, timeout int, restart bool) (i
 	var ids []uint64
 
 	for {
-		if p.wakeSignal() {
+		ids = q.take(ids[:0])
+
+		if p.sig.deliverable() != 0 {
 			if restart && p.interrupted() {
 				asked = false
 
@@ -526,7 +457,6 @@ func (p *Process) waitObjects(entries []pollEntry, timeout int, restart bool) (i
 		var ready int
 
 		if asked {
-			ids = q.take(ids[:0])
 			ready = pollSome(entries, ids)
 		} else {
 			ready, asked = pollEntries(entries), true
@@ -536,42 +466,17 @@ func (p *Process) waitObjects(entries []pollEntry, timeout int, restart bool) (i
 			return ready, nil
 		}
 
-		var timer *time.Timer
-		var expired <-chan time.Time
-
-		if !end.IsZero() {
-			d := time.Until(end)
-
-			if d <= 0 {
-				return 0, nil
-			}
-
-			timer = time.NewTimer(d)
-			expired = timer.C
-		}
-
-		fired := false
-
-		select {
-		case <-p.wake:
-		case <-q.sleep():
-		case <-expired:
-			fired = true
-		}
-
-		if timer != nil {
-			timer.Stop()
-		}
-
-		if fired {
+		if q.sleepUntil(end) {
 			return 0, nil
 		}
 	}
 }
 
 // pushWait is a wait queue of the process's for one wait, as a wait can
-// run inside another's signal handler; popWait gives it back, its
-// subscriptions taken back.
+// run inside another's signal handler, and the one ring wakes from now on;
+// popWait gives it back, its subscriptions taken back, and ring wakes the
+// wait under it again. The ids an earlier wait left in it are there: each
+// wait forgets them before it first looks.
 func (p *Process) pushWait() *waitQueue {
 	if p.waitDepth == len(p.waitQueues) {
 		p.waitQueues = append(p.waitQueues, &waitQueue{})
@@ -579,7 +484,7 @@ func (p *Process) pushWait() *waitQueue {
 
 	q := p.waitQueues[p.waitDepth]
 	p.waitDepth++
-	q.reset()
+	p.waiting.Store(q)
 
 	return q
 }
@@ -590,14 +495,24 @@ func (p *Process) popWait(q *waitQueue, entries []pollEntry) {
 	}
 
 	p.waitDepth--
+
+	if p.waitDepth > 0 {
+		p.waiting.Store(p.waitQueues[p.waitDepth-1])
+	} else {
+		p.waiting.Store(nil)
+	}
 }
 
 // pollSome asks the entries of ids again, the others not ready as they
-// were, and counts the ready ones.
+// were, and counts the ready ones; ringID is none of them.
 func pollSome(entries []pollEntry, ids []uint64) int {
 	ready := 0
 
 	for _, id := range ids {
+		if id >= uint64(len(entries)) {
+			continue
+		}
+
 		e := &entries[id]
 		e.revents = e.obj.poll(e.events)
 
@@ -625,13 +540,22 @@ func pollEntries(entries []pollEntry) int {
 	return ready
 }
 
-// waitFor waits until ready says so, as waitObjects waits for files: it
-// asks, takes the change it waits on, asks again, then selects on the
-// change and the process's wake. A signal interrupts it, restart as
-// there.
-func (p *Process) waitFor(ready func() bool, change func() <-chan struct{}, restart bool) error {
+// waitFor waits until ready says so, as waitObjects waits for files: on a
+// wait queue subscribed to the changes of list, which a signal rings too.
+// A signal interrupts it, restart as there.
+func (p *Process) waitFor(ready func() bool, list *subscribers, restart bool) error {
+	q := p.pushWait()
+	list.add(q, 0)
+
+	defer func() {
+		list.remove(q, 0)
+		p.popWait(q, nil)
+	}()
+
 	for {
-		if p.wakeSignal() {
+		q.reset()
+
+		if p.sig.deliverable() != 0 {
 			if restart && p.interrupted() {
 				continue
 			}
@@ -643,16 +567,7 @@ func (p *Process) waitFor(ready func() bool, change func() <-chan struct{}, rest
 			return nil
 		}
 
-		ch := change()
-
-		if ready() {
-			return nil
-		}
-
-		select {
-		case <-p.wake:
-		case <-ch:
-		}
+		<-q.sleep()
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 )
 
 // Waits. An object tells of its changes whoever subscribed to it, a wait
@@ -15,7 +16,10 @@ import (
 // them, and sleeps on its one channel until an id comes, then asks the
 // objects of the ids that came and no other (kernel_object.go
 // waitObjects, kernel_epoll.go). An object that poll finds not ready for
-// events wakes the subscriptions for them as it may become ready.
+// events wakes the subscriptions for them as it may become ready. The
+// process's own changes, a signal, a child's, wake the queue of the wait
+// it is in with ringID (kernel_signal.go ring), so a wait sleeps on its
+// one channel whatever it waits for.
 
 // A waker is what an object wakes as it changes.
 type waker interface {
@@ -109,6 +113,9 @@ func (q *waitQueue) wake(id uint64) {
 	q.mu.Unlock()
 }
 
+// ringID is the id of a wake for the process itself, no object's.
+const ringID = ^uint64(0)
+
 // sleep is the channel a waiter sleeps on: closed once an id came.
 func (q *waitQueue) sleep() <-chan struct{} {
 	q.mu.Lock()
@@ -125,6 +132,32 @@ func (q *waitQueue) sleep() <-chan struct{} {
 	return q.ch
 }
 
+// sleepUntil sleeps until an id comes or end passes, zero for never; it
+// tells whether end passed.
+func (q *waitQueue) sleepUntil(end time.Time) bool {
+	if end.IsZero() {
+		<-q.sleep()
+
+		return false
+	}
+
+	d := time.Until(end)
+
+	if d <= 0 {
+		return true
+	}
+
+	t := time.NewTimer(d)
+	defer t.Stop()
+
+	select {
+	case <-q.sleep():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
 // take moves the ids that came into into.
 func (q *waitQueue) take(into []uint64) []uint64 {
 	q.mu.Lock()
@@ -133,6 +166,16 @@ func (q *waitQueue) take(into []uint64) []uint64 {
 	q.mu.Unlock()
 
 	return into
+}
+
+// came forgets the ids that came and tells whether id was one of them.
+func (q *waitQueue) came(id uint64) bool {
+	q.mu.Lock()
+	had := slices.Contains(q.ids, id)
+	q.ids = q.ids[:0]
+	q.mu.Unlock()
+
+	return had
 }
 
 // reset forgets the ids that came.

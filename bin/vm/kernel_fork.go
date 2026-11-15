@@ -396,13 +396,11 @@ func (p *Process) stopped(sig int) {
 	p.halted, p.report = true, sig<<8|stoppedBy
 	p.k.mu.Unlock()
 	p.tellParent(saNocldstop)
+	q := p.pushWait()
+	defer p.popWait(q, nil)
 
 	for {
-		select {
-		case <-p.wake:
-		default:
-		}
-
+		q.reset()
 		p.k.mu.Lock()
 		halted := p.halted
 		p.k.mu.Unlock()
@@ -414,7 +412,7 @@ func (p *Process) stopped(sig int) {
 			return
 		}
 
-		<-p.wake
+		<-q.sleep()
 	}
 }
 
@@ -430,7 +428,7 @@ func (p *Process) cont() {
 	p.k.mu.Unlock()
 
 	if was {
-		p.wakeUp()
+		p.ring()
 		p.tellParent(saNocldstop)
 	}
 }
@@ -457,12 +455,17 @@ func (p *Process) tellParent(flag uint32) {
 	}
 }
 
-// waitEvent waits until ready holds, or a signal interrupts: then the
-// error is EINTR, after the handlers ran when they all restart calls.
-// Ready comes first, as a call that has its result returns it.
+// waitEvent waits until ready holds, which a change of the children
+// rings for, or a signal interrupts: then the error is EINTR, after the
+// handlers ran when they all restart calls. Ready comes first, as a call
+// that has its result returns it.
 func (p *Process) waitEvent(ready func() bool) error {
+	q := p.pushWait()
+	defer p.popWait(q, nil)
+
 	for {
-		signal := p.wakeSignal()
+		q.reset()
+		signal := p.sig.deliverable() != 0
 
 		if ready() {
 			return nil
@@ -476,7 +479,7 @@ func (p *Process) waitEvent(ready func() bool) error {
 			return syscall.EINTR
 		}
 
-		<-p.wake
+		<-q.sleep()
 	}
 }
 

@@ -81,7 +81,7 @@ func (p *Process) openFifo(st *syscall.Stat_t, flags int) (File, error) {
 		return e, nil
 	}
 
-	err := p.waitFor(func() bool { return pp.met(reads, readerOpens, writerOpens) }, pp.opened.wait, true)
+	err := p.waitFor(func() bool { return pp.met(reads, readerOpens, writerOpens) }, &pp.opened, true)
 
 	if err != nil {
 		e.unref()

@@ -45,9 +45,9 @@ type pipe struct {
 	writers     int
 	readerOpens uint64
 	writerOpens uint64
-	// opened changes as an end joins, for the opens of a FIFO that wait for
-	// the other side; name is a FIFO's.
-	opened changed
+	// opened are the subscriptions an end's joining wakes, of the opens of
+	// a FIFO that wait for the other side; name is a FIFO's.
+	opened subscribers
 	name   *fifoName
 	ino    uint64
 	made   time.Time
@@ -150,7 +150,7 @@ func (pp *pipe) join(reads, writes bool) (uint64, uint64) {
 		old.nudgeWriter()
 	}
 
-	pp.opened.bump()
+	pp.opened.tell()
 
 	return readerOpens, writerOpens
 }
