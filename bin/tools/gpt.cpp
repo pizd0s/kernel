@@ -1,14 +1,15 @@
 // gpt: a partition of a block device as a block device of its own, a
 // service of rootfs's /dev/init (lib/protocol/service.h): /dev/<name> is
-// the bytes [first, first + length) of device. A READ or WRITE goes on to
-// the device as it came, moved by first and cut at the partition's end,
-// its memfd and its reply's endpoint with it: the device's service puts
-// the bytes into the memory of who reads, or takes them from who writes,
-// and answers them itself. This process never has the bytes, nor waits
-// for the device. A partition with an ext2, ext3 or ext4 file system gets
-// /bin/fuse2fs for it, <name>fs.
+// the bytes [first, first + length) of the device, which blk starts gpt
+// with an open file of, a plain socket, descriptor <device>. A READ or
+// WRITE goes on to the device as it came, moved by first and cut at the
+// partition's end, its memfd and its reply's endpoint with it: the
+// device's service puts the bytes into the memory of who reads, or takes
+// them from who writes, and answers them itself. This process never has
+// the bytes, nor waits for the device. A partition blk found an ext2,
+// ext3 or ext4 file system on, ext, gets /bin/fuse2fs for it, <name>fs.
 //
-//     gpt [-r fd] <device> <name> <first> <length>
+//     gpt [-r fd] <device> <name> <first> <length> [ext]
 //
 // -r: a descriptor to close once the partition is there, which the file
 // system's service gets too.
@@ -92,13 +93,8 @@ static void writePartition(const Endpoint& e, const Request& r) {
     forward(r, opWrite, uint32_t(MIN(uint64_t(r.h.arg), length - io.off)), &at, sizeof at);
 }
 
-// Starts /bin/fuse2fs for the partition when it has an ext2 file system:
-// its superblock's magic, 1024 bytes in, at 56.
-static void probe(const char* name, int ready) {
-    unsigned char magic[2];
-    if (pread(device, magic, sizeof magic, off_t(first + 1024 + 56)) != ssize_t(sizeof magic) || magic[0] != 0x53 || magic[1] != 0xEF) {
-        return;
-    }
+// Starts /bin/fuse2fs for the partition's ext2, ext3 or ext4 file system.
+static void fileSystem(const char* name, int ready) {
     char path[64];
     char fsName[64];
     char options[32];
@@ -151,17 +147,15 @@ static void handle(Endpoint& e, Request& r) {
 int gptMain(int argc, char** argv) {
     int at;
     const int ready = readyDescriptor(argc, argv, at);
-    if (argc - at != 4) {
-        dprintf(STDERR_FILENO, "usage: gpt [-r fd] <device> <name> <first> <length>\n");
+    if (argc - at != 4 && (argc - at != 5 || strcmp(argv[at + 4], "ext") != 0)) {
+        dprintf(STDERR_FILENO, "usage: gpt [-r fd] <device> <name> <first> <length> [ext]\n");
         return 2;
     }
     const char* name = argv[at + 1];
     first = strtoull(argv[at + 2], nullptr, 10);
     length = strtoull(argv[at + 3], nullptr, 10);
-    device = open(argv[at], O_RDWR | O_CLOEXEC);
-    if (device < 0) {
-        fatal("gpt: %s: %s", argv[at], strerror(errno));
-    }
+    device = atoi(argv[at]);
+    fcntl(device, F_SETFD, FD_CLOEXEC);
     epoll = epoll_create1(EPOLL_CLOEXEC);
     if (epoll < 0) {
         fatal("gpt: epoll_create1: errno %d", errno);
@@ -169,7 +163,9 @@ int gptMain(int argc, char** argv) {
     partition = enroll("gpt", name, S_IFBLK | 0660);
     watch(epoll, {partition.end, true, false, false, nullptr});
     signal(SIGCHLD, SIG_IGN);
-    probe(name, ready);
+    if (argc - at == 5) {
+        fileSystem(name, ready);
+    }
     if (ready >= 0) {
         close(ready);
     }

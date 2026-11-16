@@ -182,9 +182,9 @@ type Attrs interface {
 
 // A Socket takes the socket calls as libc makes them, with the guest's
 // addresses and buffers; the addresses it returns are the guest's. A pair
-// of the kernel's is a Transfer too; an open file of a server
-// (kernel_remote.go) is a Socket for the program that speaks the protocol
-// on it itself, and a Transfer only when a file.
+// of the kernel's is a Transfer too. An open file of a server is none: a
+// program that speaks the protocol itself has a plain socket for it, what
+// /dev/init opens and what blk gives gpt.
 type Socket interface {
 	File
 	bind(p *Process, at, n uint32) error

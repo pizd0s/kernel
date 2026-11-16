@@ -200,6 +200,8 @@
 //     OPEN of /dev/tty, devfs's, is the opener's controlling terminal: its
 //     OK has openControlling, and the kernel opens that terminal instead,
 //     with an OPEN on the open file it keeps of it, a slave's.
+//   /dev/init's open is a plain socket, an end of a pair devfs keeps the
+//   other end of, which its opener speaks the protocol on itself.
 //     REGISTER  arg mode    name          on /dev/init. OK stat: a device,
 //                                         S_IFCHR or S_IFBLK, of that name
 //                                         in /dev, whose owner is who asks

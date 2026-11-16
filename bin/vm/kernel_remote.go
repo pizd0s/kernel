@@ -176,15 +176,12 @@ var (
 	_ Transfer = (*remoteFile)(nil)
 	_ Windowed = (*remoteFile)(nil)
 	_ Seeker   = (*remoteFile)(nil)
-	_ Socket   = (*remoteFile)(nil)
 	_ Attrs    = (*remoteFile)(nil)
 	_ Locker   = (*remoteFile)(nil)
 	_ Dir      = (*remoteDir)(nil)
 	_ Seeker   = (*remoteDir)(nil)
-	_ Socket   = (*remoteDir)(nil)
 	_ Attrs    = (*remoteDir)(nil)
 	_ Locker   = (*remoteDir)(nil)
-	_ Socket   = (*remotePath)(nil)
 	_ Attrs    = (*remotePath)(nil)
 	_ Locker   = (*remotePath)(nil)
 	_ Dir      = (*noRoot)(nil)
@@ -370,42 +367,6 @@ func (n *remoteNode) setFlags(fl int) error {
 	n.append.Store(fl&syscall.O_APPEND != 0)
 
 	return nil
-}
-
-// The Socket role: an open file of a server is a connection to it, and a
-// program that knows the protocol may speak it there itself; the messages
-// are the endpoint's.
-
-func (n *remoteNode) sendmsg(p *Process, at, flags uint32) (int, error) {
-	return n.end.sendmsg(p, at, flags)
-}
-
-func (n *remoteNode) recvmsg(p *Process, at, flags uint32) (int, error) {
-	return n.end.recvmsg(p, at, flags)
-}
-
-func (n *remoteNode) sendto(p *Process, buf, size, flags, addr, alen uint32) (int, error) {
-	return n.end.sendto(p, buf, size, flags, addr, alen)
-}
-
-func (n *remoteNode) recvfrom(p *Process, buf, size, flags uint32) (int, []byte, error) {
-	return n.end.recvfrom(p, buf, size, flags)
-}
-
-func (n *remoteNode) bind(p *Process, at, size uint32) error    { return syscall.EINVAL }
-func (n *remoteNode) connect(p *Process, at, size uint32) error { return syscall.EISCONN }
-func (n *remoteNode) listen(backlog int) error                  { return syscall.EINVAL }
-func (n *remoteNode) accept(p *Process, flags uint32) (File, []byte, error) {
-	return nil, nil, syscall.EINVAL
-}
-func (n *remoteNode) sockname(p *Process) ([]byte, error) { return n.end.sockname(p) }
-func (n *remoteNode) peername(p *Process) ([]byte, error) { return n.end.peername(p) }
-func (n *remoteNode) shutdown(how int) error              { return n.end.shutdown(how) }
-func (n *remoteNode) getsockopt(p *Process, level, name, at, lenAt uint32) error {
-	return n.end.getsockopt(p, level, name, at, lenAt)
-}
-func (n *remoteNode) setsockopt(p *Process, level, name, at, size uint32) error {
-	return n.end.setsockopt(p, level, name, at, size)
 }
 
 // request sends a request on an endpoint, the files with it, as the

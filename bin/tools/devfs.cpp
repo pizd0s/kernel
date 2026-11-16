@@ -218,9 +218,10 @@ static bool nameAt(const Request& r, size_t at, const char*& name, size_t& lengt
 }
 
 // An open of a node: tty's the opener's controlling terminal, which the
-// kernel opens; init's an open file of devfs's, which REGISTER comes on; a
-// device's open handed on to its service with the reply's endpoint, which
-// the service answers on, ENXIO when the service is gone.
+// kernel opens; init's a plain socket, an end of a pair of ours, which
+// the opener speaks the protocol on itself, REGISTER; a device's open
+// handed on to its service with the reply's endpoint, which the service
+// answers on, ENXIO when the service is gone.
 static void openNode(Node& n, Request& r) {
     const uint32_t access = r.h.arg & O_ACCMODE;
     const bool reads = access != O_WRONLY;
@@ -237,9 +238,18 @@ static void openNode(Node& n, Request& r) {
     switch (n.kind) {
         case Kind::Controlling:
             return answer(r.reply(), opOk, openControlling);
-        case Kind::Registry:
-            answerOpen(epoll, r, {SERVED_FILE, 0, 0, 0, 0}, &registryTag);
+        case Kind::Registry: {
+            int pair[2];
+            if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+                return fail(r.reply(), errno);
+            }
+            watch(epoll, {pair[0], false, reads, writes, &registryTag});
+            const Header h{opOk, 0, 0, 0};
+            const iovec part{const_cast<Header*>(&h), sizeof h};
+            sendPacket(r.reply(), &part, 1, &pair[1], 1);
+            close(pair[1]);
             return;
+        }
         default: {
             const Header h{opOpen, r.h.arg, r.h.uid, r.h.gid};
             const uint32_t mode = 0;
@@ -489,17 +499,8 @@ static void registerName(const Endpoint& e, Request& r) {
 static void handle(Endpoint& e, Request& r) {
     if (e.of == &channelTag) {
         fsCall(r);
-    } else if (e.of == &registryTag) {
-        switch (r.h.op) {
-            case opRegister:
-                registerName(e, r);
-                break;
-            case opFstat:
-                answerStat(r.reply(), *named(root, "init", 4));
-                break;
-            default:
-                fail(r.reply(), EINVAL);
-        }
+    } else if (e.of == &registryTag && r.h.op == opRegister) {
+        registerName(e, r);
     } else {
         fail(r.reply(), EINVAL);
     }

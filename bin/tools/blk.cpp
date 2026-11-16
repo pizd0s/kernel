@@ -5,7 +5,10 @@
 // the memfd the READ brings, and a WRITE's straight from the writer's, one
 // copy (copy_file_range). blk reads the disk's GUID partition table,
 // 512-byte blocks, and starts /bin/gpt for each partition, <name><n>, or
-// <name>p<n> when name ends in a digit.
+// <name>p<n> when name ends in a digit: gpt gets an open file of the disk
+// as a plain socket, an end of a pair of ours, which it hands requests on
+// to the disk on itself, and is told of an ext2, ext3 or ext4 file
+// system on its partition, by the superblock's magic.
 //
 //     blk [-r fd] <name> <fd>
 //
@@ -23,6 +26,7 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/param.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -143,32 +147,42 @@ static void handle(Endpoint& e, Request& r) {
 
 // Starts /bin/gpt for a partition, the bytes [first, first + length) of
 // the disk, with the descriptor ready, which it closes once it is up.
-static void start(uint32_t index, uint64_t first, uint64_t length, int ready) {
+static void start(uint32_t index, uint64_t first, uint64_t length, bool ext, int ready) {
+    int pair[2];
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+        dprintf(STDERR_FILENO, "blk: socketpair: %s\n", strerror(errno));
+        return;
+    }
     const size_t n = strlen(name);
     const bool digit = n > 0 && name[n - 1] >= '0' && name[n - 1] <= '9';
-    char path[64];
+    char channel[12];
     char part[64];
     char from[24];
     char bytes[24];
     char fd[12];
-    snprintf(path, sizeof path, "/dev/%s", name);
+    snprintf(channel, sizeof channel, "%d", pair[1]);
     snprintf(part, sizeof part, "%s%s%u", name, digit ? "p" : "", index);
     snprintf(from, sizeof from, "%llu", (unsigned long long)first);
     snprintf(bytes, sizeof bytes, "%llu", (unsigned long long)length);
     snprintf(fd, sizeof fd, "%d", ready);
     char gpt[] = "gpt";
     char option[] = "-r";
-    char* const withReady[] = {gpt, option, fd, path, part, from, bytes, nullptr};
-    char* const without[] = {gpt, path, part, from, bytes, nullptr};
+    char* const withReady[] = {gpt, option, fd, channel, part, from, bytes, ext ? const_cast<char*>("ext") : nullptr, nullptr};
+    char* const without[] = {gpt, channel, part, from, bytes, ext ? const_cast<char*>("ext") : nullptr, nullptr};
     const pid_t pid = fork();
     if (pid == 0) {
+        fcntl(pair[1], F_SETFD, 0);
         execv("/bin/gpt", ready >= 0 ? withReady : without);
         dprintf(STDERR_FILENO, "blk: /bin/gpt: %s\n", strerror(errno));
         _exit(127);
     }
+    close(pair[1]);
     if (pid < 0) {
         dprintf(STDERR_FILENO, "blk: fork: %s\n", strerror(errno));
+        close(pair[0]);
+        return;
     }
+    watch(epoll, {pair[0], false, true, true, nullptr});
 }
 
 // The partitions of the disk's GUID partition table: its header in the
@@ -201,7 +215,10 @@ static void partitions(int ready) {
         if (memcmp(entry, none, sizeof none) == 0 || lastBlock < firstBlock || lastBlock >= size / block) {
             continue;
         }
-        start(i + 1, firstBlock * block, (lastBlock - firstBlock + 1) * block, ready);
+        // An ext2, ext3 or ext4 superblock's magic, at 1024 + 56.
+        unsigned char magic[2];
+        const bool ext = pread(disk, magic, sizeof magic, off_t(firstBlock * block + 1024 + 56)) == ssize_t(sizeof magic) && magic[0] == 0x53 && magic[1] == 0xEF;
+        start(i + 1, firstBlock * block, (lastBlock - firstBlock + 1) * block, ext, ready);
     }
 }
 
