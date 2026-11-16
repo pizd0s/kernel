@@ -174,7 +174,7 @@ func (s *unixSocket) poll(events int16) int16 {
 
 // subscribe is to the connection or the listener, and to the one the
 // socket gets when it has neither yet.
-func (s *unixSocket) subscribe(to waker, id uint64, events int16) bool {
+func (s *unixSocket) subscribe(to waker, id uint64, events int16) {
 	s.mu.Lock()
 	s.subs = append(s.subs, socketSub{to, id, events})
 	l, c := s.listener, s.conn
@@ -186,8 +186,6 @@ func (s *unixSocket) subscribe(to waker, id uint64, events int16) bool {
 	case l != nil:
 		l.subscribe(to, id, events)
 	}
-
-	return true
 }
 
 func (s *unixSocket) unsubscribe(to waker, id uint64) {
@@ -207,7 +205,7 @@ func (s *unixSocket) unsubscribe(to waker, id uint64) {
 
 // attach gives the subscriptions of the socket to what it now is, which
 // it took in the same hold of its lock, and wakes them.
-func attach(subs []socketSub, f File) {
+func attach(subs []socketSub, f Object) {
 	for _, sub := range subs {
 		f.subscribe(sub.to, sub.id, sub.events)
 		sub.to.wake(sub.id)
@@ -666,7 +664,7 @@ func (l *unixListener) poll(events int16) int16 {
 
 // subscribe makes to learn of the connections that come, for accept's
 // input, and of the room for them, for connect's output.
-func (l *unixListener) subscribe(to waker, id uint64, events int16) bool {
+func (l *unixListener) subscribe(to waker, id uint64, events int16) {
 	in, out := l.sides(events)
 
 	if in {
@@ -676,8 +674,6 @@ func (l *unixListener) subscribe(to waker, id uint64, events int16) bool {
 	if out {
 		l.conns.writers.add(to, id)
 	}
-
-	return true
 }
 
 func (l *unixListener) unsubscribe(to waker, id uint64) {
@@ -805,7 +801,7 @@ func (s *unixDgram) poll(events int16) int16 {
 	return ready | out
 }
 
-func (s *unixDgram) subscribe(to waker, id uint64, events int16) bool {
+func (s *unixDgram) subscribe(to waker, id uint64, events int16) {
 	s.mu.Lock()
 	s.subs = append(s.subs, socketSub{to, id, events})
 	s.mu.Unlock()
@@ -815,8 +811,6 @@ func (s *unixDgram) subscribe(to waker, id uint64, events int16) bool {
 		t.subscribe(to, id, pollOut)
 		t.unref()
 	}
-
-	return true
 }
 
 func (s *unixDgram) unsubscribe(to waker, id uint64) {

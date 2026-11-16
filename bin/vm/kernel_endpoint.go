@@ -226,7 +226,7 @@ func (e *pairEnd) asVFS() *remoteDir         { return nil }
 
 // subscribe makes to learn of what may make the end readable, for input,
 // and writable, for output; of both when neither is asked.
-func (e *pairEnd) subscribe(to waker, id uint64, events int16) bool {
+func (e *pairEnd) subscribe(to waker, id uint64, events int16) {
 	in, out := ioSides(events)
 
 	if in {
@@ -236,8 +236,6 @@ func (e *pairEnd) subscribe(to waker, id uint64, events int16) bool {
 	if out {
 		e.to.writers.add(to, id)
 	}
-
-	return true
 }
 
 func (e *pairEnd) unsubscribe(to waker, id uint64) {
@@ -445,7 +443,7 @@ func (e *pairEnd) kernelPut(p *Process, pk packet) error {
 
 	defer func() {
 		if waiting {
-			e.to.writers.remove(p, 0)
+			e.unsubscribe(p, 0)
 		}
 	}()
 
@@ -468,7 +466,7 @@ func (e *pairEnd) kernelPut(p *Process, pk packet) error {
 
 		if !waiting {
 			// A take from the full channel wakes its writers.
-			e.to.writers.add(p, 0)
+			e.subscribe(p, 0, pollOut)
 			waiting = true
 
 			continue
@@ -607,8 +605,8 @@ func (e *pairEnd) kernelRecv(p *Process) (packet, bool, error) {
 		return pk, eof, nil
 	}
 
-	e.from.readers.add(p, 0)
-	defer e.from.readers.remove(p, 0)
+	e.subscribe(p, 0, pollIn)
+	defer e.unsubscribe(p, 0)
 
 	for {
 		p.takeMail()

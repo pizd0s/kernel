@@ -234,7 +234,7 @@ func (p *Process) selectFds(n uint32, sets [3]fdSet, timeout int) (int, error) {
 			continue
 		}
 
-		obj, err := p.fileAt(uint32(fd))
+		obj, err := p.fd(uint32(fd))
 
 		if err != nil {
 			return 0, err
@@ -989,7 +989,7 @@ func (p *Process) poll(at, n uint32, timeout int) (int, error) {
 			continue
 		}
 
-		obj, err := p.fileAt(uint32(fd))
+		obj, err := p.fd(uint32(fd))
 
 		if err != nil {
 			binary.LittleEndian.PutUint16(e[6:], pollNval)

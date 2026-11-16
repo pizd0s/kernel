@@ -10,8 +10,11 @@ import (
 
 // What a descriptor refers to is an Object: a handle the kernel counts
 // the references of, the descriptors and processes that hold it and what
-// else does, a packet in flight or a member of an epoll; its last unref is
-// for its type to clean up after. All else it is, it is in a role, which
+// else does, a packet in flight or a member of an epoll, its last unref
+// for its type to clean up after; and what a wait waits for, any object,
+// by its readiness and its changes (kernel_queue.go): a poll or a select
+// of a process's, a set of epoll's, a call that waits. All else it is, it
+// is in a role, which
 // its as methods give, nil for a role it does not play: a File, what any
 // descriptor's object is, a Transfer reads and writes, a Seeker seeks, a
 // Dir takes the calls with a path, a Terminal a terminal's, a Windowed
@@ -30,6 +33,15 @@ type Object interface {
 	// ref takes a reference, unref drops one; the last closes the object.
 	ref()
 	unref()
+	// poll is the events ready now of those asked. subscribe makes the
+	// object wake to, with id, as it may become ready for events;
+	// unsubscribe takes that back. An object poll found not ready for
+	// events wakes its subscriptions for them as it may become ready; one
+	// that never changes, ready whenever asked, keeps no subscription and
+	// wakes none.
+	poll(events int16) int16
+	subscribe(to waker, id uint64, events int16)
+	unsubscribe(to waker, id uint64)
 	// asFile and the rest are the object in a role, nil for one it does
 	// not play, or the type of the kernel's it is.
 	asFile() File
@@ -51,21 +63,12 @@ type Object interface {
 	asVFS() *remoteDir
 }
 
-// A File is an open file, what any descriptor's object is: what fstat,
-// fcntl's F_GETFL and F_SETFL, poll and epoll ask of it.
+// A File is an open file, what any descriptor's object is: what fstat
+// and fcntl's F_GETFL and F_SETFL ask of it.
 type File interface {
 	Object
 	// stat is fstat.
 	stat(p *Process, st *syscall.Stat_t) error
-	// poll is the events ready now of those asked. subscribe makes the
-	// file wake to, with id, as it may become ready for events, and tells
-	// whether it ever changes: a file ready whenever asked does not, and
-	// takes no subscription; unsubscribe takes one back. A file poll found
-	// not ready for events wakes its subscriptions for them as it may
-	// become ready (kernel_queue.go).
-	poll(events int16) int16
-	subscribe(to waker, id uint64, events int16) bool
-	unsubscribe(to waker, id uint64)
 	// flags are the status flags of fcntl: the access mode, O_NONBLOCK and
 	// what else the object keeps; setFlags sets those F_SETFL may.
 	flags() (int, error)
@@ -478,7 +481,7 @@ func deadline(timeout int) time.Time {
 
 // pollEntry is an object and the events asked of it, revents those ready.
 type pollEntry struct {
-	obj     File
+	obj     Object
 	events  int16
 	revents int16
 }
@@ -566,7 +569,7 @@ func (p *Process) waitFor(ready func() bool, list *subscribers, restart bool) er
 }
 
 // waitObject waits until one object is ready for events.
-func (p *Process) waitObject(obj File, events int16, timeout int, restart bool) (int, error) {
+func (p *Process) waitObject(obj Object, events int16, timeout int, restart bool) (int, error) {
 	return p.waitObjects([]pollEntry{{obj: obj, events: events}}, timeout, restart)
 }
 

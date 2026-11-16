@@ -241,7 +241,7 @@ func (e *pipeEnd) sides(events int16) (in, out bool) {
 // subscribe makes to learn of what fills the pipe, for the end's reading,
 // and of what drains it, for its writing: on the pipe's channel, which a
 // FIFO's that starts again gives on (renew), under the pipe's lock.
-func (e *pipeEnd) subscribe(to waker, id uint64, events int16) bool {
+func (e *pipeEnd) subscribe(to waker, id uint64, events int16) {
 	pp := e.pipe
 	in, out := e.sides(events)
 	pp.mu.Lock()
@@ -254,8 +254,6 @@ func (e *pipeEnd) subscribe(to waker, id uint64, events int16) bool {
 	if out {
 		pp.ch.writers.add(to, id)
 	}
-
-	return true
 }
 
 func (e *pipeEnd) unsubscribe(to waker, id uint64) {

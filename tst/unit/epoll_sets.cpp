@@ -62,10 +62,6 @@ int main() {
     assert(epoll_ctl(ep, EPOLL_CTL_ADD, ends[0], &event) == 0);
     assert(epoll_ctl(ep, EPOLL_CTL_ADD, ends[0], &event) == -1 && errno == EEXIST);
     assert(epoll_ctl(ep, 7, ends[0], &event) == -1 && errno == EINVAL);
-    int file = open("epoll-member", O_CREAT | O_RDWR | O_TRUNC, 0600);
-    assert(file >= 0);
-    assert(epoll_ctl(ep, EPOLL_CTL_ADD, file, &event) == -1 && errno == EPERM);
-    assert(close(file) == 0 && unlink("epoll-member") == 0);
 
     // Level-triggered: ready while data is there, with the data word back.
     assert(waitOne(ep, &event, 0) == 0);

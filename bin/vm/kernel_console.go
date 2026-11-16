@@ -123,18 +123,14 @@ func (c *consoleEnd) poll(events int16) int16 {
 	return ready
 }
 
-func (c *consoleEnd) subscribe(to waker, id uint64, events int16) bool {
-	changes := false
-
+func (c *consoleEnd) subscribe(to waker, id uint64, events int16) {
 	if c.in != nil && (events == 0 || events&inEvents != 0) {
-		changes = c.in.subscribe(to, id, events&inEvents) || changes
+		c.in.subscribe(to, id, events&inEvents)
 	}
 
 	if c.out != nil && (events == 0 || events&outEvents != 0) {
-		changes = c.out.subscribe(to, id, events&outEvents) || changes
+		c.out.subscribe(to, id, events&outEvents)
 	}
-
-	return changes
 }
 
 func (c *consoleEnd) unsubscribe(to waker, id uint64) {
@@ -607,8 +603,7 @@ func (f *diskFile) poll(events int16) int16 {
 	return events & (pollIn | pollRdnorm | pollOut | pollWrnorm)
 }
 
-func (f *diskFile) subscribe(to waker, id uint64, events int16) bool {
-	return false
+func (f *diskFile) subscribe(to waker, id uint64, events int16) {
 }
 
 func (f *diskFile) unsubscribe(to waker, id uint64) {

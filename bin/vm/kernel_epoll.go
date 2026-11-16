@@ -11,18 +11,21 @@ import (
 	"time"
 )
 
-// An epoll is a set of files of the kernel, each a member subscribed to
-// the set (kernel_queue.go): a change of its file wakes the set with the
-// member's id, which marks it, in the order of the marks. epoll_wait asks
-// the marked members and no other, and sleeps on the process's mail while
-// none of them is ready, among the set's sleepers, whom a mark wakes. A level-triggered member reported stays marked, asked again by
-// the next wait while it is ready; an edge-triggered one is reported once
-// a change of its file, a one-shot one once until EPOLL_CTL_MOD. A file
-// that is ready whenever asked and never changes, a regular file, cannot
-// be a member: EPERM, as on Linux. A set can be a member of a set: a
-// change of a member wakes those subscribed to the set. The epoll keeps a
-// reference to a member's file, so a member is removed before its last
-// close, or stays until the epoll's.
+// An epoll is a set of objects of the kernel, each a member subscribed to
+// the set (kernel_queue.go): a change of its object wakes the set with the
+// member's id, which marks it, in the order of the marks; a member is
+// marked as it is added, as it may be ready then. epoll_wait asks the
+// marked members and no other, and sleeps on the process's mail while
+// none of them is ready, among the set's sleepers, whom a mark wakes. A
+// level-triggered member reported stays marked, asked again by the next
+// wait while it is ready; an edge-triggered one is reported once a change
+// of its object, a one-shot one once until EPOLL_CTL_MOD. Any object can
+// be a member: one that never changes, a regular file, wakes nothing and
+// is ready whenever asked, reported at every wait level-triggered, once
+// edge-triggered. A set can be a member of a set: a change of a member
+// wakes those subscribed to the set. The epoll keeps a reference to a
+// member's object, so a member is removed before its last close, or stays
+// until the epoll's.
 //
 // The guest's struct epoll_event is 16 bytes: events u32, data u64 at 8.
 
@@ -61,7 +64,7 @@ type epoll struct {
 // added with and the file.
 type epollKey struct {
 	fd  uint32
-	obj File
+	obj Object
 }
 
 // An epollMember is a file of a set: the events it asks for, the data a
@@ -153,7 +156,7 @@ func (ep *epoll) stat(p *Process, st *syscall.Stat_t) error {
 // poll: the epoll is readable when a marked member is ready.
 func (ep *epoll) poll(events int16) int16 {
 	type asked struct {
-		obj    File
+		obj    Object
 		events uint32
 	}
 
@@ -179,10 +182,8 @@ func (ep *epoll) poll(events int16) int16 {
 
 // subscribe is to the changes of the members: a wait for the set, or a
 // set the set is a member of.
-func (ep *epoll) subscribe(to waker, id uint64, events int16) bool {
+func (ep *epoll) subscribe(to waker, id uint64, events int16) {
 	ep.subs.add(to, id)
-
-	return true
 }
 
 func (ep *epoll) unsubscribe(to waker, id uint64) {
@@ -327,8 +328,8 @@ func (ep *epoll) remove(m *epollMember) {
 	ep.order = slices.DeleteFunc(ep.order, func(o *epollMember) bool { return o == m })
 }
 
-// add makes a member of a file, asked by the next wait, as it may be ready
-// now; a file that never changes cannot be one.
+// add makes a member of an object, asked by the next wait, as it may be
+// ready now.
 func (ep *epoll) add(key epollKey, events uint32, data uint64) error {
 	if inner := key.obj.asEpoll(); inner != nil && (inner == ep || inner.contains(ep)) {
 		return syscall.ELOOP
@@ -348,14 +349,7 @@ func (ep *epoll) add(key epollKey, events uint32, data uint64) error {
 	ep.order = append(ep.order, m)
 	ep.mu.Unlock()
 
-	if !key.obj.subscribe(ep, m.id, int16(events)) {
-		ep.mu.Lock()
-		ep.remove(m)
-		ep.mu.Unlock()
-
-		return syscall.EPERM
-	}
-
+	key.obj.subscribe(ep, m.id, int16(events))
 	key.obj.ref()
 	ep.wake(m.id)
 
@@ -521,7 +515,7 @@ func (p *Process) libcEpoll_ctl(epfd, op, fd, at uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	obj, err := p.fileAt(fd)
+	obj, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
