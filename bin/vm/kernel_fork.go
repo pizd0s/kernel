@@ -269,9 +269,9 @@ func (p *Process) reap(selects func(*Process) bool, options uint32) (int32, int,
 	return 0, 0, found
 }
 
-// wait waits until a selected child changes as options ask and returns its
-// pid and wait status, or 0 with wNohang while none has.
-func (p *Process) wait(selects func(*Process) bool, options uint32) (int32, int, error) {
+// waitChild waits until a selected child changes as options ask and
+// returns its pid and wait status, or 0 with wNohang while none has.
+func (p *Process) waitChild(selects func(*Process) bool, options uint32) (int32, int, error) {
 	for {
 		seen := p.childEvents.Load()
 		q, status, found := p.reap(selects, options)
@@ -312,7 +312,7 @@ func (p *Process) waitpid(pid int32, at, options uint32) (int, error) {
 		return 0, syscall.ECHILD
 	}
 
-	q, status, err := p.wait(p.pidSelector(pid), options&basic|wExited)
+	q, status, err := p.waitChild(p.pidSelector(pid), options&basic|wExited)
 
 	if err == nil && q != 0 && at != 0 {
 		p.put32(at, uint32(status))
@@ -357,7 +357,7 @@ func (p *Process) waitid(idtype, id, info, options uint32) uint32 {
 		return p.result(0, syscall.EINVAL)
 	}
 
-	q, status, err := p.wait(selects, options)
+	q, status, err := p.waitChild(selects, options)
 
 	if err != nil {
 		return p.result(0, err)
@@ -398,9 +398,7 @@ func (p *Process) stopped(sig int) {
 	p.halted, p.report = true, sig<<8|stoppedBy
 	p.k.mu.Unlock()
 	p.tellParent(saNocldstop)
-
-	for {
-		p.takeMail()
+	p.wait(time.Time{}, func(*event) (bool, error) {
 		p.k.mu.Lock()
 		halted := p.halted
 		p.k.mu.Unlock()
@@ -408,12 +406,8 @@ func (p *Process) stopped(sig int) {
 		killed := p.sig.pending&sigBit(int(syscall.SIGKILL)) != 0
 		p.sig.mu.Unlock()
 
-		if !halted || killed {
-			return
-		}
-
-		p.waitMail(time.Time{})
-	}
+		return !halted || killed, nil
+	})
 }
 
 // cont continues the process if it is stopped.
@@ -428,7 +422,7 @@ func (p *Process) cont() {
 	p.k.mu.Unlock()
 
 	if was {
-		p.ring()
+		p.post(event{kind: eventContinued})
 		p.tellParent(saNocldstop)
 	}
 }
@@ -449,35 +443,36 @@ func (p *Process) tellParent(flag uint32) {
 	parent.sig.mu.Unlock()
 
 	if quiet {
-		parent.childChanged(0)
+		parent.childChanged(p.pid, 0)
 	} else {
-		parent.childChanged(int(syscall.SIGCHLD))
+		parent.childChanged(p.pid, int(syscall.SIGCHLD))
 	}
 }
 
-// waitEvent waits until ready holds, which a change of the children
-// rings for, or a signal interrupts: then the error is EINTR, after the
+// waitEvent waits until ready holds, which the event of a child comes
+// for, or a signal interrupts: then the error is EINTR, after the
 // handlers ran when they all restart calls. Ready comes first, as a call
 // that has its result returns it.
 func (p *Process) waitEvent(ready func() bool) error {
-	for {
-		p.takeMail()
-		signal := p.sig.deliverable() != 0
+	_, err := p.wait(time.Time{}, func(*event) (bool, error) {
+		for {
+			signal := p.sig.deliverable() != 0
 
-		if ready() {
-			return nil
-		}
-
-		if signal {
-			if p.interrupted() {
-				continue
+			if ready() {
+				return true, nil
 			}
 
-			return syscall.EINTR
-		}
+			if !signal {
+				return false, nil
+			}
 
-		p.waitMail(time.Time{})
-	}
+			if !p.interrupted() {
+				return true, syscall.EINTR
+			}
+		}
+	})
+
+	return err
 }
 
 func (p *Process) libcFork() uint32 {

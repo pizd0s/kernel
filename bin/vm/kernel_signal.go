@@ -150,7 +150,7 @@ func (p *Process) send(sig int) {
 	}
 
 	p.sig.mu.Unlock()
-	p.ring()
+	p.post(event{kind: eventSignal, id: uint64(sig)})
 
 	if token != 0 {
 		runtime.Interrupt(token)
@@ -246,12 +246,6 @@ func (p *Process) interrupt() {
 	binary.LittleEndian.PutUint32(p.inst.block[at:], sp-redZone)
 	p.deliver()
 	binary.LittleEndian.PutUint32(p.inst.block[at:], sp)
-}
-
-// ring makes the process look again where it waits, or at its next wait:
-// for a signal, a change of its children or of its own state.
-func (p *Process) ring() {
-	p.post(look)
 }
 
 // sendSelf sends a signal the process raised itself; it takes it on its
@@ -449,16 +443,16 @@ func (p *Process) sigwait(set uint64, timeout time.Duration) (int, error) {
 		end = time.Now().Add(timeout)
 	}
 
-	for {
-		p.takeMail()
+	sig := 0
+	timedOut, err := p.wait(end, func(*event) (bool, error) {
 		p.sig.mu.Lock()
 
 		if ready := p.sig.pending & set; ready != 0 {
-			sig := bits.TrailingZeros64(ready) + 1
+			sig = bits.TrailingZeros64(ready) + 1
 			p.sig.pending &^= sigBit(sig)
 			p.sig.mu.Unlock()
 
-			return sig, nil
+			return true, nil
 		}
 
 		other := p.sig.pending &^ p.sig.blocked
@@ -467,13 +461,17 @@ func (p *Process) sigwait(set uint64, timeout time.Duration) (int, error) {
 		if other != 0 {
 			p.handleSignals()
 
-			return 0, syscall.EINTR
+			return true, syscall.EINTR
 		}
 
-		if p.waitMail(end) {
-			return 0, syscall.EAGAIN
-		}
+		return false, nil
+	})
+
+	if timedOut {
+		return 0, syscall.EAGAIN
 	}
+
+	return sig, err
 }
 
 // putSiginfo writes the siginfo_t of a signal sigwaitinfo takes.

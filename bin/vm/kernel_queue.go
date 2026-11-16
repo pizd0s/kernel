@@ -10,17 +10,18 @@ import (
 	"time"
 )
 
-// Waits. An object tells of its changes whoever subscribed to it, a
-// process or a set of epoll: it wakes each subscription's waker with the
-// id the subscription named. A process sleeps on one channel, its mail,
-// and on nothing else: whatever may change for a wait of the process's,
-// an object it waits on, a signal, a child, the server it called, puts a
-// function in (post), and the process, woken, takes all that came,
-// applies it to itself and looks again at what it waits for (takeMail,
-// waitMail). A wait subscribes to the objects it waits for before it first
-// looks, so a change after the look is mail. Mail says to look; what
-// changed is in the objects, so mail a full box drops is lost to nobody:
-// a full box wakes the process, which looks at everything. An object that
+// Waits. A process sleeps in one place, its queue of events: whatever may
+// change for a wait of the process's puts an event there, an object it
+// subscribed to, as the waker of the subscription, a signal, a child, the
+// epoll it sleeps on, a module compiled; putting one never blocks, and
+// none is lost. Every wait is one function, wait: it takes the events in
+// order, runs each one's callback, and asks the predicate the wait gives
+// whether it is over on that event or goes on; with the queue empty the
+// process sleeps until an event comes or the wait's deadline passes. A
+// wait subscribes to what it waits for before it first looks, so a change
+// after the look is an event. An event names what changed, and the
+// predicate asks what it is now: an event a predicate passes over,
+// another wait's or an earlier one's, is lost to nobody. An object that
 // poll finds not ready for events wakes the subscriptions for them as it
 // may become ready.
 
@@ -93,62 +94,131 @@ func (s *subscribers) takeOver(from *subscribers) {
 	s.mu.Unlock()
 }
 
-// mailMax is how much mail a process's box holds.
-const mailMax = 16
+// The kinds of events: an object the process subscribed to changed, id
+// the subscription's; a signal came, id its number; the process stopped
+// no more; a child changed, id its pid; an epoll the process sleeps on
+// marked a member, id the epoll's inode; a module the process waits for
+// compiled.
+type eventKind uint8
 
-// look is the mail of a change: the process looks again.
-func look(*Process) {}
+const (
+	eventChanged eventKind = iota + 1
+	eventSignal
+	eventContinued
+	eventChild
+	eventEpoll
+	eventCompiled
+)
 
-// post puts mail in the process's box; it never blocks.
-func (p *Process) post(m func(*Process)) {
+// An event is what came to a process's queue: its kind and id, and a
+// callback the wait that takes it runs on the process first, nil for one
+// that only tells.
+type event struct {
+	kind eventKind
+	id   uint64
+	run  func(*Process)
+}
+
+// eventQueue is a process's queue: its events, the oldest first, and its
+// bell, which a put rings and the process sleeps on. An event that only
+// tells, queued already, is put once.
+type eventQueue struct {
+	mu     sync.Mutex
+	events []event
+	bell   chan struct{}
+}
+
+// post puts an event in the process's queue and rings its bell; it never
+// blocks.
+func (p *Process) post(e event) {
+	q := &p.events
+	q.mu.Lock()
+	queued := e.run == nil && slices.ContainsFunc(q.events, func(o event) bool {
+		return o.run == nil && o.kind == e.kind && o.id == e.id
+	})
+
+	if !queued {
+		q.events = append(q.events, e)
+	}
+
+	q.mu.Unlock()
+
 	select {
-	case p.mail <- m:
+	case q.bell <- struct{}{}:
 	default:
 	}
 }
 
-// wake is the process as the waker of its subscriptions.
+// next takes the oldest event of the queue, none when it is empty.
+func (q *eventQueue) next() (event, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if len(q.events) == 0 {
+		return event{}, false
+	}
+
+	e := q.events[0]
+	q.events[0] = event{}
+	q.events = q.events[1:]
+
+	return e, true
+}
+
+// wake is the process as the waker of its subscriptions: the event of the
+// subscription id.
 func (p *Process) wake(id uint64) {
-	p.post(look)
+	p.post(event{kind: eventChanged, id: id})
 }
 
-// takeMail applies to the process the mail that came, all of it.
-func (p *Process) takeMail() {
+// subscriptions are n fresh ids for the subscriptions of a wait: none is
+// an earlier wait's, whose events may still come.
+func (p *Process) subscriptions(n int) uint64 {
+	first := p.lastSubscription + 1
+	p.lastSubscription += uint64(n)
+
+	return first
+}
+
+// wait is every wait of the process. done says whether the wait is over,
+// and with what error: first on no event, nil, then on each event of the
+// queue, the oldest first, after its callback ran. With the queue empty
+// the process sleeps on its bell until end, zero for never; end passing
+// ends the wait, timedOut.
+func (p *Process) wait(end time.Time, done func(e *event) (bool, error)) (timedOut bool, err error) {
+	if over, err := done(nil); over {
+		return false, err
+	}
+
+	var expired <-chan time.Time
+
+	if !end.IsZero() {
+		t := time.NewTimer(time.Until(end))
+		defer t.Stop()
+
+		expired = t.C
+	}
+
 	for {
-		select {
-		case m := <-p.mail:
-			m(p)
-		default:
-			return
+		e, ok := p.events.next()
+
+		if !ok {
+			select {
+			case <-p.events.bell:
+			case <-expired:
+				return true, nil
+			}
+
+			continue
 		}
-	}
-}
 
-// waitMail sleeps until mail comes, which it applies, or end passes, zero
-// for never; it tells whether end passed.
-func (p *Process) waitMail(end time.Time) bool {
-	if end.IsZero() {
-		(<-p.mail)(p)
+		if e.run != nil {
+			e.run(p)
+		}
 
-		return false
-	}
-
-	d := time.Until(end)
-
-	if d <= 0 {
-		return true
-	}
-
-	t := time.NewTimer(d)
-	defer t.Stop()
-
-	select {
-	case m := <-p.mail:
-		m(p)
-
-		return false
-	case <-t.C:
-		return true
+		if over, err := done(&e); over {
+			return false, err
+		}
 	}
 }
 

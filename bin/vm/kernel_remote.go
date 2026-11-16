@@ -556,36 +556,39 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 	}
 
 	defer mine.unref()
-	mine.subscribe(p, 0, pollIn)
-	defer mine.unsubscribe(p, 0)
+	id := p.subscriptions(1)
+	mine.subscribe(p, id, pollIn)
+	defer mine.unsubscribe(p, id)
 
-	for {
-		p.takeMail()
+	_, err = p.wait(time.Time{}, func(*event) (bool, error) {
+		for {
+			if got, eof, ok := mine.take(false); ok {
+				pk, err = replyOf(got, eof)
+				dropFiles(pk.files)
+				pk.files = nil
 
-		if got, eof, ok := mine.take(false); ok {
-			pk, err = replyOf(got, eof)
-			dropFiles(pk.files)
-			pk.files = nil
+				return true, err
+			}
 
-			return pk, cancelled, err
-		}
+			signals := p.sig.deliverable()
 
-		signals := p.sig.deliverable()
+			if signals&sigBit(int(syscall.SIGKILL)) != 0 {
+				pk, cancelled = packet{}, true
 
-		if signals&sigBit(int(syscall.SIGKILL)) != 0 {
-			return packet{}, true, syscall.EINTR
-		}
+				return true, syscall.EINTR
+			}
 
-		if signals != 0 && !cancelled {
+			if signals == 0 || cancelled {
+				return false, nil
+			}
+
 			// A server that answered already closed its end.
 			cancelled = true
 			request(p, mine, rCancel, 0, nil, nil)
-
-			continue
 		}
+	})
 
-		p.waitMail(time.Time{})
-	}
+	return pk, cancelled, err
 }
 
 // call is a call on the node: a fresh pair, its one end with the

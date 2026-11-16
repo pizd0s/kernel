@@ -439,41 +439,41 @@ func (e *pairEnd) kernelSend(p *Process, data []byte, files []Object) error {
 }
 
 func (e *pairEnd) kernelPut(p *Process, pk packet) error {
-	waiting := false
+	id, waiting := uint64(0), false
 
 	defer func() {
 		if waiting {
-			e.unsubscribe(p, 0)
+			e.unsubscribe(p, id)
 		}
 	}()
 
-	for {
-		p.takeMail()
+	_, err := p.wait(time.Time{}, func(*event) (bool, error) {
+		for {
+			if e.noWrite.Load() {
+				return true, syscall.EPIPE
+			}
 
-		if e.noWrite.Load() {
-			return syscall.EPIPE
-		}
+			full, err := e.to.put(pk)
 
-		full, err := e.to.put(pk)
+			if err != nil || !full {
+				return true, err
+			}
 
-		if err != nil || !full {
-			return err
-		}
+			if e.nonblock.Load() {
+				return true, syscall.EAGAIN
+			}
 
-		if e.nonblock.Load() {
-			return syscall.EAGAIN
-		}
+			if waiting {
+				return false, nil
+			}
 
-		if !waiting {
 			// A take from the full channel wakes its writers.
-			e.subscribe(p, 0, pollOut)
-			waiting = true
-
-			continue
+			id, waiting = p.subscriptions(1), true
+			e.subscribe(p, id, pollOut)
 		}
+	})
 
-		p.waitMail(time.Time{})
-	}
+	return err
 }
 
 func (e *pairEnd) queue(p *Process, pk packet, mode ioMode) error {
@@ -605,18 +605,21 @@ func (e *pairEnd) kernelRecv(p *Process) (packet, bool, error) {
 		return pk, eof, nil
 	}
 
-	e.subscribe(p, 0, pollIn)
-	defer e.unsubscribe(p, 0)
+	id := p.subscriptions(1)
+	e.subscribe(p, id, pollIn)
+	defer e.unsubscribe(p, id)
 
-	for {
-		p.takeMail()
+	var pk packet
+	var eof bool
 
-		if pk, eof, ok := e.take(false); ok {
-			return pk, eof, nil
-		}
+	p.wait(time.Time{}, func(*event) (bool, error) {
+		var ok bool
+		pk, eof, ok = e.take(false)
 
-		p.waitMail(time.Time{})
-	}
+		return ok, nil
+	})
+
+	return pk, eof, nil
 }
 
 // receive reads into the guest's buffers: a packet, of a seqpacket or a

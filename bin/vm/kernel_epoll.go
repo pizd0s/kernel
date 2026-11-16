@@ -220,7 +220,7 @@ func (ep *epoll) mark(m *epollMember) {
 	ep.ready = append(ep.ready, m)
 
 	for _, p := range ep.sleepers {
-		p.post(look)
+		p.post(event{kind: eventEpoll, id: ep.ino})
 	}
 
 	clear(ep.sleepers)
@@ -436,45 +436,43 @@ func (ep *epoll) collect(p *Process, buf []byte, max int) int {
 	return n
 }
 
-// wait waits for up to max ready members until end, zero for never: on
-// the process's mail, among the sleepers of the set, so a mark wakes it,
-// as a signal does, which interrupts it. collect takes the process out of
-// the sleepers, the one way out but the deadline's.
+// wait waits for up to max ready members until end, zero for never: the
+// process among the sleepers of the set, so a mark is an event of its, as
+// a signal is, which interrupts it. Done, it is no sleeper.
 func (ep *epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, error) {
-	for {
-		p.takeMail()
+	n := 0
+	_, err := p.wait(end, func(*event) (bool, error) {
+		for {
+			if n = ep.collect(p, buf, max); n > 0 {
+				return true, nil
+			}
 
-		if n := ep.collect(p, buf, max); n > 0 {
-			return n, nil
-		}
+			if !end.IsZero() && !time.Now().Before(end) {
+				return true, nil
+			}
 
-		if !end.IsZero() && !time.Now().Before(end) {
-			return 0, nil
-		}
+			if p.sig.deliverable() != 0 {
+				return true, syscall.EINTR
+			}
 
-		if p.sig.deliverable() != 0 {
-			return 0, syscall.EINTR
-		}
-
-		ep.mu.Lock()
-
-		if len(ep.ready) > 0 {
-			ep.mu.Unlock()
-
-			continue
-		}
-
-		ep.sleepers = append(ep.sleepers, p)
-		ep.mu.Unlock()
-
-		if p.waitMail(end) {
 			ep.mu.Lock()
-			ep.forget(p)
-			ep.mu.Unlock()
 
-			return 0, nil
+			if len(ep.ready) == 0 {
+				ep.sleepers = append(ep.sleepers, p)
+				ep.mu.Unlock()
+
+				return false, nil
+			}
+
+			ep.mu.Unlock()
 		}
-	}
+	})
+
+	ep.mu.Lock()
+	ep.forget(p)
+	ep.mu.Unlock()
+
+	return n, err
 }
 
 // epollAt is the epoll of a descriptor: another file is EINVAL.

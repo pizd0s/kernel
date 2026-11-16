@@ -487,43 +487,47 @@ type pollEntry struct {
 }
 
 // waitObjects waits until an object is ready for its events: it
-// subscribes the process to them all, then takes its mail, asks them all
-// and sleeps on the mail until the deadline of timeout milliseconds, as
-// long as none is ready. A signal interrupts it: then the error is EINTR,
+// subscribes the process to them all and asks them all, then, as long as
+// none is ready, asks one on its event, until the deadline of timeout
+// milliseconds. A signal interrupts it: then the error is EINTR,
 // after the handlers ran when all of them restart calls and restart is
 // set. It returns how many are ready.
 func (p *Process) waitObjects(entries []pollEntry, timeout int, restart bool) (int, error) {
-	end := deadline(timeout)
+	first := p.subscriptions(len(entries))
 
 	for i := range entries {
-		entries[i].obj.subscribe(p, uint64(i), entries[i].events)
+		entries[i].obj.subscribe(p, first+uint64(i), entries[i].events)
 	}
 
 	defer func() {
 		for i := range entries {
-			entries[i].obj.unsubscribe(p, uint64(i))
+			entries[i].obj.unsubscribe(p, first+uint64(i))
 		}
 	}()
 
-	for {
-		p.takeMail()
+	ready := 0
+	_, err := p.wait(deadline(timeout), func(e *event) (bool, error) {
+		switch {
+		case e == nil || e.kind == eventSignal:
+			// The first look, or a signal: all of it.
+		case e.kind != eventChanged || e.id < first || e.id-first >= uint64(len(entries)):
+			return false, nil
+		case entries[e.id-first].obj.poll(entries[e.id-first].events) == 0:
+			return false, nil
+		}
 
-		if p.sig.deliverable() != 0 {
-			if restart && p.interrupted() {
-				continue
+		for p.sig.deliverable() != 0 {
+			if !restart || !p.interrupted() {
+				return true, syscall.EINTR
 			}
-
-			return 0, syscall.EINTR
 		}
 
-		if ready := pollEntries(entries); ready > 0 {
-			return ready, nil
-		}
+		ready = pollEntries(entries)
 
-		if p.waitMail(end) {
-			return 0, nil
-		}
-	}
+		return ready > 0, nil
+	})
+
+	return ready, err
 }
 
 // pollEntries asks every entry's object for its events and counts the
@@ -546,26 +550,21 @@ func pollEntries(entries []pollEntry) int {
 // process subscribed to the changes of list. A signal interrupts it,
 // restart as there.
 func (p *Process) waitFor(ready func() bool, list *subscribers, restart bool) error {
-	list.add(p, 0)
-	defer list.remove(p, 0)
+	id := p.subscriptions(1)
+	list.add(p, id)
+	defer list.remove(p, id)
 
-	for {
-		p.takeMail()
-
-		if p.sig.deliverable() != 0 {
-			if restart && p.interrupted() {
-				continue
+	_, err := p.wait(time.Time{}, func(*event) (bool, error) {
+		for p.sig.deliverable() != 0 {
+			if !restart || !p.interrupted() {
+				return true, syscall.EINTR
 			}
-
-			return syscall.EINTR
 		}
 
-		if ready() {
-			return nil
-		}
+		return ready(), nil
+	})
 
-		p.waitMail(time.Time{})
-	}
+	return err
 }
 
 // waitObject waits until one object is ready for events.

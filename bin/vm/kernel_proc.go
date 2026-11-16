@@ -184,7 +184,7 @@ func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*
 			k.mu.Unlock()
 
 			for _, w := range waiting {
-				w.post(look)
+				w.post(event{kind: eventCompiled})
 			}
 		}()
 	}
@@ -194,19 +194,14 @@ func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*
 	}
 
 	k.mu.Unlock()
-
-	for {
-		p.takeMail()
+	p.wait(time.Time{}, func(*event) (bool, error) {
 		k.mu.Lock()
-		done := e.done
-		k.mu.Unlock()
+		defer k.mu.Unlock()
 
-		if done {
-			return e.code, e.err
-		}
+		return e.done, nil
+	})
 
-		p.waitMail(time.Time{})
-	}
+	return e.code, e.err
 }
 
 // compile compiles a module, unless obj is its object already, and links
@@ -812,23 +807,17 @@ func (p *Process) libcSystem(cmd uint32) uint32 {
 	c.execReset()
 	var ended atomic.Bool
 
-	// The child's end wakes p, which waits on its mail, its signals left
-	// for after.
+	// The child's end is an event of p's, which waits for it, its signals
+	// left for after.
 	go func() {
 		c.run(img)
 		ended.Store(true)
-		p.post(look)
+		p.post(event{kind: eventChild, id: uint64(c.pid)})
 	}()
 
-	for {
-		p.takeMail()
-
-		if ended.Load() {
-			break
-		}
-
-		p.waitMail(time.Time{})
-	}
+	p.wait(time.Time{}, func(*event) (bool, error) {
+		return ended.Load(), nil
+	})
 
 	status := c.status
 	// its parent never waits for it: the child is reaped here
