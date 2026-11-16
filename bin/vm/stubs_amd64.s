@@ -106,8 +106,10 @@ fits:
 // w2oInterruptCall is the call Go's runtime injects where it interrupts the
 // code (lib/goruntime), and the call a return from an import makes while
 // the instance's interrupt word is set. It calls helperInterrupt with the
-// instance and comes back with every register and flag as it was, but the
-// memory's base and bound, read again: a handler may have grown it.
+// instance g.instance holds: Go may interrupt the code just after a call of
+// Go, while it reads the base again, where R15 is not the base yet. It
+// comes back with every register and flag as it was, but the memory's
+// bound, read again: a handler may have grown it. The base never moves.
 TEXT ·w2oInterruptCall(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 	PUSHQ	BP
@@ -141,9 +143,11 @@ TEXT ·w2oInterruptCall(SB), NOSPLIT|NOFRAME, $0-0
 	MOVSD	X12, 112(SP)
 	MOVSD	X13, 120(SP)
 	MOVSD	X14, 128(SP)
-	LEAQ	-1073741824(R15), AX
+	MOVQ	R15, 8(SP)
+	MOVQ	472(R14), AX
 	MOVQ	AX, 0(SP)
 	CALL	·helperInterrupt(SB)
+	MOVQ	8(SP), R15
 	MOVSD	16(SP), X0
 	MOVSD	24(SP), X1
 	MOVSD	32(SP), X2
@@ -172,9 +176,8 @@ TEXT ·w2oInterruptCall(SB), NOSPLIT|NOFRAME, $0-0
 	POPQ	CX
 	POPQ	BX
 	POPQ	AX
-	MOVQ	472(R14), R15
-	MOVQ	16(R15), R13
-	MOVQ	(R15), R15
+	MOVQ	472(R14), R13
+	MOVQ	16(R13), R13
 	POPFQ
 	POPQ	BP
 	RET
