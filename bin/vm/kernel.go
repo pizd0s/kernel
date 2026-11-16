@@ -48,8 +48,10 @@ type Kernel struct {
 	// fifos are the pipes of the FIFOs of servers with an end open
 	// (kernel_fifo.go).
 	fifos map[fifoKey]*pipe
-	// fg is the foreground process group of the console.
+	// fg is the foreground process group of the console; cttys are the
+	// sessions' controlling terminals (kernel_terminal.go).
 	fg        int32
+	cttys     map[int32]*remoteTerminal
 	first     *Process
 	exit      chan int
 	functions map[string]any
@@ -84,25 +86,27 @@ type Process struct {
 	cwd      Dir
 	umask    uint32
 	// errnoAt and environAt are where the crt keeps errno and environ, tzAt
-	// tzname, timezone and daylight, herrnoAt h_errno.
-	errnoAt   uint32
-	environAt uint32
-	tzAt      [3]uint32
-	herrnoAt  uint32
+	// tzname, timezone and daylight, herrnoAt h_errno; passwordAt is
+	// getpass's buffer.
+	errnoAt    uint32
+	environAt  uint32
+	tzAt       [3]uint32
+	herrnoAt   uint32
+	passwordAt uint32
 	// heap is what the kernel knows of the heap, static the block of the
 	// results libc keeps in static storage, env the environ array the kernel
 	// allocated last.
-	heap      *Heap
-	static    uint32
-	env       uint32
-	seed      uint64
-	limits    [rlimitCount]rlimit
-	cred      cred
+	heap   *Heap
+	static uint32
+	env    uint32
+	seed   uint64
+	limits [rlimitCount]rlimit
+	cred   cred
 	// wasiRoot is the descriptor of a WASI command's preopened root, -1 for
 	// none (kernel_wasi.go); chaos is the rules of the points of failure of
 	// the process's tree, of a build for chaos only (chaos_on.go).
-	wasiRoot int
-	chaos    *chaosRulesOf
+	wasiRoot  int
+	chaos     *chaosRulesOf
 	regexes   map[uint32]*posixRegex
 	nextRegex uint32
 	// constants are strings of the heap the kernel returns and the program
@@ -168,7 +172,7 @@ type procExit struct {
 // is a server, or a program of none. Its programs compile with options.
 func newKernel(options CompileOptions, user cred) *Kernel {
 	k := &Kernel{procs: map[int32]*Process{}, codes: map[[sha256.Size]byte]*codeEntry{}, options: options, fifos: map[fifoKey]*pipe{},
-		exit: make(chan int, 1), root: newNoRoot(), user: user}
+		exit: make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]*remoteTerminal{}}
 	k.names.host, k.names.domain = "pizdos", "(none)"
 
 	k.functions = k.functionTable()
@@ -402,7 +406,7 @@ func (p *Process) runImage(img *execImage, i *Instance, enter func()) (next *exe
 		i = newInstance(img.code, p.k, runStack)
 		i.attach(p)
 		p.heap, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, 0, 0, 0, 0, 0
-		p.tzAt, p.herrnoAt = [3]uint32{}, 0
+		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0
 		p.regexes, p.constants, p.locale = map[uint32]*posixRegex{}, map[string]uint32{}, [lcAll]string{}
 		p.envStrings, p.mappings = map[uint32]bool{}, map[uint32]mapping{}
 		p.jumps, p.stackAt = map[uint32]*jump{}, 0
@@ -498,6 +502,7 @@ func trapSignal(code uint32) int {
 // vm ends.
 func (p *Process) terminate(status int) {
 	p.stopTimers()
+	p.leaveSession()
 
 	for fd := range p.files.size() {
 		p.closeFd(fd)

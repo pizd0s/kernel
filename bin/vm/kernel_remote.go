@@ -90,8 +90,12 @@ const (
 	rReady
 )
 
-// An OPEN's OK's arg: the open file tells its readiness.
-const openTells = 1
+// An OPEN's OK's arg: the open file tells its readiness. READY's flags:
+// the terminal's TOSTOP.
+const (
+	openTells   = 1
+	readyTostop = 1
+)
 
 // The flags of an io.
 const (
@@ -130,9 +134,11 @@ type remoteNode struct {
 	after uint64
 	// tells is set for a file whose server tells its readiness, READY on
 	// its endpoint, whose channel keeps only the last; ready is what that
-	// said.
-	tells bool
-	ready atomic.Int32
+	// said, and a terminal's foreground group and TOSTOP.
+	tells      bool
+	ready      atomic.Int32
+	foreground atomic.Int32
+	tostop     atomic.Bool
 }
 
 type remoteFile struct {
@@ -244,7 +250,10 @@ func (n *remoteNode) readiness() int16 {
 			break
 		}
 
-		if len(pk.data) >= remoteHeader && binary.LittleEndian.Uint32(pk.data) == rReady {
+		if len(pk.data) >= remoteHeader+8 && binary.LittleEndian.Uint32(pk.data) == rReady {
+			n.foreground.Store(int32(binary.LittleEndian.Uint32(pk.data[remoteHeader:])))
+			n.tostop.Store(binary.LittleEndian.Uint32(pk.data[remoteHeader+4:])&readyTostop != 0)
+
 			events := int16(binary.LittleEndian.Uint32(pk.data[4:])) & (pollIn | pollPri | pollOut | pollErr | pollHup)
 
 			if events&pollIn != 0 {

@@ -37,8 +37,9 @@ void fail(int fd, int e) {
     answer(fd, opErr, uint32_t(e));
 }
 
-void tell(int fd, uint32_t events) {
-    answer(fd, opReady, events);
+void tell(int fd, uint32_t events, uint32_t foreground, uint32_t flags) {
+    const uint32_t state[] = {foreground, flags};
+    answer(fd, opReady, events, state, sizeof state);
 }
 
 int enroll(int registry, const char* name, uint32_t mode, Device& out) {

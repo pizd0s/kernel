@@ -734,19 +734,6 @@ func (p *Process) libcDup3(old, new, flags uint32) uint32 {
 	return p.result(p.dupTo(old, new, flags&syscall.O_CLOEXEC != 0))
 }
 
-// tcgetsid is the caller's session: the kernel keeps no session of
-// a terminal.
-func (p *Process) libcTcgetsid(fd uint32) uint32 {
-	if p.libcIsatty(fd) == 0 {
-		return p.result(0, p.errno())
-	}
-
-	p.k.mu.Lock()
-	defer p.k.mu.Unlock()
-
-	return p.result(int(p.sid), nil)
-}
-
 func (p *Process) libcCfgetospeed(at uint32) uint32 {
 	return p.u32(at+8) & cbaud
 }

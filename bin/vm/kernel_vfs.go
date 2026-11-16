@@ -132,7 +132,8 @@ func flagOf(follow bool) uint32 {
 }
 
 // openPath opens what a path names, as open(2) does: a file system's open
-// file, an object of the kernel, a FIFO's pipe, or a handle.
+// file, an object of the kernel, a FIFO's pipe, or a handle; /dev/tty is
+// the caller's controlling terminal (kernel_terminal.go).
 func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (File, error) {
 	if p.chaosFail("openat") {
 		return nil, syscall.EIO
@@ -144,6 +145,12 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (F
 
 	if err != nil {
 		return nil, err
+	}
+
+	if pk.arg&openControlling != 0 {
+		mine.unref()
+
+		return p.openControlling(flags)
 	}
 
 	if len(pk.files) > 0 {
@@ -191,7 +198,13 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (F
 	}
 
 	if pk.arg&openTerminal != 0 {
-		return &remoteTerminal{remoteFile{node}}, nil
+		t := &remoteTerminal{remoteFile: remoteFile{node}, dev: st.Dev, ino: st.Ino}
+
+		if flags&syscall.O_NOCTTY == 0 {
+			p.acquire(t)
+		}
+
+		return t, nil
 	}
 
 	return &remoteFile{node}, nil

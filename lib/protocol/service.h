@@ -14,8 +14,9 @@ void answer(int fd, uint32_t op, uint32_t arg, const void* data = nullptr, size_
 void fail(int fd, int e);
 
 // Tells the kernel, on an open file's endpoint, the events poll finds of
-// it now (READY); its OPEN's OK said openTells.
-void tell(int fd, uint32_t events);
+// it now (READY), and a terminal's foreground group and flags; its OPEN's
+// OK said openTells.
+void tell(int fd, uint32_t events, uint32_t foreground = 0, uint32_t flags = 0);
 
 // A device registered: ours of the pair rootfs hands its opens on to, and
 // its stat, as rootfs has its name.

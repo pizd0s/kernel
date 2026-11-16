@@ -1,7 +1,7 @@
 // devfs: /dev, a file system of the VFS's (lib/protocol/protocol.h), which
 // rootfs starts and mounts on /dev with the channel it gives it: rootfs
-// asks it by node, its root node 1. It holds the terminal the kernel gave
-// vm as descriptor 0, tty, whose open hands out the terminal itself; init,
+// asks it by node, its root node 1. It holds tty, whose open is of the
+// opener's controlling terminal, which the kernel opens instead; init,
 // where the services of the system register their devices (REGISTER,
 // lib/protocol/service.h); those devices, each a service's: an open of
 // one goes on to its service, the reply's endpoint with it, and the
@@ -41,15 +41,14 @@
 namespace {
     enum class Kind {
         Dir,
-        Terminal,
+        Controlling, // tty: the opener's controlling terminal
         Registry,
         Device, // a service's: a character or block device
         Socket, // a socket's name: it holds the socket's listener, which CONNECT gives
     };
 
-    // A node of /dev: its root or a directory of devices, the terminal,
-    // init, or a service's device; pos its place among its directory's
-    // entries.
+    // A node of /dev: its root or a directory of devices, tty, init, or a
+    // service's device; pos its place among its directory's entries.
     struct Node {
         uint64_t ino;
         uint64_t pos;
@@ -60,7 +59,7 @@ namespace {
         uint64_t atime;
         uint64_t mtime;
         uint64_t ctime;
-        int fd; // the terminal's; a device's end of its service's pair; a socket's listener
+        int fd; // a device's end of its service's pair; a socket's listener
         char name[NAME_MAX + 1];
         Node* parent;  // the directory it is in; the root's is the root
         Node* entries; // a directory's, in their order
@@ -218,9 +217,10 @@ static bool nameAt(const Request& r, size_t at, const char*& name, size_t& lengt
     return length > 0;
 }
 
-// An open of a node: the terminal itself handed out; init an endpoint
-// of devfs's, which REGISTER comes on; a device's open handed on to its
-// service with the reply's endpoint, ENXIO when the service is gone.
+// An open of a node: tty's the opener's controlling terminal, which the
+// kernel opens; init an endpoint of devfs's, which REGISTER comes on; a
+// device's open handed on to its service with the reply's endpoint, ENXIO
+// when the service is gone.
 static void openNode(Node& n, Request& r) {
     const uint32_t access = r.h.arg & O_ACCMODE;
     const bool reads = access != O_WRONLY;
@@ -235,12 +235,8 @@ static void openNode(Node& n, Request& r) {
         return fail(r.reply(), EACCES);
     }
     switch (n.kind) {
-        case Kind::Terminal: {
-            const Header h{opOk, 0, 0, 0};
-            const iovec parts[] = {{const_cast<Header*>(&h), sizeof h}};
-            sendPacket(r.reply(), parts, 1, &n.fd, 1);
-            return;
-        }
+        case Kind::Controlling:
+            return answer(r.reply(), opOk, openControlling);
         case Kind::Registry:
             answerStat(r.reply(), n);
             watch(epoll, {r.reply(), false, reads, writes, &registryTag});
@@ -555,7 +551,7 @@ int devfsMain(int argc, char** argv) {
     root.gid = uint32_t(getegid());
     root.atime = root.mtime = root.ctime = now();
     root.parent = &root;
-    add(root, "tty", 3, Kind::Terminal, S_IFCHR | 0666, 0, 0)->fd = STDIN_FILENO;
+    add(root, "tty", 3, Kind::Controlling, S_IFCHR | 0666, 0, 0);
     add(root, "init", 4, Kind::Registry, S_IFCHR | 0600, uint32_t(geteuid()), uint32_t(getegid()));
     epoll = epoll_create1(EPOLL_CLOEXEC);
     if (epoll < 0 || fcntl(channel, F_SETFD, FD_CLOEXEC) != 0) {

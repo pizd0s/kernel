@@ -74,7 +74,7 @@ func (p *Process) startVfork() uint32 {
 	c.image, c.vfork = p.image, v
 	c.heap, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap, p.static, p.env, p.errnoAt, p.environAt, p.siginfo
 	c.regexes, c.nextRegex, c.constants, c.jumps, c.stackAt = p.regexes, p.nextRegex, p.constants, p.jumps, p.stackAt
-	c.locale, c.envStrings, c.mappings, c.tzAt, c.herrnoAt = p.locale, p.envStrings, p.mappings, p.tzAt, p.herrnoAt
+	c.locale, c.envStrings, c.mappings, c.tzAt, c.herrnoAt, c.passwordAt = p.locale, p.envStrings, p.mappings, p.tzAt, p.herrnoAt, p.passwordAt
 	c.token.Store(p.token.Load())
 	c.inherit(p)
 	p.inst.attach(c)
@@ -121,7 +121,7 @@ func (p *Process) fork(setup func(c *Process)) (int32, error) {
 	inst.attach(c)
 	c.image = p.image
 	c.heap, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap.clone(), p.static, p.env, p.errnoAt, p.environAt, p.siginfo
-	c.nextRegex, c.stackAt, c.locale, c.tzAt, c.herrnoAt = p.nextRegex, p.stackAt, p.locale, p.tzAt, p.herrnoAt
+	c.nextRegex, c.stackAt, c.locale, c.tzAt, c.herrnoAt, c.passwordAt = p.nextRegex, p.stackAt, p.locale, p.tzAt, p.herrnoAt, p.passwordAt
 	c.regexes, c.constants, c.jumps = map[uint32]*posixRegex{}, map[string]uint32{}, map[uint32]*jump{}
 
 	for id, r := range p.regexes {

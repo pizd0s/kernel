@@ -449,10 +449,6 @@ func (p *Process) libcPrctl(option, va uint32) uint32 {
 	return p.prctl(option, va)
 }
 
-func (p *Process) libcGetpass(prompt uint32) uint32 {
-	return p.getpass(prompt)
-}
-
 // Hanging up the terminal needs privilege.
 func (p *Process) libcVhangup() uint32 {
 	return p.result(0, syscall.EPERM)
@@ -460,22 +456,6 @@ func (p *Process) libcVhangup() uint32 {
 
 func (p *Process) libcSethostid(id uint32) uint32 {
 	return p.result(0, syscall.EPERM)
-}
-
-// getpass reads a password from the process's terminal, /dev/tty: the
-// system has no terminal, so it is NULL, with open's error, as musl's when
-// it opens none.
-func (p *Process) getpass(prompt uint32) uint32 {
-	f, err := p.openPath("/dev/tty", syscall.O_RDWR|syscall.O_NOCTTY, 0)
-
-	if err == nil {
-		f.unref()
-		err = syscall.ENOTTY
-	}
-
-	p.setErrno(errnoOf(err))
-
-	return 0
 }
 
 // The system's names, uname's, the kernel's own: none of the host's. The

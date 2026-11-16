@@ -69,7 +69,8 @@ namespace {
     struct Terminal;
 
     // An open file of a terminal, its master's or its slave's: its
-    // endpoint, which hears its readiness, and the events it heard last.
+    // endpoint, which hears its readiness, and what it heard last: the
+    // events, the foreground group and the flags.
     struct Open {
         Terminal* terminal;
         bool master;
@@ -77,6 +78,8 @@ namespace {
         bool writes;
         int fd;
         uint32_t told;
+        uint32_t toldForeground;
+        uint32_t toldFlags;
     };
 
     enum class Wait {
@@ -663,13 +666,19 @@ static uint32_t eventsOf(const Open& o) {
     return events;
 }
 
+// Tells every open file of the terminal what changed of its readiness,
+// its foreground group and its TOSTOP.
 static void tellAll(const Terminal& t) {
+    const uint32_t foreground = uint32_t(t.foreground);
+    const uint32_t flags = (t.settings.c_lflag & TOSTOP) != 0 ? readyTostop : 0;
     for (Open& o : opens) {
         if (o.terminal == &t) {
             const uint32_t events = eventsOf(o);
-            if (events != o.told) {
-                tell(o.fd, events);
+            if (events != o.told || foreground != o.toldForeground || flags != o.toldFlags) {
+                tell(o.fd, events, foreground, flags);
                 o.told = events;
+                o.toldForeground = foreground;
+                o.toldFlags = flags;
             }
         }
     }
@@ -981,8 +990,8 @@ static void setAttributes(Open& o, Request& r) {
     }
     if (r.h.arg == TCSANOW) {
         apply(t, settings);
-        answer(r.reply(), opOk, 0);
-        return progress(t);
+        progress(t);
+        return answer(r.reply(), opOk, 0);
     }
     if (Waiting* w = hold(o, r, Wait::Drain)) {
         w->settles = true;
@@ -1074,11 +1083,12 @@ static void controls(Open& o, const Request& r) {
         return fail(r.reply(), EINVAL);
     }
     memcpy(&group, r.body, sizeof group);
-    if (t.session != 0 && t.session != pid_t(r.h.arg)) {
+    if (r.h.arg != 0 && t.session != 0 && t.session != pid_t(r.h.arg)) {
         return fail(r.reply(), EPERM);
     }
     t.session = pid_t(r.h.arg);
-    t.foreground = pid_t(group);
+    t.foreground = r.h.arg != 0 ? pid_t(group) : 0;
+    tellAll(t);
     answer(r.reply(), opOk, 0);
 }
 
@@ -1127,6 +1137,7 @@ static void fileCall(Open& o, Request& r) {
             return answerCount(r.reply(), uint32_t(t.foreground));
         case opSetPgrp:
             t.foreground = pid_t(r.h.arg);
+            tellAll(t);
             return answer(r.reply(), opOk, 0);
         case opSetCtty:
             return controls(o, r);
@@ -1141,7 +1152,7 @@ static void opened(Terminal& t, bool master, Request& r) {
     const uint32_t access = r.h.arg & O_ACCMODE;
     for (Open& o : opens) {
         if (!o.terminal) {
-            o = {&t, master, access != O_WRONLY, access != O_RDONLY, r.reply(), 0xffffffff};
+            o = {&t, master, access != O_WRONLY, access != O_RDONLY, r.reply(), 0xffffffff, 0, 0};
             watch(epoll, {r.reply(), false, o.reads, o.writes, &o});
             r.fds[r.count - 1] = -1;
             ++(master ? t.masters : t.slaves);

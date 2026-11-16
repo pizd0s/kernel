@@ -148,10 +148,16 @@
 //   and from the server, on the endpoint of an open file whose OPEN's OK
 //   had openTells in arg, the file's readiness, which select, poll and
 //   epoll find: until the first, nothing is ready; the last counts.
-//     READY     arg events                POLLIN, POLLPRI, POLLOUT, POLLERR
-//                                         and POLLHUP, Linux's bits; sent
-//                                         as they change, the first right
-//                                         after the OK
+//     READY     arg events  foreground u32, flags u32
+//                                         events: POLLIN, POLLPRI, POLLOUT,
+//                                         POLLERR and POLLHUP, Linux's bits;
+//                                         a terminal's foreground group and
+//                                         readyTostop for its TOSTOP, which
+//                                         the kernel's job control needs,
+//                                         zeros of any other file. Sent as
+//                                         they change, the first right
+//                                         after the OK, and before the
+//                                         answer to a call that changed them
 //
 //   A terminal's, on an open file whose OPEN's OK had openTerminal in arg:
 //   the server keeps all of the terminal, its settings and its discipline
@@ -182,12 +188,15 @@
 //                                         session
 //     SETCTTY   arg sid   pgrp u32        a slave controls the session of
 //                                         sid, pgrp its foreground group;
-//                                         EPERM when it controls another
+//                                         EPERM when it controls another;
+//                                         sid 0: it controls none now
 //
 //   A device's service's, on the channel devfs has of it, and on
 //   /dev/init:
 //     OPEN      arg flags   mode u32      the reply's endpoint is the open
 //                                         file
+//     OPEN of /dev/tty, devfs's, is the opener's controlling terminal: its
+//     OK has openControlling, and the kernel opens that terminal instead.
 //     REGISTER  arg mode    name          on /dev/init. OK stat: a device,
 //                                         S_IFCHR or S_IFBLK, of that name
 //                                         in /dev. fds[0] is the end of a
@@ -308,9 +317,13 @@ constexpr size_t maxFds = 4;
 constexpr uint32_t noId = 0xffffffff; // a uid or gid CHOWN keeps
 constexpr uint32_t fsNocache = 1;     // ROOT's flags: the file system changes by itself
 // An OPEN's OK's arg: the open file tells its readiness (READY); it is a
-// terminal's, which takes a terminal's calls.
+// terminal's, which takes a terminal's calls; the open is of the opener's
+// controlling terminal, which the kernel opens.
 constexpr uint32_t openTells = 1;
 constexpr uint32_t openTerminal = 2;
+constexpr uint32_t openControlling = 4;
+// READY's flags: the terminal's TOSTOP.
+constexpr uint32_t readyTostop = 1;
 // Io's flags.
 constexpr uint32_t ioAppend = 1;
 constexpr uint32_t ioNonblock = 2;
