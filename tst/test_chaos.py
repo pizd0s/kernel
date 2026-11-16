@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Faults exercise real AOT/VM commands; production executables ignore them.
 
-    test_chaos.py <vm> <vm-chaos> <native-aot> <native-aot-chaos> <guest.wasm>
+    test_chaos.py <vm> <vm-chaos> <native-aot> <native-aot-chaos> <guest.wasm> <rootfs> <tests.img>
+
+The guest, tst/chaos/check.c, the image of the tests' /tests/chaos/check,
+runs in the system, its rule of the kernel's points of failure
+PIZDOS_CHAOS in its environment: it does an operation sixteen times and
+counts what failed, which the chaos build's rule fails once and the
+production build's never.
 """
 import os
 from pathlib import Path
@@ -21,7 +27,7 @@ def call(command, *, data=None, **variables):
 
 
 def main():
-    vm, vm_chaos, native, native_chaos, guest = sys.argv[1:]
+    vm, vm_chaos, native, native_chaos, guest, rootfs, image = sys.argv[1:]
     reference = call([native], data=EMPTY)
     assert reference.returncode == 0, reference.stderr
     assert call([native_chaos], data=EMPTY).stdout == reference.stdout
@@ -83,7 +89,26 @@ def main():
         result = call([vm, "-o", str(embedded), guest])
         assert result.returncode == 0 and embedded.read_bytes() == compiled.stdout, result.stderr
 
-    print("chaos: native/Wasm AOT and VM faults, atomic output and production no-ops passed")
+        # The check's output goes through cat, which waits for its end: what
+        # daemon detaches writes it too.
+        def run_guest(binary, operation, failures, rule=""):
+            script = f"cd /tmp && env PIZDOS_CHAOS={rule} /tests/chaos/check {operation} | cat"
+            result = call([binary, "run", "--disk", f"image={image}", "--", rootfs, "-c", script], data=b"x" * 32)
+            expected = f"{operation}: failures={failures}\n".encode()
+            assert (result.returncode, result.stdout, result.stderr) == (0, expected, b""), (operation, rule, result)
+
+        for operation, point, skip in (("read", "read", 2), ("write", "write", 2), ("openat", "openat", 2), ("fork", "fork", 2),
+                                       ("memory-grow", "memory-grow", 2), ("fstat", "file-stat", 2), ("fstatat", "file-stat", 2),
+                                       ("stat", "file-stat", 2), ("lstat", "file-stat", 2), ("fdopendir", "file-stat", 2),
+                                       ("msync", "file-stat", 2), ("chdir", "file-stat", 2), ("relative-open", "openat", 1),
+                                       ("fexecve", "file-stat", 1), ("system", "openat", 1), ("daemon", "openat", 2)):
+            rule = f"{point}@{skip}"
+            run_guest(vm, operation, 0, rule)
+            run_guest(vm_chaos, operation, 0)
+            run_guest(vm_chaos, operation, 1, rule)
+            run_guest(vm_chaos, operation, 0, f"{point}@4294967295")
+
+    print("chaos: native/Wasm AOT and VM faults, the kernel's faults a guest recovers from, atomic output and production no-ops passed")
 
 
 if __name__ == "__main__":

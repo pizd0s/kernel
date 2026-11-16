@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Run bad guest operations through the VM and check controlled diagnostics.
 
-    test_runtime_errors.py <vm> <native-aot>
+    test_runtime_errors.py <vm> <native-aot> <rootfs>
 
 Each input is a valid Wasm program using the public kernel imports. These
 cases deliberately violate the allocator or nonlocal-jump contract; they
-must terminate the guest rather than crash the Go host.
+must terminate the guest rather than crash the Go host. They run in one
+boot of the system rootfs.
 """
 import os
 from pathlib import Path
@@ -14,9 +15,7 @@ import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dev"))
-
-from exe import pack  # noqa: E402
+import system
 
 
 def leb(value, signed=False):
@@ -75,7 +74,7 @@ def program(imports, body, *, helper=None, stack=True, heap=True, table=False):
 
 
 def main():
-    vm, native = sys.argv[1:]
+    vm, native, rootfs = sys.argv[1:]
     cases = []
     # A jmp_buf comes with its size, 80, after its pointer.
     for name in ("longjmp", "_longjmp", "siglongjmp"):
@@ -113,20 +112,21 @@ def main():
     with tempfile.TemporaryDirectory(prefix="pizdos-runtime-errors-") as directory:
         work = Path(directory)
         for name, module, diagnostic in cases:
-            source, executable, compiled, embedded = [work / (name + suffix) for suffix in (".wasm", "", ".native.o", ".embedded.o")]
+            source, compiled, embedded = [work / (name + suffix) for suffix in (".wasm", ".native.o", ".embedded.o")]
             source.write_bytes(module)
-            executable.write_bytes(pack(module))
             result = subprocess.run([native, "--strict"], input=module, capture_output=True, env=env, timeout=60)
             assert result.returncode == 0, (name, result.stderr)
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0, (name, result.stderr)
             assert compiled.read_bytes() == embedded.read_bytes(), name
-            result = subprocess.run([vm, "run", "-a", "runtime-error", "--", str(executable)], capture_output=True, env=env, timeout=30)
-            assert result.returncode == 134 and result.stdout == b"", (name, result)
-            lines = result.stderr.decode().splitlines()
-            assert lines and diagnostic in lines[0], (name, result.stderr)
-            assert all(re.match(r"runtime-error\[\d+\]: ", line) for line in lines), (name, result.stderr)
+        results = system.run(vm, rootfs, [("runtime-error", module, [], b"") for _, module, _ in cases], env=env)
+        for (name, _, diagnostic), result in zip(cases, results):
+            status, stdout, stderr = result
+            assert status == 134 and stdout == b"", (name, result)
+            lines = stderr.decode().splitlines()
+            assert lines and diagnostic in lines[0], (name, stderr)
+            assert all(re.match(r"runtime-error\[\d+\]: ", line) for line in lines), (name, stderr)
             assert len(lines) > 1, (name, "missing guest stack trace")
     print(f"runtime errors: {len(cases)} controlled allocator and nonlocal-jump failures passed with both AOTs")
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reject malformed control flow, segments and unsupported import addresses.
 
-    test_compiler_rejections.py <vm> <native-aot> <wazero>
+    test_compiler_rejections.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
@@ -9,9 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dev"))
-
-from exe import pack  # noqa: E402
+import system
 
 
 def leb(value):
@@ -61,7 +59,7 @@ def program(code, *, elements=None, data=None, exports=None, import_name=None, a
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     cases = [("large-branch-table", program(b"\x41\0\x0e" + leb(1048577)), "br_table too large"),
              ("branch-table-arity", program(b"\x02\x7f\x02\x40\x41\x2a\x41\0\x0e\1\0\1\x0b\x0b\x1a"), "type mismatch: br_table arity"),
              ("trailing-operators", program(b"\x0b\1"), "operators remaining after end of function"),
@@ -94,6 +92,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="pizdos-compiler-rejections-") as directory:
         work = Path(directory)
         source, output = work / "input.wasm", work / "output.o"
+        runs = []
         for label, data, diagnostic in cases:
             low_memory = label in ("low-data", "low-stack")
             padded = low_memory or label == "computed-element-offset"
@@ -119,10 +118,12 @@ def main():
                 compiled.write_bytes(reference)
                 result = subprocess.run([vm, "-o", str(output), str(source)], capture_output=True, env=strict_env, timeout=30)
                 assert result.returncode == 0 and output.read_bytes() == reference, (label, result)
-                executable = work / "input"
-                executable.write_bytes(pack(data))
-                result = subprocess.run([vm, "run", "--", str(executable)], capture_output=True, env=strict_env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (label, result)
+                runs.append((label, data))
+        # The low data and stack, which strict mode compiles, run in one boot
+        # of the system.
+        results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=dict(env, W2X_MEMORY_TAIL="strict"))
+        for (label, _), result in zip(runs, results):
+            assert result == (0, b"", b""), (label, result)
     print(f"compiler rejections: {len(cases)} control, segment, index and import-address errors preserve output with both AOTs")
 
 

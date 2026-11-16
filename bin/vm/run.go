@@ -3,18 +3,16 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"runtime"
 	"syscall"
 )
 
-// runModule compiles a module and runs it, and returns the exit code of
-// vm: a program of the kernel, from its executable (PZD1), as its first
-// process, or a WASI command, an executable or a module, on this
-// goroutine, whose code is proc_exit's, or 128 and the trap code after a
-// trap. A module is all vm runs: no object of vm's.
-func runModule(path string, argv []string, asan bool, disks []disk, user cred) (code int) {
+// runModule compiles a module and runs it as the first process, and
+// returns the exit code of vm: a program of the kernel, from its
+// executable (PZD1), or a WASI command, from an executable or a module,
+// which WASI's personality of the kernel runs (kernel_wasi.go). A module
+// is all vm runs: no object of vm's. --asan checks a program of the
+// kernel's heap, which a WASI command has none of.
+func runModule(path string, argv []string, asan bool, disks []disk, user cred) int {
 	data, exe, err := hostProgram(path)
 
 	if err != nil {
@@ -38,52 +36,17 @@ func runModule(path string, argv []string, asan bool, disks []disk, user cred) (
 		throwFmt("%s: %v", path, err)
 	}
 
-	if importsKernel(obj) {
-		if !exe {
-			throwFmt("%s: a program of the kernel, not in an executable of PZD1", path)
-		}
+	kernel := importsKernel(obj)
 
-		return runKernel(path, argv, options, data, obj, disks, user)
+	if kernel && !exe {
+		throwFmt("%s: a program of the kernel, not in an executable of PZD1", path)
 	}
 
-	if asan {
+	if asan && !kernel {
 		throwFmt("--asan runs programs of the kernel")
 	}
 
-	if len(disks) > 0 {
-		throwFmt("--disk runs programs of the kernel")
-	}
-
-	w := newWASI(argv)
-	i := instantiate(argv[0], obj, w, runStack)
-	i.attach(w)
-
-	defer i.writeTailProfile()
-
-	defer func() {
-		switch e := recover().(type) {
-		case nil:
-		case *wasiExit:
-			code = int(e.code)
-		case *Trap:
-			fmt.Fprintln(os.Stderr, e.Error())
-
-			for _, line := range traceLines(e.stack) {
-				fmt.Fprintln(os.Stderr, "    "+line)
-			}
-
-			code = 128 + int(e.code)
-		default:
-			panic(e)
-		}
-
-		runtime.KeepAlive(i)
-	}()
-
-	i.start()
-	i.startCommand()
-
-	return 0
+	return runKernel(path, argv, options, data, obj, disks, user)
 }
 
 // hostProgram reads the program vm runs, a file of the host, as exec reads

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Float guards around zero, subnormals, infinity and NaN before truncation.
 
-    test_float_boundaries.py <vm> <native-aot> <wazero>
+    test_float_boundaries.py <vm> <native-aot> <wazero> <rootfs>
 """
 import math
 import os
@@ -10,6 +10,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+
+import system
 
 
 def leb(value, signed=False):
@@ -64,7 +66,7 @@ def program():
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     data, checks = program()
     with tempfile.TemporaryDirectory(prefix="pizdos-float-boundaries-") as directory:
         work = Path(directory)
@@ -79,8 +81,8 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), result
-            result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-            assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (strict, result)
+            [result] = system.run(vm, rootfs, [("input", data, [], b"")], env=env)
+            assert result == (0, b"", b""), (strict, result)
     print(f"float boundaries: {checks} guarded f32/f64 truncations agree with a Python model, wazero and both AOTs")
 
 

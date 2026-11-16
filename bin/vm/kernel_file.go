@@ -787,7 +787,7 @@ func (p *Process) libcFtruncate(fd uint32, size uint64) uint32 {
 // statFile reads a file's metadata for a guest operation on a
 // descriptor.
 func statFile(p *Process, f File, st *syscall.Stat_t) error {
-	if chaosFail("file-stat") {
+	if p.chaosFail("file-stat") {
 		return syscall.EIO
 	}
 

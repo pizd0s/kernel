@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check trace locations from DWARF line programs carried by Wasm modules.
 
-    test_debug_lines.py <vm> <native-aot>
+    test_debug_lines.py <vm> <native-aot> <rootfs>
 """
 import os
 from pathlib import Path
@@ -9,6 +9,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+
+import system
 
 
 def leb(value, signed=False):
@@ -170,7 +172,7 @@ def jitdump_lines(path):
 
 
 def main():
-    vm, native = sys.argv[1:]
+    vm, native, rootfs = sys.argv[1:]
     env = dict(os.environ, W2X_MEMORY_TAIL="optimized", W2X_TAIL_PROFILE="")
     valid = [(f"v{version}-wide{wide}", table(version, wide)) for version in (2, 3, 4) for wide in (False, True)]
     valid += [(f"v5-{wide}-{path}-{index}", table(5, wide, path, index))
@@ -216,17 +218,24 @@ def main():
     with tempfile.TemporaryDirectory(prefix="pizdos-lines-") as directory:
         work = Path(directory)
         source, embedded, compiled = (work / name for name in ("input.wasm", "embedded.o", "native.o"))
+        runs = []
         for name, lines in [*valid, *malformed]:
-            source.write_bytes(module(lines))
-            result = subprocess.run([native], input=source.read_bytes(), env=env, capture_output=True, timeout=30)
+            data = module(lines)
+            source.write_bytes(data)
+            result = subprocess.run([native], input=data, env=env, capture_output=True, timeout=30)
             assert result.returncode == 0, (name, result.stderr)
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(source)], env=env, capture_output=True, timeout=30)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (name, result)
-            result = subprocess.run([vm, "run", "--", str(source)], env=env, capture_output=True, timeout=30)
-            assert result.returncode == 129 and result.stdout == b"" and b"wasm trap: unreachable" in result.stderr, (name, result)
+            runs.append((name, lines, data))
+        # The modules run in one boot of the system.
+        results = system.run(vm, rootfs, [("input", data, [], b"") for _, _, data in runs], env=env)
+        for (name, lines, _), result in zip(runs, results):
+            status, stdout, stderr = result
+            assert status == 132 and stdout == b"" and b"wasm trap: unreachable" in stderr, (name, result)
             if (name, lines) in valid:
-                assert b"fixture.c:43" in result.stderr, (name, result.stderr)
+                assert b"fixture.c:43" in stderr, (name, stderr)
+        # vm writes the jitdump and the perf map of its own run.
         for name, wasm, line, branch in LOCATED:
             source.write_bytes(wasm)
             result = subprocess.run([native], input=wasm, env=env, capture_output=True, timeout=30)
@@ -237,7 +246,7 @@ def main():
             child = subprocess.Popen([vm, "run", "--", str(source)], env=dict(env, W2O_PERFMAP=str(work)),
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             out, err = child.communicate(timeout=30)
-            assert child.returncode == 130 and out == b"" and b"out of bounds memory access" in err, (name, child.returncode, err)
+            assert child.returncode == 139 and out == b"" and b"out of bounds memory access" in err, (name, child.returncode, err)
             assert f"fixture.c:{line}\n".encode() in err, (name, err)
             dump = work / f"jit-{child.pid}.dump"
             lines = jitdump_lines(dump)

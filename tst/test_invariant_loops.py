@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Check repeated indirect reads and invariant switches in memory loops.
 
-    test_invariant_loops.py <vm> <native-aot> <wazero>
+    test_invariant_loops.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import system
 
 MASK = (1 << 32) - 1
 IMAGE = bytes((i * 37 + 11) % 251 if i >= 4096 else 0 for i in range(65536))
@@ -103,7 +105,7 @@ def program(count, pointer, mode):
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     cases = [(count, 4096, mode) for count in (0, 1, 15, 16, 17, 33, 97) for mode in (0, 1, 3, 4, MASK)]
     cases += [(count, pointer, mode) for count in (1, 17, 33) for pointer in (DEST, DEST + 1, DEST + 65, 65535) for mode in (0, 3)]
     cases += [(count, 65537, 0) for count in (0, 1, 33)]
@@ -111,6 +113,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="pizdos-invariant-loops-") as directory:
         work = Path(directory)
         source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]
+        batches = {False: [], True: []}
         for case in cases:
             data, trapping = program(*case)
             source.write_bytes(data)
@@ -126,9 +129,16 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (case, strict, result)
-                result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-                assert result.returncode == (130 if trapping else 0) and result.stdout == b"", (case, strict, result)
-                assert b"out of bounds memory access" in result.stderr if trapping else result.stderr == b"", (case, strict, result)
+                batches[strict].append((case, data, trapping))
+        # Each mode's programs run in one boot of the system; a trap out of
+        # memory ends its program with SIGSEGV.
+        for strict, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data, _ in runs], env=env)
+            for (case, _, trapping), result in zip(runs, results):
+                status, stdout, stderr = result
+                assert status == (139 if trapping else 0) and stdout == b"", (case, strict, result)
+                assert b"out of bounds memory access" in stderr if trapping else stderr == b"", (case, strict, result)
                 checked += 1
     print(f"invariant loops: {checked} indirect/aliased reads and repeated switches agree with the sequential model, wazero and both AOTs")
 

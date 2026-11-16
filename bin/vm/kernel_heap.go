@@ -682,9 +682,10 @@ func (p *Process) fatal(msg string) {
 	p.exitWith(int(syscall.SIGABRT))
 }
 
-// crash reports what ends the process on the console's standard error
-// (report): the message, then the trace (trace.go), each line marked with
-// the program and the pid, as the lines of processes interleave.
+// crash reports what ends the process on its standard error, where its
+// own errors go, or the console's (report) when it has none it can write:
+// the message, then the trace (trace.go), each line marked with the
+// program and the pid, as the lines of processes interleave.
 func (p *Process) crash(msg string, stack []uintptr) {
 	name := "?"
 
@@ -697,6 +698,12 @@ func (p *Process) crash(msg string, stack []uintptr) {
 
 	for _, line := range traceLines(stack) {
 		fmt.Fprintf(&b, "%s[%d]:     %s\n", name, p.pid, line)
+	}
+
+	if t, err := p.transferAt(2, false); err == nil {
+		if _, err := t.write(p, []byte(b.String()), ioMode{quiet: true}); err == nil {
+			return
+		}
 	}
 
 	p.k.report(b.String())

@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Exercise compiler stream failures with real host descriptors.
 
-    test_host_io.py <vm> <native-aot>
+    test_host_io.py <vm> <native-aot> <rootfs>
 """
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import system
 
 
 def leb(value):
@@ -23,7 +25,7 @@ def section(kind, body):
 
 
 def main():
-    vm, native = sys.argv[1:]
+    vm, native, rootfs = sys.argv[1:]
     env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
     payload = bytes(i % 251 for i in range(131072))
     data = b"\0asm\1\0\0\0" + section(1, b"\1\x60\0\0") + section(3, b"\1\0")
@@ -38,8 +40,8 @@ def main():
         compiled.write_bytes(reference.stdout)
         result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
         assert result.returncode == 0 and embedded.read_bytes() == reference.stdout, result
-        result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-        assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), result
+        result = system.run(vm, rootfs, [("input", data, [], b"")], env=env)[0]
+        assert result == (0, b"", b""), result
 
         with source.open("rb") as stream:
             result = subprocess.run([native, "--strict"], stdin=stream, capture_output=True, env=env,

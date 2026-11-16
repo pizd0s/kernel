@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Debug names may be Unicode or malformed without changing guest traps.
 
-    test_debug_names.py <vm> <native-aot>
+    test_debug_names.py <vm> <native-aot> <rootfs>
 """
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
+
+import system
 
 
 def leb(value):
@@ -44,7 +47,7 @@ def program(payload, alias=None):
 
 
 def main():
-    vm, native = sys.argv[1:]
+    vm, native, rootfs = sys.argv[1:]
     malformed = [("short-size", b"\1\x80"), ("overflow-size", b"\1\xff\xff\xff\xff\x10"),
                  ("large-size", b"\1" + leb(10000)), ("short-count", b"\1\0"),
                  ("short-index", section(1, b"\1\x80")), ("short-name-size", section(1, b"\1\0\x80")),
@@ -72,9 +75,12 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (label, result)
-            result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-            assert result.returncode == 129 and result.stdout == b"" and result.stderr.startswith(b"wasm trap: unreachable\n"), (label, result)
-            assert name.encode() + b"+0x" in result.stderr and b"panic:" not in result.stderr, (label, result)
+        # The modules run in one boot of the system.
+        results = system.run(vm, rootfs, [("input", data, [], b"") for _, data, _ in cases], env=env)
+        for (label, _, name), result in zip(cases, results):
+            status, stdout, stderr = result
+            assert status == 132 and stdout == b"" and re.match(rb"input\[\d+\]: wasm trap: unreachable\n", stderr), (label, result)
+            assert name.encode() + b"+0x" in stderr and b"panic:" not in stderr, (label, result)
     print(f"debug names: {len(cases)} malformed, partial and Unicode sections preserve traps and expected names with both AOTs")
 
 

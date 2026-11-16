@@ -134,7 +134,7 @@ func flagOf(follow bool) uint32 {
 // openPath opens what a path names, as open(2) does: a file system's open
 // file, an object of the kernel, a FIFO's pipe, or a handle.
 func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (File, error) {
-	if chaosFail("openat") {
+	if p.chaosFail("openat") {
 		return nil, syscall.EIO
 	}
 
@@ -164,6 +164,7 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (F
 	node := remoteNode{end: mine, accmode: flags & 3}
 	node.refs.Store(1)
 	node.append.Store(flags&syscall.O_APPEND != 0)
+	node.nonblock.Store(flags&syscall.O_NONBLOCK != 0)
 
 	switch {
 	case len(pk.data) >= remoteStat+8:
@@ -191,6 +192,10 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (F
 // statPath is the metadata of what a path names, or of a last link
 // itself.
 func (d *remoteDir) statPath(p *Process, path string, follow bool, st *syscall.Stat_t) error {
+	if p.chaosFail("file-stat") {
+		return syscall.EIO
+	}
+
 	arg := uint32(0)
 
 	if follow {

@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Check full-width constants and live payloads across paired branches."""
+"""Check full-width constants and live payloads across paired branches.
+
+    run_branch_pair_constants.py <vm> <native-aot> <wazero> <wat2wasm> <fixture.wat> <rootfs>
+"""
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import system  # noqa: E402
 
 MASK = (1 << 64) - 1
 
@@ -40,7 +47,7 @@ def program(template):
 
 
 def main():
-    vm, native, wazero, wat2wasm, fixture = sys.argv[1:]
+    vm, native, wazero, wat2wasm, fixture, rootfs = sys.argv[1:]
     text, count = program(Path(fixture).read_text())
     with tempfile.TemporaryDirectory(prefix="pizdos-wat-branch-constants-") as directory:
         work = Path(directory)
@@ -57,8 +64,9 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(module)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (strict, result)
-            result = subprocess.run([vm, "run", "--", str(module)], capture_output=True, env=env, timeout=30)
-            assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (strict, result)
+            # A mode is a boot of the system of its own.
+            result = system.run(vm, rootfs, [("input", module.read_bytes(), [], b"")], env=env)[0]
+            assert result == (0, b"", b""), (strict, result)
     print(f"WAT branch constants: {count} modeled full-width comparisons retain up to 96 ordered payloads, with wazero and both AOTs in strict/optimized modes")
 
 

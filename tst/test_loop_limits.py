@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Copy loops with inclusive limits, variable steps and biased counters.
 
-    test_loop_limits.py <vm> <native-aot> <wazero>
+    test_loop_limits.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import system
 
 MASK = (1 << 32) - 1
 IMAGE = bytes((i * 37 + 11) % 251 if i >= 4096 else 0 for i in range(65536))
@@ -84,7 +86,7 @@ def program(kind, variable, start, limit, stride, overlapping):
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     cases = [(kind, variable, start, start + distance, stride, overlapping)
              for kind in ("exclusive", "inclusive") for variable, stride in ((False, 1), (False, 3), (True, 3), (True, 65537))
              for start, overlapping in ((1, False), (250, True)) for distance in (-1, 0, 1, 17, 97)]
@@ -94,6 +96,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="pizdos-loop-limits-") as directory:
         work = Path(directory)
         source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]
+        batches = {False: [], True: []}
         for case in cases:
             data = program(*case)
             source.write_bytes(data)
@@ -106,8 +109,13 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (case, result)
-                result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (case, strict, result)
+                batches[strict].append((case, data))
+        # Each mode's programs run in one boot of the system.
+        for strict, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+            for (case, _), result in zip(runs, results):
+                assert result == (0, b"", b""), (case, strict, result)
     print(f"loop limits: {len(cases)} inclusive, variable-step and biased copies agree with a bytewise model, wazero and both AOTs")
 
 

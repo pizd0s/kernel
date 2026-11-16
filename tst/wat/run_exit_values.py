@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Keep direct return and branch uses of loads after loops with early exits."""
+"""Keep direct return and branch uses of loads after loops with early exits.
+
+    run_exit_values.py <vm> <native-aot> <wazero> <wat2wasm> <fixture.wat> <rootfs>
+"""
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import system  # noqa: E402
 
 IMAGE = bytes((index * 37 + 11) % 251 if index >= 4096 else 0 for index in range(65536))
 
@@ -43,11 +50,12 @@ def program(template, branch):
 
 
 def main():
-    vm, native, wazero, wat2wasm, fixture = sys.argv[1:]
+    vm, native, wazero, wat2wasm, fixture, rootfs = sys.argv[1:]
     template, checked = Path(fixture).read_text(), 0
     with tempfile.TemporaryDirectory(prefix="pizdos-wat-exit-values-") as directory:
         work = Path(directory)
         source, module, compiled, embedded = (work / name for name in ("input.wat", "input.wasm", "native.o", "embedded.o"))
+        batches = {False: [], True: []}
         for branch in (False, True):
             wat, count = program(template, branch)
             source.write_text(wat)
@@ -62,9 +70,14 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(module)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (branch, strict, result)
-                result = subprocess.run([vm, "run", "--", str(module)], capture_output=True, env=env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (branch, strict, result)
+                batches[strict].append((branch, module.read_bytes()))
             checked += count
+        # Each mode's programs run in one boot of the system.
+        for strict, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+            for (branch, _), result in zip(runs, results):
+                assert result == (0, b"", b""), (branch, strict, result)
     print(f"WAT exit values: {checked} early/normal exits preserve returned and branched-on loads with a bytewise model, wazero and both AOTs")
 
 

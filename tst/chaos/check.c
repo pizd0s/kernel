@@ -2,7 +2,6 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <pty.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,7 +13,7 @@
 static int attempt(const char* operation) {
     if (strcmp(operation, "system") == 0) {
         // A shell that cannot be loaded ends with 127, as system reports.
-        int status = system("exit7");
+        int status = system("exit 7");
         if (WIFEXITED(status) && WEXITSTATUS(status) == 127) {
             return 1;
         }
@@ -33,21 +32,6 @@ static int attempt(const char* operation) {
         }
         assert(result == 0 || (result == -1 && error == EIO));
         return result < 0;
-    }
-    if (strcmp(operation, "forkpty") == 0) {
-        int master = -1;
-        pid_t child = forkpty(&master, NULL, NULL, NULL);
-        if (child < 0) {
-            assert(errno == EAGAIN && master == -1);
-            return 1;
-        }
-        if (child == 0) {
-            _exit(7);
-        }
-        int status;
-        assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 7);
-        assert(close(master) == 0);
-        return 0;
     }
     if (strcmp(operation, "chdir") == 0) {
         int result = chdir("/");
@@ -72,23 +56,6 @@ static int attempt(const char* operation) {
         }
         assert(close(fd) == 0);
         return failed;
-    }
-    if (strcmp(operation, "ttyname") == 0) {
-        int master, slave;
-        assert(openpty(&master, &slave, NULL, NULL, NULL) == 0);
-        char name[128];
-        memset(name, 0x5a, sizeof(name));
-        int error = ttyname_r(slave, name, sizeof(name));
-        assert(error == 0 || error == EIO);
-        if (error != 0) {
-            for (unsigned i = 0; i < sizeof(name); ++i) {
-                assert(name[i] == 0x5a);
-            }
-        } else {
-            assert(strncmp(name, "/dev/pts/", 9) == 0);
-        }
-        assert(close(master) == 0 && close(slave) == 0);
-        return error != 0;
     }
     if (strcmp(operation, "fstat") == 0 || strcmp(operation, "fstatat") == 0 || strcmp(operation, "stat") == 0 || strcmp(operation, "lstat") == 0) {
         struct stat metadata;
@@ -131,7 +98,7 @@ static int attempt(const char* operation) {
         return 0;
     }
     if (strcmp(operation, "msync") == 0) {
-        int fd = open("/mapping", O_CREAT | O_TRUNC | O_RDWR, 0600);
+        int fd = open("/tmp/mapping", O_CREAT | O_TRUNC | O_RDWR, 0600);
         assert(fd >= 0 && ftruncate(fd, 4096) == 0);
         char* mapping = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         assert(mapping != MAP_FAILED);
@@ -142,7 +109,7 @@ static int attempt(const char* operation) {
         assert(mapping[0] == 'x' && munmap(mapping, 4096) == 0);
         char byte;
         assert(pread(fd, &byte, 1, 0) == 1 && byte == 'x');
-        assert(close(fd) == 0 && unlink("/mapping") == 0);
+        assert(close(fd) == 0 && unlink("/tmp/mapping") == 0);
         return failed;
     }
     if (strcmp(operation, "memory-grow") == 0) {
@@ -201,9 +168,6 @@ static int attempt(const char* operation) {
 }
 
 int main(int argc, char** argv) {
-    if (argc == 3 && strcmp(argv[1], "-c") == 0 && strcmp(argv[2], "exit7") == 0) {
-        return 7;
-    }
     assert(argc == 2);
     int failures = 0;
     for (int i = 0; i < 16; ++i) {

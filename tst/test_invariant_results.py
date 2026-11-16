@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Return the last indirect offset read by a byte-copy loop.
 
-    test_invariant_results.py <vm> <native-aot> <wazero>
+    test_invariant_results.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import system
 
 IMAGE = bytes((i * 37 + 11) % 251 if i >= 4096 else 0 for i in range(65536))
 
@@ -69,7 +71,7 @@ def program(count, pointer, dest, do_while=False, subtract=True):
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     cases = [(count, pointer, dest, do_while, True) for count in (0, 1, 16, 17, 97)
              for dest in (32768, 8191, 8193) for pointer in (4096, dest, dest + 1, dest + 65, 8192) for do_while in (False, True)]
     cases += [(count, pointer, dest, False, False) for count in (0, 1, 17, 97)
@@ -77,6 +79,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="pizdos-invariant-results-") as directory:
         work = Path(directory)
         source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]
+        batches = {False: [], True: []}
         for case in cases:
             data = program(*case)
             source.write_bytes(data)
@@ -89,8 +92,13 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (case, result)
-                result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (case, strict, result)
+                batches[strict].append((case, data))
+        # Each mode's programs run in one boot of the system.
+        for strict, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+            for (case, _), result in zip(runs, results):
+                assert result == (0, b"", b""), (case, strict, result)
     print(f"invariant results: {len(cases)} indirect, aliasing and overlapping copies preserve their final read with both AOTs and wazero")
 
 

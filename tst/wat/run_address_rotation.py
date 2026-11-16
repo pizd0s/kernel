@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
-"""Rotate checked and unchecked addresses through long cyclic parameter chains."""
+"""Rotate checked and unchecked addresses through long cyclic parameter chains.
+
+    run_address_rotation.py <vm> <native-aot> <wazero> <wat2wasm> <fixture.wat> <rootfs>
+"""
 import os
 from pathlib import Path
+import re
+import signal
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import system  # noqa: E402
 
 
 def program(template, trap_depth=None):
@@ -37,11 +46,12 @@ def program(template, trap_depth=None):
 
 
 def main():
-    vm, native, wazero, wat2wasm, fixture = sys.argv[1:]
+    vm, native, wazero, wat2wasm, fixture, rootfs = sys.argv[1:]
     template = Path(fixture).read_text()
     with tempfile.TemporaryDirectory(prefix="pizdos-wat-address-rotation-") as directory:
         work = Path(directory)
         source, module, compiled, embedded = (work / name for name in ("input.wat", "input.wasm", "native.o", "embedded.o"))
+        batches = {False: [], True: []}
         for trap_depth in (None, 32, 128):
             text, count = program(template, trap_depth)
             source.write_text(text)
@@ -59,12 +69,20 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(module)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (strict, result)
-                result = subprocess.run([vm, "run", "--", str(module)], capture_output=True, env=env, timeout=30)
+                batches[strict].append((trap_depth, module.read_bytes()))
+        # Each mode's programs run in one boot of the system. The access out
+        # of bounds ends its process by SIGSEGV, each line of its report
+        # marked with its argv[0] and pid.
+        for strict, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+            for (trap_depth, _), result in zip(runs, results):
                 if trap_depth is None:
-                    assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (strict, result)
+                    assert result == (0, b"", b""), (trap_depth, strict, result)
                 else:
-                    assert result.returncode == 130 and result.stdout == b"", (strict, result)
-                    assert result.stderr.startswith(b"wasm trap: out of bounds memory access\n") and b"panic:" not in result.stderr, result
+                    status, out, err = result
+                    assert status == 128 + signal.SIGSEGV and out == b"", (trap_depth, strict, result)
+                    assert re.match(rb"input\[\d+\]: wasm trap: out of bounds memory access\n", err) and b"panic:" not in err, (trap_depth, strict, result)
     print(f"WAT address rotation: {count} address checks and short/long out-of-bounds chains agree with a rotation model, wazero and both AOTs")
 
 

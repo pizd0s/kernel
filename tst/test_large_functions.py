@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Compile and run large checksums and calls with thousands of arguments.
 
-    test_large_functions.py <vm> <native-aot>
+    test_large_functions.py <vm> <native-aot> <rootfs>
 
 Python computes the expected results independently. Both compiler builds
-must emit identical objects, and both objects must produce those results.
+must emit identical objects, and the programs, run in the system, must
+produce those results.
 """
 import os
 from pathlib import Path
@@ -12,6 +13,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+
+import system
 
 
 def leb(value, signed=False):
@@ -106,12 +109,13 @@ def wide_call(count):
 
 
 def main():
-    vm, native = sys.argv[1:]
+    vm, native, rootfs = sys.argv[1:]
     checked = 0
     with tempfile.TemporaryDirectory(prefix="pizdos-large-functions-") as directory:
         work = Path(directory)
         cases = [(kind, count) for count in (16383, 16385, 32769) for kind in KINDS]
         cases += [("mixed-call", count) for count in (28, 31, 32, 33, 64, 96, 1000)]
+        batches = {False: [], True: []}
         for name, count in cases:
             data = wide_call(count) if name == "mixed-call" else checksum(name, count)
             source = work / "input.wasm"
@@ -126,8 +130,13 @@ def main():
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=180)
                 assert result.returncode == 0, (name, count, strict, result.stderr)
                 assert compiled.read_bytes() == embedded.read_bytes(), (name, count, strict)
-                result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (name, count, strict, result)
+                batches[strict].append(((name, count), data))
+        # Each mode's programs run in one boot of the system.
+        for strict, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+            for ((name, count), _), result in zip(runs, results):
+                assert result == (0, b"", b""), (name, count, strict, result)
                 checked += 1
     print(f"large functions: {checked} checksum/mixed-call programs agree with independent results and both AOTs")
 

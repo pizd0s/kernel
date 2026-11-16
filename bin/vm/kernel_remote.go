@@ -742,7 +742,7 @@ func (f *remoteFile) writeFrom(p *Process, w *memfdFile, woff uint32, n int, off
 }
 
 func (f *remoteFile) read(p *Process, b []byte, mode ioMode) (int, error) {
-	if chaosFail("read") {
+	if p.chaosFail("read") {
 		return 0, syscall.EIO
 	}
 
@@ -757,7 +757,7 @@ func (f *remoteFile) read(p *Process, b []byte, mode ioMode) (int, error) {
 // written. Only an append's place is the server's to say: a server that
 // handed the WRITE on, moved, answers with where it went on its device.
 func (f *remoteFile) write(p *Process, b []byte, mode ioMode) (int, error) {
-	if chaosFail("write") {
+	if p.chaosFail("write") {
 		return 0, syscall.EIO
 	}
 

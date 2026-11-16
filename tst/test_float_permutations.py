@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Repeated parallel permutations preserve every floating-point bit pattern.
 
-    test_float_permutations.py <vm> <native-aot> <wazero>
+    test_float_permutations.py <vm> <native-aot> <wazero> <rootfs>
 """
 import math
 import os
@@ -10,6 +10,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+
+import system
 
 MASK = (1 << 64) - 1
 
@@ -89,12 +91,13 @@ def program(bits, count, kind):
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     cases = [(bits, count, kind) for bits in (32, 64) for count in (2, 7, 15, 16, 17, 31, 32, 33, 64)
              for kind in ("rotate", "reverse", "affine")]
     with tempfile.TemporaryDirectory(prefix="pizdos-float-permutations-") as directory:
         work = Path(directory)
         source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]
+        batches = {False: [], True: []}
         for case in cases:
             data = program(*case)
             source.write_bytes(data)
@@ -107,8 +110,13 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (case, result)
-                result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (case, strict, result)
+                batches[strict].append((case, data))
+        # Each mode's programs run in one boot of the system.
+        for strict, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+            for (case, _), result in zip(runs, results):
+                assert result == (0, b"", b""), (case, strict, result)
     print(f"float permutations: {len(cases)} rotation, reversal and affine permutations preserve all bits across repeated branches with both AOTs and wazero")
 
 

@@ -719,18 +719,30 @@ func (p *Process) libcSleep(seconds uint32) uint32 {
 }
 
 func (p *Process) libcClock_gettime(clock, ts uint32) uint32 {
+	t, err := p.clockNow(clock)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	p.put64(ts, uint64(t/1e9))
+	p.put32(ts+8, uint32(t%1e9))
+
+	return p.result(0, nil)
+}
+
+// clockNow is a clock's time in nanoseconds, as clock_gettime tells it.
+func (p *Process) clockNow(clock uint32) (int64, error) {
 	host, ok := hostClock(clock)
 
 	if !ok {
-		return p.result(0, syscall.EINVAL)
+		return 0, syscall.EINVAL
 	}
 
 	var t syscall.Timespec
 	syscall.Syscall(syscall.SYS_CLOCK_GETTIME, host, uintptr(unsafe.Pointer(&t)), 0)
-	p.put64(ts, uint64(t.Sec))
-	p.put32(ts+8, uint32(t.Nsec))
 
-	return p.result(0, nil)
+	return t.Sec*1e9 + t.Nsec, nil
 }
 
 func (p *Process) libcNanosleep(req, rem uint32) uint32 {

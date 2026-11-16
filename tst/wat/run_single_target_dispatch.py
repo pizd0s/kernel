@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Keep byte-load narrowing through handlers returning via a one-target table."""
+"""Keep byte-load narrowing through handlers returning via a one-target table.
+
+    run_single_target_dispatch.py <vm> <native-aot> <wazero> <wat2wasm> <fixture.wat> <rootfs>
+"""
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import system  # noqa: E402
 
 
 def program(template):
@@ -46,7 +53,7 @@ def byte_reads(obj, env):
 
 
 def main():
-    vm, native, wazero, wat2wasm, fixture = sys.argv[1:]
+    vm, native, wazero, wat2wasm, fixture, rootfs = sys.argv[1:]
     text, count = program(Path(fixture).read_text())
     with tempfile.TemporaryDirectory(prefix="pizdos-wat-single-target-dispatch-") as directory:
         work = Path(directory)
@@ -63,8 +70,9 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(module)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (strict, result)
-            result = subprocess.run([vm, "run", "--", str(module)], capture_output=True, env=env, timeout=30)
-            assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (strict, result)
+            # A mode is a boot of the system of its own.
+            result = system.run(vm, rootfs, [("input", module.read_bytes(), [], b"")], env=env)[0]
+            assert result == (0, b"", b""), (strict, result)
             byte_reads(compiled, env)
     print(f"WAT single-target dispatch: {count} modeled routes agree with wazero and both AOTs; all 16 masked word reads become byte loads in strict/optimized modes")
 

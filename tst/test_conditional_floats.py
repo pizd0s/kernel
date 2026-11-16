@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Select whether to divide, take a square root or compare floating values.
 
-    test_conditional_floats.py <vm> <native-aot> <wazero>
+    test_conditional_floats.py <vm> <native-aot> <wazero> <rootfs>
 """
 import math
 import os
@@ -10,6 +10,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+
+import system
 
 
 def leb(value, signed=False):
@@ -84,7 +86,7 @@ def program():
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     data, checks = program()
     with tempfile.TemporaryDirectory(prefix="pizdos-conditional-floats-") as directory:
         work = Path(directory)
@@ -99,8 +101,9 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), result
-            result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-            assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (strict, result)
+            # A mode is a boot of the system of its own.
+            result = system.run(vm, rootfs, [("input", data, [], b"")], env=env)[0]
+            assert result == (0, b"", b""), (strict, result)
     print(f"conditional floats: {checks} divisions, roots and min/max operations agree with a model, wazero and both AOTs")
 
 

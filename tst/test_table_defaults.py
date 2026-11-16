@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Branch tables with only a default, including value-carrying branches.
 
-    test_table_defaults.py <vm> <native-aot> <wazero>
+    test_table_defaults.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import system
 
 
 def leb(value, signed=False):
@@ -69,7 +71,8 @@ def program():
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
+    batches = {False: [], True: []}
     data, checks = program()
     with tempfile.TemporaryDirectory(prefix="pizdos-table-defaults-") as directory:
         work = Path(directory)
@@ -84,8 +87,13 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), result
-            result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-            assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (strict, result)
+            batches[strict].append(((strict), source.read_bytes()))
+    # Each mode's programs run in one boot of the system.
+    for strict, runs in batches.items():
+        env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+        results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+        for label, result in zip((label for label, _ in runs), results):
+            assert result == (0, b"", b""), (label, result)
     print(f"table defaults: {checks} empty and repeated-target tables preserve branch values and memory with wazero and both AOTs")
 
 

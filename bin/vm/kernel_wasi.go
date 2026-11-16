@@ -6,26 +6,29 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"os"
 	"runtime"
 	"syscall"
 	"time"
-	"unsafe"
 )
 
-// WASI preview1 over Linux, enough for Go's wasip1 port. Descriptors 0-2 are
-// the host's, 3 is the preopened root directory, the rest are opened by
-// path_open; the environment is the host's with PWD its working directory,
-// so paths resolve as on the host. A function returns an errno and finds
-// its memory through the instance.
+// WASI preview1, a personality of the kernel's: a module that imports
+// wasi_snapshot_preview1 runs as a process of the kernel, as a program of
+// lib/c does, and its calls are the process's, on its descriptors and its
+// root. A WASI descriptor is the process's own; the process's root, when
+// it has one, is preopened as "/" at the lowest descriptor free after 2
+// as the program starts (wasiPreopen). A call returns WASI's error number,
+// EFAULT for memory out of the module's, and finds its memory and its
+// process through the instance.
 
 const (
 	wasiOK           = 0
 	wasiE2big        = 1
 	wasiEacces       = 2
+	wasiEagain       = 6
 	wasiEbadf        = 8
 	wasiEexist       = 20
 	wasiEfault       = 21
+	wasiEintr        = 27
 	wasiEinval       = 28
 	wasiEio          = 29
 	wasiEisdir       = 31
@@ -38,15 +41,18 @@ const (
 	wasiEnotdir      = 54
 	wasiEnotempty    = 55
 	wasiEperm        = 63
+	wasiEpipe        = 64
 	wasiEspipe       = 70
+	wasiExdev        = 75
 )
 
 var wasiErrnos = map[syscall.Errno]uint32{
-	syscall.E2BIG: wasiE2big, syscall.EACCES: wasiEacces, syscall.EBADF: wasiEbadf, syscall.EEXIST: wasiEexist,
-	syscall.EFAULT: wasiEfault, syscall.EINVAL: wasiEinval, syscall.EISDIR: wasiEisdir, syscall.ELOOP: wasiEloop,
-	syscall.ENAMETOOLONG: wasiEnametoolong, syscall.ENOENT: wasiEnoent, syscall.ENOMEM: wasiEnomem,
-	syscall.ENOSPC: wasiEnospc, syscall.ENOSYS: wasiEnosys, syscall.ENOTDIR: wasiEnotdir,
-	syscall.ENOTEMPTY: wasiEnotempty, syscall.EPERM: wasiEperm, syscall.ESPIPE: wasiEspipe,
+	syscall.E2BIG: wasiE2big, syscall.EACCES: wasiEacces, syscall.EAGAIN: wasiEagain, syscall.EBADF: wasiEbadf,
+	syscall.EEXIST: wasiEexist, syscall.EFAULT: wasiEfault, syscall.EINTR: wasiEintr, syscall.EINVAL: wasiEinval,
+	syscall.EISDIR: wasiEisdir, syscall.ELOOP: wasiEloop, syscall.ENAMETOOLONG: wasiEnametoolong,
+	syscall.ENOENT: wasiEnoent, syscall.ENOMEM: wasiEnomem, syscall.ENOSPC: wasiEnospc, syscall.ENOSYS: wasiEnosys,
+	syscall.ENOTDIR: wasiEnotdir, syscall.ENOTEMPTY: wasiEnotempty, syscall.EPERM: wasiEperm, syscall.EPIPE: wasiEpipe,
+	syscall.ESPIPE: wasiEspipe, syscall.EXDEV: wasiExdev,
 }
 
 func wasiErrno(err error) uint32 {
@@ -65,79 +71,68 @@ func wasiErrno(err error) uint32 {
 	return wasiEio
 }
 
-// wasiExit is the panic of proc_exit.
-type wasiExit struct {
-	code uint32
+// wasiModule is the import module of WASI preview1.
+const wasiModule = "wasi_snapshot_preview1"
+
+var wasiFunctions = map[string]any{
+	"args_get":              wasiArgsGet,
+	"args_sizes_get":        wasiArgsSizesGet,
+	"environ_get":           wasiEnvironGet,
+	"environ_sizes_get":     wasiEnvironSizesGet,
+	"clock_time_get":        wasiClockTimeGet,
+	"clock_res_get":         wasiClockResGet,
+	"fd_write":              wasiFdWrite,
+	"fd_read":               wasiFdRead,
+	"fd_pwrite":             wasiFdPwrite,
+	"fd_pread":              wasiFdPread,
+	"fd_close":              wasiFdClose,
+	"fd_seek":               wasiFdSeek,
+	"fd_sync":               wasiFdSync,
+	"fd_fdstat_get":         wasiFdFdstatGet,
+	"fd_fdstat_set_flags":   wasiFdFdstatSetFlags,
+	"fd_filestat_get":       wasiFdFilestatGet,
+	"fd_filestat_set_size":  wasiFdFilestatSetSize,
+	"fd_prestat_get":        wasiFdPrestatGet,
+	"fd_prestat_dir_name":   wasiFdPrestatDirName,
+	"fd_readdir":            wasiFdReaddir,
+	"path_filestat_get":     wasiPathFilestatGet,
+	"path_open":             wasiPathOpen,
+	"path_create_directory": wasiPathCreateDirectory,
+	"path_remove_directory": wasiPathRemoveDirectory,
+	"path_unlink_file":      wasiPathUnlinkFile,
+	"path_rename":           wasiPathRename,
+	"path_readlink":         wasiPathReadlink,
+	"poll_oneoff":           wasiPollOneoff,
+	"random_get":            wasiRandomGet,
+	"sched_yield":           wasiSchedYield,
+	"proc_exit":             wasiProcExit,
 }
 
-type WASI struct {
-	FunctionImports
-	args []string
-	env  []string
-	fds  map[uint32]int
-	next uint32
-}
-
-const wasiRoot = 3
-
-func newWASI(args []string) *WASI {
-	root := throw2(syscall.Open("/", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0))
-	w := &WASI{args: args, env: []string{"PWD=" + throw2(os.Getwd())}, fds: map[uint32]int{0: 0, 1: 1, 2: 2, wasiRoot: root}, next: wasiRoot + 1}
-
-	for _, e := range os.Environ() {
-		if len(e) < 4 || e[:4] != "PWD=" {
-			w.env = append(w.env, e)
+// isWASI tells whether a module is a WASI command: one that imports WASI's
+// module.
+func isWASI(obj *Object) bool {
+	for _, imp := range obj.meta.imports {
+		if imp.module == wasiModule {
+			return true
 		}
 	}
 
-	return w
+	return false
 }
 
-func (w *WASI) function(imp *ImportMeta) any {
-	if imp.module != "wasi_snapshot_preview1" {
-		return nil
+// wasiPreopen opens the process's root as WASI's preopened "/", at the
+// lowest descriptor free after 2: none for a process without a root.
+func (p *Process) wasiPreopen() {
+	p.wasiRoot = -1
+	f, err := p.openAt(atFdcwd, "/", syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+
+	if err != nil {
+		return
 	}
 
-	functions := map[string]any{
-		"args_get":              wasiArgsGet,
-		"args_sizes_get":        wasiArgsSizesGet,
-		"environ_get":           wasiEnvironGet,
-		"environ_sizes_get":     wasiEnvironSizesGet,
-		"clock_time_get":        wasiClockTimeGet,
-		"clock_res_get":         wasiClockResGet,
-		"fd_write":              wasiFdWrite,
-		"fd_read":               wasiFdRead,
-		"fd_pwrite":             wasiFdPwrite,
-		"fd_pread":              wasiFdPread,
-		"fd_close":              wasiFdClose,
-		"fd_seek":               wasiFdSeek,
-		"fd_sync":               wasiFdSync,
-		"fd_fdstat_get":         wasiFdFdstatGet,
-		"fd_fdstat_set_flags":   wasiFdFdstatSetFlags,
-		"fd_filestat_get":       wasiFdFilestatGet,
-		"fd_filestat_set_size":  wasiFdFilestatSetSize,
-		"fd_prestat_get":        wasiFdPrestatGet,
-		"fd_prestat_dir_name":   wasiFdPrestatDirName,
-		"fd_readdir":            wasiFdReaddir,
-		"path_filestat_get":     wasiPathFilestatGet,
-		"path_open":             wasiPathOpen,
-		"path_create_directory": wasiPathCreateDirectory,
-		"path_remove_directory": wasiPathRemoveDirectory,
-		"path_unlink_file":      wasiPathUnlinkFile,
-		"path_rename":           wasiPathRename,
-		"path_readlink":         wasiPathReadlink,
-		"poll_oneoff":           wasiPollOneoff,
-		"random_get":            wasiRandomGet,
-		"sched_yield":           wasiSchedYield,
-		"proc_exit":             wasiProcExit,
+	if fd, err := p.install(f, 3, true); err == nil {
+		p.wasiRoot = fd
 	}
-
-	return functions[imp.name]
-}
-
-// wasiAt is the WASI of the instance whose import Go runs.
-func wasiAt(ctx uintptr) *WASI {
-	return instanceAt(ctx).host.(*WASI)
 }
 
 func guest(ctx uintptr) []byte {
@@ -173,12 +168,6 @@ func put64(m []byte, at uint32, v uint64) bool {
 	return b != nil
 }
 
-func (w *WASI) fd(fd uint32) (int, bool) {
-	host, ok := w.fds[fd]
-
-	return host, ok
-}
-
 func stringsSizes(m []byte, list []string, count, size uint32) uint32 {
 	n := 0
 
@@ -210,49 +199,44 @@ func stringsGet(m []byte, list []string, ptrs, buf uint32) uint32 {
 }
 
 func wasiArgsGet(ctx uintptr, argv, buf uint32) uint32 {
-	w := wasiAt(ctx)
-	return stringsGet(guest(ctx), w.args, argv, buf)
+	return stringsGet(guest(ctx), proc(ctx).image.argv, argv, buf)
 }
 
 func wasiArgsSizesGet(ctx uintptr, count, size uint32) uint32 {
-	w := wasiAt(ctx)
-	return stringsSizes(guest(ctx), w.args, count, size)
+	return stringsSizes(guest(ctx), proc(ctx).image.argv, count, size)
 }
 
 func wasiEnvironGet(ctx uintptr, env, buf uint32) uint32 {
-	w := wasiAt(ctx)
-	return stringsGet(guest(ctx), w.env, env, buf)
+	return stringsGet(guest(ctx), proc(ctx).image.envp, env, buf)
 }
 
 func wasiEnvironSizesGet(ctx uintptr, count, size uint32) uint32 {
-	w := wasiAt(ctx)
-	return stringsSizes(guest(ctx), w.env, count, size)
+	return stringsSizes(guest(ctx), proc(ctx).image.envp, count, size)
 }
 
-// clocks: realtime, monotonic, process and thread CPU time
-var wasiClocks = []uintptr{0, 1, 2, 3}
-
-func clock(id uint32, res bool) (uint64, uint32) {
-	if id >= uint32(len(wasiClocks)) {
+// clock is a clock's time or resolution, in nanoseconds: realtime,
+// monotonic, the process's and the thread's CPU time, as the kernel's
+// clock_gettime has them.
+func clock(p *Process, id uint32, res bool) (uint64, uint32) {
+	if id > 3 {
 		return 0, wasiEinval
 	}
 
-	var ts syscall.Timespec
-	call := uintptr(syscall.SYS_CLOCK_GETTIME)
-
 	if res {
-		call = syscall.SYS_CLOCK_GETRES
+		return 1, wasiOK
 	}
 
-	if _, _, e := syscall.Syscall(call, wasiClocks[id], uintptr(unsafe.Pointer(&ts)), 0); e != 0 {
-		return 0, wasiErrno(e)
+	t, err := p.clockNow(id)
+
+	if err != nil {
+		return 0, wasiErrno(err)
 	}
 
-	return uint64(ts.Sec)*1e9 + uint64(ts.Nsec), wasiOK
+	return uint64(t), wasiOK
 }
 
 func wasiClockTimeGet(ctx uintptr, id uint32, precision uint64, at uint32) uint32 {
-	t, e := clock(id, false)
+	t, e := clock(proc(ctx), id, false)
 
 	if e == wasiOK && !put64(guest(ctx), at, t) {
 		return wasiEfault
@@ -262,7 +246,7 @@ func wasiClockTimeGet(ctx uintptr, id uint32, precision uint64, at uint32) uint3
 }
 
 func wasiClockResGet(ctx uintptr, id uint32, at uint32) uint32 {
-	t, e := clock(id, true)
+	t, e := clock(proc(ctx), id, true)
 
 	if e == wasiOK && !put64(guest(ctx), at, t) {
 		return wasiEfault
@@ -271,9 +255,8 @@ func wasiClockResGet(ctx uintptr, id uint32, at uint32) uint32 {
 	return e
 }
 
-// iovecs reads a guest iovec array as host iovecs into its memory, which
-// stays where it is during the call.
-func iovecs(m []byte, iovs, count uint32) ([]syscall.Iovec, uint32) {
+// iovecs is a guest iovec array as spans of the module's memory.
+func iovecs(m []byte, iovs, count uint32) ([][]byte, uint32) {
 	if count > 1024 {
 		return nil, wasiEinval
 	}
@@ -284,9 +267,9 @@ func iovecs(m []byte, iovs, count uint32) ([]syscall.Iovec, uint32) {
 		return nil, wasiEfault
 	}
 
-	out := make([]syscall.Iovec, 0, count)
+	out := make([][]byte, 0, count)
 
-	for i := uint32(0); i < count; i++ {
+	for i := range count {
 		base, n := binary.LittleEndian.Uint32(table[8*i:]), binary.LittleEndian.Uint32(table[8*i+4:])
 		b := span(m, base, uint64(n))
 
@@ -294,24 +277,24 @@ func iovecs(m []byte, iovs, count uint32) ([]syscall.Iovec, uint32) {
 			return nil, wasiEfault
 		}
 
-		if n > 0 {
-			out = append(out, syscall.Iovec{Base: &b[0], Len: uint64(n)})
-		}
+		out = append(out, b)
 	}
 
 	return out, wasiOK
 }
 
-// vectored runs readv, writev, preadv or pwritev and stores the count.
-func (w *WASI) vectored(ctx uintptr, call uintptr, fd, iovs, count uint32, offset uint64, positioned bool, done uint32) uint32 {
-	m := guest(ctx)
-	host, ok := w.fd(fd)
+// vectored reads or writes a descriptor's file through iovecs, at its
+// position or at offset, and stores the count at done: a short transfer
+// ends it, as readv's and writev's.
+func vectored(ctx uintptr, fd, iovs, count uint32, offset uint64, positioned, write bool, done uint32) uint32 {
+	p, m := proc(ctx), guest(ctx)
+	obj, err := p.fd(fd)
 
-	if !ok {
+	if err != nil {
 		return wasiEbadf
 	}
 
-	v, e := iovecs(m, iovs, count)
+	bufs, e := iovecs(m, iovs, count)
 
 	if e != wasiOK {
 		return e
@@ -321,69 +304,83 @@ func (w *WASI) vectored(ctx uintptr, call uintptr, fd, iovs, count uint32, offse
 		return wasiEfault
 	}
 
-	n := uintptr(0)
-
-	if len(v) > 0 {
-		var errno syscall.Errno
-
-		if positioned {
-			n, _, errno = syscall.Syscall6(call, uintptr(host), uintptr(unsafe.Pointer(&v[0])), uintptr(len(v)), uintptr(offset), 0, 0)
-		} else {
-			n, _, errno = syscall.Syscall(call, uintptr(host), uintptr(unsafe.Pointer(&v[0])), uintptr(len(v)))
-		}
-
-		if errno != 0 {
-			return wasiErrno(errno)
-		}
-	}
-
-	put32(m, done, uint32(n))
-
-	return wasiOK
-}
-
-func wasiFdWrite(ctx uintptr, fd, iovs, count, written uint32) uint32 {
-	w := wasiAt(ctx)
-	return w.vectored(ctx, syscall.SYS_WRITEV, fd, iovs, count, 0, false, written)
-}
-
-func wasiFdRead(ctx uintptr, fd, iovs, count, read uint32) uint32 {
-	w := wasiAt(ctx)
-	return w.vectored(ctx, syscall.SYS_READV, fd, iovs, count, 0, false, read)
-}
-
-func wasiFdPwrite(ctx uintptr, fd, iovs, count uint32, offset uint64, written uint32) uint32 {
-	w := wasiAt(ctx)
-	return w.vectored(ctx, syscall.SYS_PWRITEV, fd, iovs, count, offset, true, written)
-}
-
-func wasiFdPread(ctx uintptr, fd, iovs, count uint32, offset uint64, read uint32) uint32 {
-	w := wasiAt(ctx)
-	return w.vectored(ctx, syscall.SYS_PREADV, fd, iovs, count, offset, true, read)
-}
-
-func wasiFdClose(ctx uintptr, fd uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
+	t, ok := obj.(Transfer)
 
 	if !ok {
 		return wasiEbadf
 	}
 
-	if fd <= wasiRoot {
-		return wasiOK
+	total := 0
+
+	for _, b := range bufs {
+		if len(b) == 0 {
+			continue
+		}
+
+		var n int
+
+		switch {
+		case positioned && write:
+			n, err = t.pwrite(p, b, int64(offset)+int64(total))
+		case positioned:
+			n, err = t.pread(p, b, int64(offset)+int64(total))
+		case write:
+			n, err = t.write(p, b, ioMode{})
+		default:
+			n, err = t.read(p, b, ioMode{})
+		}
+
+		total += n
+
+		if err != nil || n < len(b) {
+			break
+		}
 	}
 
-	delete(w.fds, fd)
+	if err != nil && total == 0 {
+		return wasiErrno(err)
+	}
 
-	return wasiErrno(syscall.Close(host))
+	put32(m, done, uint32(total))
+
+	return wasiOK
+}
+
+func wasiFdWrite(ctx uintptr, fd, iovs, count, written uint32) uint32 {
+	return vectored(ctx, fd, iovs, count, 0, false, true, written)
+}
+
+func wasiFdRead(ctx uintptr, fd, iovs, count, read uint32) uint32 {
+	return vectored(ctx, fd, iovs, count, 0, false, false, read)
+}
+
+func wasiFdPwrite(ctx uintptr, fd, iovs, count uint32, offset uint64, written uint32) uint32 {
+	return vectored(ctx, fd, iovs, count, offset, true, true, written)
+}
+
+func wasiFdPread(ctx uintptr, fd, iovs, count uint32, offset uint64, read uint32) uint32 {
+	return vectored(ctx, fd, iovs, count, offset, true, false, read)
+}
+
+func wasiFdClose(ctx uintptr, fd uint32) uint32 {
+	p := proc(ctx)
+
+	if !p.closeFd(int(fd)) {
+		return wasiEbadf
+	}
+
+	if int(fd) == p.wasiRoot {
+		p.wasiRoot = -1
+	}
+
+	return wasiOK
 }
 
 func wasiFdSeek(ctx uintptr, fd uint32, offset uint64, whence uint32, result uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
+	p := proc(ctx)
+	obj, err := p.fd(fd)
 
-	if !ok {
+	if err != nil {
 		return wasiEbadf
 	}
 
@@ -391,7 +388,13 @@ func wasiFdSeek(ctx uintptr, fd uint32, offset uint64, whence uint32, result uin
 		return wasiEinval
 	}
 
-	at, err := syscall.Seek(host, int64(offset), int(whence))
+	s, ok := obj.(Seeker)
+
+	if !ok {
+		return wasiEspipe
+	}
+
+	at, err := s.seek(p, int64(offset), int(whence))
 
 	if err != nil {
 		return wasiErrno(err)
@@ -405,16 +408,21 @@ func wasiFdSeek(ctx uintptr, fd uint32, offset uint64, whence uint32, result uin
 }
 
 func wasiFdSync(ctx uintptr, fd uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
+	p := proc(ctx)
+	a, err := p.attrsAt(fd)
 
-	if !ok {
+	if err == syscall.EBADF {
 		return wasiEbadf
 	}
 
-	return wasiErrno(syscall.Fsync(host))
+	if err != nil {
+		return wasiEinval
+	}
+
+	return wasiErrno(a.sync(p, false))
 }
 
+// filetype is WASI's filetype of a mode.
 func filetype(mode uint32) byte {
 	switch mode & syscall.S_IFMT {
 	case syscall.S_IFBLK:
@@ -434,21 +442,11 @@ func filetype(mode uint32) byte {
 	return 0
 }
 
-func fcntl(fd int, cmd, arg int) (int, error) {
-	r, _, e := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), uintptr(cmd), uintptr(arg))
-
-	if e != 0 {
-		return 0, e
-	}
-
-	return int(r), nil
-}
-
 func wasiFdFdstatGet(ctx uintptr, fd, at uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
+	p := proc(ctx)
+	obj, err := p.fd(fd)
 
-	if !ok {
+	if err != nil {
 		return wasiEbadf
 	}
 
@@ -460,11 +458,11 @@ func wasiFdFdstatGet(ctx uintptr, fd, at uint32) uint32 {
 
 	var st syscall.Stat_t
 
-	if err := syscall.Fstat(host, &st); err != nil {
+	if err := obj.stat(p, &st); err != nil {
 		return wasiErrno(err)
 	}
 
-	fl, err := fcntl(host, syscall.F_GETFL, 0)
+	fl, err := obj.flags()
 
 	if err != nil {
 		return wasiErrno(err)
@@ -490,14 +488,14 @@ func wasiFdFdstatGet(ctx uintptr, fd, at uint32) uint32 {
 }
 
 func wasiFdFdstatSetFlags(ctx uintptr, fd, flags uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
+	p := proc(ctx)
+	obj, err := p.fd(fd)
 
-	if !ok {
+	if err != nil {
 		return wasiEbadf
 	}
 
-	fl, err := fcntl(host, syscall.F_GETFL, 0)
+	fl, err := obj.flags()
 
 	if err != nil {
 		return wasiErrno(err)
@@ -513,9 +511,7 @@ func wasiFdFdstatSetFlags(ctx uintptr, fd, flags uint32) uint32 {
 		fl |= syscall.O_NONBLOCK
 	}
 
-	_, err = fcntl(host, syscall.F_SETFL, fl)
-
-	return wasiErrno(err)
+	return wasiErrno(obj.setFlags(fl))
 }
 
 func nanos(t syscall.Timespec) uint64 {
@@ -535,10 +531,10 @@ func filestat(b []byte, st *syscall.Stat_t) {
 }
 
 func wasiFdFilestatGet(ctx uintptr, fd, at uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
+	p := proc(ctx)
+	obj, err := p.fd(fd)
 
-	if !ok {
+	if err != nil {
 		return wasiEbadf
 	}
 
@@ -550,7 +546,7 @@ func wasiFdFilestatGet(ctx uintptr, fd, at uint32) uint32 {
 
 	var st syscall.Stat_t
 
-	if err := syscall.Fstat(host, &st); err != nil {
+	if err := obj.stat(p, &st); err != nil {
 		return wasiErrno(err)
 	}
 
@@ -560,18 +556,22 @@ func wasiFdFilestatGet(ctx uintptr, fd, at uint32) uint32 {
 }
 
 func wasiFdFilestatSetSize(ctx uintptr, fd uint32, size uint64) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
+	p := proc(ctx)
+	a, err := p.attrsAt(fd)
 
-	if !ok {
+	if err == syscall.EBADF {
 		return wasiEbadf
 	}
 
-	return wasiErrno(syscall.Ftruncate(host, int64(size)))
+	if err != nil {
+		return wasiEinval
+	}
+
+	return wasiErrno(a.truncate(p, int64(size)))
 }
 
 func wasiFdPrestatGet(ctx uintptr, fd, at uint32) uint32 {
-	if fd != wasiRoot {
+	if int(fd) != proc(ctx).wasiRoot {
 		return wasiEbadf
 	}
 
@@ -585,7 +585,7 @@ func wasiFdPrestatGet(ctx uintptr, fd, at uint32) uint32 {
 }
 
 func wasiFdPrestatDirName(ctx uintptr, fd, path, n uint32) uint32 {
-	if fd != wasiRoot {
+	if int(fd) != proc(ctx).wasiRoot {
 		return wasiEbadf
 	}
 
@@ -614,6 +614,8 @@ func direntType(t byte) byte {
 		return 3
 	case syscall.DT_REG:
 		return 4
+	case syscall.DT_SOCK:
+		return 6
 	case syscall.DT_LNK:
 		return 7
 	}
@@ -624,21 +626,26 @@ func direntType(t byte) byte {
 // fdReaddir reads the directory from its start and writes the entries from
 // cookie on, each a 24-byte header and the name, until the buffer is full.
 func wasiFdReaddir(ctx uintptr, fd, buf, n uint32, cookie uint64, used uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
+	p, m := proc(ctx), guest(ctx)
+	obj, err := p.fd(fd)
 
-	if !ok {
+	if err != nil {
 		return wasiEbadf
 	}
 
-	m := guest(ctx)
 	out := span(m, buf, uint64(n))
 
 	if out == nil || span(m, used, 4) == nil {
 		return wasiEfault
 	}
 
-	if _, err := syscall.Seek(host, 0, 0); err != nil {
+	d, ok := obj.(*remoteDir)
+
+	if !ok {
+		return wasiEnotdir
+	}
+
+	if _, err := d.seek(p, 0, 0); err != nil {
 		return wasiErrno(err)
 	}
 
@@ -647,7 +654,7 @@ func wasiFdReaddir(ctx uintptr, fd, buf, n uint32, cookie uint64, used uint32) u
 	raw := make([]byte, 64<<10)
 
 	for written < len(out) {
-		got, err := syscall.Getdents(host, raw)
+		got, err := d.readdir(p, raw)
 
 		if err != nil {
 			return wasiErrno(err)
@@ -689,7 +696,9 @@ func wasiFdReaddir(ctx uintptr, fd, buf, n uint32, cookie uint64, used uint32) u
 	return wasiOK
 }
 
-func guestPath(m []byte, path, n uint32) (string, uint32) {
+// wasiPath is the path of a call, relative to its descriptor: "." for an
+// empty one.
+func wasiPath(m []byte, path, n uint32) (string, uint32) {
 	b := span(m, path, uint64(n))
 
 	if b == nil {
@@ -707,16 +716,24 @@ func guestPath(m []byte, path, n uint32) (string, uint32) {
 	return string(b), wasiOK
 }
 
-func wasiPathFilestatGet(ctx uintptr, fd, flags, path, n, at uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
-
-	if !ok {
-		return wasiEbadf
+// dirfd is a descriptor a path is relative to: EBADF when it is not open.
+func dirfd(p *Process, fd uint32) (int32, uint32) {
+	if _, err := p.fd(fd); err != nil {
+		return 0, wasiEbadf
 	}
 
-	m := guest(ctx)
-	p, e := guestPath(m, path, n)
+	return int32(fd), wasiOK
+}
+
+func wasiPathFilestatGet(ctx uintptr, fd, flags, path, n, at uint32) uint32 {
+	p, m := proc(ctx), guest(ctx)
+	dir, e := dirfd(p, fd)
+
+	if e != wasiOK {
+		return e
+	}
+
+	name, e := wasiPath(m, path, n)
 
 	if e != wasiOK {
 		return e
@@ -728,15 +745,9 @@ func wasiPathFilestatGet(ctx uintptr, fd, flags, path, n, at uint32) uint32 {
 		return wasiEfault
 	}
 
-	follow := 0x100 // AT_SYMLINK_NOFOLLOW
-
-	if flags&1 != 0 {
-		follow = 0
-	}
-
 	var st syscall.Stat_t
 
-	if err := fstatat(host, p, &st, follow); err != nil {
+	if err := p.statAt(dir, name, flags&1 != 0, &st); err != nil {
 		return wasiErrno(err)
 	}
 
@@ -746,15 +757,14 @@ func wasiPathFilestatGet(ctx uintptr, fd, flags, path, n, at uint32) uint32 {
 }
 
 func wasiPathOpen(ctx uintptr, fd, dirflags, path, n, oflags uint32, rights, inheriting uint64, fdflags, opened uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
+	p, m := proc(ctx), guest(ctx)
+	dir, e := dirfd(p, fd)
 
-	if !ok {
-		return wasiEbadf
+	if e != wasiOK {
+		return e
 	}
 
-	m := guest(ctx)
-	p, e := guestPath(m, path, n)
+	name, e := wasiPath(m, path, n)
 
 	if e != wasiOK {
 		return e
@@ -766,7 +776,7 @@ func wasiPathOpen(ctx uintptr, fd, dirflags, path, n, oflags uint32, rights, inh
 
 	read := rights&(1<<1) != 0 || rights&(1<<14) != 0
 	write := rights&(1<<6) != 0 || rights&(1<<22) != 0
-	flags := syscall.O_CLOEXEC
+	flags := 0
 
 	switch {
 	case read && write:
@@ -795,152 +805,120 @@ func wasiPathOpen(ctx uintptr, fd, dirflags, path, n, oflags uint32, rights, inh
 		flags |= syscall.O_NOFOLLOW
 	}
 
-	r, err := syscall.Openat(host, p, flags, 0o666)
+	if err := p.descriptorFree(); err != nil {
+		return wasiErrno(err)
+	}
+
+	mode := 0o666 &^ p.umask
+	f, err := p.openAt(dir, name, flags, mode)
 
 	if err == syscall.EISDIR && write && oflags&1 == 0 {
-		r, err = syscall.Openat(host, p, flags&^(syscall.O_WRONLY|syscall.O_RDWR)|syscall.O_RDONLY, 0o666)
+		f, err = p.openAt(dir, name, flags&^(syscall.O_WRONLY|syscall.O_RDWR)|syscall.O_RDONLY, mode)
 	}
 
 	if err != nil {
 		return wasiErrno(err)
 	}
 
-	guestFd := w.next
-	w.next++
-	w.fds[guestFd] = r
-	put32(m, opened, guestFd)
+	r, err := p.install(f, 0, true)
+
+	if err != nil {
+		return wasiErrno(err)
+	}
+
+	put32(m, opened, uint32(r))
 
 	return wasiOK
 }
 
 func wasiPathCreateDirectory(ctx uintptr, fd, path, n uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
-
-	if !ok {
-		return wasiEbadf
-	}
-
-	p, e := guestPath(guest(ctx), path, n)
+	p := proc(ctx)
+	dir, e := dirfd(p, fd)
 
 	if e != wasiOK {
 		return e
 	}
 
-	return wasiErrno(syscall.Mkdirat(host, p, 0o777))
-}
+	name, e := wasiPath(guest(ctx), path, n)
 
-func fstatat(dirfd int, path string, st *syscall.Stat_t, flags int) error {
-	p := throw2(syscall.BytePtrFromString(path))
-
-	if _, _, e := syscall.Syscall6(syscall.SYS_NEWFSTATAT, uintptr(dirfd), uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(st)), uintptr(flags), 0, 0); e != 0 {
+	if e != wasiOK {
 		return e
 	}
 
-	return nil
-}
-
-func unlinkat(dirfd int, path string, flags int) error {
-	p := throw2(syscall.BytePtrFromString(path))
-
-	if _, _, e := syscall.Syscall(syscall.SYS_UNLINKAT, uintptr(dirfd), uintptr(unsafe.Pointer(p)), uintptr(flags)); e != 0 {
-		return e
-	}
-
-	return nil
+	return wasiErrno(p.mkdir(dir, name, 0o777))
 }
 
 func wasiPathRemoveDirectory(ctx uintptr, fd, path, n uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
-
-	if !ok {
-		return wasiEbadf
-	}
-
-	p, e := guestPath(guest(ctx), path, n)
-
-	if e != wasiOK {
-		return e
-	}
-
-	return wasiErrno(unlinkat(host, p, 0x200))
+	return wasiRemove(ctx, fd, path, n, true)
 }
 
 func wasiPathUnlinkFile(ctx uintptr, fd, path, n uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
+	return wasiRemove(ctx, fd, path, n, false)
+}
 
-	if !ok {
-		return wasiEbadf
-	}
-
-	p, e := guestPath(guest(ctx), path, n)
+func wasiRemove(ctx uintptr, fd, path, n uint32, directory bool) uint32 {
+	p := proc(ctx)
+	dir, e := dirfd(p, fd)
 
 	if e != wasiOK {
 		return e
 	}
 
-	return wasiErrno(unlinkat(host, p, 0))
+	name, e := wasiPath(guest(ctx), path, n)
+
+	if e != wasiOK {
+		return e
+	}
+
+	return wasiErrno(p.remove(dir, name, directory))
 }
 
 func wasiPathRename(ctx uintptr, fd, path, n, fd2, path2, n2 uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
-	host2, ok2 := w.fd(fd2)
+	p, m := proc(ctx), guest(ctx)
+	dir, e := dirfd(p, fd)
+	dir2, e2 := dirfd(p, fd2)
 
-	if !ok || !ok2 {
+	if e != wasiOK || e2 != wasiOK {
 		return wasiEbadf
 	}
 
-	m := guest(ctx)
-	p, e := guestPath(m, path, n)
+	old, e := wasiPath(m, path, n)
 
 	if e != wasiOK {
 		return e
 	}
 
-	q, e := guestPath(m, path2, n2)
+	new, e := wasiPath(m, path2, n2)
 
 	if e != wasiOK {
 		return e
 	}
 
-	return wasiErrno(syscall.Renameat(host, p, host2, q))
+	return wasiErrno(p.rename(dir, old, dir2, new))
 }
 
 func wasiPathReadlink(ctx uintptr, fd, path, n, buf, size, used uint32) uint32 {
-	w := wasiAt(ctx)
-	host, ok := w.fd(fd)
-
-	if !ok {
-		return wasiEbadf
-	}
-
-	m := guest(ctx)
-	p, e := guestPath(m, path, n)
+	p, m := proc(ctx), guest(ctx)
+	dir, e := dirfd(p, fd)
 
 	if e != wasiOK {
 		return e
 	}
 
-	out := span(m, buf, uint64(size))
+	name, e := wasiPath(m, path, n)
 
-	if out == nil || span(m, used, 4) == nil {
+	if e != wasiOK {
+		return e
+	}
+
+	if span(m, buf, uint64(size)) == nil || span(m, used, 4) == nil {
 		return wasiEfault
 	}
 
-	name := throw2(syscall.BytePtrFromString(p))
-	var target uintptr
+	r, err := p.readlinkAt(dir, name, buf, size)
 
-	if len(out) > 0 {
-		target = uintptr(unsafe.Pointer(&out[0]))
-	}
-
-	r, _, errno := syscall.Syscall6(syscall.SYS_READLINKAT, uintptr(host), uintptr(unsafe.Pointer(name)), target, uintptr(len(out)), 0, 0)
-
-	if errno != 0 {
-		return wasiErrno(errno)
+	if err != nil {
+		return wasiErrno(err)
 	}
 
 	put32(m, used, uint32(r))
@@ -948,14 +926,15 @@ func wasiPathReadlink(ctx uintptr, fd, path, n, buf, size, used uint32) uint32 {
 	return wasiOK
 }
 
-// pollOneoff sleeps until the earliest clock subscription; descriptor
-// subscriptions are reported ready at once.
+// pollOneoff sleeps until the earliest clock subscription, as nanosleep
+// does, a signal ending it; descriptor subscriptions are reported ready
+// at once.
 func wasiPollOneoff(ctx uintptr, in, out, count, events uint32) uint32 {
 	if count == 0 {
 		return wasiEinval
 	}
 
-	m := guest(ctx)
+	p, m := proc(ctx), guest(ctx)
 	subs := span(m, in, 48*uint64(count))
 	evs := span(m, out, 32*uint64(count))
 
@@ -967,7 +946,7 @@ func wasiPollOneoff(ctx uintptr, in, out, count, events uint32) uint32 {
 	sleep := int64(-1)
 	earliest := uint32(0)
 
-	for i := uint32(0); i < count; i++ {
+	for i := range count {
 		s := subs[48*i:]
 		tag := s[8]
 
@@ -984,7 +963,7 @@ func wasiPollOneoff(ctx uintptr, in, out, count, events uint32) uint32 {
 		timeout := binary.LittleEndian.Uint64(s[24:])
 
 		if binary.LittleEndian.Uint16(s[40:])&1 != 0 {
-			now, errno := clock(binary.LittleEndian.Uint32(s[16:]), false)
+			now, errno := clock(p, binary.LittleEndian.Uint32(s[16:]), false)
 
 			if errno != wasiOK {
 				return errno
@@ -1000,7 +979,10 @@ func wasiPollOneoff(ctx uintptr, in, out, count, events uint32) uint32 {
 	}
 
 	if ready == 0 && sleep >= 0 {
-		time.Sleep(time.Duration(sleep))
+		if p.sleep(time.Duration(sleep)) > 0 {
+			return wasiEintr
+		}
+
 		e := evs[:32]
 		clear(e)
 		copy(e, subs[48*earliest:48*earliest+8])
@@ -1030,6 +1012,7 @@ func wasiSchedYield(ctx uintptr) uint32 {
 	return wasiOK
 }
 
+// proc_exit ends the process, as _exit does.
 func wasiProcExit(ctx uintptr, code uint32) {
-	panic(&wasiExit{code})
+	proc(ctx).exitWith(int(code&0xff) << 8)
 }

@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Combine comparisons while keeping deferred arithmetic and live arguments."""
+"""Combine comparisons while keeping deferred arithmetic and live arguments.
+
+    run_branch_pairs.py <vm> <native-aot> <wazero> <wat2wasm> <fixture.wat> <rootfs>
+"""
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import system  # noqa: E402
 
 MASK = 0xffffffff
 
@@ -58,7 +65,7 @@ def program(template):
 
 
 def main():
-    vm, native, wazero, wat2wasm, fixture = sys.argv[1:]
+    vm, native, wazero, wat2wasm, fixture, rootfs = sys.argv[1:]
     text, count = program(Path(fixture).read_text())
     with tempfile.TemporaryDirectory(prefix="pizdos-wat-branch-pairs-") as directory:
         work = Path(directory)
@@ -75,8 +82,8 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(module)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (strict, result)
-            result = subprocess.run([vm, "run", "--", str(module)], capture_output=True, env=env, timeout=30)
-            assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (strict, result)
+            (result,) = system.run(vm, rootfs, [("input", module.read_bytes(), [], b"")], env=env)
+            assert result == (0, b"", b""), (strict, result)
     print(f"WAT branch pairs: {count} AND/OR conditions with deferred arithmetic and up to 24 live arguments agree with an integer model, wazero and both AOTs")
 
 

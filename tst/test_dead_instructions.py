@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Parse valid dead instructions and reject bad encodings through the CLI.
 
-    test_dead_instructions.py <vm> <native-aot> <wazero>
+    test_dead_instructions.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
@@ -9,6 +9,11 @@ import struct
 import subprocess
 import sys
 import tempfile
+
+import system
+
+# unreachable ends its program with SIGILL.
+ILL = 128 + 4
 
 
 def leb(value, signed=False):
@@ -57,7 +62,7 @@ def groups():
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     valid = list(groups())
     valid.append(("combined", b"".join(body for _, body in valid)))
     malformed = [("unknown-bulk-opcode", b"\xfc\x12", b"illegal opcode 0xfc"),
@@ -77,8 +82,12 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (name, result)
-                result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-                assert result.returncode == 129 and result.stdout == b"" and b"wasm trap: unreachable" in result.stderr, (name, result)
+        # Each mode's programs run in one boot of the system.
+        for strict in (False, True):
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", program(body), [], b"") for _, body in valid], env=env)
+            for (name, _), result in zip(valid, results):
+                assert result[0] == ILL and result[1] == b"" and b"wasm trap: unreachable" in result[2], (name, result)
         for name, body, diagnostic in malformed:
             source.write_bytes(program(body))
             result = subprocess.run([wazero, "-compile", str(source)], capture_output=True, timeout=60)

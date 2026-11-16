@@ -373,7 +373,7 @@ func (pp *pipe) take(b []byte) (n int, eof, ok bool) {
 }
 
 func (e *pipeEnd) read(p *Process, b []byte, mode ioMode) (int, error) {
-	if chaosFail("read") {
+	if p.chaosFail("read") {
 		return 0, syscall.EIO
 	}
 
@@ -408,7 +408,7 @@ func (e *pipeEnd) read(p *Process, b []byte, mode ioMode) (int, error) {
 // at all, waiting for room between them; what was queued before a signal
 // or EAGAIN is the count.
 func (e *pipeEnd) write(p *Process, b []byte, mode ioMode) (int, error) {
-	if chaosFail("write") {
+	if p.chaosFail("write") {
 		return 0, syscall.EIO
 	}
 

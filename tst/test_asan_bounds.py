@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check ASAN around static data, unused memory and the linear-memory end.
 
-    test_asan_bounds.py <vm> <native-aot> <wazero>
+    test_asan_bounds.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
@@ -9,9 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dev"))
-
-from exe import pack  # noqa: E402
+import system
 
 
 def leb(value, signed=False):
@@ -61,7 +59,7 @@ def program(address, width, store, host=False):
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     cases = []
     for address, diagnostic in ((1024, ""), (32760, ""), (1023, "in the first KiB"),
                                 (32768, "in memory never allocated"), (65536, "past the memory's end 0x10000")):
@@ -77,10 +75,9 @@ def main():
     env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-asan-bounds-") as directory:
         work = Path(directory)
-        source, executable, compiled, embedded = [work / name for name in ("input.wasm", "input", "native.o", "embedded.o")]
+        source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]
         for label, data, status, diagnostic in cases:
             source.write_bytes(data)
-            executable.write_bytes(pack(data))
             result = subprocess.run([wazero, "-compile", str(source)], capture_output=True, timeout=30)
             assert result.returncode == 0, (label, result)
             result = subprocess.run([native, "--asan"], input=data, capture_output=True, env=env, timeout=60)
@@ -88,11 +85,14 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "--asan", "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (label, result)
-            result = subprocess.run([vm, "run", "--asan", "--", str(executable)], capture_output=True, env=env, timeout=30)
-            assert result.returncode == status and result.stdout == b"" and diagnostic.encode() in result.stderr, (label, result)
-            assert b"panic:" not in result.stderr, (label, result)
+        # The programs run in one boot of the system, which --asan checks too.
+        results = system.run(vm, rootfs, [("input", data, [], b"") for _, data, _, _ in cases], env=env, flags=["--asan"])
+        for (label, _, status, diagnostic), result in zip(cases, results):
+            returncode, stdout, stderr = result
+            assert returncode == status and stdout == b"" and diagnostic.encode() in stderr, (label, result)
+            assert b"panic:" not in stderr, (label, result)
             if not status:
-                assert result.stderr == b"", (label, result)
+                assert stderr == b"", (label, result)
     print(f"asan bounds: {len(cases)} scalar and kernel ranges enforce static/unused/end boundaries with both AOTs")
 
 

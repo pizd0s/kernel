@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check counted byte-copy loops against a sequential memory model.
 
-    test_copy_loops.py <vm> <native-aot>
+    test_copy_loops.py <vm> <native-aot> <rootfs>
 """
 import os
 from pathlib import Path
@@ -9,9 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dev"))
-
-from exe import pack  # noqa: E402
+import system
 
 MASK = (1 << 32) - 1
 LOAD_OFFSET, STORE_OFFSET = 17, 23
@@ -112,7 +110,7 @@ def program(width, step, count, dest, source, wrapped, signed, subtract=False, k
 
 
 def main():
-    vm, native = sys.argv[1:]
+    vm, native, rootfs = sys.argv[1:]
     cases = [(width, step, count, 32768, 8192, False, False)
              for width in (1, 2, 4, 8) for step in (1, 2, 3, 4, 5, 8) for count in (0, 1, 7, 16, 17, 33, 97)]
     cases += [(width, 1, 97, dest, 8192, False, False) for width in (1, 2, 4, 8) for dest in (8191, 8193)]
@@ -123,7 +121,8 @@ def main():
     checked = 0
     with tempfile.TemporaryDirectory(prefix="pizdos-copy-loops-") as directory:
         work = Path(directory)
-        source, executable, compiled, embedded = [work / name for name in ("input.wasm", "input", "native.o", "embedded.o")]
+        source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]
+        batches = {"optimized": [], "strict": [], "asan": []}
         for case in cases:
             modes = ["optimized"]
             if case[2] == 17 or case[3] != 32768 or case[5] or case[6]:
@@ -134,7 +133,6 @@ def main():
                 strict, asan = mode == "strict", mode == "asan"
                 data = program(*case, kernel=asan)
                 source.write_bytes(data)
-                executable.write_bytes(pack(data))
                 env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
                 flag = ["--strict"] if strict else ["--asan"] if asan else []
                 result = subprocess.run([native, *flag], input=data, capture_output=True, env=env, timeout=60)
@@ -143,9 +141,16 @@ def main():
                 run_flags = ["--asan"] if asan else []
                 result = subprocess.run([vm, *run_flags, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (case, mode, result)
-                result = subprocess.run([vm, "run", *run_flags, "--", str(executable)], capture_output=True, env=env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (case, mode, result)
+                batches[mode].append((case, data))
                 checked += 1
+        # Each mode's programs run in one boot of the system; ASAN's boots
+        # with --asan, which checks the whole system then.
+        for mode, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if mode == "strict" else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env,
+                                 flags=["--asan"] if mode == "asan" else [])
+            for (case, _), result in zip(runs, results):
+                assert result == (0, b"", b""), (case, mode, result)
     print(f"copy loops: {checked} counted, overlapping, wrapping and ASAN programs agree with the bytewise model and both AOTs")
 
 

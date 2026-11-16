@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Run state machines with many paths returning to one dispatch table.
 
-    test_dispatch_loops.py <vm> <native-aot> <wazero>
+    test_dispatch_loops.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import system
 
 MASK = (1 << 32) - 1
 
@@ -72,11 +74,12 @@ def program(count, bounded=False, constant_steps=False):
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     checked = 0
     with tempfile.TemporaryDirectory(prefix="pizdos-dispatch-loops-") as directory:
         work = Path(directory)
         source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]
+        batches = {False: [], True: []}
         for count, bounded, constant_steps in ((count, bounded, constant_steps) for count in (2, 17, 33)
                                                for bounded in (False, True) for constant_steps in (False, True)):
             if count == 2 and bounded:
@@ -92,9 +95,14 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), result
-                result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (count, result)
+                batches[strict].append((count, data))
             checked += checks
+        # Each mode's programs run in one boot of the system.
+        for strict, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+            for (count, _), result in zip(runs, results):
+                assert result == (0, b"", b""), (count, result)
     print(f"dispatch loops: {checked} shared-dispatch state machines agree with the sequential model, wazero and both AOTs")
 
 

@@ -823,7 +823,7 @@ func (e *pairEnd) putControl(p *Process, pk packet, control, room uint32, cloexe
 }
 
 func (e *pairEnd) read(p *Process, b []byte, mode ioMode) (int, error) {
-	if chaosFail("read") {
+	if p.chaosFail("read") {
 		return 0, syscall.EIO
 	}
 
@@ -833,7 +833,7 @@ func (e *pairEnd) read(p *Process, b []byte, mode ioMode) (int, error) {
 }
 
 func (e *pairEnd) write(p *Process, b []byte, mode ioMode) (int, error) {
-	if chaosFail("write") {
+	if p.chaosFail("write") {
 		return 0, syscall.EIO
 	}
 

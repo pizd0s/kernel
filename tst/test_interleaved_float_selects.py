@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Preserve float selection bits between wrapping memory loads.
 
-    test_interleaved_float_selects.py <vm> <native-aot> <wazero>
+    test_interleaved_float_selects.py <vm> <native-aot> <wazero> <rootfs>
 """
 import json
 import math
@@ -11,6 +11,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+
+import system
 
 MASK = (1 << 32) - 1
 IMAGE = bytes((i * 13 + 5) % 251 for i in range(65536))
@@ -81,10 +83,12 @@ def program(compare_bits, select_bits, trapped):
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     with tempfile.TemporaryDirectory(prefix="pizdos-interleaved-floats-") as directory:
         work = Path(directory)
         source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]
+        profile = embedded.with_suffix(".jsonl")
+        batches = {"optimized": [], "plain": [], "strict": []}
         for compare_bits in (32, 64):
             for select_bits in (32, 64):
                 for trapped in (False, True):
@@ -102,18 +106,31 @@ def main():
                         compiled.write_bytes(result.stdout)
                         result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
                         assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), result
-                        profile = embedded.with_suffix(".jsonl")
+                        if mode != "profile":
+                            batches[mode].append(((compare_bits, select_bits, trapped), data))
+                            continue
+                        # With the counters every program of a boot would add its rows
+                        # to vm's profile: the module runs alone, as vm's first
+                        # process, which a trap out of memory ends with SIGSEGV.
                         profile.unlink(missing_ok=True)
                         result = subprocess.run([vm, "run", "--", str(source)], env=dict(env, W2O_TAIL_PROFILE=str(profile)),
                                                 capture_output=True, timeout=30)
-                        assert result.returncode == (130 if trapped else 0) and result.stdout == b"", (compare_bits, select_bits, mode, result)
+                        assert result.returncode == (139 if trapped else 0) and result.stdout == b"", (compare_bits, select_bits, mode, result)
                         assert (b"out of bounds memory access" in result.stderr) if trapped else result.stderr == b"", result
-                        if mode == "profile":
-                            functions = [function for row in profile.read_text().splitlines() for function in json.loads(row)["functions"]]
-                            for counter in ("guards", "omitted_checks", *(("fallbacks",) if trapped else ())):
-                                assert sum(function[counter] for function in functions) > 0, (counter, functions)
-                        else:
-                            assert not profile.exists(), mode
+                        functions = [function for row in profile.read_text().splitlines() for function in json.loads(row)["functions"]]
+                        for counter in ("guards", "omitted_checks", *(("fallbacks",) if trapped else ())):
+                            assert sum(function[counter] for function in functions) > 0, (counter, functions)
+        # Each other mode's programs run in one boot of the system, which
+        # counts nothing: no instance of it writes a profile.
+        for mode, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL=mode, W2X_TAIL_PROFILE="", W2O_TAIL_PROFILE=str(profile))
+            profile.unlink(missing_ok=True)
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+            for ((compare_bits, select_bits, trapped), _), result in zip(runs, results):
+                status, stdout, stderr = result
+                assert status == (139 if trapped else 0) and stdout == b"", (compare_bits, select_bits, mode, result)
+                assert (b"out of bounds memory access" in stderr) if trapped else stderr == b"", result
+            assert not profile.exists(), mode
     print("interleaved floats: selection bits, wrapping loads and traps agree with a model, wazero and both AOTs in four modes")
 
 

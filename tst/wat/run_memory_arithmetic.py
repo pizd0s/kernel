@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Keep loads and intervening arithmetic explicit in hand-written Wasm."""
+"""Keep loads and intervening arithmetic explicit in hand-written Wasm.
+
+    run_memory_arithmetic.py <vm> <native-aot> <wazero> <wat2wasm> <fixture.wat> <rootfs>
+"""
 import os
 from pathlib import Path
 import struct
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import system  # noqa: E402
 
 
 def signed(value, bits=32):
@@ -105,7 +112,7 @@ def program(template):
 
 
 def main():
-    vm, native, wazero, wat2wasm, fixture = sys.argv[1:]
+    vm, native, wazero, wat2wasm, fixture, rootfs = sys.argv[1:]
     wat, checks = program(Path(fixture).read_text())
     with tempfile.TemporaryDirectory(prefix="pizdos-wat-memory-") as directory:
         work = Path(directory)
@@ -122,8 +129,8 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(module)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), result
-            result = subprocess.run([vm, "run", "--", str(module)], capture_output=True, env=env, timeout=30)
-            assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), result
+            (result,) = system.run(vm, rootfs, [("input", module.read_bytes(), [], b"")], env=env)
+            assert result == (0, b"", b""), result
     print(f"WAT memory arithmetic: {checks} signed/unsigned comparisons, floating load operands and intervening signed divisions agree with numeric models, wazero and both AOTs")
 
 

@@ -118,11 +118,15 @@ def main():
             embedded = work / "embedded.o"
             result = run(["-o", embedded, source])
             assert result.returncode == 0 and embedded.read_bytes() == output.read_bytes(), result
+            # The module runs as the first process: the trap is its SIGILL,
+            # its report each line marked with its argv[0] and pid.
             result = run(["run", "--", source])
-            assert result.returncode == 129 and result.stdout == b"", (depth, result)
+            assert result.returncode == 128 + 4 and result.stdout == b"", (depth, result)
             lines = result.stderr.decode().splitlines()
-            assert lines[0] == "wasm trap: unreachable" and b"panic:" not in result.stderr, result
-            frames = lines[1:]
+            mark = f"{source}[1]: "
+            assert lines[0] == mark + "wasm trap: unreachable" and b"panic:" not in result.stderr, result
+            assert all(line.startswith(mark) for line in lines), lines
+            frames = [line[len(mark):] for line in lines[1:]]
             assert all(line.startswith("    ") for line in frames), frames
             gaps = [line for line in frames if re.fullmatch(r"    \.\.\. \d+ frames", line)]
             assert len(gaps) == (depth > 64), (depth, frames)
@@ -143,8 +147,9 @@ def main():
         for tail in (b"", b"PK\5\6 what the program has after its executable"):
             executable.write_bytes(packed + tail)
             result = run(["run", "--", executable])
-            assert (result.returncode, result.stdout, result.stderr) == (plain.returncode, plain.stdout, plain.stderr), result
-            assert result.returncode == 129, result
+            assert (result.returncode, result.stdout, result.stderr) == (plain.returncode, plain.stdout,
+                                                                         plain.stderr.replace(os.fsencode(source), os.fsencode(executable))), result
+            assert result.returncode == 128 + 4, result
         frame = packed[8:]
         # A frame that declares more than vm unpacks, 1 GiB.
         huge = b"\x28\xb5\x2f\xfd\xc0\x50" + struct.pack("<Q", 1 << 31) + b"\1\0\0"

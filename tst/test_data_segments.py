@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Run generated Wasm programs whose data initializers overlap and are dropped.
 
-    test_data_segments.py <vm> <native-aot>
+    test_data_segments.py <vm> <native-aot> <rootfs>
 """
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import system
+
+# An access out of bounds ends its program with SIGSEGV.
+SEGV = 128 + 11
 
 
 def leb(value, signed=False):
@@ -76,9 +81,9 @@ def program(count, start, trap=False, boundary=False):
 
 
 def main():
-    vm, native = sys.argv[1:]
+    vm, native, rootfs = sys.argv[1:]
     env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
-    checked = 0
+    runs = []
     with tempfile.TemporaryDirectory(prefix="pizdos-segments-") as directory:
         work = Path(directory)
         source, embedded, compiled = (work / name for name in ("input.wasm", "embedded.o", "native.o"))
@@ -86,7 +91,8 @@ def main():
             for start in (False, True):
                 for boundary in (False, True):
                     for trap in ((False, True) if count else (False,)):
-                        source.write_bytes(program(count, start, trap, boundary))
+                        data = program(count, start, trap, boundary)
+                        source.write_bytes(data)
                         result = subprocess.run([native, "--strict"], input=source.read_bytes(), env=env,
                                                 capture_output=True, timeout=60)
                         assert result.returncode == 0, result.stderr
@@ -95,12 +101,14 @@ def main():
                                                 capture_output=True, timeout=60)
                         assert result.returncode == 0, result.stderr
                         assert embedded.read_bytes() == compiled.read_bytes(), (count, start, trap, boundary)
-                        result = subprocess.run([vm, "run", "--", str(source)], env=env, capture_output=True, timeout=30)
-                        expected = 130 if trap else 0
-                        assert result.returncode == expected and result.stdout == b"", (count, start, trap, boundary, result)
-                        assert (b"out of bounds memory access" in result.stderr) if trap else result.stderr == b"", result
-                        checked += 1
-    print(f"data segments: {checked} programs agree through native/Wasm AOT and execute as expected")
+                        runs.append(((count, start, trap, boundary), data))
+    # The programs run in one boot of the system.
+    results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+    for ((count, start, trap, boundary), _), result in zip(runs, results):
+        expected = SEGV if trap else 0
+        assert result[0] == expected and result[1] == b"", (count, start, trap, boundary, result)
+        assert (b"out of bounds memory access" in result[2]) if trap else result[2] == b"", result
+    print(f"data segments: {len(runs)} programs agree through native/Wasm AOT and execute as expected")
 
 
 if __name__ == "__main__":

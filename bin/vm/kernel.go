@@ -98,6 +98,11 @@ type Process struct {
 	seed      uint64
 	limits    [rlimitCount]rlimit
 	cred      cred
+	// wasiRoot is the descriptor of a WASI command's preopened root, -1 for
+	// none (kernel_wasi.go); chaos is the rules of the points of failure of
+	// the process's tree, of a build for chaos only (chaos_on.go).
+	wasiRoot int
+	chaos    *chaosRulesOf
 	regexes   map[uint32]*posixRegex
 	nextRegex uint32
 	// constants are strings of the heap the kernel returns and the program
@@ -179,13 +184,16 @@ func proc(ctx uintptr) *Process {
 	return instanceAt(ctx).proc
 }
 
-// Imports: the kernel's functions; the module imports nothing else.
+// Imports: the kernel's functions, and WASI's (kernel_wasi.go).
 func (k *Kernel) function(imp *ImportMeta) any {
-	if imp.module != "kernel" {
-		return nil
+	switch imp.module {
+	case "kernel":
+		return k.functions[imp.name]
+	case wasiModule:
+		return wasiFunctions[imp.name]
 	}
 
-	return k.functions[imp.name]
+	return nil
 }
 
 // functionTable lists the kernel's functions by import name.
@@ -285,6 +293,7 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 		p.comm, p.undumpable, p.noNewPrivs = parent.comm, parent.undumpable, parent.noNewPrivs
 		p.cwd, p.umask, p.limits, p.seed = parent.cwd, parent.umask, parent.limits, parent.seed
 		p.cred = parent.cred.clone()
+		p.chaos = parent.chaos
 		p.root, p.rootPath = parent.root, parent.rootPath
 	}
 
@@ -393,10 +402,18 @@ func (p *Process) runImage(img *execImage, i *Instance, enter func()) (next *exe
 		i = newInstance(img.code, p.k, runStack)
 		i.attach(p)
 		p.heap, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, 0, 0, 0, 0, 0
+		p.tzAt, p.herrnoAt = [3]uint32{}, 0
 		p.regexes, p.constants, p.locale = map[uint32]*posixRegex{}, map[string]uint32{}, [lcAll]string{}
 		p.envStrings, p.mappings = map[uint32]bool{}, map[uint32]mapping{}
 		p.jumps, p.stackAt = map[uint32]*jump{}, 0
 		enter = func() {
+			p.chaosStart(img.envp)
+			p.wasiRoot = -1
+
+			if isWASI(img.code.obj) {
+				p.wasiPreopen()
+			}
+
 			p.asanStart()
 			i.start()
 			p.asanInit()
@@ -417,6 +434,20 @@ func (p *Process) runImage(img *execImage, i *Instance, enter func()) (next *exe
 		p.token.Store(0)
 		e := recover()
 		who := i.host.(*Process)
+
+		// A trap's report is the trapping process's, a borrower's of vfork
+		// too, on its standard error before the borrowers end and their
+		// descriptors with them.
+		if t, ok := e.(*Trap); ok {
+			msg := t.Error()
+
+			if t.code == trapAsan {
+				msg = who.asanReport(t)
+			}
+
+			who.crash(msg, t.stack)
+		}
+
 		p.endBorrowers(i, e)
 
 		switch e := e.(type) {
@@ -426,13 +457,6 @@ func (p *Process) runImage(img *execImage, i *Instance, enter func()) (next *exe
 		case *execImage:
 			next = e
 		case *Trap:
-			msg := e.Error()
-
-			if e.code == trapAsan {
-				msg = who.asanReport(e)
-			}
-
-			who.crash(msg, e.stack)
 			status = trapSignal(e.code)
 		default:
 			panic(e)

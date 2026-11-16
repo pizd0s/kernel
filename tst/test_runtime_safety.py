@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bad public kernel calls must trap in the guest and preserve the Go host.
 
-    test_runtime_safety.py <vm> <native-aot> <wazero>
+    test_runtime_safety.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
@@ -9,6 +9,8 @@ import re
 import subprocess
 import sys
 import tempfile
+
+import system
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dev"))
 
@@ -64,7 +66,7 @@ def program(name, args, *, wide=False, returns=True, expected=None, memory=True,
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     cases = [("span-overflow", "write", [1, 65535, 2], {}, 139, "out of bounds memory access"),
              ("string-address", "getenv", [65536], {}, 139, "out of bounds memory access"),
              ("unterminated-string", "getenv", [65520], {}, 139, "out of bounds memory access"),
@@ -90,11 +92,27 @@ def main():
               ("no-linear-memory", "getpid", [], {"memory": False, "expected": 1}, 0, ""),
               ("environment-without-CRT", "getenv", [4096], {"expected": 0}, 0, ""),
               ("exec-without-CRT", "execv", [4096, 4096], {"expected": 0xffffffff}, 0, "")]
-    cases += [("program-without-root", "__kernel_program", [4096, 1024], {"expected": 0, "error": 2}, 0, "")]
+    # In the system a program has its path; without a root, as vm's first
+    # process, it has none. The process without linear memory is the first
+    # too, whose pid it knows.
+    cases += [("program-short-buffer", "__kernel_program", [4096, 0], {"expected": 0, "error": 34}, 0, ""),
+              ("program-without-root", "__kernel_program", [4096, 1024], {"expected": 0, "error": 2}, 0, "")]
+    direct = {"program-without-root", "no-linear-memory"}
     env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-runtime-safety-") as directory:
         work = Path(directory)
         source, executable, compiled, embedded = [work / name for name in ("input.wasm", "input", "native.o", "embedded.o")]
+        runs = []
+
+        def check(label, status, diagnostic, code, out, err):
+            assert code == status and out == b"" and b"panic:" not in err, (label, code, out, err)
+            if status:
+                lines = err.decode().splitlines()
+                assert diagnostic in lines[0] and len(lines) > 1, (label, lines)
+                assert all(re.match(r"runtime-safety\[\d+\]: ", line) for line in lines), (label, lines)
+            else:
+                assert err == b"", (label, err)
+
         for label, name, args, options, status, diagnostic in cases:
             data = program(name, args, **options)
             source.write_bytes(data)
@@ -106,14 +124,15 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (label, result)
-            result = subprocess.run([vm, "run", "-a", "runtime-safety", "--", str(executable)], capture_output=True, env=env, timeout=30)
-            assert result.returncode == status and result.stdout == b"" and b"panic:" not in result.stderr, (label, result)
-            if status:
-                lines = result.stderr.decode().splitlines()
-                assert diagnostic in lines[0] and len(lines) > 1, (label, lines)
-                assert all(re.match(r"runtime-safety\[\d+\]: ", line) for line in lines), (label, lines)
+            if label in direct:
+                result = subprocess.run([vm, "run", "-a", "runtime-safety", "--", str(executable)], capture_output=True, env=env, timeout=30)
+                check(label, status, diagnostic, result.returncode, result.stdout, result.stderr)
             else:
-                assert result.stderr == b"", (label, result)
+                runs.append(((label, status, diagnostic), executable.read_bytes()))
+        # The rest run in one boot of the system.
+        results = system.run(vm, rootfs, [("runtime-safety", program, [], b"") for _, program in runs], env=env)
+        for ((label, status, diagnostic), _), result in zip(runs, results):
+            check(label, status, diagnostic, *result)
     print(f"runtime safety: {len(cases)} public memory/math calls trap safely or respect empty/early-match bounds with both AOTs")
 
 

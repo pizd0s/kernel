@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Check explicit copy addresses and loop-carried integer values."""
+"""Check explicit copy addresses and loop-carried integer values.
+
+    run_copy_addresses.py <vm> <native-aot> <wazero> <wat2wasm> <fixture.wat> <rootfs>
+"""
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import system  # noqa: E402
 
 IMAGE = bytes((i * 37 + 11) % 251 if i >= 4096 else 0 for i in range(65536))
 
@@ -150,7 +157,7 @@ def program(template, stride, form, carry, count, dest, other, variable_step=Fal
 
 
 def main():
-    vm, native, wazero, wat2wasm, fixture = sys.argv[1:]
+    vm, native, wazero, wat2wasm, fixture, rootfs = sys.argv[1:]
     template = Path(fixture).read_text()
     cases = [(stride, form, carry, count, dest, other) for stride in (1, 2, 3)
              for form in ("add", "subtract", "cancel", "distinct") for carry in ("none", "wide", "nonlinear")
@@ -180,6 +187,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="pizdos-wat-copy-addresses-") as directory:
         work = Path(directory)
         source, module, compiled, embedded = (work / name for name in ("input.wat", "input.wasm", "native.o", "embedded.o"))
+        batches = {False: [], True: []}
         for case in cases:
             source.write_text(program(template, *case))
             result = subprocess.run([wat2wasm, str(source), "-o", str(module)], capture_output=True, timeout=30)
@@ -193,8 +201,13 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(module)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (case, strict, result)
-                result = subprocess.run([vm, "run", "--", str(module)], capture_output=True, env=env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (case, strict, result)
+                batches[strict].append((case, module.read_bytes()))
+        # Each mode's programs run in one boot of the system.
+        for strict, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+            for (case, _), result in zip(runs, results):
+                assert result == (0, b"", b""), (case, strict, result)
     print(f"WAT copy addresses: {len(cases)} direct/subtractive/cancelled/distinct addresses and i32/i64 loop states agree with a bytewise model, wazero and both AOTs")
 
 

@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Deep sequences of stateful branches must retain their observable effects.
 
-    test_deep_control.py <vm> <native-aot> <wazero>
+    test_deep_control.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import system
 
 
 def leb(value, signed=False):
@@ -48,10 +50,11 @@ def program(count):
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     with tempfile.TemporaryDirectory(prefix="pizdos-deep-control-") as directory:
         work = Path(directory)
         source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]
+        batches = {False: [], True: []}
         for count in (2049, 4097):
             data = program(count)
             source.write_bytes(data)
@@ -64,8 +67,13 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=120)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (count, strict, result)
-                result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (count, strict, result)
+                batches[strict].append((count, data))
+        # Each mode's programs run in one boot of the system.
+        for strict, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+            for (count, _), result in zip(runs, results):
+                assert result == (0, b"", b""), (count, strict, result)
     print("deep control: stateful branch sequences through 4097 decisions agree with the independent checksum, wazero and both AOTs")
 
 

@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Mask results returned in registers and stack slots by direct/indirect calls."""
+"""Mask results returned in registers and stack slots by direct/indirect calls.
+
+    run_result_masks.py <vm> <native-aot> <wazero> <wat2wasm> <fixture.wat> <rootfs>
+"""
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import system  # noqa: E402
 
 
 def program(template, count, width, indirect):
@@ -29,12 +36,13 @@ def program(template, count, width, indirect):
 
 
 def main():
-    vm, native, wazero, wat2wasm, fixture = sys.argv[1:]
+    vm, native, wazero, wat2wasm, fixture, rootfs = sys.argv[1:]
     template = Path(fixture).read_text()
     checked = 0
     with tempfile.TemporaryDirectory(prefix="pizdos-wat-result-masks-") as directory:
         work = Path(directory)
         source, module, compiled, embedded = (work / name for name in ("input.wat", "input.wasm", "native.o", "embedded.o"))
+        batches = {False: [], True: []}
         for count in (10, 17, 32, 65):
             for width in (1, 2):
                 for indirect in (False, True):
@@ -51,9 +59,14 @@ def main():
                         compiled.write_bytes(result.stdout)
                         result = subprocess.run([vm, "-o", str(embedded), str(module)], capture_output=True, env=env, timeout=60)
                         assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (count, width, indirect, strict, result)
-                        result = subprocess.run([vm, "run", "--", str(module)], capture_output=True, env=env, timeout=30)
-                        assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (count, width, indirect, strict, result)
+                        batches[strict].append(((count, width, indirect), module.read_bytes()))
                     checked += checks
+        # Each mode's programs run in one boot of the system.
+        for strict, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+            for ((count, width, indirect), _), result in zip(runs, results):
+                assert result == (0, b"", b""), (count, width, indirect, strict, result)
     print(f"WAT result masks: {checked} direct/indirect calls returning 10/17/32/65 values preserve byte/halfword hashes with a model, wazero and both AOTs")
 
 

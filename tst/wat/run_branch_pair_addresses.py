@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Check paired comparisons with deferred memory-address arithmetic."""
+"""Check paired comparisons with deferred memory-address arithmetic.
+
+    run_branch_pair_addresses.py <vm> <native-aot> <wazero> <wat2wasm> <fixture.wat> <rootfs>
+"""
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import system  # noqa: E402
 
 MASK = 0xffffffff
 
@@ -72,13 +79,14 @@ def trap_programs(template):
 
 
 def main():
-    vm, native, wazero, wat2wasm, fixture = sys.argv[1:]
+    vm, native, wazero, wat2wasm, fixture, rootfs = sys.argv[1:]
     template = Path(fixture).read_text()
     text, count = program(template)
     traps = 0
     with tempfile.TemporaryDirectory(prefix="pizdos-wat-branch-addresses-") as directory:
         work = Path(directory)
         source, module, compiled, embedded = (work / name for name in ("input.wat", "input.wasm", "native.o", "embedded.o"))
+        batches = {False: [], True: []}
         source.write_text(text)
         result = subprocess.run([wat2wasm, str(source), "-o", str(module)], capture_output=True, timeout=30)
         assert result.returncode == 0, result.stderr.decode()
@@ -91,8 +99,7 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(module)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (strict, result)
-            result = subprocess.run([vm, "run", "--", str(module)], capture_output=True, env=env, timeout=30)
-            assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (strict, result)
+            batches[strict].append((None, module.read_bytes()))
         for label, text in trap_programs(template):
             source.write_text(text)
             result = subprocess.run([wat2wasm, str(source), "-o", str(module)], capture_output=True, timeout=30)
@@ -106,9 +113,19 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(module)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (label, strict, result)
-                result = subprocess.run([vm, "run", "--", str(module)], capture_output=True, env=env, timeout=30)
-                assert result.returncode == 130 and result.stdout == b"" and b"out of bounds memory access" in result.stderr, (label, strict, module.name, result)
+                batches[strict].append((label, module.read_bytes()))
             traps += 1
+        # Each mode's programs, the modeled one and the trapping ones, run in
+        # one boot of the system; a trap ends its program with SIGSEGV.
+        for strict, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+            for (label, _), result in zip(runs, results):
+                if label is None:
+                    assert result == (0, b"", b""), (strict, result)
+                else:
+                    status, stdout, stderr = result
+                    assert status == 139 and stdout == b"" and b"out of bounds memory access" in stderr, (label, strict, module.name, result)
     print(f"WAT branch addresses: {count} modeled comparisons preserve results/memory/sentinels and {traps} eager loads trap, with wazero and both AOTs")
 
 

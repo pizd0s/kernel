@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""The standalone C++ compiler's WASI export and command match vm."""
+"""The standalone C++ compiler's WASI export and command match vm.
+
+    test_aot.py <aot.wasm> <aot-command.wasm> <wazero> <vm> <fixture.wasm> <rootfs>
+
+The command, compiled by the kernel as it starts, compiles in the system,
+its inputs one batch of a boot (tst/system.py).
+"""
 import os
 import re
 import subprocess
@@ -7,13 +13,15 @@ import sys
 import tempfile
 from pathlib import Path
 
+import system
+
 
 def run(command, data):
     return subprocess.run(command, input=data, capture_output=True, check=True)
 
 
 def main():
-    aot, command, wazero, vm, fixture = sys.argv[1:]
+    aot, command, wazero, vm, fixture, rootfs = sys.argv[1:]
     env = dict(os.environ, W2X_MEMORY_TAIL="optimized", W2X_TAIL_PROFILE="")
 
     with tempfile.TemporaryDirectory(prefix="aot-") as directory:
@@ -36,12 +44,14 @@ def main():
                 assert result.stdout == expected, f"{entry}: {source.name} differs from vm"
             print(f"aot export/command: {source.name} -> {len(expected)} bytes, identical")
 
-        # Run the C++ compiler as its own x86 output, which vm run compiles
+        # Run the C++ compiler as its own x86 output, which the kernel compiles
         # as it starts, through the same Go loader and stack/runtime ABI that
         # ordinary compiled modules use.
-        for source in (Path(fixture), Path(command)):
-            result = run([vm, "run", "--", command], source.read_bytes())
-            assert result.stdout == references[source], f"self-compiled aot differs for {source.name}"
+        sources = (Path(fixture), Path(command))
+        program = Path(command).read_bytes()
+        results = system.run(vm, rootfs, [("aot", program, [], source.read_bytes()) for source in sources], env=env)
+        for source, (status, out, err) in zip(sources, results):
+            assert status == 0 and out == references[source], f"self-compiled aot differs for {source.name}: {status} {err[-500:]!r}"
             print(f"self-compiled aot: {source.name}, identical")
 
         once = run([wazero, "-aot", aot], empty.read_bytes())

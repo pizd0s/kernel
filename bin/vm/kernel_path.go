@@ -805,21 +805,36 @@ func (p *Process) libcOpenat(dirfd, path, flags, va uint32) uint32 {
 
 func (p *Process) libcFstatat(dirfd, path, at, flags uint32) uint32 {
 	var st syscall.Stat_t
-	err := p.onAt(int32(dirfd), p.str(path), flags, func(d Dir, name string, found *syscall.Stat_t) error {
-		st = *found
-
-		return nil
-	}, func(f File) error {
-		return statFile(p, f, &st)
-	}, func(v *remoteDir, follow bool) error {
-		return v.statPath(p, p.str(path), follow, &st)
-	})
+	err := p.statFlags(int32(dirfd), p.str(path), flags, &st)
 
 	if err == nil {
 		p.putStat(at, &st)
 	}
 
 	return p.result(0, err)
+}
+
+// statFlags is fstatat's stat of a path relative to dirfd, with its flags;
+// statAt follows the last link with follow, as WASI's path_filestat_get
+// does (kernel_wasi.go).
+func (p *Process) statFlags(dirfd int32, path string, flags uint32, st *syscall.Stat_t) error {
+	return p.onAt(dirfd, path, flags, func(d Dir, name string, found *syscall.Stat_t) error {
+		*st = *found
+
+		return nil
+	}, func(f File) error {
+		return statFile(p, f, st)
+	}, func(v *remoteDir, follow bool) error {
+		return v.statPath(p, path, follow, st)
+	})
+}
+
+func (p *Process) statAt(dirfd int32, path string, follow bool, st *syscall.Stat_t) error {
+	if follow {
+		return p.statFlags(dirfd, path, 0, st)
+	}
+
+	return p.statFlags(dirfd, path, atSymlinkNofollow, st)
 }
 
 func (p *Process) libcAccess(path, mode uint32) uint32 {
@@ -1154,6 +1169,10 @@ func (p *Process) libcSymlinkat(target, dirfd, path uint32) uint32 {
 // readlinkAt writes a link's target, as much as the buffer holds: what is
 // no link is EINVAL, a slash after one follows it.
 func (p *Process) readlinkAt(dirfd int32, path string, buf, size uint32) (int, error) {
+	if p.chaosFail("readlink") {
+		return 0, syscall.EIO
+	}
+
 	var target string
 
 	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {

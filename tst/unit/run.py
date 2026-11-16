@@ -14,8 +14,9 @@ in /tmp, its environment rootfs's with the env directives; with root:
 own, in a root of its own under /tmp instead, chroot's, which has /bin/check,
 the program, and /tmp, its working directory the root, for a program
 that makes /etc's files or execs itself as /bin/check. A program of WASI
-(freestanding: true) is no process of the kernel: vm runs it on its own.
-all is build and run, as coverage runs a case with its own vm and aot.
+(freestanding: true) runs as a process of the kernel as well
+(bin/vm/kernel_wasi.go). all is build and run, as coverage runs a case
+with its own vm and aot.
 
 Directives use trustme's //@ spelling. stdout/stderr are JSON strings;
 compile-flags, aot-flags, run-flags and args use shell quoting. host: false
@@ -25,9 +26,8 @@ system's, everyone's in it, as vm's; a disk is /dev/<name> in
 the system, which the program gets open to read and write as its
 descriptors after 2, in order, their names in DISKS, as the first process
 gets vm's disks. $ROOT in a disk's path is a directory of the host with
-the program's executable as bin/check, in args of a program of WASI the
-directory it runs in, and in an env directive the reference's working
-directory.
+the program's executable as bin/check, and in an env directive the
+reference's working directory.
 """
 import json
 import os
@@ -194,25 +194,20 @@ def run(source, prefix, name, tools):
         root = Path(directory)
         (root / "bin").mkdir()
         shutil.copy(executable, root / "bin/check")
-        if case_flag(case, "freestanding", "false"):
-            (root / "tmp").mkdir()
-            run_args = [argument.replace("$ROOT", str(root)) for argument in args]
-            result = invoke([tools["vm"], "run", "-a", "check", "--", root / "bin/check", *run_args], env=env, timeout=timeout)
+        asan, named = disks(case)
+        flags = [*asan, *(arg for disk, path in named for arg in ("--disk", f"{disk}={path.replace('$ROOT', str(root))}"))]
+        opened = " ".join(f"{3 + i}<>/dev/{disk}" for i, (disk, _) in enumerate(named))
+        variables = [f"{key}={value}" for key, value in case.get("env", {}).items()]
+        if named:
+            variables.append("DISKS=" + " ".join(disk for disk, _ in named))
+        if case.get("root", "system") == "own":
+            setup = f"mkdir /tmp/root /tmp/root/bin /tmp/root/tmp && cp /tests/unit/{name} /tmp/root/bin/check"
+            program = ["chroot", "/tmp/root", "/bin/check"]
         else:
-            asan, named = disks(case)
-            flags = [*asan, *(arg for disk, path in named for arg in ("--disk", f"{disk}={path.replace('$ROOT', str(root))}"))]
-            opened = " ".join(f"{3 + i}<>/dev/{disk}" for i, (disk, _) in enumerate(named))
-            variables = [f"{key}={value}" for key, value in case.get("env", {}).items()]
-            if named:
-                variables.append("DISKS=" + " ".join(disk for disk, _ in named))
-            if case.get("root", "system") == "own":
-                setup = f"mkdir /tmp/root /tmp/root/bin /tmp/root/tmp && cp /tests/unit/{name} /tmp/root/bin/check"
-                program = ["chroot", "/tmp/root", "/bin/check"]
-            else:
-                setup, program = "cd /tmp", ["/tests/unit/" + name]
-            script = f"{setup} && " + (f"exec {opened} && " if opened else "") + shlex.join(["exec", "env", *variables, *program, *args])
-            result = invoke([tools["vm"], "run", *flags, "--disk", f"image={tools['image']}", "--", tools["rootfs"], "-c", script],
-                            env=env, timeout=timeout)
+            setup, program = "cd /tmp", ["/tests/unit/" + name]
+        script = f"{setup} && " + (f"exec {opened} && " if opened else "") + shlex.join(["exec", "env", *variables, *program, *args])
+        result = invoke([tools["vm"], "run", *flags, "--disk", f"image={tools['image']}", "--", tools["rootfs"], "-c", script],
+                        env=env, timeout=timeout)
         check(result, case, "kernel")
 
     Path(str(prefix) + ".stamp").write_text("native reference, native and Wasm AOT objects, kernel: passed\n")

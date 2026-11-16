@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Keep early call arguments live across a long stateful integer calculation.
 
-    test_sparse_values.py <vm> <native-aot> <wazero>
+    test_sparse_values.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import system
 
 MASK = (1 << 64) - 1
 
@@ -69,7 +71,8 @@ def program(steps):
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
+    batches = {False: [], True: []}
     with tempfile.TemporaryDirectory(prefix="pizdos-sparse-values-") as directory:
         work = Path(directory)
         source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]
@@ -85,8 +88,13 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=180)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (steps, result)
-                result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (steps, strict, result)
+                batches[strict].append(((steps, strict), source.read_bytes()))
+    # Each mode's programs run in one boot of the system.
+    for strict, runs in batches.items():
+        env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+        results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+        for label, result in zip((label for label, _ in runs), results):
+            assert result == (0, b"", b""), (label, result)
     print("sparse values: early arguments survive stateful calculations through 16385 steps and agree with a model, wazero and both AOTs")
 
 

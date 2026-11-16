@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Many-value results survive internal direct and indirect call chains.
 
-    test_wide_results.py <vm> <native-aot> <wazero>
+    test_wide_results.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
@@ -9,6 +9,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+
+import system
 
 TYPES = {"i32": 0x7f, "i64": 0x7e, "f32": 0x7d, "f64": 0x7c}
 EXTEND = {"i32": b"\xad", "i64": b"", "f32": b"\xbc\xad", "f64": b"\xbd"}
@@ -92,7 +94,8 @@ def program(kinds, indirect, partial=False):
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
+    batches = {False: [], True: []}
     patterns = [(kind,) for kind in TYPES] + [tuple(TYPES)]
     cases = [(pattern, count, indirect, False) for pattern in patterns for count in (0, 6, 7, 15, 16, 17, 31, 32, 40, 64)
              for indirect in (False, True)]
@@ -113,8 +116,13 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (pattern, count, indirect, result)
-                result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (pattern, count, indirect, strict, result)
+                batches[strict].append(((pattern, count, indirect, strict), source.read_bytes()))
+    # Each mode's programs run in one boot of the system.
+    for strict, runs in batches.items():
+        env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+        results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+        for label, result in zip((label for label, _ in runs), results):
+            assert result == (0, b"", b""), (label, result)
     print(f"wide results: {len(cases)} direct/indirect call chains preserve up to 65 mixed results with a model, wazero and both AOTs")
 
 

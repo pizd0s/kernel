@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Carry integers and floats through explicit multi-latch dispatch loops."""
+"""Carry integers and floats through explicit multi-latch dispatch loops.
+
+    run_dispatch_values.py <vm> <native-aot> <wazero> <wat2wasm> <fixture.wat> <rootfs>
+"""
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import system  # noqa: E402
 
 MASK = (1 << 64) - 1
 
@@ -76,12 +83,13 @@ def program(template, handlers, width, constant_steps, nested=False):
 
 
 def main():
-    vm, native, wazero, wat2wasm, fixture = sys.argv[1:]
+    vm, native, wazero, wat2wasm, fixture, rootfs = sys.argv[1:]
     template = Path(fixture).read_text()
     checks = 0
     with tempfile.TemporaryDirectory(prefix="pizdos-wat-dispatch-values-") as directory:
         work = Path(directory)
         source, module, compiled, embedded = (work / name for name in ("input.wat", "input.wasm", "native.o", "embedded.o"))
+        batches = {False: [], True: []}
         for handlers in (17, 33):
             for width in (1, 7, 15, 17, 32, 40):
                 for constant_steps, nested in ((False, False), (True, False), (False, True), (True, True)):
@@ -100,8 +108,13 @@ def main():
                         compiled.write_bytes(result.stdout)
                         result = subprocess.run([vm, "-o", str(embedded), str(module)], capture_output=True, env=env, timeout=60)
                         assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (case, strict, result)
-                        result = subprocess.run([vm, "run", "--", str(module)], capture_output=True, env=env, timeout=30)
-                        assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (case, strict, result)
+                        batches[strict].append((case, module.read_bytes()))
+        # Each mode's programs run in one boot of the system.
+        for strict, runs in batches.items():
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+            for (case, _), result in zip(runs, results):
+                assert result == (0, b"", b""), (case, strict, result)
     print(f"WAT dispatch values: {checks} flat/nested state machines with 17/33 latches preserve up to 40 integer and 40 float values across calls, wazero and both AOTs")
 
 

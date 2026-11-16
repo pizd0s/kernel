@@ -204,8 +204,9 @@ func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *Object) (*Cod
 }
 
 // compile compiles a module, unless obj is its object already, and links
-// it to the kernel: ENOEXEC, with why, for one that is no program of the
-// kernel.
+// it to the kernel: a program of lib/c's or a WASI command, whose imports
+// are the kernel's or WASI's (kernel_wasi.go); ENOEXEC, with why, for one
+// that imports anything else.
 func (k *Kernel) compile(data []byte, name string, obj *Object) (*Code, error) {
 	if obj == nil {
 		var err error
@@ -218,10 +219,6 @@ func (k *Kernel) compile(data []byte, name string, obj *Object) (*Code, error) {
 	var c *Code
 
 	if e := try(func() {
-		if !importsKernel(obj) {
-			throwFmt("not a program of the kernel")
-		}
-
 		c = link(name, obj, k)
 	}); e != nil {
 		return nil, fmt.Errorf("%s: %s: %w", name, e, syscall.ENOEXEC)
@@ -275,7 +272,13 @@ func (p *Process) loadFrom(path string, first File, argv []string) (*execImage, 
 		var st syscall.Stat_t
 		t, transfers := f.(Transfer)
 
-		if err := f.stat(p, &st); err != nil || !transfers || st.Mode&syscall.S_IFMT != syscall.S_IFREG {
+		if err := statFile(p, f, &st); err != nil {
+			f.unref()
+
+			return nil, err
+		}
+
+		if !transfers || st.Mode&syscall.S_IFMT != syscall.S_IFREG {
 			f.unref()
 
 			return nil, syscall.EACCES

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """A trap in nested vfork children must unwind the whole borrowed stack.
 
-    test_vfork_traps.py <vm> <native-aot> <wazero>
+    test_vfork_traps.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import system
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dev"))
 
@@ -42,19 +45,19 @@ def program(children, fault):
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     faults = [(b"\0", 132, b"wasm trap: unreachable"),
               (b"\x41\x81\x80\4\x2d\0\0\x1a", 139, b"out of bounds memory access"),
               (b"\x41\1\x41\0\x6d\x1a", 136, b"integer divide by zero")]
     env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-vfork-traps-") as directory:
         work = Path(directory)
-        source, executable, compiled, embedded = [work / name for name in ("input.wasm", "input", "native.o", "embedded.o")]
+        source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]
+        runs = []
         for children in (1, 2, 4):
             for fault, status, diagnostic in faults:
                 data = program(children, fault)
                 source.write_bytes(data)
-                executable.write_bytes(pack(data))
                 result = subprocess.run([wazero, "-compile", str(source)], capture_output=True, timeout=30)
                 assert result.returncode == 0, result
                 result = subprocess.run([native, "--strict"], input=data, capture_output=True, env=env, timeout=60)
@@ -62,9 +65,13 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), result
-                result = subprocess.run([vm, "run", "-a", "vfork-trap", "--", str(executable)], capture_output=True, env=env, timeout=30)
-                assert result.returncode == status and result.stdout == b"" and diagnostic in result.stderr, (children, status, result)
-                assert result.stderr.startswith(f"vfork-trap[{children + 1}]: ".encode()) and b"panic:" not in result.stderr, result
+                runs.append(((children, status, diagnostic), pack(data)))
+        # The programs run in one boot of the system; the trap is the
+        # innermost borrower's, whose report its program and pid mark.
+        results = system.run(vm, rootfs, [("vfork-trap", program, [], b"") for _, program in runs], env=env)
+        for ((children, status, diagnostic), _), (code, out, err) in zip(runs, results):
+            assert code == status and out == b"" and diagnostic in err, (children, status, code, out, err)
+            assert re.match(rb"vfork-trap\[\d+\]: ", err) and b"panic:" not in err, (children, err)
     print("vfork traps: unreachable, memory and arithmetic faults in nested borrowers unwind safely with both AOTs")
 
 

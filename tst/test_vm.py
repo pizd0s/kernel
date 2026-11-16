@@ -8,14 +8,18 @@ import sys
 import tempfile
 from pathlib import Path
 
+import system
+
 
 def main():
-    vm, native, reactor, command, wazero, fixture = sys.argv[1:]
+    vm, native, reactor, command, wazero, fixture, rootfs = sys.argv[1:]
     compilers = {
-        "self-compiled AOT": [vm, "run", "--", command],
         "WASI reactor": [wazero, "-aot", reactor],
         "WASI command": [wazero, command],
     }
+    # The self-compiled AOT, the command the kernel compiles as it starts,
+    # compiles its inputs in the system, all of them in one boot.
+    self_compiled = []
 
     with tempfile.TemporaryDirectory(prefix="vm-") as work:
         out = Path(work) / "out.o"
@@ -35,6 +39,8 @@ def main():
                 assert got == want, f"{name}: {source} differs from native C++"
                 print(f"{name}: {Path(source).name} -> {len(want)} bytes, identical")
 
+            self_compiled.append((Path(source).name, data, want))
+
         # An ignored custom section makes input end exactly on a page boundary.
         # Supplying it through a pipe also exercises partial stdin reads.
         empty = b"\0asm\1\0\0\0"
@@ -51,6 +57,12 @@ def main():
         for name, entry in {"native": [native], **compilers}.items():
             got = subprocess.run(entry, input=padded, capture_output=True, check=True, pipesize=4096).stdout
             assert got == want, f"{name}: page-aligned stdin changed the module"
+        self_compiled.append(("page-aligned stdin", padded, want))
+        program = Path(command).read_bytes()
+        results = system.run(vm, rootfs, [("aot", program, [], data) for _, data, _ in self_compiled])
+        for (label, _, want), (status, got, err) in zip(self_compiled, results):
+            assert status == 0 and got == want, f"self-compiled AOT: {label} differs from native C++: {status} {err[-500:]!r}"
+            print(f"self-compiled AOT: {label} -> {len(want)} bytes, identical")
         print("page-aligned stdin: native/WASI/self-compiled identical")
 
         bad = Path(work) / "bad.wasm"

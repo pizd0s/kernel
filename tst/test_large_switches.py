@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Run large structured branch tables against an independent interpreter.
 
-    test_large_switches.py <vm> <native-aot> <wazero>
+    test_large_switches.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import system
 
 
 def leb(value, signed=False):
@@ -52,10 +54,12 @@ def program(count, order):
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     checked = 0
+    env = dict(os.environ, W2X_MEMORY_TAIL="optimized", W2X_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-large-switches-") as directory:
         work = Path(directory)
+        runs = []
         for count in (8193, 16385):
             for order in ("ordered", "permuted", "repeated"):
                 data = program(count, order)
@@ -63,7 +67,6 @@ def main():
                 source.write_bytes(data)
                 reference = subprocess.run([wazero, "-interpreter", str(source)], capture_output=True, timeout=120)
                 assert reference.returncode == 0 and reference.stdout == b"", (count, order, reference)
-                env = dict(os.environ, W2X_MEMORY_TAIL="optimized", W2X_TAIL_PROFILE="")
                 result = subprocess.run([native], input=data,
                                         capture_output=True, env=env, timeout=180)
                 assert result.returncode == 0, (count, order, result.stderr)
@@ -71,9 +74,12 @@ def main():
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=180)
                 assert result.returncode == 0, (count, order, result.stderr)
                 assert compiled.read_bytes() == embedded.read_bytes(), (count, order)
-                result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-                assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (count, order, result)
-                checked += 1
+                runs.append(((count, order), data))
+        # The programs run in one boot of the system.
+        results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
+        for ((count, order), _), result in zip(runs, results):
+            assert result == (0, b"", b""), (count, order, result)
+            checked += 1
     print(f"large switches: {checked} ordered/permuted/repeated tables agree with wazero and both AOTs")
 
 

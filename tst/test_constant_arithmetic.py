@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Evaluate raw constant expressions against Python integers and wazero.
 
-    test_constant_arithmetic.py <vm> <native-aot> <wazero>
+    test_constant_arithmetic.py <vm> <native-aot> <wazero> <rootfs>
 """
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import system
+
+# A trap of integer arithmetic ends its program with SIGFPE.
+FPE = 128 + 8
 
 
 def leb(value, signed=False):
@@ -129,16 +134,16 @@ def program():
 
 
 def main():
-    vm, native, wazero = sys.argv[1:]
+    vm, native, wazero, rootfs = sys.argv[1:]
     data, checks = program()
     cases = [("values", data, 0, b"")]
     for bits in (32, 64):
         mask = (1 << bits) - 1
         for offset in (3, 4, 5, 6):
             code = constant(123, bits) + constant(0, bits) + bytes([(0x6a if bits == 32 else 0x7c) + offset])
-            cases.append((f"zero-{bits}-{offset}", module([(bits, code)], b"\x10\0\x1a"), 132, b"integer divide by zero"))
+            cases.append((f"zero-{bits}-{offset}", module([(bits, code)], b"\x10\0\x1a"), FPE, b"integer divide by zero"))
         code = constant(1 << (bits - 1), bits) + constant(mask, bits) + bytes([0x6d if bits == 32 else 0x7f])
-        cases.append((f"overflow-{bits}", module([(bits, code)], b"\x10\0\x1a"), 131, b"integer overflow"))
+        cases.append((f"overflow-{bits}", module([(bits, code)], b"\x10\0\x1a"), FPE, b"integer overflow"))
     with tempfile.TemporaryDirectory(prefix="pizdos-constant-arithmetic-") as directory:
         work = Path(directory)
         source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]
@@ -155,10 +160,14 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (label, result)
-                result = subprocess.run([vm, "run", "--", str(source)], capture_output=True, env=env, timeout=30)
-                assert result.returncode == status and result.stdout == b"" and diagnostic in result.stderr, (label, result)
+        # Each mode's programs run in one boot of the system.
+        for strict in (False, True):
+            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            results = system.run(vm, rootfs, [("input", case[1], [], b"") for case in cases], env=env)
+            for (label, _, status, diagnostic), result in zip(cases, results):
+                assert result[0] == status and result[1] == b"" and diagnostic in result[2], (label, result)
                 if not status:
-                    assert result.stderr == b"", result
+                    assert result[2] == b"", result
     print(f"constant arithmetic: {checks} integer expressions and {len(cases) - 1} constant traps agree with Python, wazero and both AOTs")
 
 

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Reject a wide-string copy beyond the heap limit while signals are pending."""
+"""Reject a wide-string copy beyond the heap limit while signals are pending.
+The host's SIGUSR1 reaches only vm's first process, so the program runs
+as it, not in the system: rootfs goes unused.
+
+    run_wide_allocation_limit.py <vm> <native-aot> <wazero> <wat2wasm> <fixture.wat> <rootfs>
+"""
 import os
 from pathlib import Path
 import select
@@ -15,7 +20,7 @@ from exe import pack  # noqa: E402
 
 
 def main():
-    vm, native, wazero, wat2wasm, fixture = sys.argv[1:]
+    vm, native, wazero, wat2wasm, fixture, _ = sys.argv[1:]
     with tempfile.TemporaryDirectory(prefix="pizdos-wat-wide-limit-") as directory:
         work = Path(directory)
         module, executable, compiled, embedded = (work / name for name in ("input.wasm", "input", "native.o", "embedded.o"))

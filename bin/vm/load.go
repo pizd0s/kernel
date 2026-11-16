@@ -304,7 +304,7 @@ func helperTrapAt(ctx uintptr, code uint32, addr uint64, info uint32) {
 func helperMemoryGrow(ctx uintptr, delta uint32) uint32 {
 	i := instanceAt(ctx)
 
-	if _, compiler := i.host.(*CompilerIO); !compiler && chaosFail("memory-grow") {
+	if _, compiler := i.host.(*CompilerIO); !compiler && i.proc.chaosFail("memory-grow") {
 		return math.MaxUint32
 	}
 

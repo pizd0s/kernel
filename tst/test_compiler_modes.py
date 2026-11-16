@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare public compiler modes on wrapping, interleaved memory accesses.
 
-    test_compiler_modes.py <vm> <native-aot>
+    test_compiler_modes.py <vm> <native-aot> <rootfs>
 """
 import json
 import os
@@ -9,6 +9,11 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import system
+
+# An access out of bounds ends its program with SIGSEGV.
+SEGV = 128 + 11
 
 
 def leb(value, signed=False):
@@ -53,16 +58,22 @@ def program(trapped=False):
     return module + section(11, b"\1\0" + constant(1024) + b"\x0b" + leb(len(image) - 1024) + image[1024:])
 
 
+def check(mode, trapped, result):
+    status, stdout, stderr = result
+    assert status == (SEGV if trapped else 0) and stdout == b"", (mode, result)
+    assert (b"out of bounds memory access" in stderr) if trapped else stderr == b"", result
+
+
 def main():
-    vm, native = sys.argv[1:]
+    vm, native, rootfs = sys.argv[1:]
     with tempfile.TemporaryDirectory(prefix="pizdos-modes-") as directory:
         work = Path(directory)
         source = work / "input.wasm"
         for mode, flag in (("optimized", None), ("plain", "--plain"), ("strict", "--strict"), ("profile", "--tail-profile")):
+            env = dict(os.environ, W2X_MEMORY_TAIL="optimized" if mode == "profile" else mode,
+                       W2X_TAIL_PROFILE="1" if mode == "profile" else "")
             for trapped in (False, True):
                 source.write_bytes(program(trapped))
-                env = dict(os.environ, W2X_MEMORY_TAIL="optimized" if mode == "profile" else mode,
-                           W2X_TAIL_PROFILE="1" if mode == "profile" else "")
                 compiled, embedded = work / f"{mode}-{trapped}-native.o", work / f"{mode}-{trapped}-embedded.o"
                 result = subprocess.run([native, *([flag] if flag else [])], input=source.read_bytes(), env=env,
                                         capture_output=True, timeout=60)
@@ -70,18 +81,27 @@ def main():
                 compiled.write_bytes(result.stdout)
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], env=env, capture_output=True, timeout=60)
                 assert result.returncode == 0 and compiled.read_bytes() == embedded.read_bytes(), (mode, result)
-                profile = embedded.with_suffix(".jsonl")
-                result = subprocess.run([vm, "run", "--", str(source)], env=dict(env, W2O_TAIL_PROFILE=str(profile)),
-                                        capture_output=True, timeout=30)
-                assert result.returncode == (130 if trapped else 0) and result.stdout == b"", (mode, result)
-                assert (b"out of bounds memory access" in result.stderr) if trapped else result.stderr == b"", result
                 if mode == "profile":
+                    # vm writes each program's profile to a file of the
+                    # host, which a boot of the system fills with its own
+                    # programs' too: this run is vm's own.
+                    profile = embedded.with_suffix(".jsonl")
+                    result = subprocess.run([vm, "run", "--", str(source)], env=dict(env, W2O_TAIL_PROFILE=str(profile)),
+                                            capture_output=True, timeout=30)
+                    check(mode, trapped, (result.returncode, result.stdout, result.stderr))
                     rows = [json.loads(line) for line in profile.read_text().splitlines()]
                     functions = [function for row in rows for function in row["functions"]]
                     for counter in ("guards", "omitted_checks", *(("fallbacks",) if trapped else ())):
                         assert sum(function[counter] for function in functions) > 0, (counter, rows)
-                else:
-                    assert not profile.exists(), mode
+            if mode != "profile":
+                # The mode's programs run in one boot of the system, which
+                # writes no profile.
+                profile = work / f"{mode}.jsonl"
+                results = system.run(vm, rootfs, [("input", program(trapped), [], b"") for trapped in (False, True)],
+                                     env=dict(env, W2O_TAIL_PROFILE=str(profile)))
+                for trapped, result in zip((False, True), results):
+                    check(mode, trapped, result)
+                assert not profile.exists(), mode
     print("compiler modes: identical native/Wasm objects, wrapping loads and fast/fallback profile counters passed")
 
 
