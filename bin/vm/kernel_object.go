@@ -183,8 +183,8 @@ type Attrs interface {
 // A Socket takes the socket calls as libc makes them, with the guest's
 // addresses and buffers; the addresses it returns are the guest's. A pair
 // of the kernel's is a Transfer too. An open file of a server is none: a
-// program that speaks the protocol itself has a plain socket for it, what
-// /dev/init opens and what blk gives gpt.
+// program that speaks the protocol itself has a plain socket for it, as
+// /dev/init's open is.
 type Socket interface {
 	File
 	bind(p *Process, at, n uint32) error

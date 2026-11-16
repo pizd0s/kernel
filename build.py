@@ -469,7 +469,7 @@ vm_chaos_coverage = command(
 # The tools of the system, its services and the commands that speak to
 # them, in one multicall executable, /bin/tools, each a link to it in the
 # image (bin/tools).
-TOOLS = ["blk", "console", "devfs", "devices", "erofs", "gpt", "mount", "pty", "tmpfs", "umount"]
+TOOLS = ["blk", "console", "devfs", "devices", "erofs", "mount", "pty", "tmpfs", "umount"]
 PROTOCOL_SOURCES = build.glob("$(S)/lib/protocol/*.cpp")
 PROTOCOL_HEADERS = build.glob("$(S)/lib/protocol/*.h")
 TOOL_SOURCES = [*build.glob("$(S)/bin/tools/*.cpp"), *PROTOCOL_SOURCES]
@@ -510,7 +510,7 @@ unix_sockets = executable("unix_sockets_exe", command(
 ), "$(B)/tst/unix_sockets")
 
 # fuse2fs, e2fsprogs' FUSE server of ext2, ext3 and ext4, on the system's
-# libfuse (lib/fuse), which gpt starts for such a partition (bin/fuse2fs).
+# libfuse (lib/fuse), which blk starts for such a partition (bin/fuse2fs).
 FUSE_SOURCES = [*build.glob("$(S)/lib/fuse/*.cpp"), *build.glob("$(S)/lib/fuse/*.h")]
 fuse2fs = command(
     name="fuse2fs",

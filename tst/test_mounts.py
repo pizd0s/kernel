@@ -8,8 +8,8 @@ bytes and what is written are the mounted directory's. A mount point is
 busy to rmdir and to another mount; umount lets go of it; what is not
 there, not a directory, or a device is refused.
 
-File systems on a disk: blk serves the disk, gpt each partition, and
-gpt starts fuse2fs, on the system's libfuse, for one with an ext2 file
+File systems on a disk: blk serves the disk and each partition, and
+starts fuse2fs, on the system's libfuse, for one with an ext2 file
 system, /dev/<part>fs, a file system to mount, there before the shell
 starts. The disk's ext2 and ext4 file systems are made here (Image),
 the test's user's: their files' bytes come whole from runs of blocks,

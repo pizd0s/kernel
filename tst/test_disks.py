@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Disks of the host as block devices of the system: vm run --disk gives
-rootfs a file of the host, /bin/blk serves it as /dev/<name> and starts
-/bin/gpt for each partition of its GUID partition table, /dev/<name><n>,
-or <name>p<n> after a digit; the shell starts once they are all there. A
-partition's READs and WRITEs go on to the disk, moved and cut at the
-partition's end, and the disk's bytes go between the host's file and the
-reader's or writer's memory. What is written is in the host's file after
-vm ends; a disk with no partition table is a disk alone.
+rootfs a file of the host, /bin/blk serves it as /dev/<name> and each
+partition of its GUID partition table as /dev/<name><n>, or <name>p<n>
+after a digit; the shell starts once they are all there. A partition's
+READs and WRITEs are the disk's, moved and cut at the partition's end,
+and the disk's bytes go between the host's file and the reader's or
+writer's memory. What is written is in the host's file after vm ends; a
+disk with no partition table is a disk alone.
 
     test_disks.py <vm> <rootfs>
 """
