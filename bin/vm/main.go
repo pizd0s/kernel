@@ -43,10 +43,12 @@ func main() {
 
 		compileCommand(args)
 	}); e != nil {
+		restoreHostTerminal()
 		fmt.Fprintln(os.Stderr, "vm:", e)
 		os.Exit(1)
 	}
 
+	restoreHostTerminal()
 	os.Exit(code)
 }
 

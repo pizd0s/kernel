@@ -13,6 +13,7 @@ namespace {
 
 static const Tool tools[] = {
     {"blk", blkMain},
+    {"console", consoleMain},
     {"devfs", devfsMain},
     {"devices", devicesMain},
     {"erofs", erofsMain},

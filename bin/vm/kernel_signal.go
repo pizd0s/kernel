@@ -136,6 +136,7 @@ func (p *Process) send(sig int) {
 	}
 
 	if p == p.k.first && !blocked && act.handler == sigDfl && defaultAction(sig) == actTerminate {
+		restoreHostTerminal()
 		os.Exit(128 + sig)
 	}
 

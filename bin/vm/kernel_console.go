@@ -20,7 +20,13 @@ import (
 // discipline is between: the bytes are as they come. A trap's report goes
 // out with what the process wrote before it. The console has a foreground
 // process group, the first process's at first, which tcsetpgrp sets: the
-// signals the host's terminal makes for vm go to it (routeSignals).
+// signals the host makes for vm go to it (routeSignals).
+//
+// When vm's standard input is a terminal of the host's, vm makes it raw
+// while it runs, as a terminal emulator does, and gives it back as it was
+// when it ends: every key comes as its bytes, and the system's own
+// terminal (bin/tools/console.cpp) is the discipline. The console has the
+// window of that terminal then, TIOCGWINSZ's, which SIGWINCH says changed.
 type console struct {
 	// out are the movers of output, which flush waits for; err is the
 	// pipe of the standard error, for the reports of traps.
@@ -198,12 +204,76 @@ func (m *mover) wake(uint64) {
 	}
 }
 
+// The host's terminal of vm's standard input, as it was before vm made it
+// raw; nil when it is none.
+var hostTerminal struct {
+	mu    sync.Mutex
+	saved *syscall.Termios
+}
+
+func termiosOf(fd int, req uintptr, t *syscall.Termios) error {
+	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), req, uintptr(unsafe.Pointer(t))); e != 0 {
+		return e
+	}
+
+	return nil
+}
+
+// rawHostTerminal makes vm's standard input raw, as cfmakeraw does, when
+// it is a terminal.
+func rawHostTerminal() {
+	var t syscall.Termios
+
+	if termiosOf(0, syscall.TCGETS, &t) != nil {
+		return
+	}
+
+	saved := t
+	t.Iflag &^= syscall.IGNBRK | syscall.BRKINT | syscall.PARMRK | syscall.ISTRIP | syscall.INLCR | syscall.IGNCR | syscall.ICRNL | syscall.IXON
+	t.Oflag &^= syscall.OPOST
+	t.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.ISIG | syscall.IEXTEN
+	t.Cflag &^= syscall.CSIZE | syscall.PARENB
+	t.Cflag |= syscall.CS8
+	t.Cc[syscall.VMIN], t.Cc[syscall.VTIME] = 1, 0
+
+	if termiosOf(0, syscall.TCSETS, &t) == nil {
+		hostTerminal.mu.Lock()
+		hostTerminal.saved = &saved
+		hostTerminal.mu.Unlock()
+	}
+}
+
+// restoreHostTerminal gives the host's terminal back as it was, before vm
+// ends.
+func restoreHostTerminal() {
+	hostTerminal.mu.Lock()
+	defer hostTerminal.mu.Unlock()
+
+	if hostTerminal.saved != nil {
+		termiosOf(0, syscall.TCSETS, hostTerminal.saved)
+		hostTerminal.saved = nil
+	}
+}
+
+// hostWindow is the size of the window of the host's terminal, a struct
+// winsize: ENOTTY when vm's standard input is no terminal.
+func hostWindow() ([sizeofWinsize]byte, error) {
+	var w [sizeofWinsize]byte
+
+	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, 0, syscall.TIOCGWINSZ, uintptr(unsafe.Pointer(&w[0]))); e != 0 {
+		return w, syscall.ENOTTY
+	}
+
+	return w, nil
+}
+
 // newConsole makes the console of the descriptors vm has of 0, 1 and 2,
 // nil for one it has not, and starts its movers: the first process's 0 and
 // 1 write the standard output, its 2 the standard error, and all three
 // read the standard input.
 func (k *Kernel) newConsole() []File {
 	c := &console{}
+	rawHostTerminal()
 	var pipes [3]*pipeEnd
 
 	for fd := range 3 {

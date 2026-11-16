@@ -1167,6 +1167,18 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 		return r
 	case tiocspgrp:
 		return p.libcTcsetpgrp(fd, p.u32(p.varArg(va, 0)))
+	case tiocgwinsz:
+		if _, ok := obj.(*consoleEnd); !ok {
+			break
+		}
+
+		w, err := hostWindow()
+
+		if err == nil {
+			copy(p.span(p.varArg(va, 0), sizeofWinsize), w[:])
+		}
+
+		return p.result(0, err)
 	case fionread:
 		i, ok := obj.(Ioctl)
 
