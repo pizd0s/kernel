@@ -97,16 +97,6 @@ func (p *Process) vectored(fd, iovs, count uint32, events int16, call uintptr, o
 		return p.result(0, err)
 	}
 
-	if v, ok := t.(Vectored); ok {
-		iov := make([]syscall.Iovec, 0, len(spans))
-
-		for _, b := range spans {
-			iov = append(iov, syscall.Iovec{Base: &b[0], Len: uint64(len(b))})
-		}
-
-		return p.result(v.vectored(p, call, iov, off, events))
-	}
-
 	total := 0
 
 	for _, b := range spans {
@@ -244,7 +234,7 @@ func (p *Process) selectFds(n uint32, sets [3]fdSet, timeout int) (int, error) {
 			continue
 		}
 
-		obj, err := p.fd(uint32(fd))
+		obj, err := p.fileAt(uint32(fd))
 
 		if err != nil {
 			return 0, err
@@ -352,20 +342,20 @@ func (p *Process) libcPwrite(fd, buf, n uint32, off uint64) uint32 {
 // of servers (copyFiles); an offset given is read from the guest's memory
 // and written back.
 func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) uint32 {
-	src, err := p.fd(in)
+	src, err := p.fileAt(in)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	dst, err := p.fd(out)
+	dst, err := p.fileAt(out)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	_, fromWindow := src.(*memfdFile)
-	_, toWindow := dst.(*memfdFile)
+	fromWindow := src.asMemfd() != nil
+	toWindow := dst.asMemfd() != nil
 
 	if flags != 0 {
 		return p.result(0, syscall.EINVAL)
@@ -412,7 +402,7 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 // files, src open to read and dst to write, not to append: Linux's errors
 // else.
 func copyFiles(p *Process, src, dst File, from, to *int64, n int) (int, error) {
-	in, out := src.(Transfer), dst.(Transfer)
+	in, out := src.asTransfer(), dst.asTransfer()
 	inFlags, _ := src.flags()
 	outFlags, _ := dst.flags()
 
@@ -555,7 +545,7 @@ func (p *Process) libcLockf(fd, cmd uint32, n uint64) uint32 {
 // does, all of it ignored, and has the space fallocate asks for as its
 // size reaches the end of it, as a file of tmpfs has.
 func (p *Process) libcPosix_fadvise(fd uint32, off, n uint64, advice uint32) uint32 {
-	obj, err := p.fd(fd)
+	obj, err := p.fileAt(fd)
 
 	if err != nil {
 		return uint32(errnoOf(err))
@@ -580,7 +570,7 @@ func (p *Process) libcPosix_fadvise(fd uint32, off, n uint64, advice uint32) uin
 const posixFadvNoreuse = 5
 
 func (p *Process) libcPosix_fallocate(fd uint32, off, n uint64) uint32 {
-	obj, err := p.fd(fd)
+	obj, err := p.fileAt(fd)
 
 	if err != nil {
 		return uint32(errnoOf(err))
@@ -605,14 +595,14 @@ func (p *Process) fallocate(obj File, off, n int64) error {
 		return err
 	}
 
-	a, ok := obj.(Attrs)
+	a := obj.asAttrs()
 
 	switch {
 	case st.Mode&syscall.S_IFMT == syscall.S_IFIFO:
 		return syscall.ESPIPE
 	case st.Mode&syscall.S_IFMT == syscall.S_IFDIR:
 		return syscall.EISDIR
-	case st.Mode&syscall.S_IFMT != syscall.S_IFREG || !ok:
+	case st.Mode&syscall.S_IFMT != syscall.S_IFREG || a == nil:
 		return syscall.ENODEV
 	case off > math.MaxInt64-n:
 		return syscall.EFBIG
@@ -750,10 +740,16 @@ func (p *Process) libcFtruncate(fd uint32, size uint64) uint32 {
 }
 
 // statFile reads a file's metadata for a guest operation on a
-// descriptor.
-func statFile(p *Process, f File, st *syscall.Stat_t) error {
+// descriptor; what is no File has none: EBADF.
+func statFile(p *Process, obj Object, st *syscall.Stat_t) error {
 	if p.chaosFail("file-stat") {
 		return syscall.EIO
+	}
+
+	f := obj.asFile()
+
+	if f == nil {
+		return syscall.EBADF
 	}
 
 	return f.stat(p, st)
@@ -832,7 +828,7 @@ const (
 )
 
 func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
-	obj, err := p.fd(fd)
+	obj, err := p.fileAt(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -993,7 +989,7 @@ func (p *Process) poll(at, n uint32, timeout int) (int, error) {
 			continue
 		}
 
-		obj, err := p.fd(uint32(fd))
+		obj, err := p.fileAt(uint32(fd))
 
 		if err != nil {
 			binary.LittleEndian.PutUint16(e[6:], pollNval)
@@ -1103,13 +1099,13 @@ func (p *Process) libcCfsetspeed(at, speed uint32) uint32 {
 // TIOCSPGRP (kernel_console.go), and FIONREAD of a pipe. The system has no
 // terminal: the rest is ENOTTY.
 func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
-	obj, err := p.fd(fd)
+	obj, err := p.fileAt(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	if t, ok := obj.(Terminal); ok {
+	if t := obj.asTerminal(); t != nil {
 		if r, done := p.terminalIoctl(t, fd, req, va); done {
 			return r
 		}
@@ -1146,7 +1142,7 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 	case tiocspgrp:
 		return p.libcTcsetpgrp(fd, p.u32(p.varArg(va, 0)))
 	case tiocgwinsz:
-		if _, ok := obj.(*consoleEnd); !ok {
+		if obj.asConsole() == nil {
 			break
 		}
 
@@ -1158,9 +1154,9 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 
 		return p.result(0, err)
 	case fionread:
-		i, ok := obj.(Ioctl)
+		i := obj.asIoctl()
 
-		if !ok {
+		if i == nil {
 			break
 		}
 

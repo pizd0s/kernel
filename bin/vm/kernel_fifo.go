@@ -40,7 +40,7 @@ func (n *fifoName) forget(pp *pipe) {
 
 // openFifo opens the FIFO of a server whose stat st is, with the flags of
 // open.
-func (p *Process) openFifo(st *syscall.Stat_t, flags int) (File, error) {
+func (p *Process) openFifo(st *syscall.Stat_t, flags int) (Object, error) {
 	access := flags & syscall.O_ACCMODE
 	reads, writes := access != syscall.O_WRONLY, access != syscall.O_RDONLY
 	nonblock := flags&syscall.O_NONBLOCK != 0

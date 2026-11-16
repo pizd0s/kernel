@@ -47,7 +47,7 @@ func hostLimits() [rlimitCount]rlimit {
 // code is the code of the executable a file holds: the error is ENOEXEC
 // when the file is no executable of a program of the kernel, EACCES when it
 // cannot be read at an offset.
-func (k *Kernel) code(p *Process, f File, name string) (*Code, error) {
+func (k *Kernel) code(p *Process, f Object, name string) (*Code, error) {
 	exe, ok, err := programData(p, f, false)
 
 	if err != nil {
@@ -64,16 +64,22 @@ func (k *Kernel) code(p *Process, f File, name string) (*Code, error) {
 // programData is the executable a file begins with, read at offsets to
 // its length and no further, as exec reads a program (readProgram).
 // EACCES when it cannot be read at an offset.
-func programData(p *Process, f File, module bool) (data []byte, ok bool, err error) {
+func programData(p *Process, f Object, module bool) (data []byte, ok bool, err error) {
+	file := f.asFile()
+
+	if file == nil {
+		return nil, false, syscall.EACCES
+	}
+
 	var st syscall.Stat_t
 
-	if err := f.stat(p, &st); err != nil {
+	if err := file.stat(p, &st); err != nil {
 		return nil, false, err
 	}
 
-	t, isTransfer := f.(Transfer)
+	t := f.asTransfer()
 
-	if !isTransfer {
+	if t == nil {
 		return nil, false, syscall.EACCES
 	}
 
@@ -155,7 +161,7 @@ type codeEntry struct {
 // process's code, a compiler that ends in a panic, a module it refuses,
 // would leave the goroutine's instance its own (aot.cpp's entry thunk
 // restores it only on return).
-func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *Object) (*Code, error) {
+func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*Code, error) {
 	key := sha256.Sum256(data)
 	k.mu.Lock()
 	e, found := k.codes[key]
@@ -207,7 +213,7 @@ func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *Object) (*Cod
 // it to the kernel: a program of lib/c's or a WASI command, whose imports
 // are the kernel's or WASI's (kernel_wasi.go); ENOEXEC, with why, for one
 // that imports anything else.
-func (k *Kernel) compile(data []byte, name string, obj *Object) (*Code, error) {
+func (k *Kernel) compile(data []byte, name string, obj *ElfObject) (*Code, error) {
 	if obj == nil {
 		var err error
 
@@ -233,7 +239,7 @@ func (p *Process) exec(path string, argv, envp []string) error {
 }
 
 // execFrom is exec of a file, when one is given: fexecve's.
-func (p *Process) execFrom(path string, f File, argv, envp []string) error {
+func (p *Process) execFrom(path string, f Object, argv, envp []string) error {
 	img, err := p.loadFrom(path, f, argv)
 
 	if err != nil {
@@ -254,7 +260,7 @@ func (p *Process) loadProgram(path string, argv []string) (*execImage, error) {
 
 // loadFrom is loadProgram of a file, when one is given: fexecve's. A
 // program is a regular file the process may execute.
-func (p *Process) loadFrom(path string, first File, argv []string) (*execImage, error) {
+func (p *Process) loadFrom(path string, first Object, argv []string) (*execImage, error) {
 	for range 4 {
 		f, program := first, ""
 
@@ -270,7 +276,7 @@ func (p *Process) loadFrom(path string, first File, argv []string) (*execImage, 
 		}
 
 		var st syscall.Stat_t
-		t, transfers := f.(Transfer)
+		t := f.asTransfer()
 
 		if err := statFile(p, f, &st); err != nil {
 			f.unref()
@@ -278,7 +284,7 @@ func (p *Process) loadFrom(path string, first File, argv []string) (*execImage, 
 			return nil, err
 		}
 
-		if !transfers || st.Mode&syscall.S_IFMT != syscall.S_IFREG {
+		if t == nil || st.Mode&syscall.S_IFMT != syscall.S_IFREG {
 			f.unref()
 
 			return nil, syscall.EACCES
@@ -336,8 +342,8 @@ func (p *Process) loadFrom(path string, first File, argv []string) (*execImage, 
 
 // openProgram opens the file a path names for exec, a last link followed,
 // and says its path from the root, as Linux's /proc/self/exe does.
-func (p *Process) openProgram(path string) (File, string, error) {
-	var f File
+func (p *Process) openProgram(path string) (Object, string, error) {
+	var f Object
 	var program string
 	err := p.onPath(atFdcwd, path, func(d Dir) error {
 		var err error

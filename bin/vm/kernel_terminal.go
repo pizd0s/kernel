@@ -32,8 +32,54 @@ import (
 // device's, the same for each open of it, which its server's struct
 // served said.
 type remoteTerminal struct {
-	remoteFile
+	node     remoteNode
 	dev, ino uint64
+}
+
+func (t *remoteTerminal) ref()   { t.node.ref() }
+func (t *remoteTerminal) unref() { t.node.unref() }
+
+// A remoteTerminal is a File, a Transfer, a Terminal, an Attrs and a
+// Locker: its node answers but job control's reads and writes and the
+// terminal's calls. It is no Seeker, and no Windowed: lseek is ESPIPE,
+// copy_file_range EINVAL, as Linux's of a terminal.
+func (t *remoteTerminal) asFile() File              { return t }
+func (t *remoteTerminal) asTransfer() Transfer      { return t }
+func (t *remoteTerminal) asSeeker() Seeker          { return nil }
+func (t *remoteTerminal) asDir() Dir                { return nil }
+func (t *remoteTerminal) asTerminal() Terminal      { return t }
+func (t *remoteTerminal) asWindowed() Windowed      { return nil }
+func (t *remoteTerminal) asLink() Link              { return nil }
+func (t *remoteTerminal) asAttrs() Attrs            { return t }
+func (t *remoteTerminal) asSocket() Socket          { return nil }
+func (t *remoteTerminal) asIoctl() Ioctl            { return nil }
+func (t *remoteTerminal) asLocker() Locker          { return t }
+func (t *remoteTerminal) asEpoll() *epoll           { return nil }
+func (t *remoteTerminal) asMemfd() *memfdFile       { return nil }
+func (t *remoteTerminal) asPair() *pairEnd          { return nil }
+func (t *remoteTerminal) asListener() *unixListener { return nil }
+func (t *remoteTerminal) asConsole() *consoleEnd    { return nil }
+func (t *remoteTerminal) asVFS() *remoteDir         { return nil }
+
+func (t *remoteTerminal) stat(p *Process, st *syscall.Stat_t) error { return t.node.stat(p, st) }
+func (t *remoteTerminal) poll(events int16) int16                   { return t.node.poll(events) }
+func (t *remoteTerminal) subscribe(to waker, id uint64, events int16) bool {
+	return t.node.subscribe(to, id, events)
+}
+func (t *remoteTerminal) unsubscribe(to waker, id uint64) { t.node.unsubscribe(to, id) }
+func (t *remoteTerminal) flags() (int, error)             { return t.node.flags() }
+func (t *remoteTerminal) setFlags(fl int) error           { return t.node.setFlags(fl) }
+
+func (t *remoteTerminal) truncate(p *Process, size int64) error          { return t.node.truncate(p, size) }
+func (t *remoteTerminal) sync(p *Process, data bool) error               { return t.node.sync(p, data) }
+func (t *remoteTerminal) chmod(p *Process, mode uint32) error            { return t.node.chmod(p, mode) }
+func (t *remoteTerminal) chown(p *Process, uid, gid int) error           { return t.node.chown(p, uid, gid) }
+func (t *remoteTerminal) utimes(p *Process, ts []syscall.Timespec) error { return t.node.utimes(p, ts) }
+func (t *remoteTerminal) statfs(p *Process, st *syscall.Statfs_t) error  { return t.node.statfs(p, st) }
+
+func (t *remoteTerminal) flock(p *Process, op int) error { return t.node.flock(p, op) }
+func (t *remoteTerminal) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
+	return t.node.recordLock(p, cmd, lk)
 }
 
 // A service's OPEN, and on a slave's open file another open of the slave.
@@ -90,7 +136,7 @@ func (p *Process) isCtty(t Terminal) bool {
 // open: another open of the terminal, which no owner's permission keeps
 // out, as Linux's does not; ENXIO for a session that has none, or whose
 // terminal hung up, which controls it no more.
-func (p *Process) openControlling(flags int) (File, error) {
+func (p *Process) openControlling(flags int) (Object, error) {
 	p.k.mu.Lock()
 	c := p.k.cttys[p.sid]
 
@@ -249,7 +295,7 @@ func (t *remoteTerminal) read(p *Process, b []byte, mode ioMode) (int, error) {
 		return 0, err
 	}
 
-	return t.remoteFile.read(p, b, mode)
+	return t.node.read(p, b, mode)
 }
 
 func (t *remoteTerminal) write(p *Process, b []byte, mode ioMode) (int, error) {
@@ -259,7 +305,7 @@ func (t *remoteTerminal) write(p *Process, b []byte, mode ioMode) (int, error) {
 		}
 	}
 
-	return t.remoteFile.write(p, b, mode)
+	return t.node.write(p, b, mode)
 }
 
 // changeAt is the terminal of a descriptor for a call that changes it,
@@ -307,20 +353,6 @@ func (p *Process) leaveSession(going bool) {
 	t.unref()
 }
 
-// A terminal moves no window: copy_file_range is EINVAL, as Linux's of
-// what is no regular file.
-func (t *remoteTerminal) readWindow(p *Process, w *memfdFile, woff uint32, n int, from *int64) (int, error) {
-	return 0, syscall.EINVAL
-}
-
-func (t *remoteTerminal) writeWindow(p *Process, w *memfdFile, woff uint32, n int, to *int64) (int, error) {
-	return 0, syscall.EINVAL
-}
-
-func (t *remoteTerminal) seek(p *Process, off int64, whence int) (int64, error) {
-	return 0, syscall.ESPIPE
-}
-
 func (t *remoteTerminal) pread(p *Process, b []byte, off int64) (int, error) {
 	return 0, syscall.ESPIPE
 }
@@ -338,9 +370,9 @@ func (p *Process) terminalAt(fd uint32) (Terminal, error) {
 		return nil, err
 	}
 
-	t, ok := f.(Terminal)
+	t := f.asTerminal()
 
-	if !ok {
+	if t == nil {
 		return nil, syscall.ENOTTY
 	}
 
@@ -351,7 +383,7 @@ func (p *Process) terminalAt(fd uint32) (Terminal, error) {
 // cancels it, and it restarts when the handlers ask for that.
 func (t *remoteTerminal) waits(p *Process, op, arg uint32, body []byte) error {
 	for {
-		_, cancelled, err := t.waiting(p, op, arg, body, nil)
+		_, cancelled, err := t.node.waiting(p, op, arg, body, nil)
 
 		if err == syscall.EINTR && cancelled && p.interrupted() {
 			continue
@@ -363,7 +395,7 @@ func (t *remoteTerminal) waits(p *Process, op, arg uint32, body []byte) error {
 
 // count is a call answered with a count.
 func (t *remoteTerminal) count(p *Process, op uint32) (uint32, error) {
-	pk, err := t.on(p, op, 0, nil)
+	pk, err := t.node.on(p, op, 0, nil)
 
 	if err == nil && len(pk.data) != 4 {
 		err = syscall.EIO
@@ -385,13 +417,13 @@ func (t *remoteTerminal) device() (uint64, uint64) {
 
 // jobs is what the terminal's READY said last.
 func (t *remoteTerminal) jobs() (int32, bool, bool) {
-	hungUp := t.readiness()&pollHup != 0
+	hungUp := t.node.readiness()&pollHup != 0
 
-	return t.remoteNode.foreground.Load(), t.tostop.Load(), hungUp
+	return t.node.foreground.Load(), t.node.tostop.Load(), hungUp
 }
 
 func (t *remoteTerminal) getattr(p *Process) ([]byte, error) {
-	pk, err := t.on(p, rTcgetattr, 0, nil)
+	pk, err := t.node.on(p, rTcgetattr, 0, nil)
 
 	if err == nil && len(pk.data) != sizeofTermios {
 		err = syscall.EIO
@@ -402,18 +434,18 @@ func (t *remoteTerminal) getattr(p *Process) ([]byte, error) {
 
 func (t *remoteTerminal) setattr(p *Process, when uint32, termios []byte) error {
 	if when == 0 {
-		return t.simple(p, rTcsetattr, when, termios)
+		return t.node.simple(p, rTcsetattr, when, termios)
 	}
 
 	return t.waits(p, rTcsetattr, when, termios)
 }
 
 func (t *remoteTerminal) flush(p *Process, queue uint32) error {
-	return t.simple(p, rTcflush, queue, nil)
+	return t.node.simple(p, rTcflush, queue, nil)
 }
 
 func (t *remoteTerminal) flow(p *Process, action uint32) error {
-	return t.simple(p, rTcflow, action, nil)
+	return t.node.simple(p, rTcflow, action, nil)
 }
 
 func (t *remoteTerminal) drain(p *Process) error {
@@ -421,7 +453,7 @@ func (t *remoteTerminal) drain(p *Process) error {
 }
 
 func (t *remoteTerminal) window(p *Process) ([]byte, error) {
-	pk, err := t.on(p, rGetWinsize, 0, nil)
+	pk, err := t.node.on(p, rGetWinsize, 0, nil)
 
 	if err == nil && len(pk.data) != sizeofWinsize {
 		err = syscall.EIO
@@ -431,7 +463,7 @@ func (t *remoteTerminal) window(p *Process) ([]byte, error) {
 }
 
 func (t *remoteTerminal) setWindow(p *Process, size []byte) error {
-	return t.simple(p, rSetWinsize, 0, size)
+	return t.node.simple(p, rSetWinsize, 0, size)
 }
 
 func (t *remoteTerminal) pending(p *Process) (uint32, error) {
@@ -447,27 +479,27 @@ func (t *remoteTerminal) foreground(p *Process) (uint32, error) {
 }
 
 func (t *remoteTerminal) setForeground(p *Process, pgrp uint32) error {
-	return t.simple(p, rSetPgrp, pgrp, nil)
+	return t.node.simple(p, rSetPgrp, pgrp, nil)
 }
 
 func (t *remoteTerminal) control(p *Process, sid, pgrp int32) error {
 	var body [4]byte
 	binary.LittleEndian.PutUint32(body[:], uint32(pgrp))
 
-	return t.simple(p, rSetCtty, uint32(sid), body[:])
+	return t.node.simple(p, rSetCtty, uint32(sid), body[:])
 }
 
 // reopen is the server's other open of the slave, which the OK brings, a
 // terminal's.
 func (t *remoteTerminal) reopen(p *Process, flags int) (Terminal, error) {
-	pk, err := t.call(p, rOpen, uint32(flags), nil, nil)
+	pk, err := t.node.call(p, rOpen, uint32(flags), nil, nil)
 
 	if err != nil {
 		return nil, err
 	}
 
 	if len(pk.files) == 1 {
-		if r, ok := pk.files[0].(Terminal); ok {
+		if r := pk.files[0].asTerminal(); r != nil {
 			return r, nil
 		}
 	}
@@ -486,7 +518,7 @@ func (t *remoteTerminal) name(p *Process, peer bool) (string, error) {
 		arg = 1
 	}
 
-	pk, err := t.on(p, rName, arg, nil)
+	pk, err := t.node.on(p, rName, arg, nil)
 
 	if err != nil {
 		return "", err

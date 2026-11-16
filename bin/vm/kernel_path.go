@@ -94,7 +94,7 @@ func (p *Process) start(dirfd int32, path string) (Dir, error) {
 // onAt runs a call on what an *at call names: byPath on the path, a last
 // link followed unless AT_SYMLINK_NOFOLLOW, or byFile on the descriptor's
 // own file when the path is empty with AT_EMPTY_PATH.
-func (p *Process) onAt(dirfd int32, path string, flags uint32, byFile func(f File) error, byPath func(d Dir, follow bool) error) error {
+func (p *Process) onAt(dirfd int32, path string, flags uint32, byFile func(f Object) error, byPath func(d Dir, follow bool) error) error {
 	if path == "" && flags&atEmptyPath != 0 {
 		if dirfd == atFdcwd {
 			return byFile(p.cwd)
@@ -116,9 +116,9 @@ func (p *Process) onAt(dirfd int32, path string, flags uint32, byFile func(f Fil
 
 // attrsCall is a call on a descriptor's attributes; a file without any
 // has no such call: EINVAL.
-func attrsCall(call func(a Attrs) error) func(f File) error {
-	return func(f File) error {
-		if a, ok := f.(Attrs); ok {
+func attrsCall(call func(a Attrs) error) func(f Object) error {
+	return func(f Object) error {
+		if a := f.asAttrs(); a != nil {
 			return call(a)
 		}
 
@@ -127,8 +127,8 @@ func attrsCall(call func(a Attrs) error) func(f File) error {
 }
 
 // openAt opens what a path relative to dirfd names, as open(2) does.
-func (p *Process) openAt(dirfd int32, path string, flags int, mode uint32) (File, error) {
-	var f File
+func (p *Process) openAt(dirfd int32, path string, flags int, mode uint32) (Object, error) {
+	var f Object
 	err := p.onPath(dirfd, path, func(d Dir) error {
 		var err error
 		f, err = d.openPath(p, path, flags, mode)
@@ -162,7 +162,7 @@ func (p *Process) open(dirfd int32, path string, flags, va uint32) (int, error) 
 }
 
 // openPath opens a guest path.
-func (p *Process) openPath(path string, flags int, mode uint32) (File, error) {
+func (p *Process) openPath(path string, flags int, mode uint32) (Object, error) {
 	return p.openAt(atFdcwd, path, flags, mode)
 }
 
@@ -178,9 +178,9 @@ func (p *Process) readPath(path string, max int) ([]byte, error) {
 	}
 
 	defer f.unref()
-	t, ok := f.(Transfer)
+	t := f.asTransfer()
 
-	if !ok {
+	if t == nil {
 		return nil, nil
 	}
 
@@ -352,7 +352,7 @@ func (p *Process) libcFstatat(dirfd, path, at, flags uint32) uint32 {
 // statAt follows the last link with follow, as WASI's path_filestat_get
 // does (kernel_wasi.go).
 func (p *Process) statFlags(dirfd int32, path string, flags uint32, st *syscall.Stat_t) error {
-	return p.onAt(dirfd, path, flags, func(f File) error {
+	return p.onAt(dirfd, path, flags, func(f Object) error {
 		return statFile(p, f, st)
 	}, func(d Dir, follow bool) error {
 		return d.statPath(p, path, follow, st)
@@ -374,7 +374,7 @@ func (p *Process) libcAccess(path, mode uint32) uint32 {
 // faccessat of a descriptor's own file: a file of the kernel is the
 // process's to use.
 func (p *Process) libcFaccessat(dirfd, path, mode, flags uint32) uint32 {
-	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(f File) error {
+	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(f Object) error {
 		return nil
 	}, func(d Dir, follow bool) error {
 		return p.access(d, p.str(path), mode, flags)
@@ -437,9 +437,9 @@ func (p *Process) directory(path string) (Dir, error) {
 			return err
 		}
 
-		h, ok := f.(Dir)
+		h := f.asDir()
 
-		if !ok {
+		if h == nil {
 			f.unref()
 
 			return syscall.ENOTDIR
@@ -486,11 +486,13 @@ func (p *Process) libcFchdir(fd uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	d := asRoot(obj)
+	d := obj.asDir()
 
 	if d == nil {
 		return p.result(0, syscall.ENOTDIR)
 	}
+
+	d.ref()
 
 	if err := p.access(d, "", 1, 0); err != nil {
 		d.unref()
@@ -662,9 +664,9 @@ func (p *Process) libcReadlinkat(dirfd, path, buf, size uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	l, ok := obj.(Link)
+	l := obj.asLink()
 
-	if !ok {
+	if l == nil {
 		return p.result(0, syscall.ENOENT)
 	}
 
@@ -1080,7 +1082,7 @@ func (p *Process) libcFdopendir(fd uint32) uint32 {
 		return p.pointer(0, err)
 	}
 
-	if _, ok := obj.(Dir); !ok || st.Mode&syscall.S_IFMT != syscall.S_IFDIR {
+	if obj.asDir() == nil || st.Mode&syscall.S_IFMT != syscall.S_IFDIR {
 		return p.pointer(0, syscall.ENOTDIR)
 	}
 

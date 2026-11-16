@@ -8,20 +8,53 @@ import (
 	"unsafe"
 )
 
-// An open file is a File: what a descriptor refers to, shared by the
-// descriptors and processes that refer to it, and what every kind of call
-// asks of it. What else a file can do is a role, an interface a call
-// casts to: a Transfer reads and writes, a Seeker seeks, a Dir takes the
-// calls with a path, a Terminal a terminal's, a Socket speaks sockets, an
-// Ioctl takes ioctls, a Locker takes locks, an Epoll watches files
-// (kernel_epoll.go). Every file is the kernel's: one
-// of a server (kernel_remote.go), a pipe (kernel_pipe.go), a socket, a
-// memfd, the console or a disk (kernel_console.go); each plays its own
-// roles.
-type File interface {
+// What a descriptor refers to is an Object: a handle the kernel counts
+// the references of, the descriptors and processes that hold it and what
+// else does, a packet in flight or a member of an epoll; its last unref is
+// for its type to clean up after. All else it is, it is in a role, which
+// its as methods give, nil for a role it does not play: a File, what any
+// descriptor's object is, a Transfer reads and writes, a Seeker seeks, a
+// Dir takes the calls with a path, a Terminal a terminal's, a Windowed
+// file moves bytes to and from a memfd's window, a Link is what
+// readlinkat reads by an empty path, an Attrs has the attributes, a
+// Socket speaks sockets, an Ioctl takes ioctls, a Locker takes locks. A
+// few calls want a type of the kernel's itself: an epoll
+// (kernel_epoll.go), a memfd (kernel_memfd.go), an end of a socket pair
+// (kernel_endpoint.go), a socket that listens (kernel_unix.go), the
+// console (kernel_console.go) or a handle of the VFS's (kernel_vfs.go).
+// Every object is the kernel's: an open file of a server
+// (kernel_remote.go), a pipe's end (kernel_pipe.go), a socket, a memfd,
+// the console's, a disk's or an epoll. Each says all it is itself: no
+// object type embeds another, nor has a method of another's.
+type Object interface {
 	// ref takes a reference, unref drops one; the last closes the object.
 	ref()
 	unref()
+	// asFile and the rest are the object in a role, nil for one it does
+	// not play, or the type of the kernel's it is.
+	asFile() File
+	asTransfer() Transfer
+	asSeeker() Seeker
+	asDir() Dir
+	asTerminal() Terminal
+	asWindowed() Windowed
+	asLink() Link
+	asAttrs() Attrs
+	asSocket() Socket
+	asIoctl() Ioctl
+	asLocker() Locker
+	asEpoll() *epoll
+	asMemfd() *memfdFile
+	asPair() *pairEnd
+	asListener() *unixListener
+	asConsole() *consoleEnd
+	asVFS() *remoteDir
+}
+
+// A File is an open file, what any descriptor's object is: what fstat,
+// fcntl's F_GETFL and F_SETFL, poll and epoll ask of it.
+type File interface {
+	Object
 	// stat is fstat.
 	stat(p *Process, st *syscall.Stat_t) error
 	// poll is the events ready now of those asked. subscribe makes the
@@ -47,23 +80,15 @@ type ioMode struct {
 }
 
 type Transfer interface {
-	File
+	Object
 	read(p *Process, b []byte, mode ioMode) (int, error)
 	write(p *Process, b []byte, mode ioMode) (int, error)
 	pread(p *Process, b []byte, off int64) (int, error)
 	pwrite(p *Process, b []byte, off int64) (int, error)
 }
 
-// A Vectored transfer runs readv, writev, preadv or pwritev on the host
-// with iovecs into the guest's memory: call is the system call, off its
-// offset. A Transfer without the role gathers and scatters instead.
-type Vectored interface {
-	Transfer
-	vectored(p *Process, call uintptr, iov []syscall.Iovec, off uint64, events int16) (int, error)
-}
-
 type Seeker interface {
-	File
+	Object
 	seek(p *Process, off int64, whence int) (int64, error)
 }
 
@@ -76,13 +101,13 @@ type Seeker interface {
 // a process that has none (noRoot). follow says whether a last symbolic
 // link is followed.
 type Dir interface {
-	File
+	Object
 	// path is the directory's own path from the process's root.
 	path(p *Process) (string, error)
 	// readdir gives the entries after the last it gave, as getdents64
 	// does, in the guest's struct dirent layout.
 	readdir(p *Process, b []byte) (int, error)
-	openPath(p *Process, path string, flags int, mode uint32) (File, error)
+	openPath(p *Process, path string, flags int, mode uint32) (Object, error)
 	statPath(p *Process, path string, follow bool, st *syscall.Stat_t) error
 	readlinkPath(p *Process, path string) (string, error)
 	mkdirPath(p *Process, path string, mode uint32) error
@@ -104,12 +129,12 @@ type Dir interface {
 	// mountPath mounts on target the directory source names, or the root
 	// of the file system conn is a connection to; unmountPath lets what
 	// is mounted on path go.
-	mountPath(p *Process, target, source string, conn File) error
+	mountPath(p *Process, target, source string, conn Object) error
 	unmountPath(p *Process, path string, flags uint32) error
 	// bindPath makes a socket node of path, which holds held;
 	// connectPath is what the socket node path names holds.
-	bindPath(p *Process, path string, mode uint32, held File) error
-	connectPath(p *Process, path string) (File, error)
+	bindPath(p *Process, path string, mode uint32, held Object) error
+	connectPath(p *Process, path string) (Object, error)
 }
 
 // A Terminal is a terminal's open file (kernel_terminal.go): its server
@@ -155,7 +180,7 @@ type Terminal interface {
 // reads into it or writes from it. from and to are the file's offsets,
 // nil for its position, which moves.
 type Windowed interface {
-	File
+	Object
 	readWindow(p *Process, w *memfdFile, woff uint32, n int, from *int64) (int, error)
 	writeWindow(p *Process, w *memfdFile, woff uint32, n int, to *int64) (int, error)
 }
@@ -164,14 +189,14 @@ type Windowed interface {
 // which readlinkat reads by an empty path: a symbolic link's target, or
 // ENOENT for what is no link, as Linux has it.
 type Link interface {
-	File
+	Object
 	readlink(p *Process) (string, error)
 }
 
 // An Attrs has the attributes a descriptor's calls set, and knows the file
 // system it is on: an open file of a server (kernel_remote.go).
 type Attrs interface {
-	File
+	Object
 	truncate(p *Process, size int64) error
 	sync(p *Process, data bool) error
 	chmod(p *Process, mode uint32) error
@@ -186,12 +211,12 @@ type Attrs interface {
 // program that speaks the protocol itself has a plain socket for it, as
 // /dev/init's open is.
 type Socket interface {
-	File
+	Object
 	bind(p *Process, at, n uint32) error
 	connect(p *Process, at, n uint32) error
 	listen(backlog int) error
 	// accept returns the connection and the peer's address.
-	accept(p *Process, flags uint32) (File, []byte, error)
+	accept(p *Process, flags uint32) (Object, []byte, error)
 	sendmsg(p *Process, at, flags uint32) (int, error)
 	recvmsg(p *Process, at, flags uint32) (int, error)
 	sendto(p *Process, buf, n, flags, addr, alen uint32) (int, error)
@@ -201,26 +226,28 @@ type Socket interface {
 	getsockopt(p *Process, level, name, at, lenAt uint32) error
 	setsockopt(p *Process, level, name, at, n uint32) error
 	shutdown(how int) error
+	// socketKind is SOCK_STREAM, SOCK_DGRAM or SOCK_SEQPACKET.
+	socketKind() int
 }
 
 // An Ioctl takes ioctls with the host's argument layout, which the libc
 // functions convert the guest's to; a request that takes an int, TCSBRK,
 // TCXONC, TCFLSH, takes it pointed to.
 type Ioctl interface {
-	File
+	Object
 	ioctl(req uintptr, arg unsafe.Pointer) error
 }
 
 // A Locker takes flock's locks and the record locks of fcntl, which try
 // without blocking: EAGAIN or EACCES is a lock held by another.
 type Locker interface {
-	File
+	Object
 	flock(p *Process, op int) error
 	recordLock(p *Process, cmd int, lk *syscall.Flock_t) error
 }
 
 type Descriptor struct {
-	obj     File
+	obj     Object
 	cloexec bool
 }
 
@@ -236,7 +263,7 @@ const (
 )
 
 // fd is the object of a descriptor.
-func (p *Process) fd(fd uint32) (File, error) {
+func (p *Process) fd(fd uint32) (Object, error) {
 	d, ok := p.files.at(int(fd))
 
 	if !ok {
@@ -244,6 +271,21 @@ func (p *Process) fd(fd uint32) (File, error) {
 	}
 
 	return d.obj, nil
+}
+
+// fileAt is the File of a descriptor: what any descriptor's object is.
+func (p *Process) fileAt(fd uint32) (File, error) {
+	obj, err := p.fd(fd)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if f := obj.asFile(); f != nil {
+		return f, nil
+	}
+
+	return nil, syscall.EBADF
 }
 
 // transferAt is the Transfer of a descriptor: read on a directory is
@@ -255,11 +297,11 @@ func (p *Process) transferAt(fd uint32, read bool) (Transfer, error) {
 		return nil, err
 	}
 
-	if t, ok := obj.(Transfer); ok {
+	if t := obj.asTransfer(); t != nil {
 		return t, nil
 	}
 
-	if _, ok := obj.(Dir); ok && read {
+	if obj.asDir() != nil && read {
 		return nil, syscall.EISDIR
 	}
 
@@ -273,7 +315,7 @@ func (p *Process) seekerAt(fd uint32) (Seeker, error) {
 		return nil, err
 	}
 
-	if s, ok := obj.(Seeker); ok {
+	if s := obj.asSeeker(); s != nil {
 		return s, nil
 	}
 
@@ -287,7 +329,7 @@ func (p *Process) dirAt(fd uint32) (Dir, error) {
 		return nil, err
 	}
 
-	if d, ok := obj.(Dir); ok {
+	if d := obj.asDir(); d != nil {
 		return d, nil
 	}
 
@@ -301,7 +343,7 @@ func (p *Process) attrsAt(fd uint32) (Attrs, error) {
 		return nil, err
 	}
 
-	if a, ok := obj.(Attrs); ok {
+	if a := obj.asAttrs(); a != nil {
 		return a, nil
 	}
 
@@ -315,25 +357,11 @@ func (p *Process) socketAt(fd uint32) (Socket, error) {
 		return nil, err
 	}
 
-	if s, ok := obj.(Socket); ok {
+	if s := obj.asSocket(); s != nil {
 		return s, nil
 	}
 
 	return nil, syscall.ENOTSOCK
-}
-
-func (p *Process) ioctlAt(fd uint32) (Ioctl, error) {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if i, ok := obj.(Ioctl); ok {
-		return i, nil
-	}
-
-	return nil, syscall.ENOTTY
 }
 
 func (p *Process) lockerAt(fd uint32) (Locker, error) {
@@ -343,7 +371,7 @@ func (p *Process) lockerAt(fd uint32) (Locker, error) {
 		return nil, err
 	}
 
-	if l, ok := obj.(Locker); ok {
+	if l := obj.asLocker(); l != nil {
 		return l, nil
 	}
 
@@ -352,7 +380,7 @@ func (p *Process) lockerAt(fd uint32) (Locker, error) {
 
 // install puts an object at the lowest free descriptor from min; the
 // descriptor takes the reference.
-func (p *Process) install(obj File, min int, cloexec bool) (int, error) {
+func (p *Process) install(obj Object, min int, cloexec bool) (int, error) {
 	if fd := p.files.lowest(min); fd < p.fdLimit() {
 		p.files.put(fd, obj, cloexec)
 
@@ -414,7 +442,7 @@ func (p *Process) dupTo(old, new uint32, cloexec bool) (int, error) {
 
 // placeAt makes a descriptor refer to an object, closing what it referred
 // to; the descriptor is below the process's limit.
-func (p *Process) placeAt(obj File, fd uint32, cloexec bool) {
+func (p *Process) placeAt(obj Object, fd uint32, cloexec bool) {
 	obj.ref()
 	p.closeFd(int(fd))
 	p.files.put(int(fd), obj, cloexec)

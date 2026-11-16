@@ -115,9 +115,9 @@ func (g *globber) names(dir string) ([]string, error) {
 	}
 
 	defer f.unref()
-	d, ok := f.(Dir)
+	d := f.asDir()
 
-	if !ok {
+	if d == nil {
 		return nil, syscall.ENOTDIR
 	}
 

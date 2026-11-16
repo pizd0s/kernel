@@ -289,32 +289,13 @@ func (p *Process) libcSockatmark(fd uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	switch s.(type) {
-	case *pairEnd, *unixSocket, *unixDgram:
-		// A socket of the kernel's has no out-of-band data: a stream is
-		// never at its mark, and the other kinds have none, as Linux's.
-		if kindOf(s) == sockStream {
-			return p.result(0, nil)
-		}
-
-		return p.result(0, syscall.EOPNOTSUPP)
+	// A socket of the kernel's has no out-of-band data: a stream is never
+	// at its mark, and the other kinds have none, as Linux's.
+	if s.socketKind() == sockStream {
+		return p.result(0, nil)
 	}
 
-	return p.result(0, syscall.ENOTTY)
-}
-
-// kindOf is the kind of a socket of the kernel's.
-func kindOf(s Socket) int {
-	switch s := s.(type) {
-	case *pairEnd:
-		return s.shared.kind
-	case *unixSocket:
-		return s.kind
-	case *unixDgram:
-		return sockDgram
-	}
-
-	return sockSeqpacket
+	return p.result(0, syscall.EOPNOTSUPP)
 }
 
 func (p *Process) socketAccept(fd, addr, lenAt, flags uint32) uint32 {

@@ -110,7 +110,7 @@ var wasiFunctions = map[string]any{
 
 // isWASI tells whether a module is a WASI command: one that imports WASI's
 // module.
-func isWASI(obj *Object) bool {
+func isWASI(obj *ElfObject) bool {
 	for _, imp := range obj.meta.imports {
 		if imp.module == wasiModule {
 			return true
@@ -304,9 +304,9 @@ func vectored(ctx uintptr, fd, iovs, count uint32, offset uint64, positioned, wr
 		return wasiEfault
 	}
 
-	t, ok := obj.(Transfer)
+	t := obj.asTransfer()
 
-	if !ok {
+	if t == nil {
 		return wasiEbadf
 	}
 
@@ -388,9 +388,9 @@ func wasiFdSeek(ctx uintptr, fd uint32, offset uint64, whence uint32, result uin
 		return wasiEinval
 	}
 
-	s, ok := obj.(Seeker)
+	s := obj.asSeeker()
 
-	if !ok {
+	if s == nil {
 		return wasiEspipe
 	}
 
@@ -444,7 +444,7 @@ func filetype(mode uint32) byte {
 
 func wasiFdFdstatGet(ctx uintptr, fd, at uint32) uint32 {
 	p := proc(ctx)
-	obj, err := p.fd(fd)
+	obj, err := p.fileAt(fd)
 
 	if err != nil {
 		return wasiEbadf
@@ -489,7 +489,7 @@ func wasiFdFdstatGet(ctx uintptr, fd, at uint32) uint32 {
 
 func wasiFdFdstatSetFlags(ctx uintptr, fd, flags uint32) uint32 {
 	p := proc(ctx)
-	obj, err := p.fd(fd)
+	obj, err := p.fileAt(fd)
 
 	if err != nil {
 		return wasiEbadf
@@ -532,7 +532,7 @@ func filestat(b []byte, st *syscall.Stat_t) {
 
 func wasiFdFilestatGet(ctx uintptr, fd, at uint32) uint32 {
 	p := proc(ctx)
-	obj, err := p.fd(fd)
+	obj, err := p.fileAt(fd)
 
 	if err != nil {
 		return wasiEbadf
@@ -639,13 +639,13 @@ func wasiFdReaddir(ctx uintptr, fd, buf, n uint32, cookie uint64, used uint32) u
 		return wasiEfault
 	}
 
-	d, ok := obj.(Dir)
+	d := obj.asDir()
 
-	if !ok {
+	if d == nil {
 		return wasiEnotdir
 	}
 
-	if s, ok := obj.(Seeker); ok {
+	if s := obj.asSeeker(); s != nil {
 		if _, err := s.seek(p, 0, 0); err != nil {
 			return wasiErrno(err)
 		}

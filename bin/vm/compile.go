@@ -282,7 +282,7 @@ func unpack(exe []byte) ([]byte, error) {
 
 // compileExecutable compiles the module of an executable to its object, as
 // compileModule does, ENOEXEC with why for frames that do not unpack.
-func compileExecutable(exe []byte, options CompileOptions) (*Object, error) {
+func compileExecutable(exe []byte, options CompileOptions) (*ElfObject, error) {
 	module, err := unpack(exe)
 
 	if err != nil {
@@ -295,7 +295,7 @@ func compileExecutable(exe []byte, options CompileOptions) (*Object, error) {
 // compileModule compiles a module to its object: ENOEXEC for what is no
 // module, or a module the compiler refuses, with its diagnostic, or traps
 // on.
-func compileModule(data []byte, options CompileOptions) (obj *Object, err error) {
+func compileModule(data []byte, options CompileOptions) (obj *ElfObject, err error) {
 	if !bytes.HasPrefix(data, wasmHeader) {
 		return nil, syscall.ENOEXEC
 	}

@@ -43,9 +43,9 @@ const (
 
 const noteOwner = "wasm2o"
 
-// Object is what a loader takes from an object, as vm or a linker
+// ElfObject is what a loader takes from an object, as vm or a linker
 // that combined such objects wrote it.
-type Object struct {
+type ElfObject struct {
 	text   []byte
 	rodata []byte
 	// defined maps a symbol of the text to its offset; relocs are those
@@ -265,9 +265,9 @@ func (f *elfFile) relocations(of int) []objReloc {
 	return out[:n]
 }
 
-func readObject(data []byte) *Object {
+func readObject(data []byte) *ElfObject {
 	f := parseELF(data)
-	obj := &Object{text: f.sections[f.text].data, defined: f.functions()}
+	obj := &ElfObject{text: f.sections[f.text].data, defined: f.functions()}
 
 	if f.rodata >= 0 {
 		obj.rodata = f.sections[f.rodata].data
@@ -547,7 +547,7 @@ func cfaProgram(b []byte, code uint64, cfa int64, sp *[]spEntry, size uint32) in
 
 // describeSymbols adds what the symbols tell to the description: the
 // exports and imports of functions, and the init thunk.
-func (obj *Object) describeSymbols(symbols []elfSymbol, text int) {
+func (obj *ElfObject) describeSymbols(symbols []elfSymbol, text int) {
 	m := obj.meta
 	m.init = symInit
 

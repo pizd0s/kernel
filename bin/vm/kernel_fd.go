@@ -30,7 +30,7 @@ func (t *fdTable) at(fd int) (Descriptor, bool) {
 }
 
 // put makes a free number refer to obj, which takes the reference.
-func (t *fdTable) put(fd int, obj File, cloexec bool) {
+func (t *fdTable) put(fd int, obj Object, cloexec bool) {
 	if fd >= len(t.slots) {
 		t.slots = append(t.slots, make([]Descriptor, fd+1-len(t.slots))...)
 	}
@@ -40,7 +40,7 @@ func (t *fdTable) put(fd int, obj File, cloexec bool) {
 }
 
 // take frees a number and gives what it referred to, nil for nothing.
-func (t *fdTable) take(fd int) File {
+func (t *fdTable) take(fd int) Object {
 	if fd < 0 || fd >= len(t.slots) || t.slots[fd].obj == nil {
 		return nil
 	}

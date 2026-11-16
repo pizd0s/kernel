@@ -27,11 +27,6 @@ type memfdFile struct {
 	made time.Time
 }
 
-var (
-	_ Transfer = (*memfdFile)(nil)
-	_ Seeker   = (*memfdFile)(nil)
-)
-
 var memfdInodes atomic.Uint64
 
 // memfd_create makes a file of the n bytes of the process's memory at at,
@@ -96,6 +91,26 @@ func (f *memfdFile) unref() {
 		f.inst.unhold()
 	}
 }
+
+// A memfdFile is a File, a Transfer and a Seeker, and itself to a call
+// that wants one.
+func (f *memfdFile) asFile() File              { return f }
+func (f *memfdFile) asTransfer() Transfer      { return f }
+func (f *memfdFile) asSeeker() Seeker          { return f }
+func (f *memfdFile) asDir() Dir                { return nil }
+func (f *memfdFile) asTerminal() Terminal      { return nil }
+func (f *memfdFile) asWindowed() Windowed      { return nil }
+func (f *memfdFile) asLink() Link              { return nil }
+func (f *memfdFile) asAttrs() Attrs            { return nil }
+func (f *memfdFile) asSocket() Socket          { return nil }
+func (f *memfdFile) asIoctl() Ioctl            { return nil }
+func (f *memfdFile) asLocker() Locker          { return nil }
+func (f *memfdFile) asEpoll() *epoll           { return nil }
+func (f *memfdFile) asMemfd() *memfdFile       { return f }
+func (f *memfdFile) asPair() *pairEnd          { return nil }
+func (f *memfdFile) asListener() *unixListener { return nil }
+func (f *memfdFile) asConsole() *consoleEnd    { return nil }
+func (f *memfdFile) asVFS() *remoteDir         { return nil }
 
 func (f *memfdFile) stat(p *Process, st *syscall.Stat_t) error {
 	*st = syscall.Stat_t{Ino: f.ino, Mode: syscall.S_IFREG | 0o777, Nlink: 1, Size: int64(len(f.mem)),
@@ -212,20 +227,20 @@ func (f *memfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 // there or come straight from there, one copy, a Windowed file's; another
 // memfd's bytes are moved. from and to are the offsets given, nil for the
 // files' positions, which move.
-func copyWindow(p *Process, src, dst File, from, to *int64, n int) (int, error) {
-	if w, ok := dst.(*memfdFile); ok {
+func copyWindow(p *Process, src, dst Object, from, to *int64, n int) (int, error) {
+	if w := dst.asMemfd(); w != nil {
 		return w.fill(p, src, from, to, n)
 	}
 
-	return src.(*memfdFile).drain(p, dst, from, to, n)
+	return src.asMemfd().drain(p, dst, from, to, n)
 }
 
 // fill copies up to n bytes of src, at from or its position, into the
 // range at to or its position: the range does not grow, past its end the
 // copy is ENOSPC. No lock is held while the bytes go: a server that
 // writes to the range as it answers waits for nothing.
-func (f *memfdFile) fill(p *Process, src File, from, to *int64, n int) (int, error) {
-	if src == File(f) {
+func (f *memfdFile) fill(p *Process, src Object, from, to *int64, n int) (int, error) {
+	if src == Object(f) {
 		return 0, syscall.EINVAL
 	}
 
@@ -248,12 +263,11 @@ func (f *memfdFile) fill(p *Process, src File, from, to *int64, n int) (int, err
 	var count int
 	var err error
 
-	switch s := src.(type) {
-	case *memfdFile:
-		count, err = s.moveTo(f.mem[at:int(at)+n], from)
-	case Windowed:
-		count, err = s.readWindow(p, f, uint32(at), n, from)
-	default:
+	if m := src.asMemfd(); m != nil {
+		count, err = m.moveTo(f.mem[at:int(at)+n], from)
+	} else if w := src.asWindowed(); w != nil {
+		count, err = w.readWindow(p, f, uint32(at), n, from)
+	} else {
 		err = syscall.EINVAL // as copy_file_range has it
 	}
 
@@ -264,7 +278,7 @@ func (f *memfdFile) fill(p *Process, src File, from, to *int64, n int) (int, err
 
 // drain copies up to n bytes of the range, at from or its position, into
 // dst at to or its position.
-func (f *memfdFile) drain(p *Process, dst File, from, to *int64, n int) (int, error) {
+func (f *memfdFile) drain(p *Process, dst Object, from, to *int64, n int) (int, error) {
 	if f.mode == syscall.O_WRONLY {
 		return 0, syscall.EBADF
 	}
@@ -282,7 +296,7 @@ func (f *memfdFile) drain(p *Process, dst File, from, to *int64, n int) (int, er
 	var count int
 	var err error
 
-	if d, ok := dst.(Windowed); ok {
+	if d := dst.asWindowed(); d != nil {
 		count, err = d.writeWindow(p, f, uint32(at), n, to)
 	} else {
 		err = syscall.EINVAL // as copy_file_range has it
@@ -328,39 +342,39 @@ func (f *memfdFile) moved(at *int64, count int) {
 	f.mu.Unlock()
 }
 
-// readWindow reads n bytes of the server's file at from, or at its
+// readWindow reads size bytes of the server's file at from, or at its
 // position, which moves, into the memfd w from its byte woff on.
-func (f *remoteFile) readWindow(p *Process, w *memfdFile, woff uint32, n int, from *int64) (int, error) {
+func (n *remoteNode) readWindow(p *Process, w *memfdFile, woff uint32, size int, from *int64) (int, error) {
 	if from != nil {
-		count, err := f.readInto(p, w, woff, n, *from)
+		count, err := n.readInto(p, w, woff, size, *from)
 		*from += int64(count)
 
 		return count, err
 	}
 
-	count, err := f.readInto(p, w, woff, n, atomic.LoadInt64(&f.pos))
-	atomic.AddInt64(&f.pos, int64(count))
+	count, err := n.readInto(p, w, woff, size, atomic.LoadInt64(&n.pos))
+	atomic.AddInt64(&n.pos, int64(count))
 
 	return count, err
 }
 
-// writeWindow writes n bytes of the memfd w, from its byte woff on, into
-// the server's file at to, or at its position, which moves. A file open
-// to append is EBADF, as Linux has it.
-func (f *remoteFile) writeWindow(p *Process, w *memfdFile, woff uint32, n int, to *int64) (int, error) {
-	if f.append.Load() {
+// writeWindow writes size bytes of the memfd w, from its byte woff on,
+// into the server's file at to, or at its position, which moves. A file
+// open to append is EBADF, as Linux has it.
+func (n *remoteNode) writeWindow(p *Process, w *memfdFile, woff uint32, size int, to *int64) (int, error) {
+	if n.append.Load() {
 		return 0, syscall.EBADF
 	}
 
 	if to != nil {
-		count, _, err := f.writeFrom(p, w, woff, n, *to, false)
+		count, _, err := n.writeFrom(p, w, woff, size, *to, false)
 		*to += int64(count)
 
 		return count, err
 	}
 
-	count, _, err := f.writeFrom(p, w, woff, n, atomic.LoadInt64(&f.pos), false)
-	atomic.AddInt64(&f.pos, int64(count))
+	count, _, err := n.writeFrom(p, w, woff, size, atomic.LoadInt64(&n.pos), false)
+	atomic.AddInt64(&n.pos, int64(count))
 
 	return count, err
 }

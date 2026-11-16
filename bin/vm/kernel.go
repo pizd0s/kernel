@@ -200,7 +200,7 @@ func (k *Kernel) function(imp *ImportMeta) any {
 
 // functionTable lists the kernel's functions by import name.
 
-func importsKernel(obj *Object) bool {
+func importsKernel(obj *ElfObject) bool {
 	for _, imp := range obj.meta.imports {
 		if imp.module == "kernel" {
 			return true
@@ -225,7 +225,7 @@ type disk struct {
 // those after them, in order, and DISKS in its environment their names, by
 // spaces. Its program has no path of the system's: the system has no
 // file of vm's.
-func runKernel(path string, argv []string, options CompileOptions, data []byte, obj *Object, disks []disk, user cred) int {
+func runKernel(path string, argv []string, options CompileOptions, data []byte, obj *ElfObject, disks []disk, user cred) int {
 	k := newKernel(options, user)
 	p := throw2(k.newProcess(nil))
 	code, err := k.codeOf(p, data, path, obj)

@@ -57,7 +57,7 @@ const (
 // of a datagram's sender, the path it is bound to (kernel_unix.go).
 type packet struct {
 	data  []byte
-	files []File
+	files []Object
 	cred  *ucred
 	addr  []byte
 	// arg is a server's reply's arg, of its header (replyOf).
@@ -76,7 +76,7 @@ func (p *Process) ucred() *ucred {
 }
 
 // dropFiles lets go of the files of packets nobody takes.
-func dropFiles(files []File) {
+func dropFiles(files []Object) {
 	for _, f := range files {
 		f.unref()
 	}
@@ -107,7 +107,8 @@ type pairEnd struct {
 	mu     sync.Mutex
 	front  *packet
 	peeked atomic.Bool
-	sockOptions
+	// options are the socket's options of the socket level.
+	options sockOptions
 }
 
 // sockOptions are the options of the socket level a socket of the
@@ -153,8 +154,6 @@ func (o *sockOptions) intOption(name uint32) uint32 {
 
 	return bit(name == soRcvlowat)
 }
-
-var _ Socket = (*pairEnd)(nil)
 
 var pairInodes atomic.Uint64
 
@@ -204,6 +203,26 @@ func (e *pairEnd) unref() {
 	e.dead.Store(true)
 	e.to.end()
 }
+
+// A pairEnd is a File, a Transfer and a Socket, and itself to a call that
+// wants one.
+func (e *pairEnd) asFile() File              { return e }
+func (e *pairEnd) asTransfer() Transfer      { return e }
+func (e *pairEnd) asSeeker() Seeker          { return nil }
+func (e *pairEnd) asDir() Dir                { return nil }
+func (e *pairEnd) asTerminal() Terminal      { return nil }
+func (e *pairEnd) asWindowed() Windowed      { return nil }
+func (e *pairEnd) asLink() Link              { return nil }
+func (e *pairEnd) asAttrs() Attrs            { return nil }
+func (e *pairEnd) asSocket() Socket          { return e }
+func (e *pairEnd) asIoctl() Ioctl            { return nil }
+func (e *pairEnd) asLocker() Locker          { return nil }
+func (e *pairEnd) asEpoll() *epoll           { return nil }
+func (e *pairEnd) asMemfd() *memfdFile       { return nil }
+func (e *pairEnd) asPair() *pairEnd          { return e }
+func (e *pairEnd) asListener() *unixListener { return nil }
+func (e *pairEnd) asConsole() *consoleEnd    { return nil }
+func (e *pairEnd) asVFS() *remoteDir         { return nil }
 
 // subscribe makes to learn of what may make the end readable, for input,
 // and writable, for output; of both when neither is asked.
@@ -308,7 +327,7 @@ func (e *pairEnd) setFlags(fl int) error {
 // the other end can see it, and gives them back when it does not go; the
 // sender keeps its own. EPIPE comes without SIGPIPE, as Linux has it for
 // these.
-func (e *pairEnd) send(p *Process, data []byte, files []File, mode ioMode) error {
+func (e *pairEnd) send(p *Process, data []byte, files []Object, mode ioMode) error {
 	if len(data) > packetMax {
 		return syscall.EMSGSIZE
 	}
@@ -318,18 +337,18 @@ func (e *pairEnd) send(p *Process, data []byte, files []File, mode ioMode) error
 
 // sendOwned is send of data the caller gives away: the packet keeps it as
 // it is.
-func (e *pairEnd) sendOwned(p *Process, data []byte, files []File, mode ioMode) error {
+func (e *pairEnd) sendOwned(p *Process, data []byte, files []Object, mode ioMode) error {
 	return e.sendCred(p, data, files, nil, mode)
 }
 
 // sendCred is sendOwned with the credentials the sender gave, SCM_CREDENTIALS',
 // or none: a receiver that asks for them gets the sender's own then.
-func (e *pairEnd) sendCred(p *Process, data []byte, files []File, cred *ucred, mode ioMode) error {
+func (e *pairEnd) sendCred(p *Process, data []byte, files []Object, cred *ucred, mode ioMode) error {
 	if len(data) > packetMax {
 		return syscall.EMSGSIZE
 	}
 
-	if cred == nil && p != nil && e.peer.passcred.Load() {
+	if cred == nil && p != nil && e.peer.options.passcred.Load() {
 		cred = p.ucred()
 	}
 
@@ -350,7 +369,7 @@ func (e *pairEnd) sendCred(p *Process, data []byte, files []File, cred *ucred, m
 // packetMax bytes, the files and the credentials with the first, waiting
 // for room between them: what was queued before EAGAIN, a signal or the
 // timeout is the count. EPIPE is SIGPIPE too, unless quiet.
-func (e *pairEnd) sendStream(p *Process, spans [][]byte, files []File, cred *ucred, mode ioMode) (int, error) {
+func (e *pairEnd) sendStream(p *Process, spans [][]byte, files []Object, cred *ucred, mode ioMode) (int, error) {
 	sent := 0
 
 	for len(spans) > 0 {
@@ -403,7 +422,7 @@ func totalLength(spans [][]byte) int {
 // data given away, with files, quiet, and no signal of p's ends its wait
 // for room, which sleeps on p's mail. A nonblocking end is EAGAIN when
 // full.
-func (e *pairEnd) kernelSend(p *Process, data []byte, files []File) error {
+func (e *pairEnd) kernelSend(p *Process, data []byte, files []Object) error {
 	if len(data) > packetMax {
 		return syscall.EMSGSIZE
 	}
@@ -460,7 +479,7 @@ func (e *pairEnd) kernelPut(p *Process, pk packet) error {
 }
 
 func (e *pairEnd) queue(p *Process, pk packet, mode ioMode) error {
-	return e.queueAs(p, pk, mode.nonblock || e.nonblock.Load(), &e.sndTimeout)
+	return e.queueAs(p, pk, mode.nonblock || e.nonblock.Load(), &e.options.sndTimeout)
 }
 
 // queueAs is queue for a sender of the end's that is not the end itself,
@@ -573,7 +592,7 @@ func (e *pairEnd) recv(p *Process, mode ioMode, peek bool) (packet, bool, error)
 			return packet{}, false, syscall.EAGAIN
 		}
 
-		if ready, err := e.wait(p, pollIn, &e.rcvTimeout); err != nil {
+		if ready, err := e.wait(p, pollIn, &e.options.rcvTimeout); err != nil {
 			return packet{}, false, err
 		} else if !ready {
 			return packet{}, false, syscall.EAGAIN
@@ -688,7 +707,7 @@ func (e *pairEnd) receiveStream(p *Process, bufs [][]byte, flags uint32, control
 			return 0, 0, 0, syscall.EAGAIN
 		}
 
-		ready, err := e.wait(p, pollIn, &e.rcvTimeout)
+		ready, err := e.wait(p, pollIn, &e.options.rcvTimeout)
 
 		if err != nil || !ready {
 			if got > 0 {
@@ -797,7 +816,7 @@ func scatterInto(bufs [][]byte, data []byte) int {
 func (e *pairEnd) putControl(p *Process, pk packet, control, room uint32, cloexec bool) (uint32, uint32) {
 	written, cut := p.putRights(pk.files, control, room, cloexec)
 
-	if pk.cred == nil || !e.passcred.Load() {
+	if pk.cred == nil || !e.options.passcred.Load() {
 		return written, cut
 	}
 
@@ -866,7 +885,7 @@ func (e *pairEnd) listen(backlog int) error {
 	return syscall.EINVAL
 }
 
-func (e *pairEnd) accept(p *Process, flags uint32) (File, []byte, error) {
+func (e *pairEnd) accept(p *Process, flags uint32) (Object, []byte, error) {
 	return nil, nil, syscall.EINVAL
 }
 
@@ -876,6 +895,10 @@ func (e *pairEnd) sockname(p *Process) ([]byte, error) {
 
 func (e *pairEnd) peername(p *Process) ([]byte, error) {
 	return unixAddress(nil), nil
+}
+
+func (e *pairEnd) socketKind() int {
+	return e.shared.kind
 }
 
 func (e *pairEnd) shutdown(how int) error {
@@ -900,7 +923,7 @@ func (e *pairEnd) shutdown(how int) error {
 }
 
 func (e *pairEnd) getsockopt(p *Process, level, name, at, lenAt uint32) error {
-	return e.sockOptions.get(p, e.shared.kind, level, name, at, lenAt)
+	return e.options.get(p, e.shared.kind, level, name, at, lenAt)
 }
 
 // get is getsockopt of a socket of a kind with the options o.
@@ -966,7 +989,7 @@ func (o *sockOptions) get(p *Process, kind int, level, name, at, lenAt uint32) e
 // soInts, as Linux checks them, and takes the other options of the socket
 // level as done.
 func (e *pairEnd) setsockopt(p *Process, level, name, at, n uint32) error {
-	return e.sockOptions.set(p, level, name, at, n)
+	return e.options.set(p, level, name, at, n)
 }
 
 // set is setsockopt with the options o.
@@ -1139,8 +1162,8 @@ func (e *pairEnd) recvmsg(p *Process, at, flags uint32) (int, error) {
 // process's own, which send takes references to, and the credentials of
 // its SCM_CREDENTIALS, the process's own, as Linux has a process without
 // privileges give: EPERM else. No other control message is known.
-func (p *Process) rights(at, n uint32) ([]File, *ucred, error) {
-	var files []File
+func (p *Process) rights(at, n uint32) ([]Object, *ucred, error) {
+	var files []Object
 	var cred *ucred
 
 	for off := uint32(0); off+guestCmsgHeader <= n; {
@@ -1187,7 +1210,7 @@ func (p *Process) rights(at, n uint32) ([]File, *ucred, error) {
 // bytes; those that do not fit, or all of them without a buffer, are
 // dropped with MSG_CTRUNC. It returns the control bytes written and the
 // flag.
-func (p *Process) putRights(files []File, at, room uint32, cloexec bool) (uint32, uint32) {
+func (p *Process) putRights(files []Object, at, room uint32, cloexec bool) (uint32, uint32) {
 	if len(files) == 0 {
 		return 0, 0
 	}

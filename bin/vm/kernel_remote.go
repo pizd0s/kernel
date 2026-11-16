@@ -126,8 +126,11 @@ const (
 	utimeOmit     = 1<<30 - 2
 )
 
-// remoteNode is an open file of a server: the end of its pair, and what
-// the kernel keeps of it.
+// remoteNode is what the kernel keeps of an open file of a server: the
+// end of its pair, its flags and position, and what its server told of
+// it. Each kind of open file of a server, remoteFile, remoteTerminal
+// (kernel_terminal.go), remoteDir and remotePath, has one and answers its
+// calls with it, each call by a method of its own; a node is no object.
 type remoteNode struct {
 	end  *pairEnd
 	refs atomic.Int32
@@ -149,43 +152,181 @@ type remoteNode struct {
 	tostop     atomic.Bool
 }
 
+// remoteFile is a server's file.
 type remoteFile struct {
-	remoteNode
+	node remoteNode
 }
 
-// remoteHandle is a handle of rootfs's, which the calls with a path go to
-// whole (kernel_vfs.go); id is its, which a call names the root by.
-type remoteHandle struct {
-	remoteNode
-	id uint64
-}
-
-// remoteDir is a handle of a directory of the VFS's: the Dir.
+// remoteDir is a handle of a directory of rootfs's, the VFS's, which the
+// calls with a path go to whole (kernel_vfs.go); id is its, which a call
+// names the root by.
 type remoteDir struct {
-	remoteHandle
+	node remoteNode
+	id   uint64
 }
 
-// remotePath is a handle of what O_PATH opened that is no directory: its
-// calls are those of what it is, by an empty path, and no path walks from
-// it.
+// remotePath is a handle of rootfs's of what O_PATH opened that is no
+// directory: its calls are those of what it is, by an empty path, and no
+// path walks from it.
 type remotePath struct {
-	remoteHandle
+	node remoteNode
+	id   uint64
 }
 
-var (
-	_ Transfer = (*remoteFile)(nil)
-	_ Windowed = (*remoteFile)(nil)
-	_ Seeker   = (*remoteFile)(nil)
-	_ Attrs    = (*remoteFile)(nil)
-	_ Locker   = (*remoteFile)(nil)
-	_ Dir      = (*remoteDir)(nil)
-	_ Seeker   = (*remoteDir)(nil)
-	_ Attrs    = (*remoteDir)(nil)
-	_ Locker   = (*remoteDir)(nil)
-	_ Attrs    = (*remotePath)(nil)
-	_ Locker   = (*remotePath)(nil)
-	_ Dir      = (*noRoot)(nil)
-)
+func (f *remoteFile) ref()   { f.node.ref() }
+func (f *remoteFile) unref() { f.node.unref() }
+
+// A remoteFile is a File, a Transfer, a Seeker, a Windowed, an Attrs and a
+// Locker: its node answers them all.
+func (f *remoteFile) asFile() File              { return f }
+func (f *remoteFile) asTransfer() Transfer      { return f }
+func (f *remoteFile) asSeeker() Seeker          { return f }
+func (f *remoteFile) asDir() Dir                { return nil }
+func (f *remoteFile) asTerminal() Terminal      { return nil }
+func (f *remoteFile) asWindowed() Windowed      { return f }
+func (f *remoteFile) asLink() Link              { return nil }
+func (f *remoteFile) asAttrs() Attrs            { return f }
+func (f *remoteFile) asSocket() Socket          { return nil }
+func (f *remoteFile) asIoctl() Ioctl            { return nil }
+func (f *remoteFile) asLocker() Locker          { return f }
+func (f *remoteFile) asEpoll() *epoll           { return nil }
+func (f *remoteFile) asMemfd() *memfdFile       { return nil }
+func (f *remoteFile) asPair() *pairEnd          { return nil }
+func (f *remoteFile) asListener() *unixListener { return nil }
+func (f *remoteFile) asConsole() *consoleEnd    { return nil }
+func (f *remoteFile) asVFS() *remoteDir         { return nil }
+
+func (f *remoteFile) stat(p *Process, st *syscall.Stat_t) error { return f.node.stat(p, st) }
+func (f *remoteFile) poll(events int16) int16                   { return f.node.poll(events) }
+func (f *remoteFile) subscribe(to waker, id uint64, events int16) bool {
+	return f.node.subscribe(to, id, events)
+}
+func (f *remoteFile) unsubscribe(to waker, id uint64) { f.node.unsubscribe(to, id) }
+func (f *remoteFile) flags() (int, error)             { return f.node.flags() }
+func (f *remoteFile) setFlags(fl int) error           { return f.node.setFlags(fl) }
+
+func (f *remoteFile) read(p *Process, b []byte, mode ioMode) (int, error) {
+	return f.node.read(p, b, mode)
+}
+func (f *remoteFile) write(p *Process, b []byte, mode ioMode) (int, error) {
+	return f.node.write(p, b, mode)
+}
+func (f *remoteFile) pread(p *Process, b []byte, off int64) (int, error) {
+	return f.node.readAt(p, b, off)
+}
+func (f *remoteFile) pwrite(p *Process, b []byte, off int64) (int, error) {
+	return f.node.writeAt(p, b, off)
+}
+func (f *remoteFile) seek(p *Process, off int64, whence int) (int64, error) {
+	return f.node.seek(p, off, whence)
+}
+func (f *remoteFile) readWindow(p *Process, w *memfdFile, woff uint32, n int, from *int64) (int, error) {
+	return f.node.readWindow(p, w, woff, n, from)
+}
+func (f *remoteFile) writeWindow(p *Process, w *memfdFile, woff uint32, n int, to *int64) (int, error) {
+	return f.node.writeWindow(p, w, woff, n, to)
+}
+
+func (f *remoteFile) truncate(p *Process, size int64) error          { return f.node.truncate(p, size) }
+func (f *remoteFile) sync(p *Process, data bool) error               { return f.node.sync(p, data) }
+func (f *remoteFile) chmod(p *Process, mode uint32) error            { return f.node.chmod(p, mode) }
+func (f *remoteFile) chown(p *Process, uid, gid int) error           { return f.node.chown(p, uid, gid) }
+func (f *remoteFile) utimes(p *Process, ts []syscall.Timespec) error { return f.node.utimes(p, ts) }
+func (f *remoteFile) statfs(p *Process, st *syscall.Statfs_t) error  { return f.node.statfs(p, st) }
+
+func (f *remoteFile) flock(p *Process, op int) error { return f.node.flock(p, op) }
+func (f *remoteFile) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
+	return f.node.recordLock(p, cmd, lk)
+}
+
+func (d *remoteDir) ref()   { d.node.ref() }
+func (d *remoteDir) unref() { d.node.unref() }
+
+// A remoteDir is a File, a Seeker, a Dir, an Attrs and a Locker, and
+// itself to a call that wants the VFS's handle: its node answers but
+// the Dir's calls (kernel_vfs.go), readdir and seek.
+func (d *remoteDir) asFile() File              { return d }
+func (d *remoteDir) asTransfer() Transfer      { return nil }
+func (d *remoteDir) asSeeker() Seeker          { return d }
+func (d *remoteDir) asDir() Dir                { return d }
+func (d *remoteDir) asTerminal() Terminal      { return nil }
+func (d *remoteDir) asWindowed() Windowed      { return nil }
+func (d *remoteDir) asLink() Link              { return nil }
+func (d *remoteDir) asAttrs() Attrs            { return d }
+func (d *remoteDir) asSocket() Socket          { return nil }
+func (d *remoteDir) asIoctl() Ioctl            { return nil }
+func (d *remoteDir) asLocker() Locker          { return d }
+func (d *remoteDir) asEpoll() *epoll           { return nil }
+func (d *remoteDir) asMemfd() *memfdFile       { return nil }
+func (d *remoteDir) asPair() *pairEnd          { return nil }
+func (d *remoteDir) asListener() *unixListener { return nil }
+func (d *remoteDir) asConsole() *consoleEnd    { return nil }
+func (d *remoteDir) asVFS() *remoteDir         { return d }
+
+func (d *remoteDir) stat(p *Process, st *syscall.Stat_t) error { return d.node.stat(p, st) }
+func (d *remoteDir) poll(events int16) int16                   { return d.node.poll(events) }
+func (d *remoteDir) subscribe(to waker, id uint64, events int16) bool {
+	return d.node.subscribe(to, id, events)
+}
+func (d *remoteDir) unsubscribe(to waker, id uint64) { d.node.unsubscribe(to, id) }
+func (d *remoteDir) flags() (int, error)             { return d.node.flags() }
+func (d *remoteDir) setFlags(fl int) error           { return d.node.setFlags(fl) }
+
+func (d *remoteDir) truncate(p *Process, size int64) error          { return d.node.truncate(p, size) }
+func (d *remoteDir) sync(p *Process, data bool) error               { return d.node.sync(p, data) }
+func (d *remoteDir) chmod(p *Process, mode uint32) error            { return d.node.chmod(p, mode) }
+func (d *remoteDir) chown(p *Process, uid, gid int) error           { return d.node.chown(p, uid, gid) }
+func (d *remoteDir) utimes(p *Process, ts []syscall.Timespec) error { return d.node.utimes(p, ts) }
+func (d *remoteDir) statfs(p *Process, st *syscall.Statfs_t) error  { return d.node.statfs(p, st) }
+
+func (d *remoteDir) flock(p *Process, op int) error { return d.node.flock(p, op) }
+func (d *remoteDir) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
+	return d.node.recordLock(p, cmd, lk)
+}
+
+func (h *remotePath) ref()   { h.node.ref() }
+func (h *remotePath) unref() { h.node.unref() }
+
+// A remotePath is a File, a Link, an Attrs and a Locker: its node answers
+// but readlink (kernel_vfs.go).
+func (h *remotePath) asFile() File              { return h }
+func (h *remotePath) asTransfer() Transfer      { return nil }
+func (h *remotePath) asSeeker() Seeker          { return nil }
+func (h *remotePath) asDir() Dir                { return nil }
+func (h *remotePath) asTerminal() Terminal      { return nil }
+func (h *remotePath) asWindowed() Windowed      { return nil }
+func (h *remotePath) asLink() Link              { return h }
+func (h *remotePath) asAttrs() Attrs            { return h }
+func (h *remotePath) asSocket() Socket          { return nil }
+func (h *remotePath) asIoctl() Ioctl            { return nil }
+func (h *remotePath) asLocker() Locker          { return h }
+func (h *remotePath) asEpoll() *epoll           { return nil }
+func (h *remotePath) asMemfd() *memfdFile       { return nil }
+func (h *remotePath) asPair() *pairEnd          { return nil }
+func (h *remotePath) asListener() *unixListener { return nil }
+func (h *remotePath) asConsole() *consoleEnd    { return nil }
+func (h *remotePath) asVFS() *remoteDir         { return nil }
+
+func (h *remotePath) stat(p *Process, st *syscall.Stat_t) error { return h.node.stat(p, st) }
+func (h *remotePath) poll(events int16) int16                   { return h.node.poll(events) }
+func (h *remotePath) subscribe(to waker, id uint64, events int16) bool {
+	return h.node.subscribe(to, id, events)
+}
+func (h *remotePath) unsubscribe(to waker, id uint64) { h.node.unsubscribe(to, id) }
+func (h *remotePath) flags() (int, error)             { return h.node.flags() }
+func (h *remotePath) setFlags(fl int) error           { return h.node.setFlags(fl) }
+
+func (h *remotePath) truncate(p *Process, size int64) error          { return h.node.truncate(p, size) }
+func (h *remotePath) sync(p *Process, data bool) error               { return h.node.sync(p, data) }
+func (h *remotePath) chmod(p *Process, mode uint32) error            { return h.node.chmod(p, mode) }
+func (h *remotePath) chown(p *Process, uid, gid int) error           { return h.node.chown(p, uid, gid) }
+func (h *remotePath) utimes(p *Process, ts []syscall.Timespec) error { return h.node.utimes(p, ts) }
+func (h *remotePath) statfs(p *Process, st *syscall.Statfs_t) error  { return h.node.statfs(p, st) }
+
+func (h *remotePath) flock(p *Process, op int) error { return h.node.flock(p, op) }
+func (h *remotePath) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
+	return h.node.recordLock(p, cmd, lk)
+}
 
 // servedpair is a pair a server makes for what it serves: the first end
 // is the server's, a plain one; the second is born the open file struct
@@ -228,23 +369,23 @@ func (p *Process) libcServedpair(what, sv uint32) uint32 {
 // second end, as the open flags say: a file, a terminal's of device dev
 // and ino, or a handle of id, of a directory or of what O_PATH opened;
 // with servedTells its server's READY is its readiness.
-func served(kind uint32, flags int, dev, ino, id uint64, end *pairEnd) (File, error) {
+func served(kind uint32, flags int, dev, ino, id uint64, end *pairEnd) (Object, error) {
 	var n *remoteNode
-	var f File
+	var f Object
 
 	switch kind &^ servedTells {
 	case servedFile:
 		r := &remoteFile{}
-		n, f = &r.remoteNode, r
+		n, f = &r.node, r
 	case servedTerminal:
 		t := &remoteTerminal{dev: dev, ino: ino}
-		n, f = &t.remoteNode, t
+		n, f = &t.node, t
 	case servedDir:
-		d := &remoteDir{remoteHandle{id: id}}
-		n, f = &d.remoteNode, d
+		d := &remoteDir{id: id}
+		n, f = &d.node, d
 	case servedPath:
-		h := &remotePath{remoteHandle{id: id}}
-		n, f = &h.remoteNode, h
+		h := &remotePath{id: id}
+		n, f = &h.node, h
 	default:
 		return nil, syscall.EINVAL
 	}
@@ -259,18 +400,6 @@ func served(kind uint32, flags int, dev, ino, id uint64, end *pairEnd) (File, er
 	}
 
 	return f, nil
-}
-
-// asRoot is the Dir a descriptor's file is for fchdir, with a reference
-// of the caller's: a directory's; nil for anything else.
-func asRoot(f File) Dir {
-	if d, ok := f.(Dir); ok {
-		d.ref()
-
-		return d
-	}
-
-	return nil
 }
 
 func (n *remoteNode) ref() {
@@ -372,7 +501,7 @@ func (n *remoteNode) setFlags(fl int) error {
 // request sends a request on an endpoint, the files with it, as the
 // process's effective user and group. The kernel waits as itself, not as
 // the process: nothing of the process's interrupts a call to a server.
-func request(p *Process, to *pairEnd, op, arg uint32, body []byte, files []File) error {
+func request(p *Process, to *pairEnd, op, arg uint32, body []byte, files []Object) error {
 	data := make([]byte, remoteHeader+len(body))
 	binary.LittleEndian.PutUint32(data, op)
 	binary.LittleEndian.PutUint32(data[4:], arg)
@@ -421,7 +550,7 @@ func replyOf(pk packet, eof bool) (packet, error) {
 // far or EINTR, which cancelled marks: the caller restarts the call when
 // the handlers ask for that. For SIGKILL it waits no more: the process
 // ends. The reply brings no files.
-func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []File) (pk packet, cancelled bool, err error) {
+func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Object) (pk packet, cancelled bool, err error) {
 	mine, theirs := newPair(false)
 	err = request(p, n.end, op, arg, body, append(files, theirs))
 	theirs.unref()
@@ -474,7 +603,7 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Fi
 // request and stay the caller's. Only an OPEN's reply brings a file, the
 // open file's endpoint, and a CONNECT's, the listener, which the packet
 // keeps; the files of any other reply, or the rest of theirs, go here.
-func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []File) (packet, error) {
+func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []Object) (packet, error) {
 	mine, theirs := newPair(false)
 	defer mine.unref()
 	err := request(p, n.end, op, arg, body, append(files, theirs))
@@ -598,7 +727,7 @@ func whens(ts []syscall.Timespec) (uint32, []byte) {
 	return when, body
 }
 
-// The Attrs role, of a file or a directory of a server.
+// The attributes of an open file of a server, what its Attrs role asks.
 
 func (n *remoteNode) simple(p *Process, op, arg uint32, body []byte) error {
 	_, err := n.on(p, op, arg, body)
@@ -661,7 +790,8 @@ func (n *remoteNode) statfs(p *Process, st *syscall.Statfs_t) error {
 	return decodeStatfs(pk.data, st)
 }
 
-// The Locker role: the locks are the endpoint's, the open file's.
+// The locks of an open file of a server, what its Locker role asks: the
+// locks are the endpoint's, the open file's.
 
 func (n *remoteNode) flock(p *Process, op int) error {
 	return n.simple(p, rFlock, uint32(op), nil)
@@ -723,15 +853,16 @@ func (n *remoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error 
 	return nil
 }
 
-// The Dir role, of a handle (kernel_vfs.go).
+// A directory's readdir and seek; its other calls are the VFS's
+// (kernel_vfs.go).
 
 // readdir fills the entries after the last it gave, as many as fit, in
 // the guest's struct dirent layout: ino, off, reclen, type, name; an
 // entry's off is its position.
 func (d *remoteDir) readdir(p *Process, b []byte) (int, error) {
 	var after [8]byte
-	binary.LittleEndian.PutUint64(after[:], d.after)
-	pk, err := d.on(p, rReaddir, 0, after[:])
+	binary.LittleEndian.PutUint64(after[:], d.node.after)
+	pk, err := d.node.on(p, rReaddir, 0, after[:])
 
 	if err != nil {
 		return 0, err
@@ -764,7 +895,7 @@ func (d *remoteDir) readdir(p *Process, b []byte) (int, error) {
 		b[n+18] = kind
 		copy(b[n+19:], name)
 		n += reclen
-		d.after = pos
+		d.node.after = pos
 		data = data[min(end+1, len(data)):]
 	}
 
@@ -777,43 +908,44 @@ func (d *remoteDir) seek(p *Process, off int64, whence int) (int64, error) {
 		return 0, syscall.EINVAL
 	}
 
-	d.after = 0
+	d.node.after = 0
 
 	return 0, nil
 }
 
-// The Transfer role, of a file.
+// The reads and writes of an open file of a server, a file's or a
+// terminal's.
 
 // readAt reads into b, the process's memory, at off: the READ brings a
 // memfd of b.
-func (f *remoteFile) readAt(p *Process, b []byte, off int64) (int, error) {
+func (n *remoteNode) readAt(p *Process, b []byte, off int64) (int, error) {
 	if off < 0 || len(b) == 0 {
-		return f.readInto(p, nil, 0, 0, off)
+		return n.readInto(p, nil, 0, 0, off)
 	}
 
 	w := window(p, b, syscall.O_WRONLY)
-	n, err := f.readInto(p, w, 0, len(b), off)
+	count, err := n.readInto(p, w, 0, len(b), off)
 	w.unref()
 
-	return n, err
+	return count, err
 }
 
-// readInto reads n bytes at off into the memfd w, from its byte woff on:
-// the READ brings w, and the server writes the bytes there itself. A
-// count past n is the server's lie: EIO.
-func (f *remoteFile) readInto(p *Process, w *memfdFile, woff uint32, n int, off int64) (int, error) {
+// readInto reads size bytes at off into the memfd w, from its byte woff
+// on: the READ brings w, and the server writes the bytes there itself. A
+// count past size is the server's lie: EIO.
+func (n *remoteNode) readInto(p *Process, w *memfdFile, woff uint32, size int, off int64) (int, error) {
 	if off < 0 {
 		return 0, syscall.EINVAL
 	}
 
-	if n == 0 {
+	if size == 0 {
 		return 0, nil
 	}
 
-	body := ioBody(off, woff, f.ioFlags())
+	body := ioBody(off, woff, n.ioFlags())
 
 	for {
-		pk, cancelled, err := f.waiting(p, rRead, uint32(n), body[:], []File{w})
+		pk, cancelled, err := n.waiting(p, rRead, uint32(size), body[:], []Object{w})
 
 		if err == syscall.EINTR && cancelled && p.interrupted() {
 			continue
@@ -823,7 +955,7 @@ func (f *remoteFile) readInto(p *Process, w *memfdFile, woff uint32, n int, off 
 			return 0, err
 		}
 
-		if len(pk.data) < 4 || int(binary.LittleEndian.Uint32(pk.data)) > n {
+		if len(pk.data) < 4 || int(binary.LittleEndian.Uint32(pk.data)) > size {
 			return 0, syscall.EIO
 		}
 
@@ -850,40 +982,41 @@ func (n *remoteNode) ioFlags() uint32 {
 	return 0
 }
 
-func (f *remoteFile) writeAt(p *Process, b []byte, off int64) (int, error) {
-	n, _, err := f.put(p, b, off, false)
+func (n *remoteNode) writeAt(p *Process, b []byte, off int64) (int, error) {
+	count, _, err := n.put(p, b, off, false)
 
-	return n, err
+	return count, err
 }
 
 // put writes b, the process's memory, at off, or atEnd at the end the
 // file has when the server takes the write: the WRITE brings a memfd of b.
-func (f *remoteFile) put(p *Process, b []byte, off int64, atEnd bool) (int, int64, error) {
+func (n *remoteNode) put(p *Process, b []byte, off int64, atEnd bool) (int, int64, error) {
 	if off < 0 || len(b) == 0 {
-		return f.writeFrom(p, nil, 0, 0, off, atEnd)
+		return n.writeFrom(p, nil, 0, 0, off, atEnd)
 	}
 
 	w := window(p, b, syscall.O_RDONLY)
-	n, at, err := f.writeFrom(p, w, 0, len(b), off, atEnd)
+	count, at, err := n.writeFrom(p, w, 0, len(b), off, atEnd)
 	w.unref()
 
-	return n, at, err
+	return count, at, err
 }
 
-// writeFrom writes n bytes of the memfd w, from its byte woff on, at off,
-// or atEnd at the end the file has when the server takes the write: the
-// WRITE brings w, and the server reads the bytes from there itself. The
-// count and where they went; a count past n is the server's lie: EIO.
-func (f *remoteFile) writeFrom(p *Process, w *memfdFile, woff uint32, n int, off int64, atEnd bool) (int, int64, error) {
+// writeFrom writes size bytes of the memfd w, from its byte woff on, at
+// off, or atEnd at the end the file has when the server takes the write:
+// the WRITE brings w, and the server reads the bytes from there itself.
+// The count and where they went; a count past size is the server's lie:
+// EIO.
+func (n *remoteNode) writeFrom(p *Process, w *memfdFile, woff uint32, size int, off int64, atEnd bool) (int, int64, error) {
 	if off < 0 {
 		return 0, 0, syscall.EINVAL
 	}
 
-	if n == 0 {
+	if size == 0 {
 		return 0, off, nil
 	}
 
-	flags := f.ioFlags()
+	flags := n.ioFlags()
 
 	if atEnd {
 		flags |= ioAppend
@@ -892,7 +1025,7 @@ func (f *remoteFile) writeFrom(p *Process, w *memfdFile, woff uint32, n int, off
 	body := ioBody(off, woff, flags)
 
 	for {
-		pk, cancelled, err := f.waiting(p, rWrite, uint32(n), body[:], []File{w})
+		pk, cancelled, err := n.waiting(p, rWrite, uint32(size), body[:], []Object{w})
 
 		if err == syscall.EINTR && cancelled && p.interrupted() {
 			continue
@@ -902,7 +1035,7 @@ func (f *remoteFile) writeFrom(p *Process, w *memfdFile, woff uint32, n int, off
 			return 0, 0, err
 		}
 
-		if len(pk.data) < 12 || int(binary.LittleEndian.Uint32(pk.data)) > n {
+		if len(pk.data) < 12 || int(binary.LittleEndian.Uint32(pk.data)) > size {
 			return 0, 0, syscall.EIO
 		}
 
@@ -910,60 +1043,52 @@ func (f *remoteFile) writeFrom(p *Process, w *memfdFile, woff uint32, n int, off
 	}
 }
 
-func (f *remoteFile) read(p *Process, b []byte, mode ioMode) (int, error) {
+func (n *remoteNode) read(p *Process, b []byte, mode ioMode) (int, error) {
 	if p.chaosFail("read") {
 		return 0, syscall.EIO
 	}
 
-	n, err := f.readAt(p, b, atomic.LoadInt64(&f.pos))
-	atomic.AddInt64(&f.pos, int64(n))
+	count, err := n.readAt(p, b, atomic.LoadInt64(&n.pos))
+	atomic.AddInt64(&n.pos, int64(count))
 
-	return n, err
+	return count, err
 }
 
 // write writes at the position, or with O_APPEND at the end, which the
 // server finds as it writes and says; the position is after what was
 // written. Only an append's place is the server's to say: a server that
 // handed the WRITE on, moved, answers with where it went on its device.
-func (f *remoteFile) write(p *Process, b []byte, mode ioMode) (int, error) {
+func (n *remoteNode) write(p *Process, b []byte, mode ioMode) (int, error) {
 	if p.chaosFail("write") {
 		return 0, syscall.EIO
 	}
 
-	off := atomic.LoadInt64(&f.pos)
-	atEnd := f.append.Load()
-	n, at, err := f.put(p, b, off, atEnd)
+	off := atomic.LoadInt64(&n.pos)
+	atEnd := n.append.Load()
+	count, at, err := n.put(p, b, off, atEnd)
 
 	if err == nil {
 		if !atEnd {
 			at = off
 		}
 
-		atomic.StoreInt64(&f.pos, at+int64(n))
+		atomic.StoreInt64(&n.pos, at+int64(count))
 	}
 
-	return n, err
+	return count, err
 }
 
-func (f *remoteFile) pread(p *Process, b []byte, off int64) (int, error) {
-	return f.readAt(p, b, off)
-}
-
-func (f *remoteFile) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return f.writeAt(p, b, off)
-}
-
-func (f *remoteFile) seek(p *Process, off int64, whence int) (int64, error) {
+func (n *remoteNode) seek(p *Process, off int64, whence int) (int64, error) {
 	base := int64(0)
 
 	switch whence {
 	case 0:
 	case 1:
-		base = atomic.LoadInt64(&f.pos)
+		base = atomic.LoadInt64(&n.pos)
 	case 2:
 		var st syscall.Stat_t
 
-		if err := f.stat(p, &st); err != nil {
+		if err := n.stat(p, &st); err != nil {
 			return 0, err
 		}
 
@@ -976,7 +1101,7 @@ func (f *remoteFile) seek(p *Process, off int64, whence int) (int64, error) {
 		return 0, syscall.EINVAL
 	}
 
-	atomic.StoreInt64(&f.pos, base+off)
+	atomic.StoreInt64(&n.pos, base+off)
 
 	return base + off, nil
 }
@@ -1005,6 +1130,25 @@ func (r *noRoot) stat(p *Process, st *syscall.Stat_t) error {
 
 	return nil
 }
+
+// A noRoot is a File and a Dir.
+func (r *noRoot) asFile() File              { return r }
+func (r *noRoot) asTransfer() Transfer      { return nil }
+func (r *noRoot) asSeeker() Seeker          { return nil }
+func (r *noRoot) asDir() Dir                { return r }
+func (r *noRoot) asTerminal() Terminal      { return nil }
+func (r *noRoot) asWindowed() Windowed      { return nil }
+func (r *noRoot) asLink() Link              { return nil }
+func (r *noRoot) asAttrs() Attrs            { return nil }
+func (r *noRoot) asSocket() Socket          { return nil }
+func (r *noRoot) asIoctl() Ioctl            { return nil }
+func (r *noRoot) asLocker() Locker          { return nil }
+func (r *noRoot) asEpoll() *epoll           { return nil }
+func (r *noRoot) asMemfd() *memfdFile       { return nil }
+func (r *noRoot) asPair() *pairEnd          { return nil }
+func (r *noRoot) asListener() *unixListener { return nil }
+func (r *noRoot) asConsole() *consoleEnd    { return nil }
+func (r *noRoot) asVFS() *remoteDir         { return nil }
 
 func (r *noRoot) poll(events int16) int16 {
 	return events & (pollIn | pollOut | pollRdnorm | pollWrnorm)
@@ -1039,7 +1183,7 @@ func (r *noRoot) gone(path string, own error) error {
 	return syscall.ENOENT
 }
 
-func (r *noRoot) openPath(p *Process, path string, flags int, mode uint32) (File, error) {
+func (r *noRoot) openPath(p *Process, path string, flags int, mode uint32) (Object, error) {
 	switch {
 	case !r.itself(path) && flags&syscall.O_CREAT != 0:
 		return nil, syscall.EROFS
@@ -1134,7 +1278,7 @@ func (r *noRoot) realpathOf(p *Process, path string) (string, error) {
 }
 
 // No file system is mounted on the root, and no socket is in it.
-func (r *noRoot) mountPath(p *Process, target, source string, conn File) error {
+func (r *noRoot) mountPath(p *Process, target, source string, conn Object) error {
 	return syscall.EINVAL
 }
 
@@ -1142,10 +1286,10 @@ func (r *noRoot) unmountPath(p *Process, path string, flags uint32) error {
 	return syscall.EINVAL
 }
 
-func (r *noRoot) bindPath(p *Process, path string, mode uint32, held File) error {
+func (r *noRoot) bindPath(p *Process, path string, mode uint32, held Object) error {
 	return syscall.EOPNOTSUPP
 }
 
-func (r *noRoot) connectPath(p *Process, path string) (File, error) {
+func (r *noRoot) connectPath(p *Process, path string) (Object, error) {
 	return nil, syscall.EOPNOTSUPP
 }

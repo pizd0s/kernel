@@ -39,7 +39,7 @@ type unixSocket struct {
 	// The options are the socket's until it is connected, and its
 	// connection's then, which gets them, as a connection accept takes
 	// gets the listening socket's.
-	sockOptions
+	options sockOptions
 }
 
 type socketSub struct {
@@ -61,12 +61,6 @@ type unixListener struct {
 	ino       uint64
 	kind      int
 }
-
-var (
-	_ Socket   = (*unixSocket)(nil)
-	_ Transfer = (*unixSocket)(nil)
-	_ File     = (*unixListener)(nil)
-)
 
 // somaxconn is the most connections a listener holds, Linux's default.
 const somaxconn = 4096
@@ -128,6 +122,25 @@ func (s *unixSocket) unref() {
 		c.unref()
 	}
 }
+
+// A unixSocket is a File, a Transfer and a Socket.
+func (s *unixSocket) asFile() File              { return s }
+func (s *unixSocket) asTransfer() Transfer      { return s }
+func (s *unixSocket) asSeeker() Seeker          { return nil }
+func (s *unixSocket) asDir() Dir                { return nil }
+func (s *unixSocket) asTerminal() Terminal      { return nil }
+func (s *unixSocket) asWindowed() Windowed      { return nil }
+func (s *unixSocket) asLink() Link              { return nil }
+func (s *unixSocket) asAttrs() Attrs            { return nil }
+func (s *unixSocket) asSocket() Socket          { return s }
+func (s *unixSocket) asIoctl() Ioctl            { return nil }
+func (s *unixSocket) asLocker() Locker          { return nil }
+func (s *unixSocket) asEpoll() *epoll           { return nil }
+func (s *unixSocket) asMemfd() *memfdFile       { return nil }
+func (s *unixSocket) asPair() *pairEnd          { return nil }
+func (s *unixSocket) asListener() *unixListener { return nil }
+func (s *unixSocket) asConsole() *consoleEnd    { return nil }
+func (s *unixSocket) asVFS() *remoteDir         { return nil }
 
 func (s *unixSocket) state() (*unixListener, *pairEnd) {
 	s.mu.Lock()
@@ -277,7 +290,7 @@ func (s *unixSocket) listen(backlog int) error {
 }
 
 // accept takes the connection that came first: the far end of its pair.
-func (s *unixSocket) accept(p *Process, flags uint32) (File, []byte, error) {
+func (s *unixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
 	l, _ := s.state()
 
 	if l == nil || !l.listens() {
@@ -287,7 +300,7 @@ func (s *unixSocket) accept(p *Process, flags uint32) (File, []byte, error) {
 	for {
 		if e := l.pop(); e != nil {
 			e.nonblock.Store(flags&sockNonblock != 0)
-			e.copyOptions(&s.sockOptions)
+			e.options.copyOptions(&s.options)
 
 			return e, unixAddress(nil), nil
 		}
@@ -319,7 +332,7 @@ func (s *unixSocket) connect(p *Process, at, n uint32) error {
 	var conn *pairEnd
 	err = p.onPath(atFdcwd, path, func(v Dir) error {
 		var err error
-		conn, err = p.connectUnix(v, path, s.kind, s.nonblock.Load(), &s.sndTimeout)
+		conn, err = p.connectUnix(v, path, s.kind, s.nonblock.Load(), &s.options.sndTimeout)
 
 		return err
 	})
@@ -328,7 +341,7 @@ func (s *unixSocket) connect(p *Process, at, n uint32) error {
 		return err
 	}
 
-	conn.copyOptions(&s.sockOptions)
+	conn.options.copyOptions(&s.options)
 	s.mu.Lock()
 	s.conn, s.peer = conn, path
 	subs := slices.Clone(s.subs)
@@ -350,12 +363,12 @@ func (p *Process) connectUnix(v Dir, path string, kind int, nonblock bool, to *a
 		return nil, err
 	}
 
-	l, ok := f.(*unixListener)
+	l := f.asListener()
 
-	if !ok || l.kind != kind {
+	if l == nil || l.kind != kind {
 		f.unref()
 
-		if _, dgram := f.(*pairEnd); dgram || ok {
+		if f.asPair() != nil || l != nil {
 			return nil, syscall.EPROTOTYPE
 		}
 
@@ -432,6 +445,10 @@ func (s *unixSocket) connection() (*pairEnd, error) {
 	return nil, syscall.ENOTCONN
 }
 
+func (s *unixSocket) socketKind() int {
+	return s.kind
+}
+
 func (s *unixSocket) shutdown(how int) error {
 	c, err := s.connection()
 
@@ -461,7 +478,7 @@ func (s *unixSocket) getsockopt(p *Process, level, name, at, lenAt uint32) error
 		return nil
 	}
 
-	return s.sockOptions.get(p, s.kind, level, name, at, lenAt)
+	return s.options.get(p, s.kind, level, name, at, lenAt)
 }
 
 func (s *unixSocket) setsockopt(p *Process, level, name, at, n uint32) error {
@@ -469,7 +486,7 @@ func (s *unixSocket) setsockopt(p *Process, level, name, at, n uint32) error {
 		return c.setsockopt(p, level, name, at, n)
 	}
 
-	return s.sockOptions.set(p, level, name, at, n)
+	return s.options.set(p, level, name, at, n)
 }
 
 func (s *unixSocket) sendmsg(p *Process, at, flags uint32) (int, error) {
@@ -550,6 +567,25 @@ func (l *unixListener) unref() {
 	}
 }
 
+// A unixListener is a File, and itself to a call that wants one.
+func (l *unixListener) asFile() File              { return l }
+func (l *unixListener) asTransfer() Transfer      { return nil }
+func (l *unixListener) asSeeker() Seeker          { return nil }
+func (l *unixListener) asDir() Dir                { return nil }
+func (l *unixListener) asTerminal() Terminal      { return nil }
+func (l *unixListener) asWindowed() Windowed      { return nil }
+func (l *unixListener) asLink() Link              { return nil }
+func (l *unixListener) asAttrs() Attrs            { return nil }
+func (l *unixListener) asSocket() Socket          { return nil }
+func (l *unixListener) asIoctl() Ioctl            { return nil }
+func (l *unixListener) asLocker() Locker          { return nil }
+func (l *unixListener) asEpoll() *epoll           { return nil }
+func (l *unixListener) asMemfd() *memfdFile       { return nil }
+func (l *unixListener) asPair() *pairEnd          { return nil }
+func (l *unixListener) asListener() *unixListener { return l }
+func (l *unixListener) asConsole() *consoleEnd    { return nil }
+func (l *unixListener) asVFS() *remoteDir         { return nil }
+
 // shut ends the listener: it refuses from then on, and the connections
 // that waited are reset.
 func (l *unixListener) shut() {
@@ -575,7 +611,7 @@ func (l *unixListener) pop() *pairEnd {
 		return nil
 	}
 
-	return pk.files[0].(*pairEnd)
+	return pk.files[0].asPair()
 }
 
 // push queues a connection: refused when the listener is shut or does
@@ -589,7 +625,7 @@ func (l *unixListener) push(e *pairEnd) (queued, refused bool) {
 		return false, true
 	}
 
-	full, err := l.conns.put(packet{files: []File{e}})
+	full, err := l.conns.put(packet{files: []Object{e}})
 
 	if err != nil {
 		return false, true
@@ -687,11 +723,6 @@ type unixDgram struct {
 	subs         []socketSub
 }
 
-var (
-	_ Socket   = (*unixDgram)(nil)
-	_ Transfer = (*unixDgram)(nil)
-)
-
 func newUnixDgram(nonblock bool) *unixDgram {
 	s := &unixDgram{}
 	s.refs.Store(1)
@@ -724,6 +755,25 @@ func (s *unixDgram) unref() {
 	s.inbox.unref()
 	s.mouth.unref()
 }
+
+// A unixDgram is a File, a Transfer and a Socket.
+func (s *unixDgram) asFile() File              { return s }
+func (s *unixDgram) asTransfer() Transfer      { return s }
+func (s *unixDgram) asSeeker() Seeker          { return nil }
+func (s *unixDgram) asDir() Dir                { return nil }
+func (s *unixDgram) asTerminal() Terminal      { return nil }
+func (s *unixDgram) asWindowed() Windowed      { return nil }
+func (s *unixDgram) asLink() Link              { return nil }
+func (s *unixDgram) asAttrs() Attrs            { return nil }
+func (s *unixDgram) asSocket() Socket          { return s }
+func (s *unixDgram) asIoctl() Ioctl            { return nil }
+func (s *unixDgram) asLocker() Locker          { return nil }
+func (s *unixDgram) asEpoll() *epoll           { return nil }
+func (s *unixDgram) asMemfd() *memfdFile       { return nil }
+func (s *unixDgram) asPair() *pairEnd          { return nil }
+func (s *unixDgram) asListener() *unixListener { return nil }
+func (s *unixDgram) asConsole() *consoleEnd    { return nil }
+func (s *unixDgram) asVFS() *remoteDir         { return nil }
 
 // targetEnd is connect's target, with a reference of its own, or nil.
 func (s *unixDgram) targetEnd() *pairEnd {
@@ -841,7 +891,7 @@ func (p *Process) mouthOf(path string) (*pairEnd, error) {
 			return err
 		}
 
-		if e, ok := f.(*pairEnd); ok && e.shared.kind == sockDgram {
+		if e := f.asPair(); e != nil && e.shared.kind == sockDgram {
 			mouth = e
 
 			return nil
@@ -895,7 +945,7 @@ func (s *unixDgram) listen(backlog int) error {
 	return syscall.EOPNOTSUPP
 }
 
-func (s *unixDgram) accept(p *Process, flags uint32) (File, []byte, error) {
+func (s *unixDgram) accept(p *Process, flags uint32) (Object, []byte, error) {
 	return nil, nil, syscall.EOPNOTSUPP
 }
 
@@ -917,6 +967,10 @@ func (s *unixDgram) peername(p *Process) ([]byte, error) {
 	return unixAddress([]byte(s.peer)), nil
 }
 
+func (s *unixDgram) socketKind() int {
+	return sockDgram
+}
+
 func (s *unixDgram) shutdown(how int) error {
 	return s.inbox.shutdown(how)
 }
@@ -932,7 +986,7 @@ func (s *unixDgram) setsockopt(p *Process, level, name, at, n uint32) error {
 // send sends a datagram of data, which it keeps, with files and cred to
 // the socket of path, or to the target without one: ENOTCONN when there
 // is none, EPIPE after shutdown's SHUT_WR.
-func (s *unixDgram) send(p *Process, data []byte, files []File, cred *ucred, nonblock bool, path string) (int, error) {
+func (s *unixDgram) send(p *Process, data []byte, files []Object, cred *ucred, nonblock bool, path string) (int, error) {
 	if s.inbox.noWrite.Load() {
 		return 0, syscall.EPIPE
 	}
@@ -955,7 +1009,7 @@ func (s *unixDgram) send(p *Process, data []byte, files []File, cred *ucred, non
 
 	defer to.unref()
 
-	if cred == nil && to.peer.passcred.Load() {
+	if cred == nil && to.peer.options.passcred.Load() {
 		cred = p.ucred()
 	}
 
@@ -973,7 +1027,7 @@ func (s *unixDgram) send(p *Process, data []byte, files []File, cred *ucred, non
 		pk.addr = []byte(name)
 	}
 
-	if err := to.queueAs(p, pk, nonblock || s.nonblock.Load(), &s.inbox.sndTimeout); err != nil {
+	if err := to.queueAs(p, pk, nonblock || s.nonblock.Load(), &s.inbox.options.sndTimeout); err != nil {
 		dropFiles(files)
 
 		return 0, err

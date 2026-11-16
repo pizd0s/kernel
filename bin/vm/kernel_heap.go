@@ -987,10 +987,9 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 		var f Transfer
 
 		if err == nil {
-			t, ok := obj.(Transfer)
-			_, seeks := obj.(Seeker)
+			t := obj.asTransfer()
 
-			if !ok || !seeks {
+			if t == nil || obj.asSeeker() == nil {
 				err = syscall.ENODEV
 			} else {
 				f = t

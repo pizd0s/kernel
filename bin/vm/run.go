@@ -20,7 +20,7 @@ func runModule(path string, argv []string, asan bool, disks []disk, user cred) i
 	}
 
 	options := programOptions(asan)
-	var obj *Object
+	var obj *ElfObject
 
 	if exe {
 		obj, err = compileExecutable(data, options)

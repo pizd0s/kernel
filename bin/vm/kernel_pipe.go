@@ -63,11 +63,6 @@ type pipeEnd struct {
 	nonblock atomic.Bool
 }
 
-var (
-	_ Transfer = (*pipeEnd)(nil)
-	_ Ioctl    = (*pipeEnd)(nil)
-)
-
 var pipeInodes atomic.Uint64
 
 // newPipe is a pipe without an end.
@@ -211,6 +206,25 @@ func (e *pipeEnd) unref() {
 		pp.name.forget(pp)
 	}
 }
+
+// A pipeEnd is a File, a Transfer and an Ioctl.
+func (e *pipeEnd) asFile() File              { return e }
+func (e *pipeEnd) asTransfer() Transfer      { return e }
+func (e *pipeEnd) asSeeker() Seeker          { return nil }
+func (e *pipeEnd) asDir() Dir                { return nil }
+func (e *pipeEnd) asTerminal() Terminal      { return nil }
+func (e *pipeEnd) asWindowed() Windowed      { return nil }
+func (e *pipeEnd) asLink() Link              { return nil }
+func (e *pipeEnd) asAttrs() Attrs            { return nil }
+func (e *pipeEnd) asSocket() Socket          { return nil }
+func (e *pipeEnd) asIoctl() Ioctl            { return e }
+func (e *pipeEnd) asLocker() Locker          { return nil }
+func (e *pipeEnd) asEpoll() *epoll           { return nil }
+func (e *pipeEnd) asMemfd() *memfdFile       { return nil }
+func (e *pipeEnd) asPair() *pairEnd          { return nil }
+func (e *pipeEnd) asListener() *unixListener { return nil }
+func (e *pipeEnd) asConsole() *consoleEnd    { return nil }
+func (e *pipeEnd) asVFS() *remoteDir         { return nil }
 
 // sides are what of the end a wait for events is on: its reading, its
 // writing, or both, of an end that does both and is asked neither.

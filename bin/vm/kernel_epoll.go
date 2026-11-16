@@ -36,13 +36,6 @@ const (
 	epollMaxEvents = 1 << 20
 )
 
-// An Epoll is the role epoll_ctl and epoll_wait ask of their descriptor.
-type Epoll interface {
-	File
-	ctl(op uint32, key epollKey, events uint32, data uint64) error
-	wait(p *Process, buf []byte, max int, end time.Time) (int, error)
-}
-
 type epoll struct {
 	mu      sync.Mutex
 	members map[epollKey]*epollMember
@@ -91,9 +84,7 @@ type epollMember struct {
 }
 
 var (
-	_ Epoll    = (*epoll)(nil)
-	_ Transfer = (*epoll)(nil)
-	_ waker    = (*epoll)(nil)
+	_ waker = (*epoll)(nil)
 )
 
 var epollInodes atomic.Uint64
@@ -130,6 +121,25 @@ func (ep *epoll) unref() {
 		m.key.obj.unref()
 	}
 }
+
+// An epoll is a File and a Transfer, and itself to a call that wants one.
+func (ep *epoll) asFile() File              { return ep }
+func (ep *epoll) asTransfer() Transfer      { return ep }
+func (ep *epoll) asSeeker() Seeker          { return nil }
+func (ep *epoll) asDir() Dir                { return nil }
+func (ep *epoll) asTerminal() Terminal      { return nil }
+func (ep *epoll) asWindowed() Windowed      { return nil }
+func (ep *epoll) asLink() Link              { return nil }
+func (ep *epoll) asAttrs() Attrs            { return nil }
+func (ep *epoll) asSocket() Socket          { return nil }
+func (ep *epoll) asIoctl() Ioctl            { return nil }
+func (ep *epoll) asLocker() Locker          { return nil }
+func (ep *epoll) asEpoll() *epoll           { return ep }
+func (ep *epoll) asMemfd() *memfdFile       { return nil }
+func (ep *epoll) asPair() *pairEnd          { return nil }
+func (ep *epoll) asListener() *unixListener { return nil }
+func (ep *epoll) asConsole() *consoleEnd    { return nil }
+func (ep *epoll) asVFS() *remoteDir         { return nil }
 
 // stat is an anonymous inode's: no type, as Linux has it.
 func (ep *epoll) stat(p *Process, st *syscall.Stat_t) error {
@@ -257,7 +267,7 @@ func (ep *epoll) contains(inner *epoll) bool {
 	ep.mu.Unlock()
 
 	for _, m := range members {
-		if e, ok := m.key.obj.(*epoll); ok && (e == inner || e.contains(inner)) {
+		if e := m.key.obj.asEpoll(); e != nil && (e == inner || e.contains(inner)) {
 			return true
 		}
 	}
@@ -320,7 +330,7 @@ func (ep *epoll) remove(m *epollMember) {
 // add makes a member of a file, asked by the next wait, as it may be ready
 // now; a file that never changes cannot be one.
 func (ep *epoll) add(key epollKey, events uint32, data uint64) error {
-	if inner, ok := key.obj.(*epoll); ok && (inner == ep || inner.contains(ep)) {
+	if inner := key.obj.asEpoll(); inner != nil && (inner == ep || inner.contains(ep)) {
 		return syscall.ELOOP
 	}
 
@@ -473,15 +483,15 @@ func (ep *epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, erro
 	}
 }
 
-// epollAt is the Epoll of a descriptor: another file is EINVAL.
-func (p *Process) epollAt(fd uint32) (Epoll, error) {
+// epollAt is the epoll of a descriptor: another file is EINVAL.
+func (p *Process) epollAt(fd uint32) (*epoll, error) {
 	obj, err := p.fd(fd)
 
 	if err != nil {
 		return nil, err
 	}
 
-	if ep, ok := obj.(Epoll); ok {
+	if ep := obj.asEpoll(); ep != nil {
 		return ep, nil
 	}
 
@@ -511,7 +521,7 @@ func (p *Process) libcEpoll_ctl(epfd, op, fd, at uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	obj, err := p.fd(fd)
+	obj, err := p.fileAt(fd)
 
 	if err != nil {
 		return p.result(0, err)

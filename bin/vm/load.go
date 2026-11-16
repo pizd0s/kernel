@@ -55,7 +55,7 @@ func (FunctionImports) table(*ImportMeta) uintptr {
 // the same code.
 type Code struct {
 	name string
-	obj  *Object
+	obj  *ElfObject
 	text []byte
 	base uintptr
 	// keep holds the Go function values the code calls.
@@ -82,7 +82,7 @@ func bindContext(code, ctx uintptr) uintptr {
 
 type Instance struct {
 	name string
-	obj  *Object
+	obj  *ElfObject
 	code *Code
 	// region is the instance's mapping (newRegion): block is its start.
 	// holds counts the instance itself and the memfds of its memory: the
@@ -438,7 +438,7 @@ func (c *Code) resolve(sym string, imports Imports) uintptr {
 // link links an object in place: the text, executable, then on pages of
 // their own .rodata and a GOT entry per external symbol, read-only. It
 // registers the code with Go; code lives as long as the process.
-func link(name string, obj *Object, imports Imports) *Code {
+func link(name string, obj *ElfObject, imports Imports) *Code {
 	c := &Code{name: name, obj: obj}
 	page := func(n int) int {
 		return (n + 4095) &^ 4095
@@ -518,7 +518,7 @@ func put32rel(at []byte, v int64) {
 
 // instantiate links an object and makes an instance of it that may take
 // stack bytes of goroutine stack; start runs its init.
-func instantiate(name string, obj *Object, imports Imports, stack uint64) *Instance {
+func instantiate(name string, obj *ElfObject, imports Imports, stack uint64) *Instance {
 	return newInstance(link(name, obj, imports), imports, stack)
 }
 

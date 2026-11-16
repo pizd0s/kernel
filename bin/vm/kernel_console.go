@@ -48,11 +48,6 @@ type consoleEnd struct {
 	nonblock atomic.Bool
 }
 
-var (
-	_ Transfer = (*consoleEnd)(nil)
-	_ Ioctl    = (*consoleEnd)(nil)
-)
-
 func newConsoleEnd(in, out *pipeEnd) *consoleEnd {
 	for _, e := range []*pipeEnd{in, out} {
 		if e != nil {
@@ -81,6 +76,26 @@ func (c *consoleEnd) unref() {
 		}
 	}
 }
+
+// A consoleEnd is a File, a Transfer and an Ioctl, and itself to a call
+// that wants one.
+func (c *consoleEnd) asFile() File              { return c }
+func (c *consoleEnd) asTransfer() Transfer      { return c }
+func (c *consoleEnd) asSeeker() Seeker          { return nil }
+func (c *consoleEnd) asDir() Dir                { return nil }
+func (c *consoleEnd) asTerminal() Terminal      { return nil }
+func (c *consoleEnd) asWindowed() Windowed      { return nil }
+func (c *consoleEnd) asLink() Link              { return nil }
+func (c *consoleEnd) asAttrs() Attrs            { return nil }
+func (c *consoleEnd) asSocket() Socket          { return nil }
+func (c *consoleEnd) asIoctl() Ioctl            { return c }
+func (c *consoleEnd) asLocker() Locker          { return nil }
+func (c *consoleEnd) asEpoll() *epoll           { return nil }
+func (c *consoleEnd) asMemfd() *memfdFile       { return nil }
+func (c *consoleEnd) asPair() *pairEnd          { return nil }
+func (c *consoleEnd) asListener() *unixListener { return nil }
+func (c *consoleEnd) asConsole() *consoleEnd    { return c }
+func (c *consoleEnd) asVFS() *remoteDir         { return nil }
 
 // stat is a character device's, as a terminal's.
 func (c *consoleEnd) stat(p *Process, st *syscall.Stat_t) error {
@@ -271,7 +286,7 @@ func hostWindow() ([sizeofWinsize]byte, error) {
 // nil for one it has not, and starts its movers: the first process's 0 and
 // 1 write the standard output, its 2 the standard error, and all three
 // read the standard input.
-func (k *Kernel) newConsole() []File {
+func (k *Kernel) newConsole() []Object {
 	c := &console{}
 	rawHostTerminal()
 	var pipes [3]*pipeEnd
@@ -309,7 +324,7 @@ func (k *Kernel) newConsole() []File {
 	}
 
 	k.console = c
-	files := make([]File, 3)
+	files := make([]Object, 3)
 
 	for fd, out := range []*pipeEnd{pipes[1], pipes[1], pipes[2]} {
 		if pipes[fd] != nil {
@@ -513,9 +528,7 @@ func (p *Process) isConsole(fd uint32) (bool, error) {
 		return false, err
 	}
 
-	_, ok := obj.(*consoleEnd)
-
-	return ok, nil
+	return obj.asConsole() != nil, nil
 }
 
 // diskFile is a disk of vm's, a file of the host (`vm run --disk`): read
@@ -529,13 +542,6 @@ type diskFile struct {
 	pos  atomic.Int64
 	ino  uint64
 }
-
-var (
-	_ Transfer = (*diskFile)(nil)
-	_ Seeker   = (*diskFile)(nil)
-	_ Attrs    = (*diskFile)(nil)
-	_ Windowed = (*diskFile)(nil)
-)
 
 func newDiskFile(fd int) *diskFile {
 	f := &diskFile{fd: fd, ino: pipeInodes.Add(1)}
@@ -553,6 +559,25 @@ func (f *diskFile) unref() {
 		syscall.Close(f.fd)
 	}
 }
+
+// A diskFile is a File, a Transfer, a Seeker, a Windowed and an Attrs.
+func (f *diskFile) asFile() File              { return f }
+func (f *diskFile) asTransfer() Transfer      { return f }
+func (f *diskFile) asSeeker() Seeker          { return f }
+func (f *diskFile) asDir() Dir                { return nil }
+func (f *diskFile) asTerminal() Terminal      { return nil }
+func (f *diskFile) asWindowed() Windowed      { return f }
+func (f *diskFile) asLink() Link              { return nil }
+func (f *diskFile) asAttrs() Attrs            { return f }
+func (f *diskFile) asSocket() Socket          { return nil }
+func (f *diskFile) asIoctl() Ioctl            { return nil }
+func (f *diskFile) asLocker() Locker          { return nil }
+func (f *diskFile) asEpoll() *epoll           { return nil }
+func (f *diskFile) asMemfd() *memfdFile       { return nil }
+func (f *diskFile) asPair() *pairEnd          { return nil }
+func (f *diskFile) asListener() *unixListener { return nil }
+func (f *diskFile) asConsole() *consoleEnd    { return nil }
+func (f *diskFile) asVFS() *remoteDir         { return nil }
 
 // size is the file's size now.
 func (f *diskFile) size() (int64, error) {
