@@ -181,8 +181,60 @@ void stopServing() {
     stopping = true;
 }
 
-void serve(int epoll, Handle handle, Gone gone, Accepted accepted, Expire expire) {
+// Serves one event of the loop's: a connection to accept, a request to
+// handle, or the end of an endpoint.
+static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepted accepted) {
     alignas(Header) static unsigned char packet[65536];
+    if (e->fd < 0) {
+        return; // let go of during this batch
+    }
+    if (e->listens) {
+        const int connection = accept4(e->fd, nullptr, nullptr, SOCK_CLOEXEC);
+        if (connection >= 0 && accepted) {
+            accepted(*e, connection);
+        } else if (connection >= 0) {
+            close(connection);
+        }
+        return;
+    }
+    Request r{};
+    const ssize_t got = receivePacket(e->fd, packet, sizeof packet, r.fds, r.count);
+    if (got <= 0) {
+        if (gone && !e->channel) {
+            gone(*e);
+        }
+        unwatch(epoll, e);
+        return;
+    }
+    if (size_t(got) < sizeof(Header) || (r.count == 0 && e->channel)) {
+        for (size_t k = 0; k < r.count; ++k) {
+            close(r.fds[k]);
+        }
+        return;
+    }
+    if (r.count == 0) {
+        // A question: its answer goes on the endpoint it came on, in the
+        // order the questions came.
+        r.fds[0] = e->fd;
+        r.count = 1;
+        r.onEndpoint = true;
+    }
+    memcpy(&r.h, packet, sizeof r.h);
+    r.body = packet + sizeof(Header);
+    r.size = size_t(got) - sizeof(Header);
+    if (e->channel && r.h.op != opOpen) {
+        fail(r.reply(), EINVAL);
+    } else {
+        handle(*e, r);
+    }
+    for (size_t k = 0; k < r.count; ++k) {
+        if (r.fds[k] >= 0 && !(r.onEndpoint && k + 1 == r.count)) {
+            close(r.fds[k]);
+        }
+    }
+}
+
+void serve(int epoll, Handle handle, Gone gone, Accepted accepted, Expire expire) {
     while (!stopping && watched > 0) {
         epoll_event events[16];
         const int timeout = expire ? expire() : -1;
@@ -190,56 +242,14 @@ void serve(int epoll, Handle handle, Gone gone, Accepted accepted, Expire expire
         if (n < 0 && errno != EINTR) {
             fatal("service: epoll_wait: errno %d", errno);
         }
-        for (int i = 0; i < n; ++i) {
-            auto* e = static_cast<Endpoint*>(events[i].data.ptr);
-            if (e->fd < 0) {
-                continue; // let go of during this batch
-            }
-            if (e->listens) {
-                const int connection = accept4(e->fd, nullptr, nullptr, SOCK_CLOEXEC);
-                if (connection >= 0 && accepted) {
-                    accepted(*e, connection);
-                } else if (connection >= 0) {
-                    close(connection);
-                }
-                continue;
-            }
-            Request r{};
-            const ssize_t got = receivePacket(e->fd, packet, sizeof packet, r.fds, r.count);
-            if (got <= 0) {
-                if (gone && !e->channel) {
-                    gone(*e);
-                }
-                epoll_ctl(epoll, EPOLL_CTL_DEL, e->fd, nullptr);
-                close(e->fd);
-                free(e);
-                --watched;
-                continue;
-            }
-            if (size_t(got) < sizeof(Header) || (r.count == 0 && e->channel)) {
-                for (size_t k = 0; k < r.count; ++k) {
-                    close(r.fds[k]);
-                }
-                continue;
-            }
-            if (r.count == 0) {
-                // A question: its answer goes on the endpoint it came on,
-                // in the order the questions came.
-                r.fds[0] = e->fd;
-                r.count = 1;
-                r.onEndpoint = true;
-            }
-            memcpy(&r.h, packet, sizeof r.h);
-            r.body = packet + sizeof(Header);
-            r.size = size_t(got) - sizeof(Header);
-            if (e->channel && r.h.op != opOpen) {
-                fail(r.reply(), EINVAL);
-            } else {
-                handle(*e, r);
-            }
-            for (size_t k = 0; k < r.count; ++k) {
-                if (r.fds[k] >= 0 && !(r.onEndpoint && k + 1 == r.count)) {
-                    close(r.fds[k]);
+        // The ends that closed first: a request the batch has came after
+        // them, its caller having seen them close, and finds them gone, a
+        // slave's read after its master's close the hung-up read.
+        for (int pass = 0; pass < 2; ++pass) {
+            for (int i = 0; i < n; ++i) {
+                const bool hangup = (events[i].events & (EPOLLHUP | EPOLLERR)) != 0;
+                if (hangup == (pass == 0)) {
+                    serveEvent(epoll, static_cast<Endpoint*>(events[i].data.ptr), handle, gone, accepted);
                 }
             }
         }
