@@ -239,7 +239,7 @@ static void orphanedStopped() {
             assert(setpgid(0, 0) == 0);
             listenForHangup();
             raise(SIGSTOP);
-            for (int i = 0; i < 100 && (hups == 0 || conts == 0); ++i) {
+            for (int i = 0; i < 500 && (hups == 0 || conts == 0); ++i) {
                 usleep(10000);
             }
             char line[128];
@@ -261,8 +261,9 @@ static void orphanedStopped() {
 
 // A child in a group of its own, the foreground one, which tells what it
 // heard of the leader's giving the terminal up and what /dev/tty opens
-// then; ready is written once it listens.
-static pid_t foregroundChild(const char* label, int ready) {
+// then; ready is written once it listens. A SIGCONT it hears comes right
+// after the SIGHUP: it waits for one it should hear, else a while.
+static pid_t foregroundChild(const char* label, int ready, bool continued) {
     const pid_t child = fork();
     assert(child >= 0);
     if (child == 0) {
@@ -278,7 +279,9 @@ static pid_t foregroundChild(const char* label, int ready) {
         while (hups == 0) {
             sigsuspend(&none);
         }
-        usleep(100000);
+        for (int i = 0; i < (continued ? 500 : 10) && conts == 0; ++i) {
+            usleep(10000);
+        }
         char line[128];
         snprintf(line, sizeof line, "%s: SIGHUP %d SIGCONT %d, /dev/tty %s\n", label, int(hups), int(conts), openTerminal());
         tell(line);
@@ -293,7 +296,7 @@ static pid_t foregroundChild(const char* label, int ready) {
 static void leaderGoes() {
     int ready[2];
     assert(pipe(ready) == 0);
-    foregroundChild("leader gone, foreground", ready[1]);
+    foregroundChild("leader gone, foreground", ready[1], false);
     char c;
     assert(read(ready[0], &c, 1) == 1);
 }
@@ -303,7 +306,7 @@ static void leaderGoes() {
 static void leaderLetsGo() {
     int ready[2];
     assert(pipe(ready) == 0);
-    const pid_t child = foregroundChild("notty, foreground", ready[1]);
+    const pid_t child = foregroundChild("notty, foreground", ready[1], true);
     char c;
     assert(read(ready[0], &c, 1) == 1);
     const int r = ioctl(STDIN_FILENO, TIOCNOTTY);
@@ -359,7 +362,8 @@ static void runCase(void (*body)(), bool terminal) {
 // The master goes: the slave hangs up, the read the session's leader
 // waits on is EIO, the leader hears SIGHUP and SIGCONT, which it blocks
 // while it reads, so that they do not end the read first, and the
-// terminal controls the session no more.
+// terminal controls the session no more. The leader's read waits before
+// the master goes as the test waits for it a while: nothing tells it.
 static void hangUp() {
     int told[2];
     assert(pipe(told) == 0);
@@ -382,7 +386,7 @@ static void hangUp() {
         char got[32];
         snprintf(got, sizeof got, "%s", n < 0 ? errorName(errno) : n == 0 ? "0" : "a byte");
         assert(sigprocmask(SIG_UNBLOCK, &both, nullptr) == 0);
-        for (int i = 0; i < 100 && (hups == 0 || conts == 0); ++i) {
+        for (int i = 0; i < 500 && (hups == 0 || conts == 0); ++i) {
             usleep(10000);
         }
         char line[128];
@@ -393,6 +397,9 @@ static void hangUp() {
     close(told[1]);
     char c;
     assert(read(master, &c, 1) == 1 && c == 'r');
+    // The read the leader makes next waits by then: a read that comes
+    // after the hangup reads nothing, as Linux's does.
+    usleep(300000);
     close(master);
     char text[256];
     size_t n = 0;

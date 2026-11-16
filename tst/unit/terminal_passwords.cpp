@@ -128,7 +128,6 @@ static void interrupted() {
     termios before;
     termios after;
     assert(tcgetattr(STDIN_FILENO, &before) == 0);
-    ualarm(100000, 0);
     errno = 0;
     const char* password = getpass("interrupt: ");
     const int e = errno;
@@ -151,7 +150,9 @@ static void noMemory() {
     tell(!password && errno == ENOMEM ? "no memory: NULL ENOMEM\n" : "no memory: ?\n");
 }
 
-// A prompt the test waits for at the master, and what it types then.
+// A prompt the test waits for at the master, and what it types then, or
+// with none SIGALRM to the leader: getpass, one call, is reading then, or
+// about to with the signal there.
 struct Answer {
     const char* prompt;
     const char* text;
@@ -201,7 +202,11 @@ static void runCase(void (*body)(), const Answer* answers, size_t count, bool te
             at += got > 0 ? size_t(got) : 0;
             if (answered < count && endsWith(shown, at, answers[answered].prompt)) {
                 const char* typed = answers[answered++].text;
-                assert(write(master, typed, strlen(typed)) == ssize_t(strlen(typed)));
+                if (typed) {
+                    assert(write(master, typed, strlen(typed)) == ssize_t(strlen(typed)));
+                } else {
+                    assert(kill(leader, SIGALRM) == 0);
+                }
             }
         }
     }
@@ -235,9 +240,10 @@ int main() {
     longLine[150] = '\n';
     longLine[151] = 0;
     const Answer answers[] = {{"first: ", "s3cr3t\n"}, {"empty: ", "\n"}, {"long: ", longLine}, {"eof: ", "\x04"}};
+    const Answer interrupt[] = {{"interrupt: ", nullptr}};
     runCase(noTerminal, nullptr, 0, false);
     runCase(passwords, answers, 4, true);
-    runCase(interrupted, nullptr, 0, true);
+    runCase(interrupted, interrupt, 1, true);
     runCase(noMemory, nullptr, 0, true);
     return 0;
 }
