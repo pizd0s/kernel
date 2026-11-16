@@ -6,17 +6,23 @@ its applets, each case a boot of rootfs from the image of the tests, in
 errors, exit and SIGINT are longjmps, one of them out of a signal handler;
 its commands, pipes, substitutions and jobs are forks; xargs, find -exec
 and awk's pipes are vforks; a loop without system calls is interrupted for
-its signals.
+its signals. On a host's terminal the shell's jobs are the system's
+pseudoterminal's (bin/tools/console.cpp): ^Z stops one, a read out of the
+foreground stops another, fg continues them and ^C ends them.
 
     test_busybox.py <vm> <rootfs> <tests.img>
 """
+import fcntl
 import hashlib
 import os
+import pty
 import select
 import shlex
 import signal
+import struct
 import subprocess
 import sys
+import termios
 import time
 
 DATA = "banana\napple\ncherry\napple\n10\n9\n"
@@ -155,6 +161,43 @@ def interrupt(vm, rootfs, image, first):
     return (prompt + out).decode(errors="replace"), p.returncode
 
 
+def job_control(vm, rootfs, image):
+    """^Z stops a command on the terminal, jobs lists it, fg continues it
+    and ^C ends it; a cat in the background stops for SIGTTIN as it reads,
+    and fg takes it to the foreground, where it reads, and ^C ends it."""
+    pid, fd = pty.fork()
+
+    if pid == 0:
+        fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+        os.execv(vm, boot(vm, rootfs, image, "exec env PS1='$ ' sh -i"))
+
+    out = until(fd, b"$ ", 120)
+
+    def pump(seconds):
+        nonlocal out
+        end = time.monotonic() + seconds
+
+        while time.monotonic() < end:
+            if select.select([fd], [], [], 0.05)[0]:
+                try:
+                    out += os.read(fd, 4096)
+                except OSError:
+                    return
+
+    pump(0.3)
+
+    for keys in [b"cat\r", b"\x1a", b"jobs\r", b"fg\r", b"\x03", b"echo after $?\r", b"cat &\r", b"jobs\r", b"fg\r", b"\x03",
+                 b"echo again $?\r", b"exit 6\r"]:
+        os.write(fd, keys)
+        pump(0.6)
+
+    pump(5)
+    _, status = os.waitpid(pid, 0)
+    os.close(fd)
+
+    return out.decode(errors="replace").replace("\r", ""), os.waitstatus_to_exitcode(status)
+
+
 # files: a tree made, archived, compressed and read back, in one boot
 FILES = """\
 mkdir -p /tmp/d/e && cp /tmp/script.sh /tmp/d/e/copy && ln -s e/copy /tmp/d/link &&
@@ -191,11 +234,17 @@ def main():
         if not out.endswith(tail) or code != 5:
             failed.append(f"SIGINT to sh -i after {first!r}: exit {code}, stdout ends {out[-60:]!r}; want exit 5, {tail!r}")
 
+    out, code = job_control(vm, rootfs, image)
+    stops = out.count("Stopped") - out.count("Stopped (tty input)")
+
+    if stops < 2 or "Stopped (tty input)" not in out or "after 130" not in out or "again 130" not in out or code != 6:
+        failed.append(f"job control: exit {code}, terminal {out!r}")
+
     for f in failed:
         print(f)
 
     assert not failed, f"{len(failed)} of the busybox cases failed"
-    print(f"{len(CASES) + 2 + len(INTERRUPTS)} cases passed")
+    print(f"{len(CASES) + 3 + len(INTERRUPTS)} cases passed")
 
 
 if __name__ == "__main__":

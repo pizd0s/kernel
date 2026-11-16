@@ -2,11 +2,12 @@
 """CPython in the system: python3 is the image's /bin/python3, its
 standard library its own file's. A script, its standard input, prints what
 the interpreter computes and what it gets from the kernel: processes,
-pipes, signals, timers, locks, mappings written back, the user database,
-locales and the tokenizer's positions. Then a set of CPython's own tests,
-from the release tarball's Lib/test, the image of the tests' /lib/python3.14/test,
-which python searches after its file, runs with its regrtest. Each boots
-rootfs from the image of the tests and runs in /tmp.
+pipes, a pseudoterminal, signals, timers, locks, mappings written back,
+the user database, locales and the tokenizer's positions. Then a set of
+CPython's own tests, from the release tarball's Lib/test, the image of the
+tests' /lib/python3.14/test, which python searches after its file, runs
+with its regrtest. Each boots rootfs from the image of the tests and runs
+in /tmp.
 
     test_python.py <vm> <rootfs> <tests.img>
 """
@@ -22,7 +23,7 @@ TESTS = [
 ]
 
 SCRIPT = r'''
-import errno, fcntl, hashlib, io, json, locale, math, mmap, os, pwd, random, re, resource, select, signal
+import errno, fcntl, hashlib, io, json, locale, math, mmap, os, pty, pwd, random, re, resource, select, signal
 import struct, subprocess, sys, time, tokenize
 
 print(sys.version.split()[0], sys.platform, len(sys.builtin_module_names))
@@ -55,6 +56,24 @@ rd, wr = os.pipe()
 print("select", select.select([rd], [], [], 0)[0], end=" ")
 os.write(wr, b"x")
 print(select.select([rd], [], [], 1)[0] == [rd], os.read(rd, 1))
+
+# a pseudoterminal: forkpty's child writes to its terminal; the master
+# reads it, then EIO once the slave is closed
+pid, master = pty.fork()
+if pid == 0:
+    os.write(1, b"from the child\n")
+    os._exit(0)
+out = b""
+while True:
+    try:
+        chunk = os.read(master, 100)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+os.waitpid(pid, 0)
+print("pty", out.replace(b"\r", b"").decode().strip(), os.isatty(master))
 
 
 # signals and timers
@@ -106,6 +125,7 @@ sh 42
 python 1024
 waitid 3 True
 select [] True b'x'
+pty from the child True
 alarm True
 kill True
 sigwait True
