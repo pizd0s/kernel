@@ -25,7 +25,8 @@ import (
 //	its modes say, gid their group (permits). A reply's are zero.
 //
 //	Every request brings a fresh endpoint, last among its files: the reply
-//	comes on it, and an open's stays the open file's. A READ or a WRITE
+//	comes on it. An open's OK brings the open file's endpoint, the end of
+//	a pair the server made, whose other end it keeps. A READ or a WRITE
 //	brings before it a memfd of the memory the process reads into or
 //	writes from (kernel_memfd.go): the server writes the bytes there or
 //	reads them from there itself, from the memfd's byte woff on, one copy,
@@ -431,13 +432,13 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Fi
 }
 
 // call is a call on the node: a fresh pair, its one end with the
-// request, the reply on the other. The reply's packet and that end come
-// back; the caller keeps the end for an open file or drops it. files go
-// with the request and stay the caller's. Only an OPEN's reply brings a
-// file, the file itself, which the packet keeps; the files of any other
-// reply, or the rest of an OPEN's, go here.
-func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []File) (packet, *pairEnd, error) {
+// request, the reply on the other, the reply's packet. files go with the
+// request and stay the caller's. Only an OPEN's reply brings a file, the
+// open file's endpoint, and a CONNECT's, the listener, which the packet
+// keeps; the files of any other reply, or the rest of theirs, go here.
+func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []File) (packet, error) {
 	mine, theirs := newPair(false)
+	defer mine.unref()
 	err := request(p, n.end, op, arg, body, append(files, theirs))
 	theirs.unref()
 
@@ -446,20 +447,16 @@ func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []File)
 	}
 
 	if err != nil {
-		mine.unref()
-
-		return packet{}, nil, err
+		return packet{}, err
 	}
 
 	pk, err := reply(p, mine)
 
 	if err != nil {
-		mine.unref()
-
-		return packet{}, nil, err
+		return packet{}, err
 	}
 
-	if (op == vOpen || op == vConnect) && len(pk.files) > 0 {
+	if (op == vOpen || op == vConnect || op == rOpen) && len(pk.files) > 0 {
 		dropFiles(pk.files[1:])
 		pk.files = pk.files[:1]
 	} else {
@@ -467,20 +464,26 @@ func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []File)
 		pk.files = nil
 	}
 
-	return pk, mine, nil
+	return pk, nil
 }
 
-// on is a call on the node that opens nothing: the reply's packet.
+// on is a call on the node that brings no file: the reply's packet.
 func (n *remoteNode) on(p *Process, op, arg uint32, body []byte) (packet, error) {
-	pk, mine, err := n.call(p, op, arg, body, nil)
+	return n.call(p, op, arg, body, nil)
+}
 
-	if err != nil {
-		return packet{}, err
+// openedEnd is the endpoint of the open file an OPEN's OK brought: EIO
+// for an OK without one, a server's fault.
+func openedEnd(pk packet) (*pairEnd, error) {
+	if len(pk.files) == 1 {
+		if end, ok := pk.files[0].(*pairEnd); ok && end.shared.kind == sockSeqpacket {
+			return end, nil
+		}
 	}
 
-	mine.unref()
+	dropFiles(pk.files)
 
-	return pk, nil
+	return nil, syscall.EIO
 }
 
 // decodeStat is a Stat_t of the protocol's stat.

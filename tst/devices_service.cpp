@@ -169,27 +169,28 @@ static void readText(const Endpoint& e, const Request& r) {
     answer(r.reply(), opOk, 0, &done, sizeof done);
 }
 
-static bool handle(Endpoint& e, Request& r) {
+static void handle(Endpoint& e, Request& r) {
     if (e.channel) {
         if (!mailbox) {
-            answer(r.reply(), opOk, 0, &device.st, sizeof device.st);
-            return true;
+            answerOpen(epoll, r, 0, &device.st, sizeof device.st, e.of);
+            return;
         }
         if (openCount == sizeof opens / sizeof opens[0]) {
             fail(r.reply(), ENFILE);
-            return false;
+            return;
         }
-        answer(r.reply(), opOk, openTells, &device.st, sizeof device.st);
-        opens[openCount++] = r.reply();
-        tellAll();
-        return true;
+        if (const Endpoint* opened = answerOpen(epoll, r, openTells, &device.st, sizeof device.st, e.of)) {
+            opens[openCount++] = opened->fd;
+            tellAll();
+        }
+        return;
     }
     if (e.of == &readerTag) {
         if (r.h.op == opCancel) {
             fail(e.fd, EINTR);
             letReaderGo();
         }
-        return false;
+        return;
     }
     switch (r.h.op) {
         case opRead:
@@ -212,7 +213,6 @@ static bool handle(Endpoint& e, Request& r) {
         default:
             fail(r.reply(), EINVAL);
     }
-    return false;
 }
 
 static int copy(const char* path, long long off, long long woff, long long n) {

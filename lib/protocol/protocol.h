@@ -17,10 +17,12 @@
 //
 // An endpoint is one end of a seqpacket pair: whose holds the other end
 // answers on it. Every request brings a fresh endpoint, last among its
-// descriptors: the reply goes on it, and an open's stays the open file's.
-// A server may hand a request on, its descriptors with it, to another,
-// which answers on that endpoint and keeps it: the one that handed it on
-// is out of the way from then on. A server that is gone is EIO.
+// descriptors, which the reply goes on. An open file is a pair the server
+// makes as it opens: it keeps one end, the open file's endpoint, and the
+// OPEN's OK brings the other, fds[0], to who asked. A server may hand a
+// request on, its descriptors with it, to another, which answers on that
+// endpoint: the one that handed it on is out of the way from then on. A
+// server that is gone is EIO.
 //
 // A READ or a WRITE, which waits as long as its file says, may hear
 // CANCEL on its endpoint from who asked, whose caller gave up for a
@@ -42,12 +44,11 @@
 //   its handle's open gave. A call follows a last link as Linux's does,
 //   and checks what Linux checks before the file system.
 //     OPEN      arg flags   root u64, mode u32, path
-//                                         OK stat [id u64]: the reply's
-//                                         endpoint is the open file, or
-//                                         with id a handle; fds[0] an
-//                                         object: the file is it. A FIFO
-//                                         is its stat: the kernel makes
-//                                         its pipe
+//                                         OK stat [id u64], fds[0] the
+//                                         open file's endpoint, or with id
+//                                         a handle's. A FIFO is its stat,
+//                                         no endpoint: the kernel makes its
+//                                         pipe
 //     STAT      arg follow  root u64, path    OK stat
 //     READLINK              root u64, path    OK target
 //     MKDIR     arg mode    root u64, path
@@ -93,10 +94,10 @@
 //     GETATTR               node u64          OK stat
 //     READLINK              node u64          OK target
 //     READDIR               node u64, after u64   as an open file's
-//     OPEN      arg flags   node u64          OK stat: the reply's endpoint
-//                                         is the open file, but a FIFO's
-//     CREATE    arg flags   node u64, mode u32, name   OK stat: the reply's
-//                                         endpoint is the open file of the
+//     OPEN      arg flags   node u64          OK stat, fds[0] the open file's
+//                                         endpoint, but a FIFO's
+//     CREATE    arg flags   node u64, mode u32, name   OK stat, fds[0] the
+//                                         endpoint of the open file of the
 //                                         name, made when it is not there;
 //                                         with O_EXCL EEXIST when it is
 //     MKDIR     arg mode    node u64, name
@@ -191,13 +192,13 @@
 //                                         EPERM when it controls another;
 //                                         sid 0: it controls none now
 //     OPEN      arg flags                 on a slave's: another open file of
-//                                         the slave, the reply's endpoint,
-//                                         OK as its device's OPEN's
+//                                         the slave, OK as its device's
+//                                         OPEN's
 //
 //   A device's service's, on the channel devfs has of it, and on
 //   /dev/init:
-//     OPEN      arg flags   mode u32      the reply's endpoint is the open
-//                                         file
+//     OPEN      arg flags   mode u32      OK stat, fds[0] the open file's
+//                                         endpoint
 //     OPEN of /dev/tty, devfs's, is the opener's controlling terminal: its
 //     OK has openControlling, and the kernel opens that terminal instead,
 //     with an OPEN on the open file it keeps of it, a slave's.

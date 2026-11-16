@@ -106,11 +106,13 @@ static void writeBlocks(const Endpoint& e, const Request& r) {
     answer(r.reply(), opOk, 0, wrote, sizeof wrote);
 }
 
-static bool handle(Endpoint& e, Request& r) {
+static int epoll = -1;
+
+static void handle(Endpoint& e, Request& r) {
     const Stat st = diskStat();
     if (e.channel) {
-        answer(r.reply(), opOk, 0, &st, sizeof st);
-        return true;
+        answerOpen(epoll, r, 0, &st, sizeof st, e.of);
+        return;
     }
     switch (r.h.op) {
         case opRead:
@@ -137,7 +139,6 @@ static bool handle(Endpoint& e, Request& r) {
         default:
             fail(r.reply(), EINVAL);
     }
-    return false;
 }
 
 // Starts /bin/gpt for a partition, the bytes [first, first + length) of
@@ -219,7 +220,7 @@ int blkMain(int argc, char** argv) {
     }
     size = uint64_t(end);
     signal(SIGCHLD, SIG_IGN);
-    const int epoll = epoll_create1(EPOLL_CLOEXEC);
+    epoll = epoll_create1(EPOLL_CLOEXEC);
     if (epoll < 0) {
         fatal("blk: epoll_create1: errno %d", errno);
     }

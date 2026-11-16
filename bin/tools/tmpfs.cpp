@@ -850,7 +850,7 @@ static bool put(int w, const void* from, usize count, usize at) {
     return count == 0 || pwrite(w, from, count, off_t(at)) == ssize_t(count);
 }
 
-static bool readNode(Endpoint* ep, const Header& h, Body body, int fd) {
+static void readNode(Endpoint* ep, const Header& h, Body body, int fd) {
     Io io;
     if (!ioOf(h, body, io) || io.off > INT64_MAX) {
         return error(fd, EINVAL);
@@ -882,7 +882,7 @@ static bool readNode(Endpoint* ep, const Header& h, Body body, int fd) {
 
 // The data at the offset, or at the end with append, as much as the
 // capacity takes: the count and where it went.
-static bool writeNode(Endpoint* ep, const Header& h, Body body, int fd) {
+static void writeNode(Endpoint* ep, const Header& h, Body body, int fd) {
     Io io;
     if (!ioOf(h, body, io) || io.off > INT64_MAX) {
         return error(fd, EINVAL);
@@ -933,7 +933,6 @@ static bool writeNode(Endpoint* ep, const Header& h, Body body, int fd) {
     a.add(u32(count));
     a.add(off);
     ok(fd, out, a.size);
-    return false;
 }
 
 // An entry of a READDIR's reply, at a position.
@@ -950,7 +949,7 @@ static bool addEntry(Assembly& a, const Node* n, u64 pos, const char* name, usiz
 }
 
 // The entries after a position, in order, as many as one reply holds.
-static bool readdirNode(const Node* node, Body body, int fd) {
+static void readdirNode(const Node* node, Body body, int fd) {
     if (node->kind != Kind::Dir) {
         return error(fd, ENOTDIR);
     }
@@ -981,14 +980,13 @@ static bool readdirNode(const Node* node, Body body, int fd) {
         }
     }
     ok(fd, out, a.size);
-    return false;
 }
 
 // ---- rootfs's calls, by node ------------------------------------------------------
 
 // The path of a directory from the tree's root, made from its end, at
 // the end of out: none for a removed one, or for what is no directory.
-static bool pathOf(const Node* n, int fd) {
+static void pathOf(const Node* n, int fd) {
     usize start = sizeof out;
     while (n != tree.root) {
         const Entry* entry = n->entry;
@@ -1008,15 +1006,14 @@ static bool pathOf(const Node* n, int fd) {
     } else {
         ok(fd, out + start, sizeof out - start);
     }
-    return false;
 }
 
-// An open of a node, on the reply's endpoint: read or written as its
-// access mode says and who asks may, emptied when O_TRUNC asks. A link
-// is ELOOP, ENOTDIR with O_DIRECTORY; a directory is rootfs's to open,
-// EISDIR here; a FIFO is its stat, the kernel makes its pipe. made: who
-// asks made it now. Whether fd is kept.
-static bool openNode(Node* n, u32 flags, bool made, const Header& h, int fd) {
+// An open of a node, answered on the reply's endpoint with a new open
+// file: read or written as its access mode says and who asks may,
+// emptied when O_TRUNC asks. A link is ELOOP, ENOTDIR with O_DIRECTORY; a
+// directory is rootfs's to open, EISDIR here; a FIFO is its stat, the
+// kernel makes its pipe. made: who asks made it now.
+static void openNode(Node* n, u32 flags, bool made, const Header& h, int fd) {
     const u32 access = flags & O_ACCMODE;
     const bool reads = access != O_WRONLY;
     const bool writes = access != O_RDONLY;
@@ -1036,26 +1033,23 @@ static bool openNode(Node* n, u32 flags, bool made, const Header& h, int fd) {
     const Stat st = statOf(tree, n);
     if (n->kind == Kind::Fifo) {
         ok(fd, &st, sizeof st);
-        return false;
+        return;
     }
     if (truncates && n->content.size() > 0) {
         resize(tree, n, 0);
         touch(n);
     }
-    const Stat now = statOf(tree, n);
-    listen(fd, Role::File, n, reads, writes);
-    ++n->opens;
-    ok(fd, &now, sizeof now);
-    return true;
+    if (openFile(fd, statOf(tree, n), n, reads, writes)) {
+        ++n->opens;
+    }
 }
 
-// A call of rootfs's on its channel, by node, answered on fd: whether
-// fd is kept.
-static bool fsCall(const Header& h, Body body, int fd) {
+// A call of rootfs's on its channel, by node, answered on fd.
+static void fsCall(const Header& h, Body body, int fd) {
     if (h.op == fsRoot) {
         const Stat st = statOf(tree, tree.root);
         ok(fd, &st, sizeof st);
-        return false;
+        return;
     }
     if (body.size() < 8) {
         return error(fd, EINVAL);
@@ -1084,19 +1078,19 @@ static bool fsCall(const Header& h, Body body, int fd) {
             }
             const Stat st = statOf(tree, found);
             ok(fd, &st, sizeof st);
-            return false;
+            return;
         }
         case fsGetattr: {
             const Stat st = statOf(tree, n);
             ok(fd, &st, sizeof st);
-            return false;
+            return;
         }
         case fsReadlink:
             if (n->kind != Kind::Link) {
                 return error(fd, EINVAL);
             }
             ok(fd, n->content.data(), n->content.size());
-            return false;
+            return;
         case fsReaddir:
             return readdirNode(n, body, fd);
         case fsOpen:
@@ -1148,7 +1142,7 @@ static bool fsCall(const Header& h, Body body, int fd) {
         case fsStatfs: {
             const Statfs st = statfsOf(tree);
             ok(fd, &st, sizeof st);
-            return false;
+            return;
         }
         case fsPath:
             return pathOf(n, fd);
@@ -1177,14 +1171,14 @@ static bool fsCall(const Header& h, Body body, int fd) {
                 return error(fd, EACCES);
             }
             reply(fd, opOk, 0, nullptr, 0, &n->fd, 1);
-            return false;
+            return;
         default:
             return error(fd, ENOSYS);
     }
 }
 
-// A call on an open file, answered on fd: whether fd is kept.
-static bool fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
+// A call on an open file, answered on fd.
+static void fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
     auto* node = static_cast<Node*>(ep->node);
     switch (h.op) {
         case opRead:
@@ -1196,12 +1190,12 @@ static bool fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
         case opFstat: {
             const Stat st = statOf(tree, node);
             ok(fd, &st, sizeof st);
-            return false;
+            return;
         }
         case opFstatfs: {
             const Statfs st = statfsOf(tree);
             ok(fd, &st, sizeof st);
-            return false;
+            return;
         }
         case opFsync:
             return answer(fd, 0);

@@ -84,9 +84,15 @@ bool Request::at(size_t offset, T& out) const {
     return copy(offset, &out, sizeof out);
 }
 
-// handle answers a request, true for an OPEN on a channel whose endpoint
-// serve keeps; gone hears of an endpoint whose other end closed.
-using Handle = bool (*)(Endpoint& e, Request& r);
+// Answers an OPEN with a new open file: a pair of ours, whose one end
+// goes with the OK, its arg and data, to who asked, and whose other end,
+// watched in epoll with of, to read and write as the OPEN's flags let it,
+// is the open file. That endpoint, or none, the error answered.
+Endpoint* answerOpen(int epoll, const Request& r, uint32_t arg, const void* data, size_t size, void* of);
+
+// handle answers a request; gone hears of an endpoint whose other end
+// closed.
+using Handle = void (*)(Endpoint& e, Request& r);
 using Gone = void (*)(Endpoint& e);
 using Accepted = void (*)(Endpoint& e, int connection);
 // expire runs the service's timers that are due and is how long serve may
@@ -97,10 +103,10 @@ using Expire = int (*)();
 // is open, or until stopServing: when rootfs lets go of the devices, as
 // the system ends, what is open of them is still served until it closes.
 // Every request goes to handle, its descriptors closed after it but for
-// those it set to -1. An OPEN on a channel, which devfs handed on, keeps
-// its endpoint when handle says so, what it lets do from its flags. A
-// request without an endpoint is a question, answered on the endpoint it
-// came on. An endpoint whose other end closed goes to gone, then is closed.
+// those it set to -1; on a channel only OPEN, which devfs handed on, and
+// handle answers with answerOpen. A request without an endpoint is a
+// question, answered on the endpoint it came on. An endpoint whose other
+// end closed goes to gone, then is closed.
 // A socket that listens has its connections accepted, each to accepted.
 // Before each wait, expire runs what is due and bounds the wait.
 //

@@ -188,9 +188,8 @@ void tools::ok(int fd, const void* data, usize size) {
     reply(fd, opOk, 0, &body, size ? 1 : 0);
 }
 
-bool tools::error(int fd, int e) {
+void tools::error(int fd, int e) {
     reply(fd, opErr, u32(e), nullptr, 0);
-    return false;
 }
 
 bool tools::ioOf(const Header& h, Body body, Io& out) {
@@ -202,18 +201,16 @@ bool tools::ioOf(const Header& h, Body body, Io& out) {
     return (out.flags & ~known) == 0;
 }
 
-bool tools::readCount(int fd, usize count) {
+void tools::readCount(int fd, usize count) {
     const u32 n = u32(count);
     ok(fd, &n, sizeof n);
-    return false;
 }
 
-bool tools::answer(int fd, int e) {
+void tools::answer(int fd, int e) {
     if (e != 0) {
         return error(fd, e);
     }
     ok(fd);
-    return false;
 }
 
 int tools::window() {
@@ -252,7 +249,7 @@ u64 tools::device() {
     return u64(st.st_ino);
 }
 
-bool tools::flockNode(Locks& locks, int me, const Header& h, int fd) {
+void tools::flockNode(Locks& locks, int me, const Header& h, int fd) {
     const bool other = locks.exclusive >= 0 && locks.exclusive != me;
     usize others = 0;
     for (usize i = 0; i < locks.shared.size(); ++i) {
@@ -295,7 +292,7 @@ bool tools::flockNode(Locks& locks, int me, const Header& h, int fd) {
 // the process.
 static SmallVec<Range> keptRanges;
 
-bool tools::lockNode(Locks& locks, int me, const Header& h, Body body, int fd) {
+void tools::lockNode(Locks& locks, int me, const Header& h, Body body, int fd) {
     const u32 type = body.take<u32>();
     const u64 start = body.take<u64>();
     const u64 length = body.take<u64>();
@@ -322,7 +319,7 @@ bool tools::lockNode(Locks& locks, int me, const Header& h, Body body, int fd) {
             a.add(length);
         }
         ok(fd, out, a.size);
-        return false;
+        return;
     }
     if (type != F_UNLCK && way) {
         return error(fd, EAGAIN);
@@ -396,6 +393,19 @@ Endpoint* tools::listen(int fd, Role role, void* node, bool reads, bool writes) 
     return ep;
 }
 
+Endpoint* tools::openFile(int fd, const Stat& st, void* node, bool reads, bool writes) {
+    int pair[2];
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+        error(fd, errno);
+        return nullptr;
+    }
+    Endpoint* ep = listen(pair[0], Role::File, node, reads, writes);
+    const iovec body = part(&st, sizeof st);
+    reply(fd, opOk, 0, &body, 1, &pair[1], 1);
+    close(pair[1]);
+    return ep;
+}
+
 // An endpoint that closes: what is the file system's of it goes first.
 static void forget(Endpoint* ep, Closing closing) {
     ep->dead = true;
@@ -441,7 +451,7 @@ static void handle(Endpoint* ep, FsCall fsCall, FileCall fileCall, Closing closi
     const Body body{packet + sizeof(Header), packet + sizeof(Header) + n};
     if (packetFdCount == 0) {
         // A question of rootfs's, answered on its channel, in order; an
-        // open keeps an endpoint, which a question has none of.
+        // open's file goes on an endpoint, which a question has none of.
         if (ep->role == Role::Channel) {
             if (h.op == fsOpen || h.op == fsCreate) {
                 error(ep->fd, EINVAL);
@@ -458,11 +468,12 @@ static void handle(Endpoint* ep, FsCall fsCall, FileCall fileCall, Closing closi
         return;
     }
     const int fd = packetFds[packetFdCount - 1];
-    const bool kept = ep->role == Role::Channel ? fsCall(h, body, fd) : fileCall(ep, h, body, fd);
-    if (!kept) {
-        close(fd);
+    if (ep->role == Role::Channel) {
+        fsCall(h, body, fd);
+    } else {
+        fileCall(ep, h, body, fd);
     }
-    for (usize i = 0; i + 1 < packetFdCount; ++i) {
+    for (usize i = 0; i < packetFdCount; ++i) {
         if (packetFds[i] >= 0) {
             close(packetFds[i]);
         }

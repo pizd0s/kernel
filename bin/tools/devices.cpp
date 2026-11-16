@@ -96,12 +96,14 @@ static void writeSource(const Source& s, const Endpoint& e, const Request& r) {
     answer(r.reply(), opOk, 0, taken, sizeof taken);
 }
 
-static bool handle(Endpoint& e, Request& r) {
+static int epoll = -1;
+
+static void handle(Endpoint& e, Request& r) {
     const Source& s = *static_cast<Source*>(e.of);
     const Stat& st = s.registered.st;
     if (e.channel) {
-        answer(r.reply(), opOk, 0, &st, sizeof st);
-        return true;
+        answerOpen(epoll, r, 0, &st, sizeof st, e.of);
+        return;
     }
     switch (r.h.op) {
         case opRead:
@@ -124,7 +126,6 @@ static bool handle(Endpoint& e, Request& r) {
         default:
             fail(r.reply(), EINVAL);
     }
-    return false;
 }
 
 int devicesMain(int argc, char** argv) {
@@ -134,7 +135,7 @@ int devicesMain(int argc, char** argv) {
         dprintf(STDERR_FILENO, "usage: devices [-r fd]\n");
         return 2;
     }
-    const int epoll = epoll_create1(EPOLL_CLOEXEC);
+    epoll = epoll_create1(EPOLL_CLOEXEC);
     if (epoll < 0) {
         fatal("devices: epoll_create1: errno %d", errno);
     }

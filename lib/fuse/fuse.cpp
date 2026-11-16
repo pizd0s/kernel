@@ -230,10 +230,11 @@ static void moved(const char* from, const char* to) {
     }
 }
 
-// An endpoint watched: the request's reply endpoint, a channel's or an
-// open file's from now on.
-static Open* keepOn(int fd, bool channel, char* path, bool reads, bool writes) {
+// What an endpoint of ours is, a channel or an open file of a path, among
+// the others; the endpoint watched is the caller's.
+static Open* listed(bool channel, char* path) {
     auto* o = static_cast<Open*>(allocate(sizeof(Open)));
+    *o = {};
     o->channel = channel;
     o->path = path;
     o->next = opens;
@@ -241,14 +242,30 @@ static Open* keepOn(int fd, bool channel, char* path, bool reads, bool writes) {
         opens->previous = o;
     }
     opens = o;
-    watch(epoll, {fd, false, reads, writes, o});
     return o;
 }
 
-static Open* keep(Request& r, bool channel, char* path, bool reads, bool writes) {
-    Open* o = keepOn(r.reply(), channel, path, reads, writes);
-    r.fds[r.count - 1] = -1;
-    return o;
+// An open goes: the file system's release of an open file, and what we
+// kept of it.
+static void unlisted(Open* o) {
+    if (o->opened) {
+        if (operations.flush) {
+            operations.flush(o->path, &o->info);
+        }
+        if (operations.release) {
+            operations.release(o->path, &o->info);
+        }
+    }
+    if (o->previous) {
+        o->previous->next = o->next;
+    } else {
+        opens = o->next;
+    }
+    if (o->next) {
+        o->next->previous = o->previous;
+    }
+    free(o->path);
+    free(o);
 }
 
 // A name of a call, after what comes before it in the body.
@@ -319,10 +336,13 @@ static void openFile(Request& r, char* path, uint32_t mode, bool creates) {
         return fail(r.reply(), e);
     }
     know(uint64_t(st.st_ino), path);
-    answerStat(r.reply(), st);
-    Open* kept = keep(r, false, path, access != O_WRONLY, writes);
-    kept->opened = opened;
-    kept->info = info;
+    Open* o = listed(false, path);
+    o->opened = opened;
+    o->info = info;
+    const Stat out = protocolStat(st);
+    if (!answerOpen(epoll, r, 0, &out, sizeof out, o)) {
+        unlisted(o);
+    }
 }
 
 // The times of UTIMES and FUTIMES: when's bits say now or kept, else
@@ -740,7 +760,7 @@ static void fileCall(Open& o, const Endpoint& e, Request& r) {
     answer(r.reply(), opOk, 0);
 }
 
-static bool handle(Endpoint& e, Request& r) {
+static void handle(Endpoint& e, Request& r) {
     context.uid = uid_t(r.h.uid);
     context.gid = gid_t(r.h.gid);
     Open& o = *static_cast<Open*>(e.of);
@@ -749,13 +769,12 @@ static bool handle(Endpoint& e, Request& r) {
     } else {
         fileCall(o, e, r);
     }
-    return false;
 }
 
 // A connection mount(2) made to the file system's socket: a channel of
 // rootfs's calls, ROOT the first.
 static void accepted(Endpoint&, int connection) {
-    keepOn(connection, true, nullptr, true, true);
+    watch(epoll, {connection, false, true, true, listed(true, nullptr)});
     ++channels;
 }
 
@@ -769,24 +788,7 @@ static void gone(Endpoint& e) {
     if (o->channel && --channels == 0) {
         stopServing();
     }
-    if (o->opened) {
-        if (operations.flush) {
-            operations.flush(o->path, &o->info);
-        }
-        if (operations.release) {
-            operations.release(o->path, &o->info);
-        }
-    }
-    if (o->previous) {
-        o->previous->next = o->next;
-    } else {
-        opens = o->next;
-    }
-    if (o->next) {
-        o->next->previous = o->previous;
-    }
-    free(o->path);
-    free(o);
+    unlisted(o);
 }
 
 // A device for the file system's files: the number of a pair, which no

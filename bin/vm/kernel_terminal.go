@@ -106,7 +106,7 @@ func (p *Process) openControlling(flags int) (File, error) {
 		return nil, syscall.ENXIO
 	}
 
-	pk, mine, err := c.call(p, rOpen, uint32(flags), nil, nil)
+	pk, err := c.call(p, rOpen, uint32(flags), nil, nil)
 
 	if err != nil {
 		return nil, err
@@ -115,13 +115,19 @@ func (p *Process) openControlling(flags int) (File, error) {
 	var st syscall.Stat_t
 
 	if err := decodeStat(pk.data, &st); err != nil || pk.arg&openTerminal == 0 {
-		mine.unref()
+		dropFiles(pk.files)
 
 		return nil, syscall.EIO
 	}
 
+	end, err := openedEnd(pk)
+
+	if err != nil {
+		return nil, err
+	}
+
 	t := &remoteTerminal{dev: st.Dev, ino: st.Ino}
-	t.opened(mine, pk.arg, flags)
+	t.opened(end, pk.arg, flags)
 
 	return t, nil
 }

@@ -1163,17 +1163,18 @@ static void fileCall(Open& o, Request& r) {
     }
 }
 
-// An open of a terminal's end: the open file is its endpoint, which
-// hears the terminal's readiness from its OK on.
+// An open of a terminal's end: a new open file, which hears the
+// terminal's readiness from its OK on.
 static void opened(Terminal& t, bool master, Request& r) {
     const uint32_t access = r.h.arg & O_ACCMODE;
     for (Open& o : opens) {
         if (!o.terminal) {
-            o = {&t, master, access != O_WRONLY, access != O_RDONLY, r.reply(), 0xffffffff, 0, 0};
-            watch(epoll, {r.reply(), false, o.reads, o.writes, &o});
-            r.fds[r.count - 1] = -1;
+            const Endpoint* e = answerOpen(epoll, r, openTells | openTerminal, master ? &device.st : &t.slave.st, sizeof device.st, &o);
+            if (!e) {
+                return;
+            }
+            o = {&t, master, access != O_WRONLY, access != O_RDONLY, e->fd, 0xffffffff, 0, 0};
             ++(master ? t.masters : t.slaves);
-            answer(o.fd, opOk, openTells | openTerminal, master ? &device.st : &t.slave.st, sizeof device.st);
             progress(t);
             return;
         }
@@ -1203,7 +1204,14 @@ static void openMaster(Request& r) {
         }
         terminals[n] = t;
         t->channel = watch(epoll, {t->slave.end, true, false, false, t});
-        return opened(*t, true, r);
+        opened(*t, true, r);
+        if (t->masters == 0) {
+            // No open file for the master: the terminal goes, its name too.
+            unwatch(epoll, t->channel);
+            terminals[n] = nullptr;
+            free(t);
+        }
+        return;
     }
     fail(r.reply(), ENOSPC);
 }
@@ -1229,30 +1237,23 @@ static void hangUp(Terminal& t) {
     t.channel = nullptr;
 }
 
-static bool handle(Endpoint& e, Request& r) {
-    if (e.channel) {
-        if (r.h.op != opOpen) {
-            fail(r.reply(), EINVAL);
-        } else if (e.of == &ptyTag) {
-            openMaster(r);
+static void handle(Endpoint& e, Request& r) {
+    if (e.channel && e.of == &ptyTag) {
+        openMaster(r);
+    } else if (e.channel) {
+        Terminal& t = *static_cast<Terminal*>(e.of);
+        if (t.hungUp) {
+            fail(r.reply(), EIO);
         } else {
-            Terminal& t = *static_cast<Terminal*>(e.of);
-            if (t.hungUp) {
-                fail(r.reply(), EIO);
-            } else {
-                opened(t, false, r);
-            }
+            opened(t, false, r);
         }
-        return false;
-    }
-    if (isWaiting(e.of)) {
+    } else if (isWaiting(e.of)) {
         if (r.h.op == opCancel) {
             cancel(*static_cast<Waiting*>(e.of));
         }
-        return false;
+    } else {
+        fileCall(*static_cast<Open*>(e.of), r);
     }
-    fileCall(*static_cast<Open*>(e.of), r);
-    return false;
 }
 
 // The terminal is gone once neither end is open.

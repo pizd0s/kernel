@@ -218,9 +218,9 @@ static bool nameAt(const Request& r, size_t at, const char*& name, size_t& lengt
 }
 
 // An open of a node: tty's the opener's controlling terminal, which the
-// kernel opens; init an endpoint of devfs's, which REGISTER comes on; a
-// device's open handed on to its service with the reply's endpoint, ENXIO
-// when the service is gone.
+// kernel opens; init's an open file of devfs's, which REGISTER comes on; a
+// device's open handed on to its service with the reply's endpoint, which
+// the service answers on, ENXIO when the service is gone.
 static void openNode(Node& n, Request& r) {
     const uint32_t access = r.h.arg & O_ACCMODE;
     const bool reads = access != O_WRONLY;
@@ -237,11 +237,11 @@ static void openNode(Node& n, Request& r) {
     switch (n.kind) {
         case Kind::Controlling:
             return answer(r.reply(), opOk, openControlling);
-        case Kind::Registry:
-            answerStat(r.reply(), n);
-            watch(epoll, {r.reply(), false, reads, writes, &registryTag});
-            r.fds[r.count - 1] = -1;
+        case Kind::Registry: {
+            const Stat st = statOf(n);
+            answerOpen(epoll, r, 0, &st, sizeof st, &registryTag);
             return;
+        }
         default: {
             const Header h{opOpen, r.h.arg, r.h.uid, r.h.gid};
             const uint32_t mode = 0;
@@ -488,7 +488,7 @@ static void registerName(const Endpoint& e, Request& r) {
     answerStat(r.reply(), *n);
 }
 
-static bool handle(Endpoint& e, Request& r) {
+static void handle(Endpoint& e, Request& r) {
     if (e.of == &channelTag) {
         fsCall(r);
     } else if (e.of == &registryTag) {
@@ -505,7 +505,6 @@ static bool handle(Endpoint& e, Request& r) {
     } else {
         fail(r.reply(), EINVAL);
     }
-    return false;
 }
 
 // An endpoint closed: rootfs's channel, which ends devfs; a device's

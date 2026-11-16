@@ -263,7 +263,7 @@ static int linkError(const Node* dst, Name newName, const Header& h) {
 
 // A READ of a file of the image: its bytes at the offset, as many as
 // asked up to its end, from the image into the window.
-static bool readNode(Endpoint* ep, const Header& h, Body body, int fd) {
+static void readNode(Endpoint* ep, const Header& h, Body body, int fd) {
     Io io;
     if (!ioOf(h, body, io) || io.off > INT64_MAX) {
         return error(fd, EINVAL);
@@ -292,7 +292,7 @@ static bool readNode(Endpoint* ep, const Header& h, Body body, int fd) {
 }
 
 // A link's target, read from the image.
-static bool readlinkNode(const Node* n, int fd) {
+static void readlinkNode(const Node* n, int fd) {
     if (!S_ISLNK(n->mode)) {
         return error(fd, EINVAL);
     }
@@ -300,7 +300,6 @@ static bool readlinkNode(const Node* n, int fd) {
         return error(fd, EIO);
     }
     ok(fd, out, n->size);
-    return false;
 }
 
 // An entry of a READDIR's reply, at a position.
@@ -319,7 +318,7 @@ static bool addEntry(Assembly& a, const Node* n, u64 pos, const char* name, usiz
 // The entries after a position, in order, as many as one reply holds:
 // "." at 1, ".." at 2, the root's its own, and then the directory's, an
 // entry's position its place among them plus three.
-static bool readdirNode(const Node* node, Body body, int fd) {
+static void readdirNode(const Node* node, Body body, int fd) {
     if (!isDirNode(node)) {
         return error(fd, ENOTDIR);
     }
@@ -338,12 +337,11 @@ static bool readdirNode(const Node* node, Body body, int fd) {
         }
     }
     ok(fd, out, a.size);
-    return false;
 }
 
 // The path of a directory from the image's root, made from its end, at
 // the end of out: none for what is no directory.
-static bool pathOf(const Node* n, int fd) {
+static void pathOf(const Node* n, int fd) {
     if (!isDirNode(n)) {
         return error(fd, ENOENT);
     }
@@ -362,16 +360,15 @@ static bool pathOf(const Node* n, int fd) {
     } else {
         ok(fd, out + start, sizeof out - start);
     }
-    return false;
 }
 
 // ---- rootfs's calls, by node ------------------------------------------------------
 
-// An open of a node, on the reply's endpoint: read as its access mode
-// says and who asks may, never written, EROFS. A link is ELOOP, ENOTDIR
-// with O_DIRECTORY; a directory is rootfs's to open, EISDIR here.
-// Whether fd is kept.
-static bool openNode(const Node* n, u32 flags, const Header& h, int fd) {
+// An open of a node, answered on the reply's endpoint with a new open
+// file: read as its access mode says and who asks may, never written,
+// EROFS. A link is ELOOP, ENOTDIR with O_DIRECTORY; a directory is
+// rootfs's to open, EISDIR here.
+static void openNode(const Node* n, u32 flags, const Header& h, int fd) {
     const u32 access = flags & O_ACCMODE;
     const bool reads = access != O_WRONLY;
     const bool writes = access != O_RDONLY;
@@ -391,19 +388,15 @@ static bool openNode(const Node* n, u32 flags, const Header& h, int fd) {
     if (writes || truncates) {
         return error(fd, EROFS);
     }
-    listen(fd, Role::File, const_cast<Node*>(n), true, false);
-    const Stat st = statOf(n);
-    ok(fd, &st, sizeof st);
-    return true;
+    openFile(fd, statOf(n), const_cast<Node*>(n), true, false);
 }
 
-// A call of rootfs's on its channel, by node, answered on fd: whether
-// fd is kept.
-static bool fsCall(const Header& h, Body body, int fd) {
+// A call of rootfs's on its channel, by node, answered on fd.
+static void fsCall(const Header& h, Body body, int fd) {
     if (h.op == fsRoot) {
         const Stat st = statOf(&image.nodes[0]);
         ok(fd, &st, sizeof st);
-        return false;
+        return;
     }
     if (body.size() < 8) {
         return error(fd, EINVAL);
@@ -427,12 +420,12 @@ static bool fsCall(const Header& h, Body body, int fd) {
             }
             const Stat st = statOf(found);
             ok(fd, &st, sizeof st);
-            return false;
+            return;
         }
         case fsGetattr: {
             const Stat st = statOf(n);
             ok(fd, &st, sizeof st);
-            return false;
+            return;
         }
         case fsReadlink:
             return readlinkNode(n, fd);
@@ -480,7 +473,7 @@ static bool fsCall(const Header& h, Body body, int fd) {
         case fsStatfs: {
             const Statfs st = statfsOf();
             ok(fd, &st, sizeof st);
-            return false;
+            return;
         }
         case fsPath:
             return pathOf(n, fd);
@@ -491,9 +484,9 @@ static bool fsCall(const Header& h, Body body, int fd) {
     }
 }
 
-// A call on an open file, answered on fd: whether fd is kept. What the
-// image opens is open to read only, and changes nothing.
-static bool fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
+// A call on an open file, answered on fd. What the image opens is open
+// to read only, and changes nothing.
+static void fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
     const auto* node = static_cast<const Node*>(ep->node);
     switch (h.op) {
         case opRead:
@@ -505,12 +498,12 @@ static bool fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
         case opFstat: {
             const Stat st = statOf(node);
             ok(fd, &st, sizeof st);
-            return false;
+            return;
         }
         case opFstatfs: {
             const Statfs st = statfsOf();
             ok(fd, &st, sizeof st);
-            return false;
+            return;
         }
         case opFsync:
             return answer(fd, 0);

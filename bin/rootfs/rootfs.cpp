@@ -1462,12 +1462,26 @@ Answer Ask::await_resume() const noexcept {
 
 // ---- opens and calls handed on ---------------------------------------------------
 
-// The reply of a handle's open: its stat and its id.
-static void handleReply(int fd, const Stat& st, u64 id) {
+// The reply of a handle's FSTAT, and of its open, with the end of its
+// pair that goes to who asked: its stat and its id.
+static void handleReply(int fd, const Stat& st, u64 id, int end = -1) {
     u8 b[sizeof st + 8];
     memcpy(b, &st, sizeof st);
     memcpy(b + sizeof st, &id, 8);
-    ok(fd, b, sizeof b);
+    const iovec body = part(b, sizeof b);
+    reply(fd, opOk, 0, &body, 1, end >= 0 ? &end : nullptr, end >= 0 ? 1 : 0);
+}
+
+// A handle's open, answered on fd: a pair of ours, whose one end goes
+// with the OK to who asked, and whose other end is the handle.
+static void openHandle(int fd, const Place& at, bool opath) {
+    int pair[2];
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+        error(fd, errno);
+        return;
+    }
+    handleReply(fd, at.st, listenHandle(pair[0], at, opath)->id, pair[1]);
+    close(pair[1]);
 }
 
 // A call handed on to a file system, with the kernel's endpoint, which
@@ -1485,31 +1499,26 @@ static bool hand(const Place& p, const Header& h, u32 op, u32 arg, const void* a
     return false;
 }
 
-// An open of a place: a directory, and what O_PATH opens, is a handle
-// of ours, who asks may read it; a socket opens nothing, ENXIO; else
-// the file system opens it on the kernel's endpoint. Whether fd is kept.
-static bool openAt(const Place& at, int flags, const Header& h, int fd) {
+// An open of a place, answered on the kernel's endpoint: a directory, and
+// what O_PATH opens, is a handle of ours, who asks may read it; a socket
+// opens nothing, ENXIO; else the file system opens it, answering on the
+// kernel's endpoint itself.
+static void openAt(const Place& at, int flags, const Header& h, int fd) {
     const bool opath = (flags & O_PATH) != 0;
     const u32 access = flags & O_ACCMODE;
     if (!opath && S_ISSOCK(at.st.mode)) {
-        return error(fd, ENXIO);
+        error(fd, ENXIO);
+    } else if ((flags & O_DIRECTORY) != 0 && !isDir(at)) {
+        error(fd, ENOTDIR);
+    } else if (!opath && isDir(at) && access != O_WRONLY && !mayStat(at.st, h, 4)) {
+        error(fd, EACCES);
+    } else if (!opath && isDir(at) && (access != O_RDONLY || (flags & O_CREAT) != 0)) {
+        error(fd, EISDIR);
+    } else if (opath || isDir(at)) {
+        openHandle(fd, at, opath);
+    } else {
+        hand(at, h, fsOpen, u32(flags), nullptr, 0, {}, fd);
     }
-    if ((flags & O_DIRECTORY) != 0 && !isDir(at)) {
-        return error(fd, ENOTDIR);
-    }
-    if (!opath && isDir(at)) {
-        if (access != O_WRONLY && !mayStat(at.st, h, 4)) {
-            return error(fd, EACCES);
-        }
-        if (access != O_RDONLY || (flags & O_CREAT) != 0) {
-            return error(fd, EISDIR);
-        }
-    }
-    if (opath || isDir(at)) {
-        handleReply(fd, at.st, listenHandle(fd, at, opath)->id);
-        return true;
-    }
-    return hand(at, h, fsOpen, u32(flags), nullptr, 0, {}, fd);
 }
 
 // ---- the walk ---------------------------------------------------------------------
@@ -2008,11 +2017,10 @@ Walk::Step Walk::answered(const Answer& a) {
 // ---- the VFS's calls ---------------------------------------------------------------
 //
 // Each is a coroutine that takes the kernel's endpoint, which it closes
-// when it is done unless an endpoint of ours took it: walks the path as
-// a walk does, waiting for the file systems, and makes the last step as
-// Linux makes it, by the file system the place is of, which answers the
-// kernel itself. What a call needs of the request it copies before it
-// first waits.
+// when it is done: walks the path as a walk does, waiting for the file
+// systems, and makes the last step as Linux makes it, by the file system
+// the place is of, which answers the kernel itself. What a call needs of
+// the request it copies before it first waits.
 
 namespace {
     // The kernel's endpoint of a call.
@@ -2082,8 +2090,8 @@ static Task openCall(Header h, int fd, Place root, Place from, u32 mode, Name pa
     if (w.kind != lastName) {
         if ((flags & O_CREAT) != 0) {
             error(fd, EISDIR);
-        } else if (openAt(w.target, flags, h, fd)) {
-            r.fd = -1;
+        } else {
+            openAt(w.target, flags, h, fd);
         }
         co_return;
     }
@@ -2110,9 +2118,7 @@ static Task openCall(Header h, int fd, Place root, Place from, u32 mode, Name pa
         error(fd, (fl & O_DIRECTORY) != 0 ? ENOTDIR : ELOOP);
         co_return;
     }
-    if (openAt(w.target, fl, h, fd)) {
-        r.fd = -1;
-    }
+    openAt(w.target, fl, h, fd);
 }
 
 // STAT: the metadata of what the path names, or of a last link itself.

@@ -117,11 +117,13 @@ static void probe(const char* name, int ready) {
     }
 }
 
-static bool handle(Endpoint& e, Request& r) {
+static int epoll = -1;
+
+static void handle(Endpoint& e, Request& r) {
     const Stat st = partitionStat();
     if (e.channel) {
-        answer(r.reply(), opOk, 0, &st, sizeof st);
-        return true;
+        answerOpen(epoll, r, 0, &st, sizeof st, e.of);
+        return;
     }
     switch (r.h.op) {
         case opRead:
@@ -144,7 +146,6 @@ static bool handle(Endpoint& e, Request& r) {
         default:
             fail(r.reply(), EINVAL);
     }
-    return false;
 }
 
 int gptMain(int argc, char** argv) {
@@ -161,7 +162,7 @@ int gptMain(int argc, char** argv) {
     if (device < 0) {
         fatal("gpt: %s: %s", argv[at], strerror(errno));
     }
-    const int epoll = epoll_create1(EPOLL_CLOEXEC);
+    epoll = epoll_create1(EPOLL_CLOEXEC);
     if (epoll < 0) {
         fatal("gpt: epoll_create1: errno %d", errno);
     }

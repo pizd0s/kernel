@@ -95,32 +95,18 @@ func (p *Process) vfsAt(dirfd int32, path string) (*remoteDir, error) {
 }
 
 // vfs is a call of the VFS's on the handle: the root's id, then the body,
-// the files with it. The reply's packet and its endpoint come back, which
-// an open keeps.
-func (d *remoteDir) vfs(p *Process, op, arg uint32, body []byte, files ...File) (packet, *pairEnd, error) {
+// the files with it; the reply's packet.
+func (d *remoteDir) vfs(p *Process, op, arg uint32, body []byte, files ...File) (packet, error) {
 	root, err := p.rootID(d)
 
 	if err != nil {
-		return packet{}, nil, err
+		return packet{}, err
 	}
 
 	b := make([]byte, 8, 8+len(body))
 	binary.LittleEndian.PutUint64(b, root)
 
 	return d.call(p, op, arg, append(b, body...), files)
-}
-
-// vfsDone is a call of the VFS's that opens nothing: its reply's packet.
-func (d *remoteDir) vfsDone(p *Process, op, arg uint32, body []byte, files ...File) (packet, error) {
-	pk, mine, err := d.vfs(p, op, arg, body, files...)
-
-	if err != nil {
-		return packet{}, err
-	}
-
-	mine.unref()
-
-	return pk, nil
 }
 
 func flagOf(follow bool) uint32 {
@@ -131,9 +117,9 @@ func flagOf(follow bool) uint32 {
 	return atSymlinkNofollow
 }
 
-// openPath opens what a path names, as open(2) does: a file system's open
-// file, an object of the kernel, a FIFO's pipe, or a handle; /dev/tty is
-// the caller's controlling terminal (kernel_terminal.go).
+// openPath opens what a path names, as open(2) does: a server's open
+// file, whose endpoint the OK brings, a FIFO's pipe, or a handle; /dev/tty
+// is the caller's controlling terminal (kernel_terminal.go).
 func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (File, error) {
 	if p.chaosFail("openat") {
 		return nil, syscall.EIO
@@ -141,37 +127,45 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (F
 
 	body := make([]byte, 4, 4+len(path))
 	binary.LittleEndian.PutUint32(body, mode)
-	pk, mine, err := d.vfs(p, vOpen, uint32(flags), append(body, path...))
+	pk, err := d.vfs(p, vOpen, uint32(flags), append(body, path...))
 
 	if err != nil {
 		return nil, err
 	}
 
 	if pk.arg&openControlling != 0 {
-		mine.unref()
+		dropFiles(pk.files)
 
 		return p.openControlling(flags)
-	}
-
-	if len(pk.files) > 0 {
-		// The file itself: an object of the kernel the server hands out.
-		mine.unref()
-
-		return pk.files[0], nil
 	}
 
 	var st syscall.Stat_t
 
 	if err := decodeStat(pk.data, &st); err != nil {
-		mine.unref()
+		dropFiles(pk.files)
 
 		return nil, err
 	}
 
+	handle := len(pk.data) >= remoteStat+8
+
+	if !handle && st.Mode&syscall.S_IFMT == syscall.S_IFIFO && flags&oPath == 0 {
+		// The VFS said who may open it; its pipe is the kernel's.
+		dropFiles(pk.files)
+
+		return p.openFifo(&st, flags)
+	}
+
+	end, err := openedEnd(pk)
+
+	if err != nil {
+		return nil, err
+	}
+
 	switch {
-	case len(pk.data) >= remoteStat+8:
+	case handle:
 		dir := &remoteDir{mode: st.Mode}
-		dir.opened(mine, pk.arg, flags)
+		dir.opened(end, pk.arg, flags)
 		dir.dev.Store(st.Dev)
 		dir.ino.Store(st.Ino)
 		dir.known.Store(true)
@@ -179,19 +173,14 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (F
 
 		return dir, nil
 	case flags&syscall.O_DIRECTORY != 0:
-		mine.unref()
+		end.unref()
 
 		return nil, syscall.ENOTDIR
-	case st.Mode&syscall.S_IFMT == syscall.S_IFIFO && flags&oPath == 0:
-		// The VFS said who may open it; its pipe is the kernel's.
-		mine.unref()
-
-		return p.openFifo(&st, flags)
 	}
 
 	if pk.arg&openTerminal != 0 {
 		t := &remoteTerminal{dev: st.Dev, ino: st.Ino}
-		t.opened(mine, pk.arg, flags)
+		t.opened(end, pk.arg, flags)
 
 		if flags&syscall.O_NOCTTY == 0 {
 			p.acquire(t)
@@ -201,21 +190,21 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (F
 	}
 
 	f := &remoteFile{}
-	f.opened(mine, pk.arg, flags)
+	f.opened(end, pk.arg, flags)
 
 	return f, nil
 }
 
-// opened makes the node the open file an OPEN's OK, its arg ok, gave on
-// mine, opened with flags.
-func (n *remoteNode) opened(mine *pairEnd, ok uint32, flags int) {
-	n.end, n.accmode, n.tells = mine, flags&3, ok&openTells != 0
+// opened makes the node the open file whose endpoint an OPEN's OK, its
+// arg ok, brought, opened with flags.
+func (n *remoteNode) opened(end *pairEnd, ok uint32, flags int) {
+	n.end, n.accmode, n.tells = end, flags&3, ok&openTells != 0
 	n.refs.Store(1)
 	n.append.Store(flags&syscall.O_APPEND != 0)
 	n.nonblock.Store(flags&syscall.O_NONBLOCK != 0)
 
 	if n.tells {
-		mine.from.latest.Store(true)
+		end.from.latest.Store(true)
 	}
 }
 
@@ -232,7 +221,7 @@ func (d *remoteDir) statPath(p *Process, path string, follow bool, st *syscall.S
 		arg = 1
 	}
 
-	pk, err := d.vfsDone(p, vStat, arg, []byte(path))
+	pk, err := d.vfs(p, vStat, arg, []byte(path))
 
 	if err != nil {
 		return err
@@ -242,7 +231,7 @@ func (d *remoteDir) statPath(p *Process, path string, follow bool, st *syscall.S
 }
 
 func (d *remoteDir) readlinkPath(p *Process, path string) (string, error) {
-	pk, err := d.vfsDone(p, vReadlink, 0, []byte(path))
+	pk, err := d.vfs(p, vReadlink, 0, []byte(path))
 
 	if err != nil {
 		return "", err
@@ -260,7 +249,7 @@ func (d *remoteDir) makePath(p *Process, op, mode uint32, target, path string) e
 		body = append(append([]byte(target), 0), path...)
 	}
 
-	_, err := d.vfsDone(p, op, mode, body)
+	_, err := d.vfs(p, op, mode, body)
 
 	return err
 }
@@ -272,7 +261,7 @@ func (d *remoteDir) unlinkPath(p *Process, path string, dir bool) error {
 		flags = atRemovedir
 	}
 
-	_, err := d.vfsDone(p, vUnlink, flags, []byte(path))
+	_, err := d.vfs(p, vUnlink, flags, []byte(path))
 
 	return err
 }
@@ -299,7 +288,7 @@ func (d *remoteDir) renamePath(p *Process, old string, to *remoteDir, new string
 		return err
 	}
 
-	_, err = d.vfsDone(p, vRename, 0, body)
+	_, err = d.vfs(p, vRename, 0, body)
 
 	return err
 }
@@ -317,7 +306,7 @@ func (d *remoteDir) linkPath(p *Process, old string, to *remoteDir, new string, 
 		arg = 1
 	}
 
-	_, err = d.vfsDone(p, vLink, arg, body)
+	_, err = d.vfs(p, vLink, arg, body)
 
 	return err
 }
@@ -325,7 +314,7 @@ func (d *remoteDir) linkPath(p *Process, old string, to *remoteDir, new string, 
 func (d *remoteDir) chmodPath(p *Process, path string, mode uint32, follow bool) error {
 	body := make([]byte, 4, 4+len(path))
 	binary.LittleEndian.PutUint32(body, flagOf(follow))
-	_, err := d.vfsDone(p, vChmod, mode, append(body, path...))
+	_, err := d.vfs(p, vChmod, mode, append(body, path...))
 
 	return err
 }
@@ -335,7 +324,7 @@ func (d *remoteDir) chownPath(p *Process, path string, uid, gid int, follow bool
 	binary.LittleEndian.PutUint32(body, flagOf(follow))
 	binary.LittleEndian.PutUint32(body[4:], uint32(uid))
 	binary.LittleEndian.PutUint32(body[8:], uint32(gid))
-	_, err := d.vfsDone(p, vChown, 0, append(body, path...))
+	_, err := d.vfs(p, vChown, 0, append(body, path...))
 
 	return err
 }
@@ -344,7 +333,7 @@ func (d *remoteDir) utimesPath(p *Process, path string, ts []syscall.Timespec, f
 	when, times := whens(ts)
 	body := make([]byte, 4, 4+len(times)+len(path))
 	binary.LittleEndian.PutUint32(body, flagOf(follow))
-	_, err := d.vfsDone(p, vUtimes, when, append(append(body, times...), path...))
+	_, err := d.vfs(p, vUtimes, when, append(append(body, times...), path...))
 
 	return err
 }
@@ -352,13 +341,13 @@ func (d *remoteDir) utimesPath(p *Process, path string, ts []syscall.Timespec, f
 func (d *remoteDir) truncatePath(p *Process, path string, size int64) error {
 	body := make([]byte, 8, 8+len(path))
 	binary.LittleEndian.PutUint64(body, uint64(size))
-	_, err := d.vfsDone(p, vTruncate, 0, append(body, path...))
+	_, err := d.vfs(p, vTruncate, 0, append(body, path...))
 
 	return err
 }
 
 func (d *remoteDir) statfsPath(p *Process, path string, st *syscall.Statfs_t) error {
-	pk, err := d.vfsDone(p, vStatfs, 0, []byte(path))
+	pk, err := d.vfs(p, vStatfs, 0, []byte(path))
 
 	if err != nil {
 		return err
@@ -370,7 +359,7 @@ func (d *remoteDir) statfsPath(p *Process, path string, st *syscall.Statfs_t) er
 // realpathOf is the path from the root of what a path names, with no
 // ".", ".." or link in it.
 func (d *remoteDir) realpathOf(p *Process, path string) (string, error) {
-	pk, err := d.vfsDone(p, vRealpath, 0, []byte(path))
+	pk, err := d.vfs(p, vRealpath, 0, []byte(path))
 
 	if err != nil {
 		return "", err
@@ -381,7 +370,7 @@ func (d *remoteDir) realpathOf(p *Process, path string) (string, error) {
 
 // path is the handle's path from the root of the process.
 func (d *remoteDir) path(p *Process) (string, error) {
-	pk, err := d.vfsDone(p, vPath, 0, nil)
+	pk, err := d.vfs(p, vPath, 0, nil)
 
 	if err != nil {
 		return "", err
@@ -397,12 +386,12 @@ func (d *remoteDir) mountPath(p *Process, target, source string, conn *pairEnd) 
 	body := append(append([]byte(target), 0), source...)
 
 	if conn != nil {
-		_, err := d.vfsDone(p, vMount, 0, body, conn)
+		_, err := d.vfs(p, vMount, 0, body, conn)
 
 		return err
 	}
 
-	_, err := d.vfsDone(p, vMount, 0, body)
+	_, err := d.vfs(p, vMount, 0, body)
 
 	return err
 }
@@ -411,20 +400,18 @@ func (d *remoteDir) mountPath(p *Process, target, source string, conn *pairEnd) 
 // which holds what the name of a socket stands for: a listener, or the
 // mouth of a datagram socket (kernel_unix.go).
 func (d *remoteDir) bindPath(p *Process, path string, mode uint32, held File) error {
-	_, err := d.vfsDone(p, vBind, mode, []byte(path), held)
+	_, err := d.vfs(p, vBind, mode, []byte(path), held)
 
 	return err
 }
 
 // connectPath is what the socket node a path names holds.
 func (d *remoteDir) connectPath(p *Process, path string) (File, error) {
-	pk, mine, err := d.vfs(p, vConnect, 0, []byte(path))
+	pk, err := d.vfs(p, vConnect, 0, []byte(path))
 
 	if err != nil {
 		return nil, err
 	}
-
-	mine.unref()
 
 	if len(pk.files) == 0 {
 		return nil, syscall.ECONNREFUSED
@@ -434,7 +421,7 @@ func (d *remoteDir) connectPath(p *Process, path string) (File, error) {
 }
 
 func (d *remoteDir) unmountPath(p *Process, path string, flags uint32) error {
-	_, err := d.vfsDone(p, vUnmount, flags, []byte(path))
+	_, err := d.vfs(p, vUnmount, flags, []byte(path))
 
 	return err
 }

@@ -150,14 +150,14 @@ namespace tools {
     iovec part(const void* data, usize size);
     void ok(int fd, const void* data = nullptr, usize size = 0);
 
-    // A reply of an error: the reply's endpoint is not kept.
-    bool error(int fd, int e);
+    // A reply of an error.
+    void error(int fd, int e);
 
     // The reply of a READ: how many bytes went into its window.
-    bool readCount(int fd, usize count);
+    void readCount(int fd, usize count);
 
     // The reply of a call that changes something: OK, or the error.
-    bool answer(int fd, int e);
+    void answer(int fd, int e);
 
     // The memfd of the memory a READ fills or a WRITE takes from: the
     // first of the request's descriptors, before its reply endpoint; -1
@@ -201,7 +201,7 @@ namespace tools {
     // flock's lock of an endpoint, me, on a node: shared, which no other
     // endpoint's exclusive one is in the way of, exclusive, which no other
     // endpoint's lock is, or none.
-    bool flockNode(Locks& locks, int me, const Header& h, int fd);
+    void flockNode(Locks& locks, int me, const Header& h, int fd);
 
     // fcntl's locks of an endpoint, me, on a range of a node, to the end
     // and past with a length of 0. With get, the first lock of another
@@ -209,7 +209,7 @@ namespace tools {
     // lock is set in place of what the endpoint held of the range, unless
     // another endpoint's lock is in the way: EAGAIN; F_UNLCK lets the
     // range go.
-    bool lockNode(Locks& locks, int me, const Header& h, Body body, int fd);
+    void lockNode(Locks& locks, int me, const Header& h, Body body, int fd);
 
     // What an endpoint that closes, me, held of the locks of a node goes.
     void unlock(Locks& locks, int me);
@@ -235,22 +235,28 @@ namespace tools {
     };
 
     // A file system's calls: rootfs's on its channel, by node, and those
-    // on an open file, each answered on fd, whether they keep it; and what
-    // is the file system's of an endpoint that closes.
-    using FsCall = bool (*)(const Header& h, Body body, int fd);
-    using FileCall = bool (*)(Endpoint* ep, const Header& h, Body body, int fd);
+    // on an open file, each answered on fd; and what is the file system's
+    // of an endpoint that closes.
+    using FsCall = void (*)(const Header& h, Body body, int fd);
+    using FileCall = void (*)(Endpoint* ep, const Header& h, Body body, int fd);
     using Closing = void (*)(Endpoint* ep);
 
     // An endpoint of a role on a descriptor of ours, an open file's open on
     // a node to read, to write or both.
     Endpoint* listen(int fd, Role role, void* node, bool reads, bool writes);
 
+    // Answers an open on fd with a new open file of node: a pair of ours,
+    // whose one end goes with the OK and the stat to who asked, and whose
+    // other end, an endpoint of the loop's, to read, to write or both, is
+    // the open file. That endpoint, or none, the error answered.
+    Endpoint* openFile(int fd, const Stat& st, void* node, bool reads, bool writes);
+
     // Serves the endpoints until the last of them closes: rootfs's channel,
     // and the open files after it. A question of rootfs's, which brings no
     // endpoint, is answered on its channel, in order; a call brings the
-    // reply's endpoint, an open keeps it as the open file's. The other
-    // descriptors of a request close after it, but for those the call set
-    // to -1.
+    // reply's endpoint, and an open the reply's too, which its open file
+    // goes on (openFile). The descriptors of a request close after it, but
+    // for those the call set to -1.
     void serve(FsCall fsCall, FileCall fileCall, Closing closing);
 }
 
