@@ -1039,7 +1039,7 @@ static void openNode(Node* n, u32 flags, bool made, const Header& h, int fd) {
         resize(tree, n, 0);
         touch(n);
     }
-    if (openFile(fd, statOf(tree, n), n, reads, writes)) {
+    if (openFile(fd, flags, n, reads, writes)) {
         ++n->opens;
     }
 }

@@ -39,6 +39,7 @@ const (
 	sizeofRlimit      = 16  // struct rlimit
 	sizeofRusage      = 88  // struct rusage
 	sizeofSchedParam  = 4   // struct sched_param
+	sizeofServed      = 32  // struct served
 	sizeofServent     = 16  // struct servent
 	sizeofSigaction   = 24  // struct sigaction
 	sizeofSiginfo     = 36  // siginfo_t

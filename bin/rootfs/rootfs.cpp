@@ -700,19 +700,20 @@ static Endpoint* listen(int fd, Role role) {
 static void hold(const Place& p);
 static void letGo(Mount* m);
 
-// A handle at a place, its id the next; O_PATH's reads nothing and
-// changes nothing.
-static Endpoint* listenHandle(int fd, const Place& p, bool opath) {
+// A handle of id at a place, on our end of its served pair; O_PATH's
+// reads nothing and changes nothing.
+static Endpoint* listenHandle(int fd, const Place& p, bool opath, u64 id) {
     Endpoint* ep = listen(fd, Role::Handle);
     ep->at = p;
     ep->at.fresh = false; // the stat is the open's, not a later call's
     ep->reads = !opath;
     ep->writes = !opath;
-    ep->id = ++handleIds;
+    ep->id = id;
     ++p.m->refs;
     handles.insert(hashId(ep->id), ep);
     return ep;
 }
+
 
 static void forget(Endpoint* ep);
 
@@ -1462,26 +1463,32 @@ Answer Ask::await_resume() const noexcept {
 
 // ---- opens and calls handed on ---------------------------------------------------
 
-// The reply of a handle's FSTAT, and of its open, with the end of its
-// pair that goes to who asked: its stat and its id.
-static void handleReply(int fd, const Stat& st, u64 id, int end = -1) {
-    u8 b[sizeof st + 8];
-    memcpy(b, &st, sizeof st);
-    memcpy(b + sizeof st, &id, 8);
-    const iovec body = part(b, sizeof b);
-    reply(fd, opOk, 0, &body, 1, end >= 0 ? &end : nullptr, end >= 0 ? 1 : 0);
+// A new handle at a place: a served pair, of a directory's handle or of
+// what O_PATH opened that is no directory, its id the next; our end is
+// the handle, the other end, the kernel's, -1 when there is no pair.
+static int makeHandle(const Place& at, int flags, int& theirs) {
+    const bool opath = (flags & O_PATH) != 0;
+    const u64 id = ++handleIds;
+    const served what{u32(isDir(at) ? SERVED_DIR : SERVED_PATH), u32(flags) & (O_ACCMODE | O_APPEND | O_NONBLOCK), 0, 0, id};
+    int pair[2];
+    if (servedpair(&what, pair) != 0) {
+        return -1;
+    }
+    listenHandle(pair[0], at, opath, id);
+    theirs = pair[1];
+    return 0;
 }
 
-// A handle's open, answered on fd: a pair of ours, whose one end goes
-// with the OK to who asked, and whose other end is the handle.
-static void openHandle(int fd, const Place& at, bool opath) {
-    int pair[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+// A handle's open, answered on fd: a new handle, whose served pair's
+// second end goes with the OK to who asked.
+static void openHandle(int fd, const Place& at, int flags) {
+    int theirs;
+    if (makeHandle(at, flags, theirs) != 0) {
         error(fd, errno);
         return;
     }
-    handleReply(fd, at.st, listenHandle(pair[0], at, opath)->id, pair[1]);
-    close(pair[1]);
+    reply(fd, opOk, 0, nullptr, 0, &theirs, 1);
+    close(theirs);
 }
 
 // A call handed on to a file system, with the kernel's endpoint, which
@@ -1515,7 +1522,7 @@ static void openAt(const Place& at, int flags, const Header& h, int fd) {
     } else if (!opath && isDir(at) && (access != O_RDONLY || (flags & O_CREAT) != 0)) {
         error(fd, EISDIR);
     } else if (opath || isDir(at)) {
-        openHandle(fd, at, opath);
+        openHandle(fd, at, flags);
     } else {
         hand(at, h, fsOpen, u32(flags), nullptr, 0, {}, fd);
     }
@@ -2645,13 +2652,12 @@ static Task connectCall(Header h, int fd, Place root, Place from, Name path) {
 }
 
 // FSTAT of a handle: the stat of its place, which its file system
-// tells, and the handle's id after it, which the kernel learns the id
-// of a handle it did not open by.
-static Task fstatCall(Header h, int fd, Place at, u64 id) {
+// tells.
+static Task fstatCall(Header h, int fd, Place at) {
     Reply r{fd};
     Held here(at);
     if (const Known* k = knownAt(here.at); k && k->whole) {
-        handleReply(fd, k->st, id);
+        ok(fd, &k->st, sizeof k->st);
         co_return;
     }
     const Answer a = co_await asking(here.at, h, fsGetattr, {});
@@ -2660,7 +2666,7 @@ static Task fstatCall(Header h, int fd, Place at, u64 id) {
         error(fd, a.error != 0 ? a.error : EIO);
     } else {
         learn(here.at, st, a.current);
-        handleReply(fd, st, id);
+        ok(fd, &st, sizeof st);
     }
 }
 
@@ -2746,7 +2752,7 @@ static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
     const bool opath = !ep->reads;
     switch (h.op) {
         case opFstat:
-            fstatCall(h, fd, at, ep->id);
+            fstatCall(h, fd, at);
             return true;
         case opFstatfs:
             return hand(at, h, fsStatfs, 0, nullptr, 0, {}, fd);
@@ -3227,8 +3233,7 @@ static Task boot() {
     int tmp[2];
     int dev[2];
     int image[2];
-    int roots[2];
-    int* pairs[] = {ends, tmp, dev, image, roots};
+    int* pairs[] = {ends, tmp, dev, image};
     for (int* pair : pairs) {
         if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
             fatal("rootfs: socketpair: errno %d", errno);
@@ -3292,8 +3297,9 @@ static Task boot() {
         }
         rootMount->fs->cached = !nocacheIn(a);
     }
-    listenHandle(roots[0], rootOf(rootMount), false);
-    rootEnd = roots[1];
+    if (makeHandle(rootOf(rootMount), O_RDONLY, rootEnd) != 0) {
+        fatal("rootfs: servedpair: errno %d", errno);
+    }
 
     const struct {
         const char* name;

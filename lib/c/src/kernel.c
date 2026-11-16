@@ -47,6 +47,7 @@
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/served.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -400,6 +401,7 @@ KERNEL_SIZED(int, pselect, (int a, fd_set* __restrict b, fd_set* __restrict c, f
 /* sys/socket.h */
 KERNEL(int, socket, (int a, int b, int c), (a, b, c))
 KERNEL(int, socketpair, (int a, int b, int c, int d[2]), (a, b, c, d))
+KERNEL_SIZED(int, servedpair, (const struct served* a, int b[2]), (const struct served* a, size_t a_size, int b[2]), (a, sizeof(struct served), b))
 KERNEL(int, bind, (int a, const struct sockaddr* b, socklen_t c), (a, b, c))
 KERNEL(int, connect, (int a, const struct sockaddr* b, socklen_t c), (a, b, c))
 KERNEL(int, listen, (int a, int b), (a, b))

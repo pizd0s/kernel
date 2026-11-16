@@ -18,11 +18,13 @@
 // An endpoint is one end of a seqpacket pair: whose holds the other end
 // answers on it. Every request brings a fresh endpoint, last among its
 // descriptors, which the reply goes on. An open file is a pair the server
-// makes as it opens: it keeps one end, the open file's endpoint, and the
-// OPEN's OK brings the other, fds[0], to who asked. A server may hand a
-// request on, its descriptors with it, to another, which answers on that
-// endpoint: the one that handed it on is out of the way from then on. A
-// server that is gone is EIO.
+// makes as it opens, with servedpair (lib/c's sys/served.h): it keeps the
+// first end, a plain one the requests come on, and the second, born the
+// open file the server describes, a file, a terminal's, a handle of a
+// directory or of what O_PATH opened, the OPEN's OK brings to who asked,
+// fds[0]. A server may hand a request on, its descriptors with it, to
+// another, which answers on that endpoint: the one that handed it on is
+// out of the way from then on. A server that is gone is EIO.
 //
 // A READ or a WRITE, which waits as long as its file says, may hear
 // CANCEL on its endpoint from who asked, whose caller gave up for a
@@ -41,14 +43,13 @@
 //   opened; the root, the working directory and the directory descriptors
 //   of a process are handles. A path walks from the handle, or from the
 //   root when it is absolute: root is the id of the process's root, which
-//   its handle's open gave. A call follows a last link as Linux's does,
-//   and checks what Linux checks before the file system.
+//   rootfs gave the handle as it made it (struct served's id). A call
+//   follows a last link as Linux's does, and checks what Linux checks
+//   before the file system.
 //     OPEN      arg flags   root u64, mode u32, path
-//                                         OK stat [id u64], fds[0] the
-//                                         open file's endpoint, or with id
-//                                         a handle's. A FIFO is its stat,
-//                                         no endpoint: the kernel makes its
-//                                         pipe
+//                                         OK, fds[0] the open file or the
+//                                         handle; a FIFO's OK is its stat
+//                                         alone: the kernel makes its pipe
 //     STAT      arg follow  root u64, path    OK stat
 //     READLINK              root u64, path    OK target
 //     MKDIR     arg mode    root u64, path
@@ -80,8 +81,7 @@
 //                                         makes a name
 //     CONNECT               root u64, path    OK, fds[0] the listener the
 //                                         socket node holds
-//   and an open file's calls but READ and WRITE: a handle's FSTAT has its
-//   id after the stat.
+//   and an open file's calls but READ and WRITE.
 //
 //   A file system's, on its channel, by node: a node is its inode number,
 //   the root's in the stat its connection answered, 1 for a file system
@@ -94,12 +94,12 @@
 //     GETATTR               node u64          OK stat
 //     READLINK              node u64          OK target
 //     READDIR               node u64, after u64   as an open file's
-//     OPEN      arg flags   node u64          OK stat, fds[0] the open file's
-//                                         endpoint, but a FIFO's
-//     CREATE    arg flags   node u64, mode u32, name   OK stat, fds[0] the
-//                                         endpoint of the open file of the
-//                                         name, made when it is not there;
-//                                         with O_EXCL EEXIST when it is
+//     OPEN      arg flags   node u64          OK, fds[0] the open file; a
+//                                         FIFO's OK is its stat alone
+//     CREATE    arg flags   node u64, mode u32, name   OK, fds[0] the open
+//                                         file of the name, made when it is
+//                                         not there; with O_EXCL EEXIST
+//                                         when it is
 //     MKDIR     arg mode    node u64, name
 //     MKNOD     arg mode    node u64, name    a FIFO or a regular file
 //     SYMLINK               node u64, target 0 name
@@ -146,9 +146,9 @@
 //                                         start u64 len u64
 //     CANCEL                              on a request's endpoint, which
 //                                         the server keeps while it waits
-//   and from the server, on the endpoint of an open file whose OPEN's OK
-//   had openTells in arg, the file's readiness, which select, poll and
-//   epoll find: until the first, nothing is ready; the last counts.
+//   and from the server, on its end of an open file it made telling
+//   (SERVED_TELLS), the file's readiness, which select, poll and epoll
+//   find: until the first, nothing is ready; the last counts.
 //     READY     arg events  foreground u32, flags u32
 //                                         events: POLLIN, POLLPRI, POLLOUT,
 //                                         POLLERR and POLLHUP, Linux's bits;
@@ -160,8 +160,8 @@
 //                                         after the OK, and before the
 //                                         answer to a call that changed them
 //
-//   A terminal's, on an open file whose OPEN's OK had openTerminal in arg:
-//   the server keeps all of the terminal, its settings and its discipline
+//   A terminal's, on a terminal's open file (SERVED_TERMINAL): the server
+//   keeps all of the terminal, its settings and its discipline
 //   (bin/tools/pty.cpp). termios is lib/c's struct termios, winsize its
 //   struct winsize; a master's are its slave's, as Linux's are.
 //     TCGETATTR                           OK termios
@@ -192,13 +192,11 @@
 //                                         EPERM when it controls another;
 //                                         sid 0: it controls none now
 //     OPEN      arg flags                 on a slave's: another open file of
-//                                         the slave, OK as its device's
-//                                         OPEN's
+//                                         the slave, as its device's OPEN
 //
 //   A device's service's, on the channel devfs has of it, and on
 //   /dev/init:
-//     OPEN      arg flags   mode u32      OK stat, fds[0] the open file's
-//                                         endpoint
+//     OPEN      arg flags   mode u32      OK, fds[0] the open file
 //     OPEN of /dev/tty, devfs's, is the opener's controlling terminal: its
 //     OK has openControlling, and the kernel opens that terminal instead,
 //     with an OPEN on the open file it keeps of it, a slave's.
@@ -235,6 +233,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/served.h>
 #include <sys/types.h>
 
 struct iovec;
@@ -325,11 +324,8 @@ enum : uint32_t {
 constexpr size_t maxFds = 4;
 constexpr uint32_t noId = 0xffffffff; // a uid or gid CHOWN keeps
 constexpr uint32_t fsNocache = 1;     // ROOT's flags: the file system changes by itself
-// An OPEN's OK's arg: the open file tells its readiness (READY); it is a
-// terminal's, which takes a terminal's calls; the open is of the opener's
-// controlling terminal, which the kernel opens.
-constexpr uint32_t openTells = 1;
-constexpr uint32_t openTerminal = 2;
+// An OPEN's OK's arg: the open is of the opener's controlling terminal,
+// which the kernel opens.
 constexpr uint32_t openControlling = 4;
 // READY's flags: the terminal's TOSTOP.
 constexpr uint32_t readyTostop = 1;

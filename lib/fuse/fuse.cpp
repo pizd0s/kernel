@@ -339,8 +339,7 @@ static void openFile(Request& r, char* path, uint32_t mode, bool creates) {
     Open* o = listed(false, path);
     o->opened = opened;
     o->info = info;
-    const Stat out = protocolStat(st);
-    if (!answerOpen(epoll, r, 0, &out, sizeof out, o)) {
+    if (!answerOpen(epoll, r, {SERVED_FILE, 0, 0, 0, 0}, o)) {
         unlisted(o);
     }
 }

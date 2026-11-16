@@ -11,10 +11,12 @@ import (
 
 // A server's files: the kernel speaks the protocol of
 // lib/protocol/protocol.h here for the POSIX calls of a process, as the
-// libc of the process would. An open file is one end of a seqpacket pair
-// (kernel_endpoint.go), whose server holds the other and answers on it: a
-// file system's, a device's service's, or rootfs's for a handle, which the
-// calls with a path go to whole (kernel_vfs.go).
+// libc of the process would. An open file is the second end of a pair its
+// server made with servedpair, born what the server described: a file, a
+// terminal's (kernel_terminal.go), a handle of a directory of rootfs's,
+// which the calls with a path go to whole (kernel_vfs.go), or one of what
+// O_PATH opened that is no directory; the server holds the first end and
+// answers on it.
 //
 // A packet is a header and a body; files ride with it.
 //
@@ -25,19 +27,18 @@ import (
 //	its modes say, gid their group (permits). A reply's are zero.
 //
 //	Every request brings a fresh endpoint, last among its files: the reply
-//	comes on it. An open's OK brings the open file's endpoint, the end of
-//	a pair the server made, whose other end it keeps. A READ or a WRITE
-//	brings before it a memfd of the memory the process reads into or
-//	writes from (kernel_memfd.go): the server writes the bytes there or
-//	reads them from there itself, from the memfd's byte woff on, one copy,
-//	as many as asked, and closes it as it answers. A server that is gone
-//	is EIO. An open file's calls:
+//	comes on it. An open's OK brings the open file, the second end of a
+//	pair the server made with servedpair, whose first end it keeps. A READ
+//	or a WRITE brings before it a memfd of the memory the process reads
+//	into or writes from (kernel_memfd.go): the server writes the bytes
+//	there or reads them from there itself, from the memfd's byte woff on,
+//	one copy, as many as asked, and closes it as it answers. A server that
+//	is gone is EIO. An open file's calls:
 //	  READ      arg len   io               OK count u32
 //	  WRITE     arg len   io               OK count u32 at u64, where an
 //	                                       append went
 //	  READDIR             after u64        OK (ino u64, pos u64, type u8, name, 0)*
-//	  FSTAT                                OK stat; a handle's that rootfs
-//	                                       answers itself: stat, id u64
+//	  FSTAT                                OK stat
 //	  FCHMOD    arg mode
 //	  FCHOWN              uid u32 gid u32
 //	  FUTIMES   arg when  atime u64 mtime u64   when: 2 atime now, 4 mtime
@@ -53,10 +54,10 @@ import (
 //	                      keeps while it waits, from the kernel (waiting):
 //	                      the server answers that request now, with the
 //	                      count so far or ERR EINTR
-//	  READY     arg events                 from the server, on the endpoint
-//	                                       of an open file whose OPEN's OK
-//	                                       had openTells in arg: what poll
-//	                                       finds of it now, the last counts
+//	  READY     arg events                 from the server, on its end of an
+//	                                       open file it made telling
+//	                                       (servedTells): what poll finds
+//	                                       of it now, the last counts
 //	replies: OK, ERR with arg the errno
 //	io { off u64, woff u32, flags u32 }   flags: ioAppend, a WRITE at the
 //	       end the file has, O_APPEND's; ioNonblock, answered at once, EAGAIN
@@ -91,11 +92,16 @@ const (
 	rReady
 )
 
-// An OPEN's OK's arg: the open file tells its readiness. READY's flags:
-// the terminal's TOSTOP.
+// The kinds of struct served (lib/c's sys/served.h), what a server's pair
+// for what it serves is born, and its server's telling of its readiness.
+// READY's flags: the terminal's TOSTOP.
 const (
-	openTells   = 1
-	readyTostop = 1
+	servedFile     = 1
+	servedTerminal = 2
+	servedDir      = 3
+	servedPath     = 4
+	servedTells    = 16
+	readyTostop    = 1
 )
 
 // The flags of an io.
@@ -146,15 +152,23 @@ type remoteFile struct {
 	remoteNode
 }
 
-// remoteDir is a handle of rootfs's (kernel_vfs.go): a directory of the
-// VFS's, or what O_PATH opened, of mode; dev and ino are its, once known,
-// and its id.
-type remoteDir struct {
+// remoteHandle is a handle of rootfs's, which the calls with a path go to
+// whole (kernel_vfs.go); id is its, which a call names the root by.
+type remoteHandle struct {
 	remoteNode
-	known    atomic.Bool
-	dev, ino atomic.Uint64
-	id       atomic.Uint64
-	mode     uint32
+	id uint64
+}
+
+// remoteDir is a handle of a directory of the VFS's: the Dir.
+type remoteDir struct {
+	remoteHandle
+}
+
+// remotePath is a handle of what O_PATH opened that is no directory: its
+// calls are those of what it is, by an empty path, and no path walks from
+// it.
+type remotePath struct {
+	remoteHandle
 }
 
 var (
@@ -168,32 +182,93 @@ var (
 	_ Socket   = (*remoteDir)(nil)
 	_ Attrs    = (*remoteDir)(nil)
 	_ Locker   = (*remoteDir)(nil)
+	_ Socket   = (*remotePath)(nil)
+	_ Attrs    = (*remotePath)(nil)
+	_ Locker   = (*remotePath)(nil)
 	_ Dir      = (*noRoot)(nil)
 )
 
-// remoteDirOn is the Dir of an endpoint of a server's directory: the
-// endpoint is its own, with the reference the Dir holds.
-func remoteDirOn(end *pairEnd) *remoteDir {
-	d := &remoteDir{remoteNode: remoteNode{end: end}}
-	d.refs.Store(1)
+// servedpair is a pair a server makes for what it serves: the first end
+// is the server's, a plain one; the second is born the open file struct
+// served at what describes, whose calls are requests on the first. Both
+// close on exec.
+func (p *Process) libcServedpair(what, sv uint32) uint32 {
+	a, b := newPair(false)
+	f, err := served(p.u32(what), int(p.u32(what+4)), p.u64(what+8), p.u64(what+16), p.u64(what+24), b)
 
-	return d
+	if err != nil {
+		a.unref()
+		b.unref()
+
+		return p.result(0, err)
+	}
+
+	x, err := p.install(a, 0, true)
+
+	if err != nil {
+		f.unref()
+
+		return p.result(0, err)
+	}
+
+	y, err := p.install(f, 0, true)
+
+	if err != nil {
+		p.closeFd(x)
+
+		return p.result(0, err)
+	}
+
+	p.put32(sv, uint32(x))
+	p.put32(sv+4, uint32(y))
+
+	return 0
+}
+
+// served is the open file a kind of struct served makes of a pair's
+// second end, as the open flags say: a file, a terminal's of device dev
+// and ino, or a handle of id, of a directory or of what O_PATH opened;
+// with servedTells its server's READY is its readiness.
+func served(kind uint32, flags int, dev, ino, id uint64, end *pairEnd) (File, error) {
+	var n *remoteNode
+	var f File
+
+	switch kind &^ servedTells {
+	case servedFile:
+		r := &remoteFile{}
+		n, f = &r.remoteNode, r
+	case servedTerminal:
+		t := &remoteTerminal{dev: dev, ino: ino}
+		n, f = &t.remoteNode, t
+	case servedDir:
+		d := &remoteDir{remoteHandle{id: id}}
+		n, f = &d.remoteNode, d
+	case servedPath:
+		h := &remotePath{remoteHandle{id: id}}
+		n, f = &h.remoteNode, h
+	default:
+		return nil, syscall.EINVAL
+	}
+
+	n.end, n.accmode, n.tells = end, flags&syscall.O_ACCMODE, kind&servedTells != 0
+	n.refs.Store(1)
+	n.append.Store(flags&syscall.O_APPEND != 0)
+	n.nonblock.Store(flags&syscall.O_NONBLOCK != 0)
+
+	if n.tells {
+		end.from.latest.Store(true)
+	}
+
+	return f, nil
 }
 
 // asRoot is the Dir a descriptor's file is for fchdir, with a reference
-// of the caller's: a directory, or a connection to a server, the root of
-// what it serves; nil for anything else.
+// of the caller's: a directory's; nil for anything else.
 func asRoot(f File) Dir {
 	if d, ok := f.(Dir); ok {
 		d.ref()
 
 		return d
-	}
-
-	if c, ok := f.(interface{ endpoint() *pairEnd }); ok {
-		c.endpoint().ref()
-
-		return remoteDirOn(c.endpoint())
 	}
 
 	return nil
@@ -472,20 +547,6 @@ func (n *remoteNode) on(p *Process, op, arg uint32, body []byte) (packet, error)
 	return n.call(p, op, arg, body, nil)
 }
 
-// openedEnd is the endpoint of the open file an OPEN's OK brought: EIO
-// for an OK without one, a server's fault.
-func openedEnd(pk packet) (*pairEnd, error) {
-	if len(pk.files) == 1 {
-		if end, ok := pk.files[0].(*pairEnd); ok && end.shared.kind == sockSeqpacket {
-			return end, nil
-		}
-	}
-
-	dropFiles(pk.files)
-
-	return nil, syscall.EIO
-}
-
 // decodeStat is a Stat_t of the protocol's stat.
 func decodeStat(b []byte, st *syscall.Stat_t) error {
 	if len(b) < remoteStat {
@@ -700,33 +761,6 @@ func (n *remoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error 
 }
 
 // The Dir role, of a handle (kernel_vfs.go).
-
-// identity is a directory's device and inode, which a server finds the
-// root of a process by.
-func identity(p *Process, d Dir) (uint64, uint64) {
-	if d, ok := d.(*remoteDir); ok {
-		return d.ident(p)
-	}
-
-	return 0, 0
-}
-
-// ident is the directory's device and inode, asked once.
-func (d *remoteDir) ident(p *Process) (uint64, uint64) {
-	if !d.known.Load() {
-		var st syscall.Stat_t
-
-		if d.stat(p, &st) != nil {
-			return 0, 0
-		}
-
-		d.dev.Store(st.Dev)
-		d.ino.Store(st.Ino)
-		d.known.Store(true)
-	}
-
-	return d.dev.Load(), d.ino.Load()
-}
 
 // readdir fills the entries after the last it gave, as many as fit, in
 // the guest's struct dirent layout: ino, off, reclen, type, name; an

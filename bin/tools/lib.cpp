@@ -393,15 +393,15 @@ Endpoint* tools::listen(int fd, Role role, void* node, bool reads, bool writes) 
     return ep;
 }
 
-Endpoint* tools::openFile(int fd, const Stat& st, void* node, bool reads, bool writes) {
+Endpoint* tools::openFile(int fd, u32 flags, void* node, bool reads, bool writes) {
+    const served what{SERVED_FILE, flags & (O_ACCMODE | O_APPEND | O_NONBLOCK), 0, 0, 0};
     int pair[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+    if (servedpair(&what, pair) != 0) {
         error(fd, errno);
         return nullptr;
     }
     Endpoint* ep = listen(pair[0], Role::File, node, reads, writes);
-    const iovec body = part(&st, sizeof st);
-    reply(fd, opOk, 0, &body, 1, &pair[1], 1);
+    reply(fd, opOk, 0, nullptr, 0, &pair[1], 1);
     close(pair[1]);
     return ep;
 }

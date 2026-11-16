@@ -182,12 +182,6 @@ func (e *pairEnd) ref() {
 	e.refs.Add(1)
 }
 
-// endpoint is the end itself: what a directory of a server is made of
-// (kernel_remote.go asRoot).
-func (e *pairEnd) endpoint() *pairEnd {
-	return e
-}
-
 // unref closes the end when its last reference goes: what it read is
 // finished, what was queued for it dropped, files and all; what it wrote
 // ends, which wakes the other end's queue: the end of its data, and EPIPE

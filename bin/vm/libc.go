@@ -477,6 +477,7 @@ func (k *Kernel) functionTable() map[string]any {
 		"__assert_fail":          libc__assert_fail,
 		"socket":                 libcSocket,
 		"socketpair":             libcSocketpair,
+		"servedpair":             libcServedpair,
 		"bind":                   libcBind,
 		"connect":                libcConnect,
 		"listen":                 libcListen,
@@ -2866,6 +2867,13 @@ func libcHstrerror(ctx uintptr, code uint32) uint32 {
 
 func libcHerror(ctx uintptr, s uint32) {
 	proc(ctx).libcHerror(s)
+}
+
+func libcServedpair(ctx uintptr, what, whatSize, sv uint32) uint32 {
+	p := proc(ctx)
+	p.sized("servedpair", whatSize, sizeofServed)
+
+	return p.libcServedpair(what, sv)
 }
 
 func libcInet_aton(ctx uintptr, s, at, atSize uint32) uint32 {

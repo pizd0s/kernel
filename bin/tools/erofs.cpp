@@ -388,7 +388,7 @@ static void openNode(const Node* n, u32 flags, const Header& h, int fd) {
     if (writes || truncates) {
         return error(fd, EROFS);
     }
-    openFile(fd, statOf(n), const_cast<Node*>(n), true, false);
+    openFile(fd, flags, const_cast<Node*>(n), true, false);
 }
 
 // A call of rootfs's on its channel, by node, answered on fd.

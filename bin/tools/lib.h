@@ -245,11 +245,12 @@ namespace tools {
     // a node to read, to write or both.
     Endpoint* listen(int fd, Role role, void* node, bool reads, bool writes);
 
-    // Answers an open on fd with a new open file of node: a pair of ours,
-    // whose one end goes with the OK and the stat to who asked, and whose
-    // other end, an endpoint of the loop's, to read, to write or both, is
-    // the open file. That endpoint, or none, the error answered.
-    Endpoint* openFile(int fd, const Stat& st, void* node, bool reads, bool writes);
+    // Answers an open on fd, of flags, with a new open file of node: a
+    // served pair of SERVED_FILE, whose second end, the open file, goes
+    // with the OK to who asked, and whose first, an endpoint of the
+    // loop's, to read, to write or both, its requests come on. That
+    // endpoint, or none, the error answered.
+    Endpoint* openFile(int fd, u32 flags, void* node, bool reads, bool writes);
 
     // Serves the endpoints until the last of them closes: rootfs's channel,
     // and the open files after it. A question of rootfs's, which brings no

@@ -237,11 +237,9 @@ static void openNode(Node& n, Request& r) {
     switch (n.kind) {
         case Kind::Controlling:
             return answer(r.reply(), opOk, openControlling);
-        case Kind::Registry: {
-            const Stat st = statOf(n);
-            answerOpen(epoll, r, 0, &st, sizeof st, &registryTag);
+        case Kind::Registry:
+            answerOpen(epoll, r, {SERVED_FILE, 0, 0, 0, 0}, &registryTag);
             return;
-        }
         default: {
             const Header h{opOpen, r.h.arg, r.h.uid, r.h.gid};
             const uint32_t mode = 0;

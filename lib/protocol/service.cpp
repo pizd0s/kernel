@@ -42,17 +42,18 @@ void tell(int fd, uint32_t events, uint32_t foreground, uint32_t flags) {
     answer(fd, opReady, events, state, sizeof state);
 }
 
-Endpoint* answerOpen(int epoll, const Request& r, uint32_t arg, const void* data, size_t size, void* of) {
+Endpoint* answerOpen(int epoll, const Request& r, served what, void* of) {
+    what.flags = r.h.arg & (O_ACCMODE | O_APPEND | O_NONBLOCK);
     int pair[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+    if (servedpair(&what, pair) != 0) {
         fail(r.reply(), errno);
         return nullptr;
     }
     const uint32_t access = r.h.arg & O_ACCMODE;
     Endpoint* e = watch(epoll, {pair[0], false, access != O_WRONLY, access != O_RDONLY, of});
-    Header h{opOk, arg, 0, 0};
-    const iovec parts[] = {{&h, sizeof h}, {const_cast<void*>(data), size}};
-    sendPacket(r.reply(), parts, size ? 2 : 1, &pair[1], 1); // a gone asker is its own loss
+    Header h{opOk, 0, 0, 0};
+    const iovec part{&h, sizeof h};
+    sendPacket(r.reply(), &part, 1, &pair[1], 1); // a gone asker is its own loss
     close(pair[1]);
     return e;
 }

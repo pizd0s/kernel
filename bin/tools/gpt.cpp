@@ -122,7 +122,7 @@ static int epoll = -1;
 static void handle(Endpoint& e, Request& r) {
     const Stat st = partitionStat();
     if (e.channel) {
-        answerOpen(epoll, r, 0, &st, sizeof st, e.of);
+        answerOpen(epoll, r, {SERVED_FILE, 0, 0, 0, 0}, e.of);
         return;
     }
     switch (r.h.op) {

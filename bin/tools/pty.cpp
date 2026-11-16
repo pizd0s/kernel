@@ -3,8 +3,9 @@
 // terminal: the open is its master, and its slave is /dev/pts/N, a device
 // the service registers as the terminal comes, the opener's and 0600, as
 // Linux's devpts makes it, and lets go when the master goes. The open
-// files of both ends are a terminal's (openTerminal) and tell their
-// readiness; an OPEN on a slave's is another open of the slave, /dev/tty's.
+// files of both ends are a terminal's (SERVED_TERMINAL), of the device of
+// their end, and tell their readiness; an OPEN on a slave's is another
+// open of the slave, /dev/tty's.
 // The service keeps all of a terminal: its settings, which the master's
 // calls get and set too, as Linux's do, its window's size, the session it
 // controls and its foreground group, and its discipline, Linux's N_TTY:
@@ -1184,7 +1185,8 @@ static void opened(Terminal& t, bool master, Request& r) {
     const uint32_t access = r.h.arg & O_ACCMODE;
     for (Open& o : opens) {
         if (!o.terminal) {
-            const Endpoint* e = answerOpen(epoll, r, openTells | openTerminal, master ? &device.st : &t.slave.st, sizeof device.st, &o);
+            const Stat& st = master ? device.st : t.slave.st;
+            const Endpoint* e = answerOpen(epoll, r, {SERVED_TERMINAL | SERVED_TELLS, 0, st.dev, st.ino, 0}, &o);
             if (!e) {
                 return;
             }

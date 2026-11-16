@@ -10,13 +10,14 @@ import (
 	"syscall"
 )
 
-// A terminal is a service's open file (kernel_remote.go) whose OPEN's OK
-// said openTerminal: an end of a pseudoterminal of bin/tools/pty.cpp, the
-// system's only terminals. The kernel keeps nothing of one: its settings,
-// its window, its foreground group and its discipline are its server's,
-// and a terminal's call is a request to it (lib/protocol/protocol.h). A
-// terminal has no offsets: seek and the positioned reads and writes are
-// ESPIPE. The console is no terminal (kernel_console.go).
+// A terminal is a service's open file (kernel_remote.go) born of a served
+// pair of SERVED_TERMINAL: an end of a pseudoterminal of
+// bin/tools/pty.cpp, the system's only terminals. The kernel keeps nothing
+// of one: its settings, its window, its foreground group and its
+// discipline are its server's, and a terminal's call is a request to it
+// (lib/protocol/protocol.h). A terminal has no offsets: seek and the
+// positioned reads and writes are ESPIPE. The console is no terminal
+// (kernel_console.go).
 //
 // What the kernel keeps is the processes': a session's controlling
 // terminal, which its leader takes with TIOCSCTTY or by opening a slave
@@ -27,7 +28,8 @@ import (
 // foreground group and TOSTOP are what the terminal's READY said last. A
 // group a going orphans hears SIGHUP and SIGCONT when it has a stopped
 // process, as POSIX says (orphans). dev and ino are the terminal's
-// device's, the same for each open of it.
+// device's, the same for each open of it, which its server's struct
+// served said.
 type remoteTerminal struct {
 	remoteFile
 	dev, ino uint64
@@ -52,12 +54,9 @@ const (
 	rSetCtty
 )
 
-// An OPEN's OK's arg: the open file is a terminal's; the open is of the
-// opener's controlling terminal (/dev/tty), which the kernel opens.
-const (
-	openTerminal    = 2
-	openControlling = 4
-)
+// An OPEN's OK's arg: the open is of the opener's controlling terminal
+// (/dev/tty), which the kernel opens.
+const openControlling = 4
 
 // The terminal's requests of ioctl, Linux's.
 const (
@@ -112,24 +111,15 @@ func (p *Process) openControlling(flags int) (File, error) {
 		return nil, err
 	}
 
-	var st syscall.Stat_t
-
-	if err := decodeStat(pk.data, &st); err != nil || pk.arg&openTerminal == 0 {
-		dropFiles(pk.files)
-
-		return nil, syscall.EIO
+	if len(pk.files) == 1 {
+		if t, ok := pk.files[0].(*remoteTerminal); ok {
+			return t, nil
+		}
 	}
 
-	end, err := openedEnd(pk)
+	dropFiles(pk.files)
 
-	if err != nil {
-		return nil, err
-	}
-
-	t := &remoteTerminal{dev: st.Dev, ino: st.Ino}
-	t.opened(end, pk.arg, flags)
-
-	return t, nil
+	return nil, syscall.EIO
 }
 
 // acquire makes a terminal opened without O_NOCTTY the controlling

@@ -1003,9 +1003,8 @@ func (p *Process) libcChdir(path uint32) uint32 {
 	return p.result(0, p.chdir(p.str(path)))
 }
 
-// fchdir makes a directory descriptor's directory the working directory;
-// a connection to a server is a directory of that server, its root,
-// which chroot(".") then takes.
+// fchdir makes a directory descriptor's directory the working directory:
+// a Dir's, which chroot(".") may then take; anything else is ENOTDIR.
 func (p *Process) libcFchdir(fd uint32) uint32 {
 	obj, err := p.fd(fd)
 
@@ -1014,11 +1013,6 @@ func (p *Process) libcFchdir(fd uint32) uint32 {
 	}
 
 	d := asRoot(obj)
-
-	if h, ok := d.(*remoteDir); ok && h.mode != 0 && h.mode&syscall.S_IFMT != syscall.S_IFDIR {
-		d.unref()
-		d = nil
-	}
 
 	if d == nil {
 		return p.result(0, syscall.ENOTDIR)
@@ -1231,7 +1225,7 @@ func (p *Process) libcReadlinkat(dirfd, path, buf, size uint32) uint32 {
 			if n, err = o.readlink(p.span(buf, size)); err == syscall.EINVAL {
 				err = syscall.ENOENT
 			}
-		case *remoteDir:
+		case *remotePath:
 			var target string
 
 			if target, err = o.readlinkPath(p, ""); err == nil {
