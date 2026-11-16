@@ -815,53 +815,68 @@ static void release(Waiting& w) {
     w.window = -1;
 }
 
-// Answers what of the waiting requests of a terminal can be, in order.
+// Answers what of the waiting requests of a terminal can be. A request
+// answered, or the bytes a write moved, may let one answer that waits
+// before it, a drain behind the master's read or a master's read behind
+// the slave's write: the requests go round until none moves.
 static void progress(Terminal& t) {
-    const int64_t at = now();
-    for (Waiting& w : waits) {
-        if (!w.at || w.open->terminal != &t) {
-            continue;
-        }
-        const int fd = w.at->fd;
-        switch (w.kind) {
-            case Wait::Read: {
-                int64_t due;
-                if (w.open->master) {
-                    if (t.output.count > 0) {
-                        answerCount(fd, takeOutput(t, w.window, w.woff, w.length));
-                        release(w);
-                    } else if (t.slaves == 0) {
-                        fail(fd, EIO);
-                        release(w);
-                    }
-                } else if (readDone(t, w, at, due)) {
-                    answerCount(fd, t.hungUp ? 0 : takeInput(t, w.window, w.woff, w.length));
-                    release(w);
-                }
-                break;
+    for (bool moved = true; moved;) {
+        moved = false;
+        const int64_t at = now();
+        for (Waiting& w : waits) {
+            if (!w.at || w.open->terminal != &t) {
+                continue;
             }
-            case Wait::Write:
-                if (w.open->master ? moveInput(t, w) : (t.hungUp || moveOutput(t, w))) {
-                    if (!w.open->master && t.hungUp && w.done == 0) {
-                        fail(fd, EIO);
-                    } else {
-                        answerWrote(fd, w.done);
-                    }
-                    release(w);
-                }
-                break;
-            case Wait::Drain:
-                if (t.output.count == 0 || t.hungUp) {
-                    if (w.settles) {
-                        if (w.when == TCSAFLUSH) {
-                            flushInput(t);
+            const int fd = w.at->fd;
+            switch (w.kind) {
+                case Wait::Read: {
+                    int64_t due;
+                    if (w.open->master) {
+                        if (t.output.count > 0) {
+                            answerCount(fd, takeOutput(t, w.window, w.woff, w.length));
+                            release(w);
+                            moved = true;
+                        } else if (t.slaves == 0) {
+                            fail(fd, EIO);
+                            release(w);
+                            moved = true;
                         }
-                        apply(t, w.settings);
+                    } else if (readDone(t, w, at, due)) {
+                        answerCount(fd, t.hungUp ? 0 : takeInput(t, w.window, w.woff, w.length));
+                        release(w);
+                        moved = true;
                     }
-                    answer(fd, opOk, 0);
-                    release(w);
+                    break;
                 }
-                break;
+                case Wait::Write: {
+                    const uint32_t before = w.done;
+                    if (w.open->master ? moveInput(t, w) : (t.hungUp || moveOutput(t, w))) {
+                        if (!w.open->master && t.hungUp && w.done == 0) {
+                            fail(fd, EIO);
+                        } else {
+                            answerWrote(fd, w.done);
+                        }
+                        release(w);
+                        moved = true;
+                    } else if (w.done != before) {
+                        moved = true;
+                    }
+                    break;
+                }
+                case Wait::Drain:
+                    if (t.output.count == 0 || t.hungUp) {
+                        if (w.settles) {
+                            if (w.when == TCSAFLUSH) {
+                                flushInput(t);
+                            }
+                            apply(t, w.settings);
+                        }
+                        answer(fd, opOk, 0);
+                        release(w);
+                        moved = true;
+                    }
+                    break;
+            }
         }
     }
     tellAll(t);
