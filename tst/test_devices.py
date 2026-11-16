@@ -12,7 +12,8 @@ and urandom, are /bin/devices', there before the shell starts. A service
 here is a program the test brings: it registers a device whose bytes
 are a text and serves its opens (tst/devices_service.cpp, which the test
 hands to the system); the name goes when the service does, and what was
-open of it fails.
+open of it fails. A name may be in a directory of /dev, which comes and
+goes with the devices in it.
 
     test_devices.py <vm> <rootfs> <devices_service>
 """
@@ -50,7 +51,7 @@ except OSError as e: print(e.strerror)
 /tmp/service copy /dev/hello 7 3 5
 /tmp/service put /dev/null hello
 /tmp/service hello 020644 again
-/tmp/service a/b 020644 bad
+/tmp/service a/b/c 020644 bad
 /tmp/service fifo 010644 bad
 /tmp/service readonly 020644 bad ro
 /tmp/service disk 060640 'the blocks'
@@ -68,6 +69,11 @@ except OSError as e: print(e.strerror)
 '
 ls /dev/hello 2>&1
 /tmp/service hello 020644 'hello again' && cat /dev/hello; echo
+/tmp/service pts/x 020644 'in a dir'
+ls /dev/pts && cat /dev/pts/x; echo
+stat -c '%F %a' /dev/pts
+kill -9 $(cat /tmp/pts_x.pid); for i in 1 2 3 4 5 6 7 8 9 10; do [ -e /dev/pts ] || break; sleep 0.1; done
+ls /dev/pts 2>&1
 /tmp/service mbox 020666 '' wait
 /tmp/service wait /dev/mbox 0
 (sleep 2; printf ping > /dev/mbox) & /tmp/service wait /dev/mbox 1; wait
@@ -115,7 +121,7 @@ Bad file descriptor
 5 12 8 ...world........
 5
 register hello: File exists
-register a/b: Invalid argument
+register a/b/c: Invalid argument
 register fifo: Invalid argument
 register readonly: Bad file descriptor
 registered disk
@@ -126,6 +132,11 @@ Input/output error
 ls: /dev/hello: No such file or directory
 registered hello
 hello again
+registered pts/x
+x
+in a dir
+directory 755
+ls: /dev/pts: No such file or directory
 registered mbox
 Interrupted system call 1
 ping 1

@@ -9,7 +9,8 @@
 // systems of the system bind there, for mount(2) to connect to. devfs
 // keeps a device's name, its mode and its owner, and lets the name go when
 // the service's end of the pair closes; a socket's goes when it is
-// unlinked. It starts the services of the system's devices, /bin/devices
+// unlinked. A device's name may be in a directory of /dev, pts/0: the
+// directory comes with the first device in it and goes with the last. It starts the services of the system's devices, /bin/devices
 // and /bin/blk for each disk vm gave the system, and ends when rootfs lets
 // go of its channel.
 //
@@ -45,8 +46,9 @@ namespace {
         Socket, // a socket's name: it holds the socket's listener, which CONNECT gives
     };
 
-    // A node of /dev: its root, the terminal, init, or a service's device;
-    // pos its place among the root's entries.
+    // A node of /dev: its root or a directory of devices, the terminal,
+    // init, or a service's device; pos its place among its directory's
+    // entries.
     struct Node {
         uint64_t ino;
         uint64_t pos;
@@ -59,12 +61,13 @@ namespace {
         uint64_t ctime;
         int fd; // the terminal's; a device's end of its service's pair; a socket's listener
         char name[NAME_MAX + 1];
-        Node* next; // among the root's entries, in their order
+        Node* parent;  // the directory it is in; the root's is the root
+        Node* entries; // a directory's, in their order
+        Node* next;    // among its directory's entries
     };
 }
 
 static Node root;
-static Node* entries;
 static uint64_t inodes;
 static uint64_t positions;
 static uint64_t dev;
@@ -122,8 +125,8 @@ static bool may(const Node& n, const Header& h, uint32_t want) {
     return (bits & want) == want;
 }
 
-// A new entry of the root, after every other.
-static Node* add(const char* name, size_t length, Kind kind, uint32_t mode, uint32_t uid, uint32_t gid) {
+// A new entry of a directory, after every other.
+static Node* add(Node& dir, const char* name, size_t length, Kind kind, uint32_t mode, uint32_t uid, uint32_t gid) {
     auto* n = static_cast<Node*>(calloc(1, sizeof(Node)));
     if (!n) {
         fatal("devfs: out of memory");
@@ -137,17 +140,18 @@ static Node* add(const char* name, size_t length, Kind kind, uint32_t mode, uint
     n->atime = n->mtime = n->ctime = now();
     n->fd = -1;
     memcpy(n->name, name, length);
-    Node** at = &entries;
+    n->parent = &dir;
+    Node** at = &dir.entries;
     while (*at) {
         at = &(*at)->next;
     }
     *at = n;
-    root.mtime = root.ctime = n->ctime;
+    dir.mtime = dir.ctime = n->ctime;
     return n;
 }
 
-static Node* named(const char* name, size_t length) {
-    for (Node* n = entries; n; n = n->next) {
+static Node* named(const Node& dir, const char* name, size_t length) {
+    for (Node* n = dir.entries; n; n = n->next) {
         if (strlen(n->name) == length && memcmp(n->name, name, length) == 0) {
             return n;
         }
@@ -155,32 +159,44 @@ static Node* named(const char* name, size_t length) {
     return nullptr;
 }
 
+// The node of an inode number: the root, an entry of it, or one of a
+// directory of the root's.
 static Node* nodeOf(uint64_t ino) {
     if (ino == root.ino) {
         return &root;
     }
-    for (Node* n = entries; n; n = n->next) {
+    for (Node* n = root.entries; n; n = n->next) {
         if (n->ino == ino) {
             return n;
+        }
+        for (Node* in = n->entries; in; in = in->next) {
+            if (in->ino == ino) {
+                return in;
+            }
         }
     }
     return nullptr;
 }
 
 // A service's end of its pair closed: the service is gone, and its
-// device's name with it.
+// device's name with it, and the directory it was in when that is left
+// empty, but the root.
 static void unregister(Node* n) {
-    for (Node** at = &entries; *at; at = &(*at)->next) {
+    Node* dir = n->parent;
+    for (Node** at = &dir->entries; *at; at = &(*at)->next) {
         if (*at == n) {
             *at = n->next;
             break;
         }
     }
-    root.mtime = root.ctime = now();
+    dir->mtime = dir->ctime = now();
     if (n->kind == Kind::Socket && n->fd >= 0) {
         close(n->fd);
     }
     free(n);
+    if (dir != &root && !dir->entries) {
+        unregister(dir);
+    }
 }
 
 // A name a call takes: no "." or "..", no "/", NAME_MAX at most.
@@ -242,15 +258,15 @@ static void openNode(Node& n, Request& r) {
     }
 }
 
-// The entries of the root after a position, as many as one reply holds.
-static void readRoot(const Request& r) {
+// The entries of a directory after a position, as many as one reply holds.
+static void readDir(const Node& dir, const Request& r) {
     uint64_t after;
     if (!r.at(8, after)) {
         return fail(r.reply(), EINVAL);
     }
     static unsigned char out[65536 - sizeof(Header)];
     size_t size = 0;
-    for (const Node* n = entries; n; n = n->next) {
+    for (const Node* n = dir.entries; n; n = n->next) {
         const size_t length = strlen(n->name);
         if (n->pos <= after) {
             continue;
@@ -303,7 +319,7 @@ static void fsCall(Request& r) {
             if (!may(*n, r.h, 1)) {
                 return fail(r.reply(), EACCES);
             }
-            const Node* found = length == 2 && memcmp(name, "..", 2) == 0 ? &root : named(name, length);
+            const Node* found = length == 2 && memcmp(name, "..", 2) == 0 ? n->parent : named(*n, name, length);
             return found ? answerStat(r.reply(), *found) : fail(r.reply(), ENOENT);
         }
         case fsGetattr:
@@ -311,7 +327,7 @@ static void fsCall(Request& r) {
         case fsReadlink:
             return fail(r.reply(), EINVAL);
         case fsReaddir:
-            return n->kind == Kind::Dir ? readRoot(r) : fail(r.reply(), ENOTDIR);
+            return n->kind == Kind::Dir ? readDir(*n, r) : fail(r.reply(), ENOTDIR);
         case fsOpen:
             return openNode(*n, r);
         case fsCreate:
@@ -342,7 +358,7 @@ static void fsCall(Request& r) {
             if (!may(*dir, r.h, 1)) {
                 return fail(r.reply(), EACCES);
             }
-            return fail(r.reply(), named(name, length) ? EEXIST : EROFS);
+            return fail(r.reply(), named(*dir, name, length) ? EEXIST : EROFS);
         }
         case fsUnlink: {
             // A socket's name goes as a writer of /dev takes it away;
@@ -350,14 +366,14 @@ static void fsCall(Request& r) {
             if (!nameAt(r, 8, name, length)) {
                 return fail(r.reply(), EINVAL);
             }
-            Node* found = named(name, length);
+            Node* found = named(*n, name, length);
             if (!found) {
                 return fail(r.reply(), ENOENT);
             }
             if (found->kind != Kind::Socket || (r.h.arg & AT_REMOVEDIR) != 0) {
                 return fail(r.reply(), EROFS);
             }
-            if (!may(root, r.h, 3)) {
+            if (!may(*n, r.h, 3)) {
                 return fail(r.reply(), EACCES);
             }
             unregister(found);
@@ -373,13 +389,13 @@ static void fsCall(Request& r) {
             if (n->kind != Kind::Dir) {
                 return fail(r.reply(), ENOTDIR);
             }
-            if (named(name, length)) {
+            if (named(*n, name, length)) {
                 return fail(r.reply(), EEXIST);
             }
             if (!may(*n, r.h, 3)) {
                 return fail(r.reply(), EACCES);
             }
-            Node* made = add(name, length, Kind::Socket, S_IFSOCK | (r.h.arg & 07777), r.h.uid, r.h.gid);
+            Node* made = add(*n, name, length, Kind::Socket, S_IFSOCK | (r.h.arg & 07777), r.h.uid, r.h.gid);
             made->fd = r.fds[0];
             r.fds[0] = -1; // the node's now
             return answer(r.reply(), opOk, 0);
@@ -404,16 +420,23 @@ static void fsCall(Request& r) {
             return fail(r.reply(), EROFS);
         case fsStatfs: {
             size_t files = 1;
-            for (const Node* e = entries; e; e = e->next) {
+            for (const Node* e = root.entries; e; e = e->next) {
                 ++files;
+                for (const Node* in = e->entries; in; in = in->next) {
+                    ++files;
+                }
             }
             const Statfs st{0, 0, files, 0, dev, 4096, NAME_MAX, ST_RDONLY};
             return answer(r.reply(), opOk, 0, &st, sizeof st);
         }
         case fsPath: {
-            char path[NAME_MAX + 2] = "/";
+            char path[2 * NAME_MAX + 3] = "/";
+            if (n->parent != &root) {
+                strcat(path, n->parent->name);
+                strcat(path, "/");
+            }
             if (n != &root) {
-                memcpy(path + 1, n->name, strlen(n->name) + 1);
+                strcat(path, n->name);
             }
             return answer(r.reply(), opOk, 0, path, strlen(path));
         }
@@ -424,8 +447,9 @@ static void fsCall(Request& r) {
 
 // A service's device: a name in /dev of the mode asked for, S_IFCHR or
 // S_IFBLK, whose opens go on to the end of a pair the request brings,
-// the service's the other; its stat is the reply. Only on an endpoint of
-// init open to write.
+// the service's the other; its stat is the reply. A name with a "/" is
+// one in a directory of /dev, made for it when there is none. Only on an
+// endpoint of init open to write.
 static void registerName(const Endpoint& e, Request& r) {
     const char* name;
     size_t length;
@@ -436,13 +460,31 @@ static void registerName(const Endpoint& e, Request& r) {
     if (r.count != 2 || (type != S_IFCHR && type != S_IFBLK) || !nameAt(r, 0, name, length)) {
         return fail(r.reply(), EINVAL);
     }
-    if (const int bad = badName(name, length)) {
+    Node* dir = &root;
+    if (const char* slash = static_cast<const char*>(memchr(name, '/', length))) {
+        const size_t dirLength = size_t(slash - name);
+        if (const int bad = badName(name, dirLength)) {
+            return fail(r.reply(), bad);
+        }
+        dir = named(root, name, dirLength);
+        if (dir && dir->kind != Kind::Dir) {
+            return fail(r.reply(), ENOTDIR);
+        }
+        length -= dirLength + 1;
+        name = slash + 1;
+        if (const int bad = badName(name, length)) {
+            return fail(r.reply(), bad);
+        }
+        if (!dir) {
+            dir = add(root, slash - dirLength, dirLength, Kind::Dir, S_IFDIR | 0755, 0, 0);
+        }
+    } else if (const int bad = badName(name, length)) {
         return fail(r.reply(), bad);
     }
-    if (named(name, length)) {
+    if (named(*dir, name, length)) {
         return fail(r.reply(), EEXIST);
     }
-    Node* n = add(name, length, Kind::Device, r.h.arg & (S_IFMT | 07777), r.h.uid, r.h.gid);
+    Node* n = add(*dir, name, length, Kind::Device, r.h.arg & (S_IFMT | 07777), r.h.uid, r.h.gid);
     n->fd = r.fds[0];
     r.fds[0] = -1; // the device's now
     watch(epoll, {n->fd, false, false, false, n});
@@ -458,7 +500,7 @@ static bool handle(Endpoint& e, Request& r) {
                 registerName(e, r);
                 break;
             case opFstat:
-                answerStat(r.reply(), *named("init", 4));
+                answerStat(r.reply(), *named(root, "init", 4));
                 break;
             default:
                 fail(r.reply(), EINVAL);
@@ -511,8 +553,9 @@ int devfsMain(int argc, char** argv) {
     root.uid = uint32_t(geteuid());
     root.gid = uint32_t(getegid());
     root.atime = root.mtime = root.ctime = now();
-    add("tty", 3, Kind::Terminal, S_IFCHR | 0666, 0, 0)->fd = STDIN_FILENO;
-    add("init", 4, Kind::Registry, S_IFCHR | 0600, uint32_t(geteuid()), uint32_t(getegid()));
+    root.parent = &root;
+    add(root, "tty", 3, Kind::Terminal, S_IFCHR | 0666, 0, 0)->fd = STDIN_FILENO;
+    add(root, "init", 4, Kind::Registry, S_IFCHR | 0600, uint32_t(geteuid()), uint32_t(getegid()));
     epoll = epoll_create1(EPOLL_CLOEXEC);
     if (epoll < 0 || fcntl(channel, F_SETFD, FD_CLOEXEC) != 0) {
         fatal("devfs: errno %d", errno);
