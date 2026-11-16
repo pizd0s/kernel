@@ -851,13 +851,14 @@ static bool put(int w, const void* from, usize count, usize at) {
 }
 
 static bool readNode(Endpoint* ep, const Header& h, Body body, int fd) {
-    const u64 off = body.take<u64>();
-    const u32 woff = body.take<u32>();
-    const auto* node = static_cast<const Node*>(ep->node);
-    const usize n = h.arg;
-    if (off > INT64_MAX) {
+    Io io;
+    if (!ioOf(h, body, io) || io.off > INT64_MAX) {
         return error(fd, EINVAL);
     }
+    const u64 off = io.off;
+    const u32 woff = io.woff;
+    const auto* node = static_cast<const Node*>(ep->node);
+    const usize n = h.arg;
     if (node->kind != Kind::Dir && !ep->reads) {
         return error(fd, EBADF);
     }
@@ -882,15 +883,16 @@ static bool readNode(Endpoint* ep, const Header& h, Body body, int fd) {
 // The data at the offset, or at the end with append, as much as the
 // capacity takes: the count and where it went.
 static bool writeNode(Endpoint* ep, const Header& h, Body body, int fd) {
-    u64 off = body.take<u64>();
-    const usize length = body.take<u32>();
-    const u32 woff = body.take<u32>();
+    Io io;
+    if (!ioOf(h, body, io) || io.off > INT64_MAX) {
+        return error(fd, EINVAL);
+    }
+    u64 off = io.off;
+    const usize length = h.arg;
+    const u32 woff = io.woff;
     Server& s = tree;
     auto* node = static_cast<Node*>(ep->node);
     const int w = window();
-    if (off > INT64_MAX) {
-        return error(fd, EINVAL);
-    }
     if (node->kind != Kind::Dir && !ep->writes) {
         return error(fd, EBADF);
     }
@@ -904,7 +906,7 @@ static bool writeNode(Endpoint* ep, const Header& h, Body body, int fd) {
                 return error(fd, EROFS);
             }
             const u64 size = node->content.size();
-            if ((h.arg & 1) != 0) {
+            if ((io.flags & ioAppend) != 0) {
                 off = size;
             }
             const u64 grows = off + count > size ? off + count - size : 0;

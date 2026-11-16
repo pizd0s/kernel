@@ -31,9 +31,8 @@ import (
 //	reads them from there itself, from the memfd's byte woff on, one copy,
 //	as many as asked, and closes it as it answers. A server that is gone
 //	is EIO. An open file's calls:
-//	  READ      arg len   off u64 woff u32 OK count u32
-//	  WRITE     arg append off u64 len u32 woff u32
-//	                                       OK count u32 at u64, where an
+//	  READ      arg len   io               OK count u32
+//	  WRITE     arg len   io               OK count u32 at u64, where an
 //	                                       append went
 //	  READDIR             after u64        OK (ino u64, pos u64, type u8, name, 0)*
 //	  FSTAT                                OK stat; a handle's that rootfs
@@ -53,7 +52,14 @@ import (
 //	                      keeps while it waits, from the kernel (waiting):
 //	                      the server answers that request now, with the
 //	                      count so far or ERR EINTR
+//	  READY     arg events                 from the server, on the endpoint
+//	                                       of an open file whose OPEN's OK
+//	                                       had openTells in arg: what poll
+//	                                       finds of it now, the last counts
 //	replies: OK, ERR with arg the errno
+//	io { off u64, woff u32, flags u32 }   flags: ioAppend, a WRITE at the
+//	       end the file has, O_APPEND's; ioNonblock, answered at once, EAGAIN
+//	       where it would wait, O_NONBLOCK's
 //	stat { ino u64, size u64, mtime u64 nanoseconds, mode u32, nlink u32,
 //	       uid u32, gid u32, atime u64, dev u64, ctime u64 }
 //	statfs { blocks u64, bfree u64, files u64, ffree u64, dev u64,
@@ -81,6 +87,16 @@ const (
 	rFlock
 	rLock
 	rCancel
+	rReady
+)
+
+// An OPEN's OK's arg: the open file tells its readiness.
+const openTells = 1
+
+// The flags of an io.
+const (
+	ioAppend   = 1
+	ioNonblock = 2
 )
 
 const (
@@ -112,6 +128,11 @@ type remoteNode struct {
 	// the last entry readdir gave.
 	pos   int64
 	after uint64
+	// tells is set for a file whose server tells its readiness, READY on
+	// its endpoint, whose channel keeps only the last; ready is what that
+	// said.
+	tells bool
+	ready atomic.Int32
 }
 
 type remoteFile struct {
@@ -181,15 +202,66 @@ func (n *remoteNode) unref() {
 	}
 }
 
+// A file whose server tells its readiness wakes its subscriptions as a
+// READY comes; any other is ready whenever asked.
 func (n *remoteNode) subscribe(to waker, id uint64, events int16) bool {
-	return false
+	if !n.tells {
+		return false
+	}
+
+	n.end.from.readers.add(to, id)
+
+	return true
 }
 
 func (n *remoteNode) unsubscribe(to waker, id uint64) {
+	if n.tells {
+		n.end.from.readers.remove(to, id)
+	}
 }
 
 func (n *remoteNode) poll(events int16) int16 {
-	return events & (pollIn | pollOut | pollRdnorm | pollWrnorm)
+	if !n.tells {
+		return events & (pollIn | pollOut | pollRdnorm | pollWrnorm)
+	}
+
+	return n.readiness() & (events | pollErr | pollHup)
+}
+
+// readiness is what the server said last of the file, the READY that came
+// on its endpoint; a server gone is a hangup and an error.
+func (n *remoteNode) readiness() int16 {
+	for {
+		pk, eof, ok := n.end.take(false)
+
+		if !ok {
+			break
+		}
+
+		if eof {
+			n.ready.Store(int32(pollHup | pollErr))
+
+			break
+		}
+
+		if len(pk.data) >= remoteHeader && binary.LittleEndian.Uint32(pk.data) == rReady {
+			events := int16(binary.LittleEndian.Uint32(pk.data[4:])) & (pollIn | pollPri | pollOut | pollErr | pollHup)
+
+			if events&pollIn != 0 {
+				events |= pollRdnorm
+			}
+
+			if events&pollOut != 0 {
+				events |= pollWrnorm
+			}
+
+			n.ready.Store(int32(events))
+		}
+
+		dropFiles(pk.files)
+	}
+
+	return int16(n.ready.Load())
 }
 
 func (n *remoteNode) flags() (int, error) {
@@ -289,6 +361,7 @@ func replyOf(pk packet, eof bool) (packet, error) {
 		return pk, syscall.Errno(binary.LittleEndian.Uint32(pk.data[4:]))
 	}
 
+	pk.arg = binary.LittleEndian.Uint32(pk.data[4:])
 	pk.data = pk.data[remoteHeader:]
 
 	return pk, nil
@@ -728,9 +801,7 @@ func (f *remoteFile) readInto(p *Process, w *memfdFile, woff uint32, n int, off 
 		return 0, nil
 	}
 
-	var body [12]byte
-	binary.LittleEndian.PutUint64(body[:], uint64(off))
-	binary.LittleEndian.PutUint32(body[8:], woff)
+	body := ioBody(off, woff, f.ioFlags())
 
 	for {
 		pk, cancelled, err := f.waiting(p, rRead, uint32(n), body[:], []File{w})
@@ -749,6 +820,25 @@ func (f *remoteFile) readInto(p *Process, w *memfdFile, woff uint32, n int, off 
 
 		return int(binary.LittleEndian.Uint32(pk.data)), nil
 	}
+}
+
+// ioBody is a READ's or a WRITE's body, an io.
+func ioBody(off int64, woff, flags uint32) [16]byte {
+	var b [16]byte
+	binary.LittleEndian.PutUint64(b[:], uint64(off))
+	binary.LittleEndian.PutUint32(b[8:], woff)
+	binary.LittleEndian.PutUint32(b[12:], flags)
+
+	return b
+}
+
+// ioFlags are the flags of the file's reads and writes, O_NONBLOCK's.
+func (n *remoteNode) ioFlags() uint32 {
+	if n.nonblock.Load() {
+		return ioNonblock
+	}
+
+	return 0
 }
 
 func (f *remoteFile) writeAt(p *Process, b []byte, off int64) (int, error) {
@@ -784,19 +874,16 @@ func (f *remoteFile) writeFrom(p *Process, w *memfdFile, woff uint32, n int, off
 		return 0, off, nil
 	}
 
-	arg := uint32(0)
+	flags := f.ioFlags()
 
 	if atEnd {
-		arg = 1
+		flags |= ioAppend
 	}
 
-	var body [16]byte
-	binary.LittleEndian.PutUint64(body[:], uint64(off))
-	binary.LittleEndian.PutUint32(body[8:], uint32(n))
-	binary.LittleEndian.PutUint32(body[12:], woff)
+	body := ioBody(off, woff, flags)
 
 	for {
-		pk, cancelled, err := f.waiting(p, rWrite, arg, body[:], []File{w})
+		pk, cancelled, err := f.waiting(p, rWrite, uint32(n), body[:], []File{w})
 
 		if err == syscall.EINTR && cancelled && p.interrupted() {
 			continue

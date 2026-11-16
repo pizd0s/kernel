@@ -13,6 +13,10 @@
 void answer(int fd, uint32_t op, uint32_t arg, const void* data = nullptr, size_t size = 0);
 void fail(int fd, int e);
 
+// Tells the kernel, on an open file's endpoint, the events poll finds of
+// it now (READY); its OPEN's OK said openTells.
+void tell(int fd, uint32_t events);
+
 // A device registered: ours of the pair rootfs hands its opens on to, and
 // its stat, as rootfs has its name.
 struct Device {
@@ -64,6 +68,10 @@ struct Request {
     int reply() const;
     int window() const;
     bool copy(size_t offset, void* out, size_t length) const;
+
+    // A READ's or a WRITE's body, false for one that is not: just an Io,
+    // whose flags are the op's.
+    bool io(Io& out) const;
 
     template <typename T>
     bool at(size_t offset, T& out) const;

@@ -60,6 +60,8 @@ type packet struct {
 	files []File
 	cred  *ucred
 	addr  []byte
+	// arg is a server's reply's arg, of its header (replyOf).
+	arg uint32
 }
 
 // ucred is SCM_CREDENTIALS' struct ucred: the pid, uid and gid of a

@@ -126,6 +126,10 @@ namespace tools {
         Name rest();
     };
 
+    // A READ's or a WRITE's body, false for one that is not: just an Io,
+    // whose flags are the op's.
+    bool ioOf(const Header& h, Body body, Io& out);
+
     // Why a name is none a call takes, 0 for one it does: "." and ".." and
     // names with "/" are a walk's; a name past NAME_MAX is too long.
     int badName(Name name);

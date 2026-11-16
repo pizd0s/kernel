@@ -161,10 +161,14 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (F
 		return nil, err
 	}
 
-	node := remoteNode{end: mine, accmode: flags & 3}
+	node := remoteNode{end: mine, accmode: flags & 3, tells: pk.arg&openTells != 0}
 	node.refs.Store(1)
 	node.append.Store(flags&syscall.O_APPEND != 0)
 	node.nonblock.Store(flags&syscall.O_NONBLOCK != 0)
+
+	if node.tells {
+		mine.from.latest.Store(true)
+	}
 
 	switch {
 	case len(pk.data) >= remoteStat+8:

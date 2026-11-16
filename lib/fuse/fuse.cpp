@@ -364,14 +364,15 @@ static int changeOwner(const char* path, const Request& r, size_t at) {
 
 // A READ: what the file system reads at off, into the memfd at woff.
 static void readFile(Open& o, const Endpoint& e, const Request& r) {
-    uint64_t off;
-    uint32_t woff;
+    Io io;
     if (!e.reads || !o.opened) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.at(0, off) || !r.at(8, woff) || !operations.read) {
+    if (r.window() < 0 || !r.io(io) || !operations.read) {
         return fail(r.reply(), EINVAL);
     }
+    const uint64_t off = io.off;
+    const uint32_t woff = io.woff;
     size_t done = 0;
     while (done < r.h.arg) {
         const size_t ask = MIN(sizeof bytes, size_t(r.h.arg) - done);
@@ -397,16 +398,17 @@ static void readFile(Open& o, const Endpoint& e, const Request& r) {
 // A WRITE: the memfd's bytes at woff, what the file system writes at
 // off, or at its end with append.
 static void writeFile(Open& o, const Endpoint& e, const Request& r) {
-    uint64_t off;
-    uint32_t length;
-    uint32_t woff;
+    Io io;
     if (!e.writes || !o.opened) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.at(0, off) || !r.at(8, length) || !r.at(12, woff) || !operations.write) {
+    if (r.window() < 0 || !r.io(io) || !operations.write) {
         return fail(r.reply(), EINVAL);
     }
-    if ((r.h.arg & 1) != 0) {
+    uint64_t off = io.off;
+    const uint32_t length = r.h.arg;
+    const uint32_t woff = io.woff;
+    if ((io.flags & ioAppend) != 0) {
         struct stat st;
         if (const int failed = attributes(o.path, st)) {
             return fail(r.reply(), failed);

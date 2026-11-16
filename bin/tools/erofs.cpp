@@ -264,12 +264,13 @@ static int linkError(const Node* dst, Name newName, const Header& h) {
 // A READ of a file of the image: its bytes at the offset, as many as
 // asked up to its end, from the image into the window.
 static bool readNode(Endpoint* ep, const Header& h, Body body, int fd) {
-    const u64 off = body.take<u64>();
-    const u32 woff = body.take<u32>();
-    const auto* node = static_cast<const Node*>(ep->node);
-    if (off > INT64_MAX) {
+    Io io;
+    if (!ioOf(h, body, io) || io.off > INT64_MAX) {
         return error(fd, EINVAL);
     }
+    const u64 off = io.off;
+    const u32 woff = io.woff;
+    const auto* node = static_cast<const Node*>(ep->node);
     const int w = window();
     if (w < 0) {
         return error(fd, EINVAL);

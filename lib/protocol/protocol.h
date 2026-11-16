@@ -122,12 +122,10 @@
 //                                         system that changes by itself
 //
 //   An open file's, on its endpoint:
-//     READ      arg len     off u64 woff u32
-//                                         OK count u32; fds[0] a memfd of
+//     READ      arg len     io            OK count u32; fds[0] a memfd of
 //                                         the reader's memory, the bytes
 //                                         go there from its byte woff on
-//     WRITE     arg append  off u64 len u32 woff u32
-//                                         OK count u32 at u64, where an
+//     WRITE     arg len     io            OK count u32 at u64, where an
 //                                         append went; fds[0] a memfd of
 //                                         the writer's memory, the bytes
 //                                         come from there from its byte
@@ -147,6 +145,13 @@
 //                                         start u64 len u64
 //     CANCEL                              on a request's endpoint, which
 //                                         the server keeps while it waits
+//   and from the server, on the endpoint of an open file whose OPEN's OK
+//   had openTells in arg, the file's readiness, which select, poll and
+//   epoll find: until the first, nothing is ready; the last counts.
+//     READY     arg events                POLLIN, POLLPRI, POLLOUT, POLLERR
+//                                         and POLLHUP, Linux's bits; sent
+//                                         as they change, the first right
+//                                         after the OK
 //
 //   A device's service's, on the channel devfs has of it, and on
 //   /dev/init:
@@ -171,6 +176,9 @@
 //   rootfs's: the system is noatime.
 //
 //   replies: OK, ERR with arg the errno
+//   io { off u64, woff u32, flags u32 }   flags: ioAppend, a WRITE at the
+//          end the file has, O_APPEND's; ioNonblock, answered at once, EAGAIN
+//          where it would wait, O_NONBLOCK's
 //   stat { ino u64, size u64, mtime u64 nanoseconds, mode u32, nlink u32,
 //          uid u32, gid u32, atime u64, dev u64, ctime u64 }
 //   statfs { blocks u64, bfree u64, files u64, ffree u64, dev u64,
@@ -240,6 +248,7 @@ enum : uint32_t {
     opFlock,
     opLock,
     opCancel,
+    opReady,
     // A service's.
     opOpen = 96,
     opRegister,
@@ -253,6 +262,11 @@ enum : uint32_t {
 constexpr size_t maxFds = 4;
 constexpr uint32_t noId = 0xffffffff; // a uid or gid CHOWN keeps
 constexpr uint32_t fsNocache = 1;     // ROOT's flags: the file system changes by itself
+// An OPEN's OK's arg: the open file tells its readiness (READY).
+constexpr uint32_t openTells = 1;
+// Io's flags.
+constexpr uint32_t ioAppend = 1;
+constexpr uint32_t ioNonblock = 2;
 // UTIMES's when.
 constexpr uint32_t whenAtimeNow = 2;
 constexpr uint32_t whenMtimeNow = 4;
@@ -264,6 +278,13 @@ struct Header {
     uint32_t arg;
     uint32_t uid;
     uint32_t gid;
+};
+
+// A READ's and a WRITE's body.
+struct Io {
+    uint64_t off;
+    uint32_t woff;
+    uint32_t flags;
 };
 
 struct Stat {

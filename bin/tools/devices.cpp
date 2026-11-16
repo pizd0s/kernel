@@ -51,11 +51,11 @@ static unsigned char entropy[65536];
 // As many bytes as asked go into the reader's memory: zeros, or the
 // kernel's random bytes; none of null.
 static void readSource(const Source& s, const Endpoint& e, const Request& r) {
-    uint32_t woff;
+    Io io;
     if (!e.reads) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.at(8, woff)) {
+    if (r.window() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
     const size_t n = s.kind == Kind::Null ? 0 : r.h.arg;
@@ -70,7 +70,7 @@ static void readSource(const Source& s, const Endpoint& e, const Request& r) {
             }
             bytes = entropy;
         }
-        if (pwrite(r.window(), bytes, count, off_t(woff) + off_t(at)) != ssize_t(count)) {
+        if (pwrite(r.window(), bytes, count, off_t(io.woff) + off_t(at)) != ssize_t(count)) {
             return fail(r.reply(), EIO);
         }
     }
@@ -80,20 +80,19 @@ static void readSource(const Source& s, const Endpoint& e, const Request& r) {
 
 // Everything written is taken, where it was written, but by full.
 static void writeSource(const Source& s, const Endpoint& e, const Request& r) {
-    uint64_t off;
-    uint32_t length;
+    Io io;
     if (!e.writes) {
         return fail(r.reply(), EBADF);
     }
-    if (!r.at(0, off) || !r.at(8, length)) {
+    if (r.window() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
     if (s.kind == Kind::Full) {
         return fail(r.reply(), ENOSPC);
     }
     unsigned char taken[12];
-    memcpy(taken, &length, 4);
-    memcpy(taken + 4, &off, 8);
+    memcpy(taken, &r.h.arg, 4);
+    memcpy(taken + 4, &io.off, 8);
     answer(r.reply(), opOk, 0, taken, sizeof taken);
 }
 

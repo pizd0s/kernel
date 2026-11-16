@@ -37,6 +37,10 @@ void fail(int fd, int e) {
     answer(fd, opErr, uint32_t(e));
 }
 
+void tell(int fd, uint32_t events) {
+    answer(fd, opReady, events);
+}
+
 int enroll(int registry, const char* name, uint32_t mode, Device& out) {
     int pair[2];
     int reply[2];
@@ -145,6 +149,15 @@ bool Request::copy(size_t offset, void* out, size_t length) const {
     }
     memcpy(out, body + offset, length);
     return true;
+}
+
+bool Request::io(Io& out) const {
+    if (size != sizeof out) {
+        return false;
+    }
+    memcpy(&out, body, sizeof out);
+    const uint32_t known = h.op == opWrite ? ioAppend | ioNonblock : ioNonblock;
+    return (out.flags & ~known) == 0;
 }
 
 void stopServing() {

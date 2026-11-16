@@ -4,7 +4,9 @@ mode and the end of a pair (REGISTER, bin/tools/protocol.h), and every
 open of /dev/<name> goes on to the service that registered it, which
 serves the open file from then on. A read that waits there ends for a
 signal: the kernel sends CANCEL, and the read restarts if the handler
-says so, or dies with the process for SIGKILL. copy_file_range between such a file and
+says so, or dies with the process for SIGKILL. A service's file may tell
+its readiness, which select, poll and epoll find; one that does not is
+ready whenever asked. copy_file_range between such a file and
 a memfd brings the memfd itself in the READ or WRITE, at its offset. The system's own, null, zero, random
 and urandom, are /bin/devices', there before the shell starts. A service
 here is a program the test brings: it registers a device whose bytes
@@ -72,6 +74,22 @@ ls /dev/hello 2>&1
 /tmp/service wait /dev/mbox 1 & sleep 1.5; kill -9 $!; wait $! 2> /dev/null; echo $?
 (sleep 2; printf pong > /dev/mbox) & /tmp/service wait /dev/mbox 1; wait
 printf mail > /dev/mbox; /tmp/service wait /dev/mbox 1
+python3 -c '
+import os, select
+f = os.open("/dev/mbox", os.O_RDWR | os.O_NONBLOCK)
+r, w, _ = select.select([f], [f], [], 0.2)
+print(r == [], w == [f])
+try: os.read(f, 4)
+except OSError as e: print(e.strerror)
+g = os.open("/dev/mbox", os.O_WRONLY)
+os.write(g, b"note")
+print(select.select([f], [], [], 1)[0] == [f], os.read(f, 16))
+p = select.poll()
+p.register(f, select.POLLIN)
+print(p.poll(200))
+os.write(g, b"more")
+print(p.poll(1000) == [(f, select.POLLIN)], os.read(f, 16))
+'
 """
 
 WANT = """\
@@ -114,6 +132,11 @@ ping 1
 137
 pong 1
 mail 0
+True True
+Resource temporarily unavailable
+True b'note'
+[]
+True b'more'
 """
 
 

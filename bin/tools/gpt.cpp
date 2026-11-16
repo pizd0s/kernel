@@ -55,52 +55,41 @@ static void forward(const Request& r, uint32_t op, uint32_t arg, const void* bod
 
 // A READ: up to the partition's end, at the device's offset.
 static void readPartition(const Endpoint& e, const Request& r) {
-    uint64_t off;
-    uint32_t woff;
+    Io io;
     if (!e.reads) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.at(0, off) || !r.at(8, woff)) {
+    if (r.window() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
-    if (off >= length || r.h.arg == 0) {
+    if (io.off >= length || r.h.arg == 0) {
         const uint32_t none = 0;
         return answer(r.reply(), opOk, 0, &none, sizeof none);
     }
-    unsigned char body[12];
-    const uint64_t at = first + off;
-    memcpy(body, &at, 8);
-    memcpy(body + 8, &woff, 4);
-    forward(r, opRead, uint32_t(MIN(uint64_t(r.h.arg), length - off)), body, sizeof body);
+    const Io at{first + io.off, io.woff, io.flags};
+    forward(r, opRead, uint32_t(MIN(uint64_t(r.h.arg), length - io.off)), &at, sizeof at);
 }
 
 // A WRITE: what fits before the partition's end, at the device's
 // offset; none fits, ENOSPC. A partition has no end to append at.
 static void writePartition(const Endpoint& e, const Request& r) {
-    uint64_t off;
-    uint32_t size;
-    uint32_t woff;
+    Io io;
     if (!e.writes) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.at(0, off) || !r.at(8, size) || !r.at(12, woff) || (r.h.arg & 1) != 0) {
+    if (r.window() < 0 || !r.io(io) || (io.flags & ioAppend) != 0) {
         return fail(r.reply(), EINVAL);
     }
-    if (size == 0) {
+    if (r.h.arg == 0) {
         unsigned char none[12] = {};
-        memcpy(none + 4, &off, 8);
+        memcpy(none + 4, &io.off, 8);
         return answer(r.reply(), opOk, 0, none, sizeof none);
     }
-    if (off >= length) {
+    if (io.off >= length) {
         return fail(r.reply(), ENOSPC);
     }
-    unsigned char body[16];
-    const uint64_t at = first + off;
-    const uint32_t count = uint32_t(MIN(uint64_t(size), length - off));
-    memcpy(body, &at, 8);
-    memcpy(body + 8, &count, 4);
-    memcpy(body + 12, &woff, 4);
-    forward(r, opWrite, 0, body, sizeof body);
+    const Io at{first + io.off, io.woff, io.flags};
+    forward(r, opWrite, uint32_t(MIN(uint64_t(r.h.arg), length - io.off)), &at, sizeof at);
 }
 
 // Starts /bin/fuse2fs for the partition when it has an ext2 file system:

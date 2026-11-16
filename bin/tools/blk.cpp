@@ -42,14 +42,15 @@ static Stat diskStat() {
 // A READ: the disk's bytes at off, as many as asked up to its end, into
 // the memfd at woff.
 static void readBlocks(const Endpoint& e, const Request& r) {
-    uint64_t off;
-    uint32_t woff;
+    Io io;
     if (!e.reads) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.at(0, off) || !r.at(8, woff)) {
+    if (r.window() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
+    const uint64_t off = io.off;
+    const uint32_t woff = io.woff;
     const uint64_t count = off >= size ? 0 : MIN(uint64_t(r.h.arg), size - off);
     uint64_t done = 0;
     while (done < count) {
@@ -71,15 +72,16 @@ static void readBlocks(const Endpoint& e, const Request& r) {
 // A WRITE: the memfd's bytes at woff, as many as fit before the disk's
 // end, onto the disk at off; none fit, ENOSPC.
 static void writeBlocks(const Endpoint& e, const Request& r) {
-    uint64_t off;
-    uint32_t length;
-    uint32_t woff;
+    Io io;
     if (!e.writes) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.at(0, off) || !r.at(8, length) || !r.at(12, woff) || (r.h.arg & 1) != 0) {
+    if (r.window() < 0 || !r.io(io) || (io.flags & ioAppend) != 0) {
         return fail(r.reply(), EINVAL);
     }
+    const uint64_t off = io.off;
+    const uint32_t length = r.h.arg;
+    const uint32_t woff = io.woff;
     if (length > 0 && off >= size) {
         return fail(r.reply(), ENOSPC);
     }

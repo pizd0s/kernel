@@ -160,7 +160,11 @@ func (p *Process) waitMail(end time.Time) bool {
 // finished that its reader is, and a write is EPIPE. mu guards the
 // messages; held counts them, so a poll asks without taking it.
 type msgChannel struct {
-	mu       sync.Mutex
+	mu sync.Mutex
+	// latest is set for a channel of which only the last message counts,
+	// an open file's readiness (kernel_remote.go): a message takes the
+	// place of those held, and the channel is never full.
+	latest   atomic.Bool
 	limit    atomic.Int32
 	messages []packet
 	head     int
@@ -221,6 +225,20 @@ func (c *msgChannel) put(pk packet) (full bool, err error) {
 		c.mu.Unlock()
 
 		return false, syscall.EPIPE
+	}
+
+	if c.latest.Load() {
+		for _, old := range c.messages[c.head:] {
+			dropFiles(old.files)
+		}
+
+		clear(c.messages)
+		c.messages, c.head = append(c.messages[:0], pk), 0
+		c.held.Store(1)
+		c.mu.Unlock()
+		c.nudge()
+
+		return false, nil
 	}
 
 	if c.held.Load() >= c.limit.Load() {

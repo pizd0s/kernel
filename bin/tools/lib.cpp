@@ -193,6 +193,15 @@ bool tools::error(int fd, int e) {
     return false;
 }
 
+bool tools::ioOf(const Header& h, Body body, Io& out) {
+    if (body.size() != sizeof out) {
+        return false;
+    }
+    memcpy(&out, body.at, sizeof out);
+    const u32 known = h.op == opWrite ? ioAppend | ioNonblock : ioNonblock;
+    return (out.flags & ~known) == 0;
+}
+
 bool tools::readCount(int fd, usize count) {
     const u32 n = u32(count);
     ok(fd, &n, sizeof n);
