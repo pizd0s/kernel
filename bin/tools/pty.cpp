@@ -819,7 +819,9 @@ static void release(Waiting& w) {
 // Answers what of the waiting requests of a terminal can be. A request
 // answered, or the bytes a write moved, may let one answer that waits
 // before it, a drain behind the master's read or a master's read behind
-// the slave's write: the requests go round until none moves.
+// the slave's write: the requests go round until none moves. What a
+// request changed of the terminal's readiness is told before its answer,
+// as the protocol has it: a poll after a read finds what it left.
 static void progress(Terminal& t) {
     for (bool moved = true; moved;) {
         moved = false;
@@ -832,26 +834,27 @@ static void progress(Terminal& t) {
             switch (w.kind) {
                 case Wait::Read: {
                     int64_t due;
-                    if (w.open->master) {
-                        if (t.output.count > 0) {
-                            answerCount(fd, takeOutput(t, w.window, w.woff, w.length));
-                            release(w);
-                            moved = true;
-                        } else if (t.slaves == 0) {
-                            fail(fd, EIO);
-                            release(w);
-                            moved = true;
-                        }
-                    } else if (readDone(t, w, at, due)) {
-                        answerCount(fd, t.hungUp ? 0 : takeInput(t, w.window, w.woff, w.length));
-                        release(w);
-                        moved = true;
+                    if (w.open->master && t.output.count > 0) {
+                        const auto count = takeOutput(t, w.window, w.woff, w.length);
+                        tellAll(t);
+                        answerCount(fd, count);
+                    } else if (w.open->master && t.slaves == 0) {
+                        fail(fd, EIO);
+                    } else if (!w.open->master && readDone(t, w, at, due)) {
+                        const auto count = t.hungUp ? 0 : takeInput(t, w.window, w.woff, w.length);
+                        tellAll(t);
+                        answerCount(fd, count);
+                    } else {
+                        break;
                     }
+                    release(w);
+                    moved = true;
                     break;
                 }
                 case Wait::Write: {
                     const uint32_t before = w.done;
                     if (w.open->master ? moveInput(t, w) : (t.hungUp || moveOutput(t, w))) {
+                        tellAll(t);
                         if (!w.open->master && t.hungUp && w.done == 0) {
                             fail(fd, EIO);
                         } else {
@@ -872,6 +875,7 @@ static void progress(Terminal& t) {
                             }
                             apply(t, w.settings);
                         }
+                        tellAll(t);
                         answer(fd, opOk, 0);
                         release(w);
                         moved = true;
@@ -1032,8 +1036,8 @@ static void flush(Open& o, Request& r) {
     if (o.master ? input : output) {
         t.output.clear();
     }
-    answer(r.reply(), opOk, 0);
     progress(t);
+    answer(r.reply(), opOk, 0);
 }
 
 static void flow(Open& o, Request& r) {
@@ -1056,8 +1060,8 @@ static void flow(Open& o, Request& r) {
         default:
             return fail(r.reply(), EINVAL);
     }
-    answer(r.reply(), opOk, 0);
     progress(t);
+    answer(r.reply(), opOk, 0);
 }
 
 static void setSize(Open& o, Request& r) {
