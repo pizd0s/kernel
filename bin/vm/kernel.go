@@ -149,6 +149,11 @@ type Process struct {
 	events eventQueue
 	own    ownEvents
 	spare  *subscription
+	// holds counts the waits of the kernel's own the process is in, which
+	// take none of its signals (holdSignals); skipped says one came in
+	// such a wait.
+	holds   int
+	skipped bool
 }
 
 // execImage is a program a process runs; panicked by exec, it unwinds the
@@ -287,6 +292,7 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 		events: eventQueue{bell: make(chan struct{}, 1)}}
 	p.own.signal.kind, p.own.continued.kind = eventSignal, eventContinued
 	p.own.child.kind, p.own.compiled.kind = eventChild, eventCompiled
+	p.own.signal.run = (*Process).takeSignals
 
 	if parent == nil {
 		p.pgid, p.sid = p.pid, p.pid
@@ -767,15 +773,14 @@ func (p *Process) errno() syscall.Errno {
 	return syscall.Errno(p.u32(p.errnoAt))
 }
 
-// result returns r, or -1 with errno set when err is not nil, after
-// delivering the pending signals: a system call returns through it.
+// result returns r, or -1 with errno set when err is not nil: a system
+// call returns through it. The process's signals are none of its
+// business: the interrupt word takes them on the way out of the import.
 func (p *Process) result(r int, err error) uint32 {
 	if err != nil {
 		p.setErrno(errnoOf(err))
 		r = -1
 	}
-
-	p.deliver()
 
 	return uint32(r)
 }
@@ -787,8 +792,6 @@ func (p *Process) result64(r int64, err error) uint64 {
 		r = -1
 	}
 
-	p.deliver()
-
 	return uint64(r)
 }
 
@@ -798,8 +801,6 @@ func (p *Process) pointer(at uint32, err error) uint32 {
 		p.setErrno(errnoOf(err))
 		at = 0
 	}
-
-	p.deliver()
 
 	return at
 }

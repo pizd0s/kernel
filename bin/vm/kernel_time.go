@@ -523,7 +523,6 @@ func (p *Process) libcTimegm(at uint32) uint64 {
 
 func (p *Process) libcUsleep(us uint32) uint32 {
 	left := p.sleep(time.Duration(us) * time.Microsecond)
-	p.deliver()
 
 	if left > 0 {
 		return p.result(0, syscall.EINTR)
@@ -586,7 +585,6 @@ func (p *Process) libcClock_nanosleep(clock, flags, req, rem uint32) uint32 {
 	}
 
 	left := p.sleep(d)
-	p.deliver()
 
 	if left > 0 {
 		if rem != 0 && flags&timerAbstime == 0 {
@@ -713,7 +711,6 @@ func (p *Process) libcTimes(at uint32) uint64 {
 
 func (p *Process) libcSleep(seconds uint32) uint32 {
 	left := p.sleep(time.Duration(seconds) * time.Second)
-	p.deliver()
 
 	return uint32((left + time.Second - 1) / time.Second)
 }
@@ -753,7 +750,6 @@ func (p *Process) libcNanosleep(req, rem uint32) uint32 {
 	}
 
 	left := p.sleep(d)
-	p.deliver()
 
 	if left > 0 {
 		if rem != 0 {

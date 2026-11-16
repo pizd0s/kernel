@@ -398,6 +398,9 @@ func (p *Process) stopped(sig int) {
 	p.halted, p.report = true, sig<<8|stoppedBy
 	p.k.mu.Unlock()
 	p.tellParent(saNocldstop)
+	p.holdSignals()
+	defer p.passSignals()
+
 	p.wait(time.Time{}, func(*event) (bool, error) {
 		p.k.mu.Lock()
 		halted := p.halted
@@ -454,22 +457,12 @@ func (p *Process) tellParent(flag uint32) {
 // handlers ran when they all restart calls. Ready comes first, as a call
 // that has its result returns it.
 func (p *Process) waitEvent(ready func() bool) error {
-	_, err := p.wait(time.Time{}, func(*event) (bool, error) {
-		for {
-			signal := p.sig.deliverable() != 0
-
-			if ready() {
-				return true, nil
-			}
-
-			if !signal {
-				return false, nil
-			}
-
-			if !p.interrupted() {
-				return true, syscall.EINTR
-			}
+	_, err := p.wait(time.Time{}, func(e *event) (bool, error) {
+		if ready() {
+			return true, nil
 		}
+
+		return e.interrupts(true), syscall.EINTR
 	})
 
 	return err

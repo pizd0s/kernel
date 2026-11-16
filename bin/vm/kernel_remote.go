@@ -558,7 +558,9 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 	defer mine.unref()
 	sub := p.subscription(0)
 	mine.subscribe(sub, pollIn)
+	p.holdSignals()
 
+	defer p.passSignals()
 	defer p.release(sub)
 	defer mine.unsubscribe(sub)
 

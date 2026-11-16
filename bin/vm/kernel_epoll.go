@@ -434,7 +434,7 @@ func (ep *epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, erro
 	defer ep.waiters.remove(&sub.in)
 
 	n := 0
-	_, err := p.wait(end, func(*event) (bool, error) {
+	_, err := p.wait(end, func(e *event) (bool, error) {
 		if n = ep.collect(buf, max); n > 0 {
 			return true, nil
 		}
@@ -443,11 +443,7 @@ func (ep *epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, erro
 			return true, nil
 		}
 
-		if p.sig.deliverable() != 0 {
-			return true, syscall.EINTR
-		}
-
-		return false, nil
+		return e.interrupts(false), syscall.EINTR
 	})
 
 	return n, err

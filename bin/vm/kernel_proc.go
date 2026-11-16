@@ -194,12 +194,14 @@ func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*
 	}
 
 	k.mu.Unlock()
+	p.holdSignals()
 	p.wait(time.Time{}, func(*event) (bool, error) {
 		k.mu.Lock()
 		defer k.mu.Unlock()
 
 		return e.done, nil
 	})
+	p.passSignals()
 
 	return e.code, e.err
 }
@@ -815,9 +817,11 @@ func (p *Process) libcSystem(cmd uint32) uint32 {
 		p.post(&p.own.child)
 	}()
 
+	p.holdSignals()
 	p.wait(time.Time{}, func(*event) (bool, error) {
 		return ended.Load(), nil
 	})
+	p.passSignals()
 
 	status := c.status
 	// its parent never waits for it: the child is reaped here

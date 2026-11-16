@@ -448,6 +448,7 @@ func (e *pairEnd) kernelPut(p *Process, pk packet) error {
 		}
 	}()
 
+	p.holdSignals()
 	_, err := p.wait(time.Time{}, func(*event) (bool, error) {
 		for {
 			if e.noWrite.Load() {
@@ -473,6 +474,7 @@ func (e *pairEnd) kernelPut(p *Process, pk packet) error {
 			e.subscribe(sub, pollOut)
 		}
 	})
+	p.passSignals()
 
 	return err
 }
@@ -615,12 +617,14 @@ func (e *pairEnd) kernelRecv(p *Process) (packet, bool, error) {
 	var pk packet
 	var eof bool
 
+	p.holdSignals()
 	p.wait(time.Time{}, func(*event) (bool, error) {
 		var ok bool
 		pk, eof, ok = e.take(false)
 
 		return ok, nil
 	})
+	p.passSignals()
 
 	return pk, eof, nil
 }

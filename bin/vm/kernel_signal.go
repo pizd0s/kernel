@@ -17,9 +17,12 @@ import (
 )
 
 // Signals are the kernel's: a process has its actions, blocked mask and
-// pending set; sending one sets it pending and wakes the process, which
-// takes it on its way out of a system call, in a blocking wait, or, when
-// it runs its own code, as Go interrupts that (lib/goruntime). A handler
+// pending set; sending one sets it pending and puts the process's signal
+// event in its queue (kernel_queue.go), whose callback takes the signals:
+// a wait runs it as it takes the event, and the process's own code as it
+// is interrupted, which the interrupt word of its instance asks for on
+// its way out of an import and Go as it runs (lib/goruntime). No call of
+// the kernel's looks at the signals on its way out. A handler
 // is a function of the guest's table, called through the exports of the
 // crt. Signals of the host's terminal go to its foreground group, the
 // host's others to the first process.
@@ -229,27 +232,29 @@ func (p *Process) raiseInterrupt() {
 // without moving it, as LLVM's wasm code does.
 const redZone = 128
 
-// interrupt takes the deliverable signals where the process's own code was
-// interrupted, by Go or on its way out of an import: a handler's frames on
-// the shadow stack go below the red zone of the function interrupted.
-// Taking them all clears the interrupt word.
+// interrupt takes the process's signal event out of its queue and runs
+// its callback where the process's own code was interrupted, by Go or on
+// its way out of an import: a handler's frames on the shadow stack go
+// below the red zone of the function interrupted. Taking the signals all
+// clears the interrupt word.
 func (p *Process) interrupt() {
+	p.events.drop(&p.own.signal)
 	at, ok := p.inst.globalAt("__stack_pointer")
 
 	if !ok {
-		p.deliver()
+		p.takeSignals()
 
 		return
 	}
 
 	sp := binary.LittleEndian.Uint32(p.inst.block[at:])
 	binary.LittleEndian.PutUint32(p.inst.block[at:], sp-redZone)
-	p.deliver()
+	p.takeSignals()
 	binary.LittleEndian.PutUint32(p.inst.block[at:], sp)
 }
 
 // sendSelf sends a signal the process raised itself; it takes it on its
-// way out of the call.
+// way out of the call, as its interrupt word asks.
 func (p *Process) sendSelf(sig int) {
 	p.sig.mu.Lock()
 	p.sig.sent(sig)
@@ -260,6 +265,85 @@ func (p *Process) sendSelf(sig int) {
 	}
 
 	p.sig.mu.Unlock()
+	p.signalled()
+}
+
+// signalled puts the process's signal event when a signal of its is
+// deliverable, and sets its interrupt word: after a signal it sent itself,
+// or a change of its mask.
+func (p *Process) signalled() {
+	p.sig.mu.Lock()
+	ready := p.sig.pending&^p.sig.blocked != 0
+
+	if ready {
+		p.setInterrupt(1)
+	}
+
+	p.sig.mu.Unlock()
+
+	if ready {
+		p.post(&p.own.signal)
+	}
+}
+
+// What the process's signal event says, in its id, to the predicate a
+// wait asks on it, after its callback took the signals: none was taken;
+// some were, and every handler run asked to restart calls; a handler ran
+// that did not.
+const (
+	signalNone = iota
+	signalTaken
+	signalFinal
+)
+
+// interrupts tells whether the event is the signal event of signals that
+// end a wait: any taken ends one that does not restart, a handler that
+// did not ask to restart ends any.
+func (e *event) interrupts(restart bool) bool {
+	return e != nil && e.kind == eventSignal && (e.id == signalFinal || e.id == signalTaken && !restart)
+}
+
+// takeSignals is the callback of the process's signal event, which the
+// wait that takes the event runs, and the process's own code interrupted:
+// it delivers the signals the process has, their handlers and default
+// actions, and says in the event what it took. In a wait of the kernel's
+// own (holdSignals) they stay for after it.
+func (p *Process) takeSignals() {
+	e := &p.own.signal
+
+	if p.holds > 0 {
+		p.skipped, e.id = true, signalNone
+
+		return
+	}
+
+	taken, restart := p.handleSignals()
+
+	switch {
+	case !taken:
+		e.id = signalNone
+	case restart:
+		e.id = signalTaken
+	default:
+		e.id = signalFinal
+	}
+}
+
+// holdSignals begins a wait of the kernel's own, a call to a server, a
+// module's compile, a stop: the process takes no signal in it.
+// passSignals ends it, and puts the signal event again when one came
+// meanwhile, for the next wait or the process's way out.
+func (p *Process) holdSignals() {
+	p.holds++
+}
+
+func (p *Process) passSignals() {
+	p.holds--
+
+	if p.holds == 0 && p.skipped {
+		p.skipped = false
+		p.post(&p.own.signal)
+	}
 }
 
 // take removes the lowest deliverable signal and returns it with its
@@ -293,21 +377,29 @@ func (p *Process) deliver() {
 	p.handleSignals()
 }
 
-// interrupted takes the signals that interrupt a blocking call and tells
-// whether the call restarts: when every handler run asked for SA_RESTART.
+// interrupted takes the signals that interrupted a call to a server, held
+// until its end, and tells whether the call restarts: when every handler
+// run asked for SA_RESTART.
 func (p *Process) interrupted() bool {
-	return p.handleSignals()
+	_, restart := p.handleSignals()
+
+	return restart
 }
 
-func (p *Process) handleSignals() bool {
-	restart := true
+// handleSignals takes the deliverable signals, each by its action: taken
+// says there was one, restart that no handler run did not ask for
+// SA_RESTART.
+func (p *Process) handleSignals() (taken, restart bool) {
+	restart = true
 
 	for {
 		sig, act := p.take()
 
 		if sig == 0 {
-			return restart
+			return taken, restart
 		}
+
+		taken = true
 
 		switch act.handler {
 		case sigIgn:
@@ -443,6 +535,9 @@ func (p *Process) sigwait(set uint64, timeout time.Duration) (int, error) {
 		end = time.Now().Add(timeout)
 	}
 
+	p.holdSignals()
+	defer p.passSignals()
+
 	sig := 0
 	timedOut, err := p.wait(end, func(*event) (bool, error) {
 		p.sig.mu.Lock()
@@ -508,12 +603,23 @@ func (p *Process) setAction(sig int, act sigAction) sigAction {
 	return old
 }
 
+// setMask sets the blocked signals: a pending one the new mask lets
+// through is deliverable from then on (signalled).
 func (p *Process) setMask(mask uint64) uint64 {
 	p.sig.mu.Lock()
-	defer p.sig.mu.Unlock()
-
 	old := p.sig.blocked
 	p.sig.blocked = mask &^ unblockable
+	ready := p.sig.pending&^p.sig.blocked != 0
+
+	if ready {
+		p.setInterrupt(1)
+	}
+
+	p.sig.mu.Unlock()
+
+	if ready {
+		p.post(&p.own.signal)
+	}
 
 	return old
 }
@@ -627,7 +733,6 @@ func (p *Process) libcSigprocmask(how, set, old uint32) uint32 {
 // returns an error number.
 func (p *Process) libcPthread_sigmask(how, set, old uint32) uint32 {
 	err := p.sigprocmask(how, set, old)
-	p.deliver()
 
 	if err != nil {
 		return uint32(errnoOf(err))
