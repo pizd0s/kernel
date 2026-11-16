@@ -164,11 +164,12 @@ void stopServing() {
     stopping = true;
 }
 
-void serve(int epoll, Handle handle, Gone gone, Accepted accepted) {
+void serve(int epoll, Handle handle, Gone gone, Accepted accepted, Expire expire) {
     alignas(Header) static unsigned char packet[65536];
     while (!stopping && watched > 0) {
         epoll_event events[16];
-        const int n = epoll_wait(epoll, events, 16, -1);
+        const int timeout = expire ? expire() : -1;
+        const int n = epoll_wait(epoll, events, 16, timeout);
         if (n < 0 && errno != EINTR) {
             fatal("service: epoll_wait: errno %d", errno);
         }

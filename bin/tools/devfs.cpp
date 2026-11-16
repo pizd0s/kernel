@@ -10,9 +10,10 @@
 // keeps a device's name, its mode and its owner, and lets the name go when
 // the service's end of the pair closes; a socket's goes when it is
 // unlinked. A device's name may be in a directory of /dev, pts/0: the
-// directory comes with the first device in it and goes with the last. It starts the services of the system's devices, /bin/devices
-// and /bin/blk for each disk vm gave the system, and ends when rootfs lets
-// go of its channel.
+// directory comes with the first device in it and goes with the last.
+// devfs starts the services of the system's devices, /bin/devices,
+// /bin/pty and /bin/blk for each disk vm gave the system, and ends when
+// rootfs lets go of its channel.
 //
 //     devfs [-r fd] <channel> [<disk> <fd>]...
 //
@@ -573,6 +574,10 @@ int devfsMain(int argc, char** argv) {
     char* const devicesArgv[] = {devicesName, option, readyText, nullptr};
     char* const bareDevices[] = {devicesName, nullptr};
     start("/bin/devices", ready >= 0 ? devicesArgv : bareDevices, -1);
+    char ptyName[] = "pty";
+    char* const ptyArgv[] = {ptyName, option, readyText, nullptr};
+    char* const barePty[] = {ptyName, nullptr};
+    start("/bin/pty", ready >= 0 ? ptyArgv : barePty, -1);
     for (int i = at + 1; i < argc; i += 2) {
         char* const blkArgv[] = {blkName, option, readyText, argv[i], argv[i + 1], nullptr};
         char* const bareBlk[] = {blkName, argv[i], argv[i + 1], nullptr};

@@ -943,36 +943,6 @@ func (p *Process) libcSetpgid(pid, pgid uint32) uint32 {
 	return p.result(0, nil)
 }
 
-// tcgetpgrp and tcsetpgrp are the console's foreground group: the console
-// is the one file that has one (kernel_console.go); any other is ENOTTY.
-func (p *Process) libcTcgetpgrp(fd uint32) uint32 {
-	if err := p.consoleAt(fd); err != nil {
-		return p.result(0, err)
-	}
-
-	return p.result(int(p.k.foreground()), nil)
-}
-
-func (p *Process) libcTcsetpgrp(fd, pgrp uint32) uint32 {
-	if err := p.consoleAt(fd); err != nil {
-		return p.result(0, err)
-	}
-
-	if int32(pgrp) < 0 {
-		return p.result(0, syscall.EINVAL)
-	}
-
-	if !p.groupExists(int32(pgrp)) {
-		return p.result(0, syscall.EPERM)
-	}
-
-	p.k.mu.Lock()
-	p.k.fg = int32(pgrp)
-	p.k.mu.Unlock()
-
-	return p.result(0, nil)
-}
-
 // consoleAt is nil for a descriptor of the console's, else EBADF or
 // ENOTTY.
 func (p *Process) consoleAt(fd uint32) error {

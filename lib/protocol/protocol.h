@@ -153,6 +153,37 @@
 //                                         as they change, the first right
 //                                         after the OK
 //
+//   A terminal's, on an open file whose OPEN's OK had openTerminal in arg:
+//   the server keeps all of the terminal, its settings and its discipline
+//   (bin/tools/pty.cpp). termios is lib/c's struct termios, winsize its
+//   struct winsize.
+//     TCGETATTR                           OK termios
+//     TCSETATTR arg when  termios         TCSANOW, TCSADRAIN, TCSAFLUSH; one
+//                                         that drains waits for the output
+//                                         to go, and may hear CANCEL
+//     TCFLUSH   arg queue                 TCIFLUSH, TCOFLUSH, TCIOFLUSH
+//     TCFLOW    arg action                TCOOFF, TCOON, TCIOFF, TCION
+//     TCDRAIN                             waits for the output to go, and
+//                                         may hear CANCEL
+//     GETWINSIZE                          OK winsize
+//     SETWINSIZE          winsize         SIGWINCH to the foreground group
+//                                         when it changes
+//     INQ                                 OK count u32: the bytes a read
+//                                         would find
+//     OUTQ                                OK count u32: the bytes written
+//                                         that the other end has not read
+//     NAME      arg peer                  OK the path of the terminal's
+//                                         device; with peer a master's
+//                                         slave's
+//     GETPGRP                             OK pgrp u32: the foreground
+//                                         group, 0 for none
+//     SETPGRP   arg pgrp                  the foreground group, which the
+//                                         kernel found in the caller's
+//                                         session
+//     SETCTTY   arg sid   pgrp u32        a slave controls the session of
+//                                         sid, pgrp its foreground group;
+//                                         EPERM when it controls another
+//
 //   A device's service's, on the channel devfs has of it, and on
 //   /dev/init:
 //     OPEN      arg flags   mode u32      the reply's endpoint is the open
@@ -252,6 +283,20 @@ enum : uint32_t {
     // A service's.
     opOpen = 96,
     opRegister,
+    // A terminal's.
+    opTcgetattr = 112,
+    opTcsetattr,
+    opTcflush,
+    opTcflow,
+    opTcdrain,
+    opGetWinsize,
+    opSetWinsize,
+    opInq,
+    opOutq,
+    opName,
+    opGetPgrp,
+    opSetPgrp,
+    opSetCtty,
     // Replies.
     opOk = 128,
     opErr,
@@ -262,8 +307,10 @@ enum : uint32_t {
 constexpr size_t maxFds = 4;
 constexpr uint32_t noId = 0xffffffff; // a uid or gid CHOWN keeps
 constexpr uint32_t fsNocache = 1;     // ROOT's flags: the file system changes by itself
-// An OPEN's OK's arg: the open file tells its readiness (READY).
+// An OPEN's OK's arg: the open file tells its readiness (READY); it is a
+// terminal's, which takes a terminal's calls.
 constexpr uint32_t openTells = 1;
+constexpr uint32_t openTerminal = 2;
 // Io's flags.
 constexpr uint32_t ioAppend = 1;
 constexpr uint32_t ioNonblock = 2;

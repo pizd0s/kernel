@@ -478,44 +478,6 @@ func (p *Process) getpass(prompt uint32) uint32 {
 	return 0
 }
 
-// The system has no pseudoterminal: posix_openpt, openpty and forkpty are
-// ENOSYS, and the calls on a master, which no descriptor is, ENOTTY.
-
-func (p *Process) libcPosix_openpt(flags uint32) uint32 {
-	return p.result(0, syscall.ENOSYS)
-}
-
-func (p *Process) libcOpenpty(amaster, aslave, name, termp, winp uint32) uint32 {
-	return p.result(0, syscall.ENOSYS)
-}
-
-func (p *Process) libcForkpty(amaster, name, termp, winp uint32) uint32 {
-	return p.result(0, syscall.ENOSYS)
-}
-
-func (p *Process) libcGrantpt(fd uint32) uint32 {
-	return p.notTerminal(fd)
-}
-
-func (p *Process) libcUnlockpt(fd uint32) uint32 {
-	return p.notTerminal(fd)
-}
-
-// ptsname is NULL with ENOTTY, ptsname_r the error number.
-func (p *Process) libcPtsname(fd uint32) uint32 {
-	p.notTerminal(fd)
-
-	return 0
-}
-
-func (p *Process) libcPtsname_r(fd, buf, size uint32) uint32 {
-	if _, err := p.fd(fd); err != nil {
-		return uint32(errnoOf(err))
-	}
-
-	return uint32(syscall.ENOTTY)
-}
-
 // The system's names, uname's, the kernel's own: none of the host's. The
 // host and domain names are root's to set.
 type systemNames struct {

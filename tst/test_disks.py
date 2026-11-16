@@ -69,6 +69,7 @@ WANT = """\
 full
 init
 null
+pty
 random
 raw
 sda

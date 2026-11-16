@@ -190,6 +190,10 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (F
 		return p.openFifo(&st, flags)
 	}
 
+	if pk.arg&openTerminal != 0 {
+		return &remoteTerminal{remoteFile{node}}, nil
+	}
+
 	return &remoteFile{node}, nil
 }
 

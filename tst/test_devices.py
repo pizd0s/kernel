@@ -102,6 +102,7 @@ WANT = """\
 full
 init
 null
+pty
 random
 tty
 urandom

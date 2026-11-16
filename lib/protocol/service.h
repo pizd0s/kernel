@@ -87,6 +87,9 @@ bool Request::at(size_t offset, T& out) const {
 using Handle = bool (*)(Endpoint& e, Request& r);
 using Gone = void (*)(Endpoint& e);
 using Accepted = void (*)(Endpoint& e, int connection);
+// expire runs the service's timers that are due and is how long serve may
+// wait for the next, in milliseconds, -1 for none.
+using Expire = int (*)();
 
 // Serves the endpoints of epoll while a device's channel or any endpoint
 // is open, or until stopServing: when rootfs lets go of the devices, as
@@ -97,12 +100,13 @@ using Accepted = void (*)(Endpoint& e, int connection);
 // request without an endpoint is a question, answered on the endpoint it
 // came on. An endpoint whose other end closed goes to gone, then is closed.
 // A socket that listens has its connections accepted, each to accepted.
+// Before each wait, expire runs what is due and bounds the wait.
 //
 // A READ or a WRITE that waits keeps its endpoint until handle answers it:
 // handle sets its descriptor in r.fds to -1 and watches it, of saying what
 // waits. A CANCEL comes on it as a question, and gone hears that the asker
 // went; once answered, the endpoint is let go of (unwatch).
-void serve(int epoll, Handle handle, Gone gone = nullptr, Accepted accepted = nullptr);
+void serve(int epoll, Handle handle, Gone gone = nullptr, Accepted accepted = nullptr, Expire expire = nullptr);
 
 // Ends serve once the events it has are handled.
 void stopServing();

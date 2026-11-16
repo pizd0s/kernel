@@ -1144,6 +1144,12 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 		return p.result(0, err)
 	}
 
+	if t, ok := obj.(*remoteTerminal); ok {
+		if r, done := p.terminalIoctl(t, fd, req, va); done {
+			return r
+		}
+	}
+
 	switch req {
 	case fionbio:
 		fl, err := obj.flags()
@@ -1193,55 +1199,4 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 	}
 
 	return p.result(0, syscall.ENOTTY)
-}
-
-// notTerminal is the answer of a call of a terminal's on a descriptor,
-// which none is: ENOTTY, EBADF for a descriptor not open.
-func (p *Process) notTerminal(fd uint32) uint32 {
-	if _, err := p.fd(fd); err != nil {
-		return p.result(0, err)
-	}
-
-	return p.result(0, syscall.ENOTTY)
-}
-
-func (p *Process) libcIsatty(fd uint32) uint32 {
-	if _, err := p.fd(fd); err != nil {
-		p.setErrno(syscall.EBADF)
-
-		return 0
-	}
-
-	p.setErrno(syscall.ENOTTY)
-
-	return 0
-}
-
-func (p *Process) libcTcgetattr(fd, at uint32) uint32 {
-	return p.notTerminal(fd)
-}
-
-// tcsetattr's action is musl's to check first: EINVAL past TCSAFLUSH.
-func (p *Process) libcTcsetattr(fd, action, at uint32) uint32 {
-	if action > 2 {
-		return p.result(0, syscall.EINVAL)
-	}
-
-	return p.notTerminal(fd)
-}
-
-func (p *Process) libcTcflow(fd, action uint32) uint32 {
-	return p.notTerminal(fd)
-}
-
-func (p *Process) libcTcflush(fd, queue uint32) uint32 {
-	return p.notTerminal(fd)
-}
-
-func (p *Process) libcTcdrain(fd uint32) uint32 {
-	return p.notTerminal(fd)
-}
-
-func (p *Process) libcTcsendbreak(fd, duration uint32) uint32 {
-	return p.notTerminal(fd)
 }

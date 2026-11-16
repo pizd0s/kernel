@@ -385,13 +385,3 @@ func (p *Process) libcTtyname_r(fd, buf, n uint32) uint32 {
 func (p *Process) libc__kernel_syslog(priority, message uint32) {
 	p.syslog(priority, message)
 }
-
-// terminalName is the name of a descriptor's terminal: the system has
-// none, so ENOTTY, EBADF for a descriptor not open.
-func (p *Process) terminalName(fd uint32) (string, syscall.Errno) {
-	if _, err := p.fd(fd); err != nil {
-		return "", syscall.EBADF
-	}
-
-	return "", syscall.ENOTTY
-}

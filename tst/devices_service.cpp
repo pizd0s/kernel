@@ -123,10 +123,12 @@ static void writeMail(const Endpoint& e, const Request& r) {
     const size_t part = MIN(size_t(r.h.arg), sizeof mail - mailLength);
     const ssize_t got = pread(r.window(), mail + mailLength, part, io.woff);
     mailLength += got > 0 ? size_t(got) : 0;
+
     struct {
         uint32_t count;
         uint64_t at;
     } __attribute__((packed)) done{uint32_t(got > 0 ? got : 0), io.off};
+
     answer(r.reply(), opOk, 0, &done, sizeof done);
     if (reader.at && mailLength > 0) {
         deliver(reader.window, reader.woff, reader.length, reader.at->fd);
@@ -239,7 +241,7 @@ static void ring(int) {
 }
 
 static int waitFor(const char* path, bool restart) {
-    struct sigaction action {};
+    struct sigaction action{};
     action.sa_handler = ring;
     action.sa_flags = restart ? SA_RESTART : 0;
     sigaction(SIGALRM, &action, nullptr);
