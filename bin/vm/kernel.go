@@ -498,11 +498,11 @@ func trapSignal(code uint32) int {
 
 // terminate ends the process with a wait status: its descriptors close, its
 // children go to the first process, it becomes a zombie its parent reaps,
-// or nothing when the parent ignores SIGCHLD; with the first process
-// vm ends.
+// or nothing when the parent ignores SIGCHLD, and the groups it joined to
+// its session may be orphaned (orphans); with the first process vm ends.
 func (p *Process) terminate(status int) {
 	p.stopTimers()
-	p.leaveSession()
+	p.leaveSession(true)
 
 	for fd := range p.files.size() {
 		p.closeFd(fd)
@@ -519,6 +519,11 @@ func (p *Process) terminate(status int) {
 	adopted := false
 
 	var bereaved []*Process
+	var joined []int32
+
+	if parent != nil && parent.pgid != p.pgid && parent.sid == p.sid {
+		joined = append(joined, p.pgid)
+	}
 
 	for _, q := range k.procs {
 		if q.ppid == p.pid {
@@ -527,6 +532,10 @@ func (p *Process) terminate(status int) {
 
 			if q.pdeathsig != 0 && !q.zombie {
 				bereaved = append(bereaved, q)
+			}
+
+			if !q.zombie && q.pgid != p.pgid && q.sid == p.sid {
+				joined = append(joined, q.pgid)
 			}
 		}
 	}
@@ -540,6 +549,7 @@ func (p *Process) terminate(status int) {
 	}
 
 	k.mu.Unlock()
+	k.orphans(joined)
 
 	if adopted && p != k.first {
 		k.first.childChanged(int(syscall.SIGCHLD))

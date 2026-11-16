@@ -168,18 +168,10 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (F
 		return nil, err
 	}
 
-	node := remoteNode{end: mine, accmode: flags & 3, tells: pk.arg&openTells != 0}
-	node.refs.Store(1)
-	node.append.Store(flags&syscall.O_APPEND != 0)
-	node.nonblock.Store(flags&syscall.O_NONBLOCK != 0)
-
-	if node.tells {
-		mine.from.latest.Store(true)
-	}
-
 	switch {
 	case len(pk.data) >= remoteStat+8:
-		dir := &remoteDir{remoteNode: node, mode: st.Mode}
+		dir := &remoteDir{mode: st.Mode}
+		dir.opened(mine, pk.arg, flags)
 		dir.dev.Store(st.Dev)
 		dir.ino.Store(st.Ino)
 		dir.known.Store(true)
@@ -198,7 +190,8 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (F
 	}
 
 	if pk.arg&openTerminal != 0 {
-		t := &remoteTerminal{remoteFile: remoteFile{node}, dev: st.Dev, ino: st.Ino}
+		t := &remoteTerminal{dev: st.Dev, ino: st.Ino}
+		t.opened(mine, pk.arg, flags)
 
 		if flags&syscall.O_NOCTTY == 0 {
 			p.acquire(t)
@@ -207,7 +200,23 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (F
 		return t, nil
 	}
 
-	return &remoteFile{node}, nil
+	f := &remoteFile{}
+	f.opened(mine, pk.arg, flags)
+
+	return f, nil
+}
+
+// opened makes the node the open file an OPEN's OK, its arg ok, gave on
+// mine, opened with flags.
+func (n *remoteNode) opened(mine *pairEnd, ok uint32, flags int) {
+	n.end, n.accmode, n.tells = mine, flags&3, ok&openTells != 0
+	n.refs.Store(1)
+	n.append.Store(flags&syscall.O_APPEND != 0)
+	n.nonblock.Store(flags&syscall.O_NONBLOCK != 0)
+
+	if n.tells {
+		mine.from.latest.Store(true)
+	}
 }
 
 // statPath is the metadata of what a path names, or of a last link

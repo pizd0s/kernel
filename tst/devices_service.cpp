@@ -279,7 +279,7 @@ int main(int argc, char** argv) {
     mailbox = argc > 4 && strcmp(argv[4], "wait") == 0;
     const bool readOnly = argc > 4 && strcmp(argv[4], "ro") == 0;
     const int registry = open("/dev/init", readOnly ? O_RDONLY : O_RDWR);
-    const int e = registry < 0 ? errno : enroll(registry, name, uint32_t(strtoul(argv[2], nullptr, 8)), device);
+    const int e = registry < 0 ? errno : enroll(registry, name, uint32_t(strtoul(argv[2], nullptr, 8)), uint32_t(geteuid()), uint32_t(getegid()), device);
     if (e != 0) {
         printf("register %s: %s\n", name, strerror(e));
         return 1;

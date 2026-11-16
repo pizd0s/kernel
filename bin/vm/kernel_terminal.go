@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/binary"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,12 +24,17 @@ import (
 // which goes with the leader; and job control, as Linux's: a read of its
 // controlling terminal from a group not in the foreground is SIGTTIN to
 // the group, a write with TOSTOP or a change of the terminal SIGTTOU; the
-// foreground group and TOSTOP are what the terminal's READY said last.
-// dev and ino are the terminal's device's, the same for each open of it.
+// foreground group and TOSTOP are what the terminal's READY said last. A
+// group a going orphans hears SIGHUP and SIGCONT when it has a stopped
+// process, as POSIX says (orphans). dev and ino are the terminal's
+// device's, the same for each open of it.
 type remoteTerminal struct {
 	remoteFile
 	dev, ino uint64
 }
+
+// A service's OPEN, and on a slave's open file another open of the slave.
+const rOpen uint32 = 96
 
 const (
 	rTcgetattr uint32 = iota + 112
@@ -77,23 +83,47 @@ func (p *Process) isCtty(t *remoteTerminal) bool {
 }
 
 // openControlling opens the caller's controlling terminal anew, /dev/tty's
-// open: ENXIO for a session that has none.
+// open: its server's other open of the slave the kernel keeps, which no
+// owner's permission keeps out, as Linux's does not; ENXIO for a session
+// that has none, or whose terminal hung up, which controls it no more.
 func (p *Process) openControlling(flags int) (File, error) {
 	p.k.mu.Lock()
 	c := p.k.cttys[p.sid]
+
+	if c != nil {
+		c.ref()
+	}
+
 	p.k.mu.Unlock()
 
 	if c == nil {
 		return nil, syscall.ENXIO
 	}
 
-	name, err := c.name(p, false)
+	defer c.unref()
+
+	if c.readiness()&pollHup != 0 {
+		return nil, syscall.ENXIO
+	}
+
+	pk, mine, err := c.call(p, rOpen, uint32(flags), nil, nil)
 
 	if err != nil {
 		return nil, err
 	}
 
-	return p.openPath(name, flags|syscall.O_NOCTTY, 0)
+	var st syscall.Stat_t
+
+	if err := decodeStat(pk.data, &st); err != nil || pk.arg&openTerminal == 0 {
+		mine.unref()
+
+		return nil, syscall.EIO
+	}
+
+	t := &remoteTerminal{dev: st.Dev, ino: st.Ino}
+	t.opened(mine, pk.arg, flags)
+
+	return t, nil
 }
 
 // acquire makes a terminal opened without O_NOCTTY the controlling
@@ -124,6 +154,10 @@ func (k *Kernel) orphaned(pgid int32) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
+	return k.orphanedLocked(pgid)
+}
+
+func (k *Kernel) orphanedLocked(pgid int32) bool {
 	for _, q := range k.procs {
 		if q.pgid != pgid || q.zombie {
 			continue
@@ -135,6 +169,33 @@ func (k *Kernel) orphaned(pgid int32) bool {
 	}
 
 	return true
+}
+
+// orphans is what a process's going does to the groups it joined to its
+// session, its own and its children's, of a parent in another group of
+// it: one orphaned now, with a stopped process, which no one could
+// continue, hears SIGHUP and SIGCONT, as POSIX says.
+func (k *Kernel) orphans(groups []int32) {
+	for i, pgid := range groups {
+		if slices.Contains(groups[:i], pgid) {
+			continue
+		}
+
+		k.mu.Lock()
+		stopped := false
+
+		for _, q := range k.procs {
+			stopped = stopped || q.pgid == pgid && !q.zombie && q.halted
+		}
+
+		hangs := stopped && k.orphanedLocked(pgid)
+		k.mu.Unlock()
+
+		if hangs {
+			k.signalGroup(pgid, int(syscall.SIGHUP))
+			k.signalGroup(pgid, int(syscall.SIGCONT))
+		}
+	}
 }
 
 // signalGroup is the kernel's signal to a process group, which no
@@ -227,10 +288,11 @@ func (p *Process) changeAt(fd uint32) (*remoteTerminal, error) {
 	return t, err
 }
 
-// leaveSession is the going of a session's leader: its controlling
-// terminal controls no session any more, and its foreground group hears
-// SIGHUP and SIGCONT, as Linux's does.
-func (p *Process) leaveSession() {
+// leaveSession is the going of a session's leader, or its TIOCNOTTY: its
+// controlling terminal controls no session any more, and its foreground
+// group hears SIGHUP, and SIGCONT after for a TIOCNOTTY, as Linux's
+// pseudoterminals do.
+func (p *Process) leaveSession(going bool) {
 	p.k.mu.Lock()
 	t := p.k.cttys[p.sid]
 	leads := p.sid == p.pid
@@ -253,7 +315,10 @@ func (p *Process) leaveSession() {
 
 	if foreground > 0 {
 		p.k.signalGroup(foreground, int(syscall.SIGHUP))
-		p.k.signalGroup(foreground, int(syscall.SIGCONT))
+
+		if !going {
+			p.k.signalGroup(foreground, int(syscall.SIGCONT))
+		}
 	}
 
 	t.unref()
@@ -554,7 +619,7 @@ func (p *Process) notty(t *remoteTerminal) error {
 		return syscall.ENOTTY
 	}
 
-	p.leaveSession()
+	p.leaveSession(false)
 
 	return nil
 }
@@ -878,6 +943,12 @@ func (p *Process) libcGetpass(prompt uint32) uint32 {
 
 	if p.passwordAt == 0 {
 		p.passwordAt = p.malloc(passwordSize + 1)
+	}
+
+	if p.passwordAt == 0 {
+		p.setErrno(syscall.ENOMEM)
+
+		return 0
 	}
 
 	at := p.passwordAt

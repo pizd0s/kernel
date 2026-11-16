@@ -1,9 +1,10 @@
 //@ compile-flags: -D_GNU_SOURCE
-//@ stdout: "slave /dev/pts/ 1 1\nline 'abc\\n' echo 'abc\\r\\n'\nerase 'ac\\n' echo 'ab\\b \\bc\\r\\n'\nkill 'd\\n' echo 'abc\\b \\b\\b \\b\\b \\bd\\r\\n'\nword 'foo baz\\n' echo 'foo bar\\b \\b\\b \\b\\b \\bbaz\\r\\n'\neof 0 'xy'\ncontrol '\\x01\\n' echo '^A\\r\\n'\nliteral '\\x7f\\n' echo '^\\b^?\\r\\n'\ninq 4\nraw 'x\\ry' echo ''\nraw out 'a\\nb'\ntimeout 0\nwindow 24 80\ninterrupted 1 foreground 1 echo '^C'\nhangup read 0 write EIO\n"
+//@ stdout: "slave /dev/pts/ 1 1\nline 'abc\\n' echo 'abc\\r\\n'\nerase 'ac\\n' echo 'ab\\b \\bc\\r\\n'\nkill 'd\\n' echo 'abc\\b \\b\\b \\b\\b \\bd\\r\\n'\nword 'foo baz\\n' echo 'foo bar\\b \\b\\b \\b\\b \\bbaz\\r\\n'\neof 0 'xy'\ncontrol '\\x01\\n' echo '^A\\r\\n'\nliteral '\\x7f\\n' echo '^\\b^?\\r\\n'\ninq 4\nraw 'x\\ry' echo ''\nraw out 'a\\nb'\ntimeout 0\nwindow 24 80\nmaster settings 1 1\nowner 1 private 1\ninterrupted 1 foreground 1 echo '^C'\nhangup read 0 write EIO\n"
 
 // The pseudoterminals: openpty's master and slave, the slave's line
-// discipline as Linux's, its settings, its window, its signals and its
-// hangup. Each result is shown as its bytes.
+// discipline as Linux's, its settings, which the master's calls get and
+// set too, its window, its owner, its signals and its hangup. Each result
+// is shown as its bytes.
 
 #include <assert.h>
 #include <errno.h>
@@ -15,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
@@ -126,6 +128,24 @@ int main() {
     winsize back{};
     assert(ioctl(master, TIOCSWINSZ, &size) == 0 && ioctl(slave, TIOCGWINSZ, &back) == 0);
     printf("window %d %d\n", back.ws_row, back.ws_col);
+
+    // The master's settings are the slave's, as Linux's are.
+    termios fromMaster;
+    termios fromSlave;
+    assert(tcgetattr(master, &fromMaster) == 0 && tcgetattr(slave, &fromSlave) == 0);
+    const int same = fromMaster.c_iflag == fromSlave.c_iflag && fromMaster.c_lflag == fromSlave.c_lflag;
+    cfmakeraw(&fromMaster);
+    assert(tcsetattr(master, TCSANOW, &fromMaster) == 0 && tcgetattr(slave, &fromSlave) == 0);
+    printf("master settings %d %d\n", same, (fromSlave.c_lflag & ICANON) == 0);
+    assert(tcsetattr(master, TCSANOW, &saved) == 0);
+
+    // The slave is its opener's, as devpts makes it: others but its group
+    // may not even write to it.
+    struct stat device;
+    assert(fstat(slave, &device) == 0);
+    const int owner = device.st_uid == getuid();
+    const int closed = (device.st_mode & S_IRWXU) == (S_IRUSR | S_IWUSR) && (device.st_mode & (S_IRWXO | S_IRGRP | S_IXGRP)) == 0;
+    printf("owner %d private %d\n", owner, closed);
 
     // A session the slave controls: ^C at the master interrupts its
     // foreground group.

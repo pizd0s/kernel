@@ -1,20 +1,23 @@
 // pty: the system's pseudoterminals, a service (lib/protocol/service.h)
 // that registers /dev/pty at /dev/init. Each open of /dev/pty is a new
 // terminal: the open is its master, and its slave is /dev/pts/N, a device
-// the service registers as the terminal comes and lets go when the master
-// goes. The open files of both ends are a terminal's (openTerminal) and
-// tell their readiness. The service keeps all of a terminal: its settings
-// and the master's, its window's size, the session it controls and its
-// foreground group, and its discipline, Linux's N_TTY: what the master
-// writes goes through the slave's input processing, its line editing,
-// echo and special characters, to what the slave reads; what the slave
-// writes, and the echo, go through its output processing to what the
-// master reads. A read that finds nothing waits, unless it must not
-// (ioNonblock), until there is something or a CANCEL; so does a write
-// that finds no room, and a drain. When the master goes, the terminal
-// hangs up: the slave reads nothing more and its writes are EIO, and the
-// session it controls hears SIGHUP; with no slave open, the master's
-// reads are EIO once it read what there was.
+// the service registers as the terminal comes, the opener's and 0600, as
+// Linux's devpts makes it, and lets go when the master goes. The open
+// files of both ends are a terminal's (openTerminal) and tell their
+// readiness; an OPEN on a slave's is another open of the slave, /dev/tty's.
+// The service keeps all of a terminal: its settings, which the master's
+// calls get and set too, as Linux's do, its window's size, the session it
+// controls and its foreground group, and its discipline, Linux's N_TTY:
+// what the master writes goes through the slave's input processing, its
+// line editing, echo and special characters, to what the slave reads;
+// what the slave writes, and the echo, go through its output processing
+// to what the master reads. A read that finds nothing waits, unless it
+// must not (ioNonblock), until there is something or a CANCEL; so does a
+// write that finds no room, and a drain. When the master goes, the
+// terminal hangs up: a read the slave waits on is EIO, as Linux's of an
+// end whose other end closed, and the slave reads nothing more, its
+// writes EIO; the session it controls hears SIGHUP. With no slave open,
+// the master's reads are EIO once it read what there was.
 //
 //     pty [-r fd]
 
@@ -108,18 +111,17 @@ namespace {
     };
 
     // A pseudoterminal: its number, its slave's device and the endpoint
-    // of its opens; its settings and its master's, its window, the session
-    // it controls and its foreground group; the line being edited, from
-    // the column it started at; what the slave reads, its lines, and when
-    // its last byte came; what the master reads, and the column the output
-    // is at; whether the next byte is literal, the output stopped, the
-    // master gone; its open files of each end.
+    // of its opens; its settings, its window, the session it controls and
+    // its foreground group; the line being edited, from the column it
+    // started at; what the slave reads, its lines, and when its last byte
+    // came; what the master reads, and the column the output is at;
+    // whether the next byte is literal, the output stopped, the master
+    // gone; its open files of each end.
     struct Terminal {
         int number;
         Device slave;
         Endpoint* channel;
         termios settings;
-        termios masterSettings;
         winsize size;
         pid_t session;
         pid_t foreground;
@@ -218,8 +220,7 @@ static void signalGroup(pid_t group, int sig) {
     }
 }
 
-// The settings of a new terminal, Linux's: its slave's, and its master's,
-// which process nothing.
+// The settings of a new terminal, Linux's slave's.
 static void startSettings(Terminal& t) {
     memset(&t.settings, 0, sizeof t.settings);
     t.settings.c_iflag = ICRNL | IXON;
@@ -243,10 +244,6 @@ static void startSettings(Terminal& t) {
     cc[VLNEXT] = 026;
     cfsetispeed(&t.settings, B38400);
     cfsetospeed(&t.settings, B38400);
-    memset(&t.masterSettings, 0, sizeof t.masterSettings);
-    t.masterSettings.c_cflag = CS8 | CREAD;
-    cfsetispeed(&t.masterSettings, B38400);
-    cfsetospeed(&t.masterSettings, B38400);
 }
 
 // Whether a byte is the special character of an index, one not disabled.
@@ -977,6 +974,9 @@ static void apply(Terminal& t, const termios& settings) {
     }
 }
 
+// New settings, from either end. The master's are the slave's, as Linux's
+// are, and take at once: what it has to read is no output of its own
+// that could go first, as a slave's TCSADRAIN waits for.
 static void setAttributes(Open& o, Request& r) {
     Terminal& t = *o.terminal;
     termios settings;
@@ -984,11 +984,10 @@ static void setAttributes(Open& o, Request& r) {
         return fail(r.reply(), EINVAL);
     }
     memcpy(&settings, r.body, sizeof settings);
-    if (o.master) {
-        t.masterSettings = settings;
-        return answer(r.reply(), opOk, 0);
+    if (o.master && r.h.arg == TCSAFLUSH) {
+        flushInput(t);
     }
-    if (r.h.arg == TCSANOW) {
+    if (o.master || r.h.arg == TCSANOW) {
         apply(t, settings);
         progress(t);
         return answer(r.reply(), opOk, 0);
@@ -1092,6 +1091,22 @@ static void controls(Open& o, const Request& r) {
     answer(r.reply(), opOk, 0);
 }
 
+static void opened(Terminal& t, bool master, Request& r);
+
+// Another open of a slave, on an open file of it: the kernel's of its
+// controlling terminal, /dev/tty's open, which asks no path, and so no
+// owner's permission, as Linux's does not.
+static void reopened(const Open& o, Request& r) {
+    Terminal& t = *o.terminal;
+    if (o.master) {
+        return fail(r.reply(), EINVAL);
+    }
+    if (t.hungUp) {
+        return fail(r.reply(), EIO);
+    }
+    opened(t, false, r);
+}
+
 static void fileCall(Open& o, Request& r) {
     Terminal& t = *o.terminal;
     switch (r.h.op) {
@@ -1108,7 +1123,7 @@ static void fileCall(Open& o, Request& r) {
         case opFutimes:
             return fail(r.reply(), EPERM);
         case opTcgetattr:
-            return answer(r.reply(), opOk, 0, o.master ? &t.masterSettings : &t.settings, sizeof t.settings);
+            return answer(r.reply(), opOk, 0, &t.settings, sizeof t.settings);
         case opTcsetattr:
             return setAttributes(o, r);
         case opTcflush:
@@ -1141,6 +1156,8 @@ static void fileCall(Open& o, Request& r) {
             return answer(r.reply(), opOk, 0);
         case opSetCtty:
             return controls(o, r);
+        case opOpen:
+            return reopened(o, r);
         default:
             return fail(r.reply(), EINVAL);
     }
@@ -1164,7 +1181,9 @@ static void opened(Terminal& t, bool master, Request& r) {
     fail(r.reply(), ENFILE);
 }
 
-// An open of /dev/pty: a new terminal, whose slave is registered.
+// An open of /dev/pty: a new terminal, whose slave is registered, the
+// opener's, who asked, and only the opener's to open, as grantpt leaves
+// it on Linux.
 static void openMaster(Request& r) {
     for (int n = 0; n < int(sizeof terminals / sizeof terminals[0]); ++n) {
         if (terminals[n]) {
@@ -1178,7 +1197,7 @@ static void openMaster(Request& r) {
         startSettings(*t);
         char path[16];
         snprintf(path, sizeof path, "pts/%d", n);
-        if (const int e = enroll(registry, path, S_IFCHR | 0666, t->slave)) {
+        if (const int e = enroll(registry, path, S_IFCHR | 0600, r.h.uid, r.h.gid, t->slave)) {
             free(t);
             return fail(r.reply(), e);
         }
@@ -1190,12 +1209,19 @@ static void openMaster(Request& r) {
 }
 
 // The master went: the slave hangs up, and the leader of the session it
-// controls hears SIGHUP and SIGCONT, as Linux's does; its name goes.
+// controls hears SIGHUP and SIGCONT, as Linux's does; the reads the slave
+// waits on end, EIO; its name goes.
 static void hangUp(Terminal& t) {
     t.hungUp = true;
     if (t.session > 0) {
         kill(t.session, SIGHUP);
         kill(t.session, SIGCONT);
+    }
+    for (Waiting& w : waits) {
+        if (w.at && w.open->terminal == &t && w.kind == Wait::Read && !w.open->master) {
+            fail(w.at->fd, EIO);
+            release(w);
+        }
     }
     t.session = 0;
     t.foreground = 0;

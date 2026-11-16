@@ -42,7 +42,7 @@ void tell(int fd, uint32_t events, uint32_t foreground, uint32_t flags) {
     answer(fd, opReady, events, state, sizeof state);
 }
 
-int enroll(int registry, const char* name, uint32_t mode, Device& out) {
+int enroll(int registry, const char* name, uint32_t mode, uint32_t uid, uint32_t gid, Device& out) {
     int pair[2];
     int reply[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
@@ -54,7 +54,7 @@ int enroll(int registry, const char* name, uint32_t mode, Device& out) {
         close(pair[1]);
         return e;
     }
-    Header h{opRegister, mode, uint32_t(geteuid()), uint32_t(getegid())};
+    Header h{opRegister, mode, uid, gid};
     const iovec parts[] = {{&h, sizeof h}, {const_cast<char*>(name), strlen(name)}};
     const int fds[] = {pair[1], reply[1]};
     const bool sent = sendPacket(registry, parts, 2, fds, 2) >= 0;
@@ -83,7 +83,7 @@ int enroll(int registry, const char* name, uint32_t mode, Device& out) {
 Device enroll(const char* program, const char* name, uint32_t mode) {
     const int registry = open("/dev/init", O_RDWR | O_CLOEXEC);
     Device d{};
-    const int e = registry < 0 ? errno : enroll(registry, name, mode, d);
+    const int e = registry < 0 ? errno : enroll(registry, name, mode, uint32_t(geteuid()), uint32_t(getegid()), d);
     if (registry >= 0) {
         close(registry);
     }

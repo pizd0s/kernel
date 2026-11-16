@@ -162,11 +162,11 @@
 //   A terminal's, on an open file whose OPEN's OK had openTerminal in arg:
 //   the server keeps all of the terminal, its settings and its discipline
 //   (bin/tools/pty.cpp). termios is lib/c's struct termios, winsize its
-//   struct winsize.
+//   struct winsize; a master's are its slave's, as Linux's are.
 //     TCGETATTR                           OK termios
-//     TCSETATTR arg when  termios         TCSANOW, TCSADRAIN, TCSAFLUSH; one
-//                                         that drains waits for the output
-//                                         to go, and may hear CANCEL
+//     TCSETATTR arg when  termios         TCSANOW, TCSADRAIN, TCSAFLUSH; a
+//                                         slave's that drains waits for the
+//                                         output to go, and may hear CANCEL
 //     TCFLUSH   arg queue                 TCIFLUSH, TCOFLUSH, TCIOFLUSH
 //     TCFLOW    arg action                TCOOFF, TCOON, TCIOFF, TCION
 //     TCDRAIN                             waits for the output to go, and
@@ -190,16 +190,24 @@
 //                                         sid, pgrp its foreground group;
 //                                         EPERM when it controls another;
 //                                         sid 0: it controls none now
+//     OPEN      arg flags                 on a slave's: another open file of
+//                                         the slave, the reply's endpoint,
+//                                         OK as its device's OPEN's
 //
 //   A device's service's, on the channel devfs has of it, and on
 //   /dev/init:
 //     OPEN      arg flags   mode u32      the reply's endpoint is the open
 //                                         file
 //     OPEN of /dev/tty, devfs's, is the opener's controlling terminal: its
-//     OK has openControlling, and the kernel opens that terminal instead.
+//     OK has openControlling, and the kernel opens that terminal instead,
+//     with an OPEN on the open file it keeps of it, a slave's.
 //     REGISTER  arg mode    name          on /dev/init. OK stat: a device,
 //                                         S_IFCHR or S_IFBLK, of that name
-//                                         in /dev. fds[0] is the end of a
+//                                         in /dev, whose owner is who asks
+//                                         (the header's ids, the service's
+//                                         or whom it registers it for: a
+//                                         pseudoterminal's slave is its
+//                                         opener's). fds[0] is the end of a
 //                                         pair whose other end the service
 //                                         keeps, the channel: devfs hands
 //                                         every open of the name on to it,
