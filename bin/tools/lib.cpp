@@ -249,81 +249,65 @@ u64 tools::device() {
     return u64(st.st_ino);
 }
 
-void tools::flockNode(Locks& locks, int me, const Header& h, int fd) {
-    const bool other = locks.exclusive >= 0 && locks.exclusive != me;
-    usize others = 0;
-    for (usize i = 0; i < locks.shared.size(); ++i) {
-        others += locks.shared[i] != me;
+static void closed(Endpoint* ep, Closing closing);
+
+static void unshare(Locks& locks, int me) {
+    locks.shared.keepIf([me](int holder) {
+        return holder != me;
+    });
+}
+
+// What an endpoint holds of flock's lock goes.
+static void flockDrop(Locks& locks, int me) {
+    unshare(locks, me);
+    if (locks.exclusive == me) {
+        locks.exclusive = -1;
     }
-    auto unshare = [&locks, me] {
-        locks.shared.keepIf([me](int holder) {
-            return holder != me;
-        });
-    };
-    switch (h.arg & ~u32(LOCK_NB)) {
-        case LOCK_UN:
-            unshare();
-            if (locks.exclusive == me) {
-                locks.exclusive = -1;
-            }
-            break;
-        case LOCK_SH:
-            if (other) {
-                return error(fd, EAGAIN);
-            }
-            locks.exclusive = -1;
-            unshare();
-            locks.shared.pushBack(me);
-            break;
-        case LOCK_EX:
-            if (other || others > 0) {
-                return error(fd, EAGAIN);
-            }
-            unshare();
-            locks.exclusive = me;
-            break;
-        default:
-            return error(fd, EINVAL);
+}
+
+// Whether flock's lock of a kind, LOCK_SH or LOCK_EX, is free for an
+// endpoint: no other endpoint's lock is in its way.
+static bool flockFree(const Locks& locks, int me, u32 kind) {
+    if (locks.exclusive >= 0 && locks.exclusive != me) {
+        return false;
     }
-    return answer(fd, 0);
+    for (usize i = 0; kind == LOCK_EX && i < locks.shared.size(); ++i) {
+        if (locks.shared[i] != me) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// flock's lock of a kind, free for the endpoint, becomes its, in place of
+// what it held.
+static void flockTake(Locks& locks, int me, u32 kind) {
+    flockDrop(locks, me);
+    if (kind == LOCK_EX) {
+        locks.exclusive = me;
+    } else {
+        locks.shared.pushBack(me);
+    }
+}
+
+// The lock of another endpoint in the way of one of a type on a range.
+static const Range* inWay(const Locks& locks, int me, u32 type, u64 start, u64 stop) {
+    for (usize i = 0; i < locks.ranges.size(); ++i) {
+        const Range& l = locks.ranges[i];
+        if (l.owner != me && l.start < stop && start < l.stop && (l.write || type == F_WRLCK)) {
+            return &l;
+        }
+    }
+    return nullptr;
 }
 
 // The ranges a LOCK keeps, made here and swapped in: one of each for
 // the process.
 static SmallVec<Range> keptRanges;
 
-void tools::lockNode(Locks& locks, int me, const Header& h, Body body, int fd) {
-    const u32 type = body.take<u32>();
-    const u64 start = body.take<u64>();
-    const u64 length = body.take<u64>();
-    const u64 stop = length == 0 || start > past - length ? past : start + length;
-    if (type > F_UNLCK) {
-        return error(fd, EINVAL);
-    }
-    const Range* way = nullptr;
-    for (usize i = 0; i < locks.ranges.size() && !way; ++i) {
-        const Range& l = locks.ranges[i];
-        if (l.owner != me && l.start < stop && start < l.stop && (l.write || type == F_WRLCK)) {
-            way = &l;
-        }
-    }
-    if (h.arg == 1) {
-        Assembly a;
-        if (way) {
-            a.add(u32(way->write ? F_WRLCK : F_RDLCK));
-            a.add(way->start);
-            a.add(way->stop == past ? 0 : way->stop - way->start);
-        } else {
-            a.add(u32(F_UNLCK));
-            a.add(start);
-            a.add(length);
-        }
-        ok(fd, out, a.size);
-        return;
-    }
-    if (type != F_UNLCK && way) {
-        return error(fd, EAGAIN);
-    }
+// A lock of a type on a range becomes the endpoint's, in place of what
+// it held of the range; F_UNLCK lets the range go.
+static void rangeTake(Locks& locks, int me, u32 type, u64 start, u64 stop) {
     keptRanges.clear();
     for (usize i = 0; i < locks.ranges.size(); ++i) {
         const Range l = locks.ranges[i];
@@ -342,19 +326,168 @@ void tools::lockNode(Locks& locks, int me, const Header& h, Body body, int fd) {
         keptRanges.pushBack({me, type == F_WRLCK, start, stop});
     }
     locks.ranges.buffer.swap(keptRanges.buffer);
-    return answer(fd, 0);
+}
+
+// Whether two that wait are in each other's way: the later waits behind
+// the earlier then, though the lock is free for it.
+static bool crossing(const Waiter& a, const Waiter& b) {
+    if (a.owner == b.owner || a.ranged != b.ranged) {
+        return false;
+    }
+    if (!a.ranged) {
+        return a.type == LOCK_EX || b.type == LOCK_EX;
+    }
+    return a.start < b.stop && b.start < a.stop && (a.type == F_WRLCK || b.type == F_WRLCK);
+}
+
+// Whether the lock asked is its endpoint's to take now: free, and none of
+// the first count that wait in its way.
+static bool ready(const Locks& locks, const Waiter& w, usize count) {
+    if (w.ranged ? inWay(locks, w.owner, w.type, w.start, w.stop) != nullptr : !flockFree(locks, w.owner, w.type)) {
+        return false;
+    }
+    for (usize i = 0; i < count; ++i) {
+        if (crossing(locks.waiting[i], w)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void take(Locks& locks, const Waiter& w) {
+    if (w.ranged) {
+        rangeTake(locks, w.owner, w.type, w.start, w.stop);
+    } else {
+        flockTake(locks, w.owner, w.type);
+    }
+}
+
+// A waiter is one no more: its request's endpoint goes out of the loop.
+static void settle(Locks& locks, Endpoint* reply) {
+    locks.waiting.keepIf([reply](const Waiter& w) {
+        return w.reply != reply;
+    });
+    closed(reply, nullptr);
+}
+
+// Gives the locks that wait to those they are free for now, the first to
+// come first, each answered OK on its request's endpoint. One that takes
+// a range in place of what it held may free an earlier one's: from the
+// first again then.
+static void grant(Locks& locks) {
+    for (usize i = 0; i < locks.waiting.size();) {
+        const Waiter w = locks.waiting[i];
+        if (!ready(locks, w, i)) {
+            ++i;
+            continue;
+        }
+        take(locks, w);
+        ok(w.reply->fd);
+        settle(locks, w.reply);
+        i = 0;
+    }
+}
+
+// The lock a request asks, answered on fd: taken when it is the
+// endpoint's to take, behind all that wait; else EAGAIN, or the request
+// waits, fd kept as an endpoint of the loop's, which its CANCEL comes on.
+static void lock(Locks& locks, Waiter w, bool waits, int fd) {
+    if (ready(locks, w, locks.waiting.size())) {
+        take(locks, w);
+        answer(fd, 0);
+        return grant(locks);
+    }
+    if (!waits) {
+        return error(fd, EAGAIN);
+    }
+    if (!w.ranged) {
+        flockDrop(locks, w.owner);
+    }
+    w.reply = listen(fd, Role::Lock, &locks, false, false);
+    packetFds[packetFdCount - 1] = -1;
+    locks.waiting.pushBack(w);
+    grant(locks);
+}
+
+void tools::flockNode(Locks& locks, int me, const Header& h, int fd) {
+    const u32 kind = h.arg & ~u32(LOCK_NB);
+    switch (kind) {
+        case LOCK_UN:
+            flockDrop(locks, me);
+            answer(fd, 0);
+            return grant(locks);
+        case LOCK_SH:
+        case LOCK_EX:
+            return lock(locks, {me, nullptr, false, kind, 0, 0}, (h.arg & LOCK_NB) == 0, fd);
+        default:
+            return error(fd, EINVAL);
+    }
+}
+
+void tools::lockNode(Locks& locks, int me, const Header& h, Body body, int fd) {
+    const u32 type = body.take<u32>();
+    const u64 start = body.take<u64>();
+    const u64 length = body.take<u64>();
+    const u64 stop = length == 0 || start > past - length ? past : start + length;
+    if (type > F_UNLCK || h.arg > lockWait) {
+        return error(fd, EINVAL);
+    }
+    if (h.arg == lockGet) {
+        const Range* way = inWay(locks, me, type, start, stop);
+        Assembly a;
+        if (way) {
+            a.add(u32(way->write ? F_WRLCK : F_RDLCK));
+            a.add(way->start);
+            a.add(way->stop == past ? 0 : way->stop - way->start);
+        } else {
+            a.add(u32(F_UNLCK));
+            a.add(start);
+            a.add(length);
+        }
+        ok(fd, out, a.size);
+        return;
+    }
+    if (type != F_UNLCK) {
+        return lock(locks, {me, nullptr, true, type, start, stop}, h.arg == lockWait, fd);
+    }
+    rangeTake(locks, me, type, start, stop);
+    answer(fd, 0);
+    grant(locks);
 }
 
 void tools::unlock(Locks& locks, int me) {
-    locks.shared.keepIf([me](int holder) {
-        return holder != me;
-    });
-    if (locks.exclusive == me) {
-        locks.exclusive = -1;
-    }
+    flockDrop(locks, me);
     locks.ranges.keepIf([me](const Range& l) {
         return l.owner != me;
     });
+    for (usize i = 0; i < locks.waiting.size();) {
+        if (locks.waiting[i].owner == me) {
+            settle(locks, locks.waiting[i].reply);
+        } else {
+            ++i;
+        }
+    }
+    grant(locks);
+}
+
+// A lock's request that waits hears on its endpoint: a CANCEL takes it
+// back, EINTR, and the end of who asked forgets it; those behind it may
+// have theirs then.
+static void lockEvent(Endpoint* ep) {
+    Header h;
+    const i64 n = receive(ep->fd, h);
+    for (usize i = 0; i < packetFdCount; ++i) {
+        close(packetFds[i]);
+    }
+    if (n >= 0 && h.op != opCancel) {
+        return;
+    }
+    Locks& locks = *static_cast<Locks*>(ep->node);
+    if (n >= 0) {
+        error(ep->fd, EINTR);
+    }
+    settle(locks, ep);
+    grant(locks);
 }
 
 // ---- the loop's endpoints ----------------------------------------------------------
@@ -406,10 +539,13 @@ Endpoint* tools::openFile(int fd, u32 flags, void* node, bool reads, bool writes
     return ep;
 }
 
-// An endpoint that closes: what is the file system's of it goes first.
+// An endpoint that closes: what is the file system's of it goes first; a
+// lock's request's is none of the file system's.
 static void forget(Endpoint* ep, Closing closing) {
     ep->dead = true;
-    closing(ep);
+    if (closing) {
+        closing(ep);
+    }
     if (ep->before) {
         ep->before->after = ep->after;
     } else {
@@ -441,6 +577,9 @@ static void bury() {
 static void handle(Endpoint* ep, FsCall fsCall, FileCall fileCall, Closing closing) {
     if (ep->dead) {
         return;
+    }
+    if (ep->role == Role::Lock) {
+        return lockEvent(ep);
     }
     Header h;
     const i64 n = receive(ep->fd, h);

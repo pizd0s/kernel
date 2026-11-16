@@ -740,7 +740,7 @@ static void fileCall(Open& o, const Endpoint& e, Request& r) {
             uint32_t type;
             uint64_t start;
             uint64_t length;
-            if (r.h.arg == 1 && r.at(0, type) && r.at(4, start) && r.at(12, length)) {
+            if (r.h.arg == lockGet && r.at(0, type) && r.at(4, start) && r.at(12, length)) {
                 unsigned char none[20];
                 const uint32_t unlocked = F_UNLCK;
                 memcpy(none, &unlocked, 4);

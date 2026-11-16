@@ -377,20 +377,6 @@ func (p *Process) terminalAt(fd uint32) (Terminal, error) {
 	return t, nil
 }
 
-// waits is a call that waits for the terminal's output to go: a signal
-// cancels it, and it restarts when the handlers ask for that.
-func (t *remoteTerminal) waits(p *Process, op, arg uint32, body []byte) error {
-	for {
-		_, restart, err := t.node.waiting(p, op, arg, body, nil)
-
-		if err == syscall.EINTR && restart {
-			continue
-		}
-
-		return err
-	}
-}
-
 // count is a call answered with a count.
 func (t *remoteTerminal) count(p *Process, op uint32) (uint32, error) {
 	pk, err := t.node.on(p, op, 0, nil)
@@ -435,7 +421,7 @@ func (t *remoteTerminal) setattr(p *Process, when uint32, termios []byte) error 
 		return t.node.simple(p, rTcsetattr, when, termios)
 	}
 
-	return t.waits(p, rTcsetattr, when, termios)
+	return t.node.waits(p, rTcsetattr, when, termios)
 }
 
 func (t *remoteTerminal) flush(p *Process, queue uint32) error {
@@ -447,7 +433,7 @@ func (t *remoteTerminal) flow(p *Process, action uint32) error {
 }
 
 func (t *remoteTerminal) drain(p *Process) error {
-	return t.waits(p, rTcdrain, 0, nil)
+	return t.node.waits(p, rTcdrain, 0, nil)
 }
 
 func (t *remoteTerminal) window(p *Process) ([]byte, error) {

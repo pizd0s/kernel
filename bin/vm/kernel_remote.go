@@ -47,14 +47,17 @@ import (
 //	  FTRUNCATE           size u64
 //	  FSYNC     arg data
 //	  FSTATFS                              OK statfs
-//	  FLOCK     arg op                     LOCK_SH, LOCK_EX, LOCK_UN
-//	  LOCK      arg get   type u32 start u64 len u64   OK; with get the
-//	                      lock in the way, F_UNLCK for none:
+//	  FLOCK     arg op                     LOCK_SH, LOCK_EX, LOCK_UN; with
+//	                                       LOCK_NB at once, else the server
+//	                                       keeps it until the lock is free
+//	  LOCK      arg how   type u32 start u64 len u64   OK; lockSet at
+//	                      once, lockWait kept until the lock is free,
+//	                      lockGet the lock in the way, F_UNLCK for none:
 //	                      type u32 start u64 len u64
-//	  CANCEL              on the endpoint of a READ or a WRITE the server
-//	                      keeps while it waits, from the kernel (waiting):
-//	                      the server answers that request now, with the
-//	                      count so far or ERR EINTR
+//	  CANCEL              on the endpoint of a request the server keeps
+//	                      while it waits, a READ, a WRITE, a lock, from
+//	                      the kernel (waiting): the server answers that
+//	                      request now, with the count so far or ERR EINTR
 //	  READY     arg events                 from the server, on its end of an
 //	                                       open file it made telling
 //	                                       (servedTells): what poll finds
@@ -103,6 +106,14 @@ const (
 	servedPath     = 4
 	servedTells    = 16
 	readyTostop    = 1
+)
+
+// How a LOCK is asked: set at once, the lock in the way told, or set
+// once it is free.
+const (
+	lockSet  = 0
+	lockGet  = 1
+	lockWait = 2
 )
 
 // The flags of an io.
@@ -783,8 +794,29 @@ func (n *remoteNode) statfs(p *Process, st *syscall.Statfs_t) error {
 // The locks of an open file of a server, what its Locker role asks: the
 // locks are the endpoint's, the open file's.
 
+// flock is flock's lock: one that waits, without LOCK_NB, is a request the
+// server keeps until the lock is the file's (waits).
 func (n *remoteNode) flock(p *Process, op int) error {
-	return n.simple(p, rFlock, uint32(op), nil)
+	if op&syscall.LOCK_NB != 0 || op == syscall.LOCK_UN {
+		return n.simple(p, rFlock, uint32(op), nil)
+	}
+
+	return n.waits(p, rFlock, uint32(op), nil)
+}
+
+// waits is a call its server may keep for as long as it takes, a lock
+// that waits, a terminal's drain: a signal the process takes cancels it,
+// and it is made again when the handlers ask for that.
+func (n *remoteNode) waits(p *Process, op, arg uint32, body []byte) error {
+	for {
+		_, restart, err := n.waiting(p, op, arg, body, nil)
+
+		if err == syscall.EINTR && restart {
+			continue
+		}
+
+		return err
+	}
 }
 
 // recordLock is fcntl's lock on the bytes a struct flock says, from the
@@ -822,11 +854,14 @@ func (n *remoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error 
 	binary.LittleEndian.PutUint64(body[4:], uint64(start))
 	binary.LittleEndian.PutUint64(body[12:], uint64(length))
 
-	if cmd != fOfdGetlk {
-		return n.simple(p, rLock, 0, body)
+	switch cmd {
+	case fOfdSetlk:
+		return n.simple(p, rLock, lockSet, body)
+	case fOfdSetlkw:
+		return n.waits(p, rLock, lockWait, body)
 	}
 
-	pk, err := n.on(p, rLock, 1, body)
+	pk, err := n.on(p, rLock, lockGet, body)
 
 	if err != nil {
 		return err

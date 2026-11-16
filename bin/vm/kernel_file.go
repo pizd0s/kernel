@@ -140,31 +140,16 @@ func (p *Process) vectored(fd, iovs, count uint32, events int16, call uintptr, o
 	return p.result(n, err)
 }
 
-// waitLock takes a lock with try, which does not block: when it would and
-// block is set, it tries again until a signal interrupts.
-func (p *Process) waitLock(block bool, try func() error) error {
-	for {
-		err := try()
-
-		if !block || err != syscall.EAGAIN && err != syscall.EACCES {
-			return err
-		}
-
-		if err := p.idle(10, true); err != nil {
-			return err
-		}
-	}
-}
-
 const (
-	fGetlk    = 5
-	fSetlk    = 6
-	fSetlkw   = 7
-	fOfdGetlk = 36
-	fOfdSetlk = 37
-	fRdlck    = 0
-	fWrlck    = 1
-	fUnlck    = 2
+	fGetlk     = 5
+	fSetlk     = 6
+	fSetlkw    = 7
+	fOfdGetlk  = 36
+	fOfdSetlk  = 37
+	fOfdSetlkw = 38
+	fRdlck     = 0
+	fWrlck     = 1
+	fUnlck     = 2
 )
 
 // recordLock runs F_GETLK, F_SETLK or F_SETLKW with a guest struct flock.
@@ -185,9 +170,11 @@ func (p *Process) recordLock(l Locker, cmd, at uint32) error {
 		return nil
 	}
 
-	return p.waitLock(cmd == fSetlkw, func() error {
-		return l.recordLock(p, fOfdSetlk, &lk)
-	})
+	if cmd == fSetlkw {
+		return l.recordLock(p, fOfdSetlkw, &lk)
+	}
+
+	return l.recordLock(p, fOfdSetlk, &lk)
 }
 
 // fdSet is a guest fd_set: 1024 bits in words of 32.
@@ -504,9 +491,7 @@ func (p *Process) libcFlock(fd, op uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	return p.result(0, p.waitLock(op&syscall.LOCK_NB == 0, func() error {
-		return l.flock(p, int(op))
-	}))
+	return p.result(0, l.flock(p, int(op)))
 }
 
 // lockf locks from the file's offset, as fcntl's write locks.
@@ -523,10 +508,10 @@ func (p *Process) libcLockf(fd, cmd uint32, n uint64) uint32 {
 	case 0:
 		lk.Type = fUnlck
 		err = l.recordLock(p, fOfdSetlk, &lk)
-	case 1, 2:
-		err = p.waitLock(cmd == 1, func() error {
-			return l.recordLock(p, fOfdSetlk, &lk)
-		})
+	case 1:
+		err = l.recordLock(p, fOfdSetlkw, &lk)
+	case 2:
+		err = l.recordLock(p, fOfdSetlk, &lk)
 	case 3:
 		lk.Type = fRdlck
 

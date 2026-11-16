@@ -189,29 +189,53 @@ namespace tools {
         u64 stop;
     };
 
-    // The locks of a node: flock's, exclusive or shared, and fcntl's. A
-    // lock is an endpoint's, an open file's, as Linux's open file
-    // description locks are.
+    struct Endpoint;
+
+    // A lock an endpoint waits for: its request, which the file system
+    // keeps and answers on reply, the request's endpoint, once the lock is
+    // the endpoint's. flock's, LOCK_SH or LOCK_EX, or fcntl's of a range,
+    // F_RDLCK or F_WRLCK.
+    struct Waiter {
+        int owner;
+        Endpoint* reply;
+        bool ranged;
+        u32 type;
+        u64 start;
+        u64 stop;
+    };
+
+    // The locks of a node: flock's, exclusive or shared, and fcntl's, and
+    // those that wait for one, the first to come first. A lock is an
+    // endpoint's, an open file's, as Linux's open file description locks
+    // are.
     struct Locks {
         int exclusive = -1;   // the endpoint that holds flock's exclusive lock, or -1
         SmallVec<int> shared; // the endpoints that hold flock's shared lock
         SmallVec<Range> ranges;
+        SmallVec<Waiter> waiting;
     };
 
     // flock's lock of an endpoint, me, on a node: shared, which no other
     // endpoint's exclusive one is in the way of, exclusive, which no other
-    // endpoint's lock is, or none.
+    // endpoint's lock is, or none. A lock is in the way held, and asked by
+    // one that waits: none is taken past those that wait for it. That is
+    // EAGAIN with LOCK_NB; without it the request waits: fd is kept until
+    // the lock is the endpoint's, behind those that came before, and what
+    // the endpoint held goes meanwhile, as a change of flock's lock is no
+    // single step.
     void flockNode(Locks& locks, int me, const Header& h, int fd);
 
     // fcntl's locks of an endpoint, me, on a range of a node, to the end
-    // and past with a length of 0. With get, the first lock of another
+    // and past with a length of 0. With lockGet, the first lock of another
     // endpoint in the way of the one described, else F_UNLCK. Else that
     // lock is set in place of what the endpoint held of the range, unless
-    // another endpoint's lock is in the way: EAGAIN; F_UNLCK lets the
-    // range go.
+    // another endpoint's lock is in the way, held or waited for: EAGAIN,
+    // or with lockWait the request waits, fd kept, until it is not;
+    // F_UNLCK lets the range go.
     void lockNode(Locks& locks, int me, const Header& h, Body body, int fd);
 
-    // What an endpoint that closes, me, held of the locks of a node goes.
+    // What an endpoint that closes, me, held of the locks of a node goes,
+    // and what it waited for there; those that waited for it get theirs.
     void unlock(Locks& locks, int me);
 
     // ---- the loop's endpoints ----------------------------------------------------------
@@ -220,6 +244,7 @@ namespace tools {
     enum class Role : u8 {
         File,    // an open file: requests come on it
         Channel, // rootfs's channel: its calls by node come on it
+        Lock,    // the endpoint of a lock's request that waits: a CANCEL comes on it
     };
 
     struct Endpoint {
