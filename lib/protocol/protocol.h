@@ -22,6 +22,12 @@
 // which answers on that endpoint and keeps it: the one that handed it on
 // is out of the way from then on. A server that is gone is EIO.
 //
+// A READ or a WRITE, which waits as long as its file says, may hear
+// CANCEL on its endpoint from who asked, whose caller gave up for a
+// signal: the server answers it at once, with the count so far or ERR
+// EINTR. A request already answered has no endpoint left to hear it on,
+// and a server that never waits need not listen.
+//
 // A packet is a Header and a body; descriptors ride with it (SCM_RIGHTS).
 //
 //   Header { op u32, arg u32, uid u32, gid u32 }
@@ -139,6 +145,8 @@
 //                                         OK; with get, the lock in the
 //                                         way, F_UNLCK for none: type u32
 //                                         start u64 len u64
+//     CANCEL                              on a request's endpoint, which
+//                                         the server keeps while it waits
 //
 //   A device's service's, on the channel devfs has of it, and on
 //   /dev/init:
@@ -231,6 +239,7 @@ enum : uint32_t {
     opFstatfs,
     opFlock,
     opLock,
+    opCancel,
     // A service's.
     opOpen = 96,
     opRegister,

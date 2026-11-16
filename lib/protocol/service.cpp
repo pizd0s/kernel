@@ -13,6 +13,10 @@
 
 static bool stopping = false;
 static size_t watched = 0;
+// What unwatch let go of during a batch of events, freed after it: an
+// event of the batch may still name it.
+static Endpoint* released[64];
+static size_t releasedCount = 0;
 
 void fatal(const char* format, ...) {
     va_list args;
@@ -93,7 +97,7 @@ int readyDescriptor(int argc, char** argv, int& first) {
     return -1;
 }
 
-void watch(int epoll, Endpoint e) {
+Endpoint* watch(int epoll, Endpoint e) {
     auto* at = static_cast<Endpoint*>(malloc(sizeof(Endpoint)));
     if (!at) {
         fatal("service: out of memory");
@@ -106,6 +110,25 @@ void watch(int epoll, Endpoint e) {
         fatal("service: epoll_ctl: errno %d", errno);
     }
     ++watched;
+    return at;
+}
+
+static void releaseAll() {
+    for (size_t i = 0; i < releasedCount; ++i) {
+        free(released[i]);
+    }
+    releasedCount = 0;
+}
+
+void unwatch(int epoll, Endpoint* e) {
+    epoll_ctl(epoll, EPOLL_CTL_DEL, e->fd, nullptr);
+    close(e->fd);
+    e->fd = -1;
+    --watched;
+    if (releasedCount == sizeof released / sizeof released[0]) {
+        fatal("service: too many endpoints let go of at once");
+    }
+    released[releasedCount++] = e;
 }
 
 int Request::reply() const {
@@ -138,6 +161,9 @@ void serve(int epoll, Handle handle, Gone gone, Accepted accepted) {
         }
         for (int i = 0; i < n; ++i) {
             auto* e = static_cast<Endpoint*>(events[i].data.ptr);
+            if (e->fd < 0) {
+                continue; // let go of during this batch
+            }
             if (e->listens) {
                 const int connection = accept4(e->fd, nullptr, nullptr, SOCK_CLOEXEC);
                 if (connection >= 0 && accepted) {
@@ -192,5 +218,6 @@ void serve(int epoll, Handle handle, Gone gone, Accepted accepted) {
                 }
             }
         }
+        releaseAll();
     }
 }

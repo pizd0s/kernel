@@ -49,6 +49,10 @@ import (
 //	  LOCK      arg get   type u32 start u64 len u64   OK; with get the
 //	                      lock in the way, F_UNLCK for none:
 //	                      type u32 start u64 len u64
+//	  CANCEL              on the endpoint of a READ or a WRITE the server
+//	                      keeps while it waits, from the kernel (waiting):
+//	                      the server answers that request now, with the
+//	                      count so far or ERR EINTR
 //	replies: OK, ERR with arg the errno
 //	stat { ino u64, size u64, mtime u64 nanoseconds, mode u32, nlink u32,
 //	       uid u32, gid u32, atime u64, dev u64, ctime u64 }
@@ -76,6 +80,7 @@ const (
 	rFstatfs
 	rFlock
 	rLock
+	rCancel
 )
 
 const (
@@ -262,26 +267,84 @@ func request(p *Process, to *pairEnd, op, arg uint32, body []byte, files []File)
 // request that was sent. A server that goes away is EIO; its error is
 // the reply's.
 func reply(p *Process, on *pairEnd) (packet, error) {
+	pk, eof, err := on.kernelRecv(p)
+
+	if err != nil {
+		return pk, err
+	}
+
+	return replyOf(pk, eof)
+}
+
+// replyOf is the reply a packet is: its body after the header, or the
+// server's error.
+func replyOf(pk packet, eof bool) (packet, error) {
+	if eof || len(pk.data) < remoteHeader {
+		return pk, syscall.EIO
+	}
+
+	if binary.LittleEndian.Uint32(pk.data) == rErr {
+		dropFiles(pk.files)
+
+		return pk, syscall.Errno(binary.LittleEndian.Uint32(pk.data[4:]))
+	}
+
+	pk.data = pk.data[remoteHeader:]
+
+	return pk, nil
+}
+
+// waiting is a READ or a WRITE, which may wait as long as the file says:
+// once the process has a signal to take, the kernel sends CANCEL on the
+// request's endpoint and waits on for the reply it brings, the count so
+// far or EINTR, which cancelled marks: the caller restarts the call when
+// the handlers ask for that. For SIGKILL it waits no more: the process
+// ends. The reply brings no files.
+func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []File) (pk packet, cancelled bool, err error) {
+	mine, theirs := newPair(false)
+	err = request(p, n.end, op, arg, body, append(files, theirs))
+	theirs.unref()
+
+	if err == syscall.EPIPE {
+		err = syscall.EIO // the server is gone
+	}
+
+	if err != nil {
+		mine.unref()
+
+		return packet{}, false, err
+	}
+
+	defer mine.unref()
+	mine.from.readers.add(p, 0)
+	defer mine.from.readers.remove(p, 0)
+
 	for {
-		pk, eof, err := on.kernelRecv(p)
+		p.takeMail()
 
-		if err != nil {
-			return pk, err
-		}
-
-		if eof || len(pk.data) < remoteHeader {
-			return pk, syscall.EIO
-		}
-
-		if binary.LittleEndian.Uint32(pk.data) == rErr {
+		if got, eof, ok := mine.take(false); ok {
+			pk, err = replyOf(got, eof)
 			dropFiles(pk.files)
+			pk.files = nil
 
-			return pk, syscall.Errno(binary.LittleEndian.Uint32(pk.data[4:]))
+			return pk, cancelled, err
 		}
 
-		pk.data = pk.data[remoteHeader:]
+		signals := p.sig.deliverable()
 
-		return pk, nil
+		if signals&sigBit(int(syscall.SIGKILL)) != 0 {
+			return packet{}, true, syscall.EINTR
+		}
+
+		if signals != 0 && !cancelled {
+			// A server that answered already closed its end.
+			cancelled = true
+			request(p, mine, rCancel, 0, nil, nil)
+
+			continue
+		}
+
+		p.waitMail(time.Time{})
 	}
 }
 
@@ -668,19 +731,24 @@ func (f *remoteFile) readInto(p *Process, w *memfdFile, woff uint32, n int, off 
 	var body [12]byte
 	binary.LittleEndian.PutUint64(body[:], uint64(off))
 	binary.LittleEndian.PutUint32(body[8:], woff)
-	pk, mine, err := f.call(p, rRead, uint32(n), body[:], []File{w})
 
-	if err != nil {
-		return 0, err
+	for {
+		pk, cancelled, err := f.waiting(p, rRead, uint32(n), body[:], []File{w})
+
+		if err == syscall.EINTR && cancelled && p.interrupted() {
+			continue
+		}
+
+		if err != nil {
+			return 0, err
+		}
+
+		if len(pk.data) < 4 || int(binary.LittleEndian.Uint32(pk.data)) > n {
+			return 0, syscall.EIO
+		}
+
+		return int(binary.LittleEndian.Uint32(pk.data)), nil
 	}
-
-	mine.unref()
-
-	if len(pk.data) < 4 || int(binary.LittleEndian.Uint32(pk.data)) > n {
-		return 0, syscall.EIO
-	}
-
-	return int(binary.LittleEndian.Uint32(pk.data)), nil
 }
 
 func (f *remoteFile) writeAt(p *Process, b []byte, off int64) (int, error) {
@@ -726,19 +794,24 @@ func (f *remoteFile) writeFrom(p *Process, w *memfdFile, woff uint32, n int, off
 	binary.LittleEndian.PutUint64(body[:], uint64(off))
 	binary.LittleEndian.PutUint32(body[8:], uint32(n))
 	binary.LittleEndian.PutUint32(body[12:], woff)
-	pk, mine, err := f.call(p, rWrite, arg, body[:], []File{w})
 
-	if err != nil {
-		return 0, 0, err
+	for {
+		pk, cancelled, err := f.waiting(p, rWrite, arg, body[:], []File{w})
+
+		if err == syscall.EINTR && cancelled && p.interrupted() {
+			continue
+		}
+
+		if err != nil {
+			return 0, 0, err
+		}
+
+		if len(pk.data) < 12 || int(binary.LittleEndian.Uint32(pk.data)) > n {
+			return 0, 0, syscall.EIO
+		}
+
+		return int(binary.LittleEndian.Uint32(pk.data)), int64(binary.LittleEndian.Uint64(pk.data[4:])), nil
 	}
-
-	mine.unref()
-
-	if len(pk.data) < 12 || int(binary.LittleEndian.Uint32(pk.data)) > n {
-		return 0, 0, syscall.EIO
-	}
-
-	return int(binary.LittleEndian.Uint32(pk.data)), int64(binary.LittleEndian.Uint64(pk.data[4:])), nil
 }
 
 func (f *remoteFile) read(p *Process, b []byte, mode ioMode) (int, error) {

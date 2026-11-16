@@ -46,7 +46,10 @@ struct Endpoint {
     bool listens = false;
 };
 
-void watch(int epoll, Endpoint e);
+Endpoint* watch(int epoll, Endpoint e);
+
+// Lets go of an endpoint watch gave: it is closed, and no event names it.
+void unwatch(int epoll, Endpoint* e);
 
 // A request on an endpoint: its header and body, its descriptors, the
 // reply's endpoint last, a memfd of a READ's or WRITE's before it.
@@ -86,6 +89,11 @@ using Accepted = void (*)(Endpoint& e, int connection);
 // request without an endpoint is a question, answered on the endpoint it
 // came on. An endpoint whose other end closed goes to gone, then is closed.
 // A socket that listens has its connections accepted, each to accepted.
+//
+// A READ or a WRITE that waits keeps its endpoint until handle answers it:
+// handle sets its descriptor in r.fds to -1 and watches it, of saying what
+// waits. A CANCEL comes on it as a question, and gone hears that the asker
+// went; once answered, the endpoint is let go of (unwatch).
 void serve(int epoll, Handle handle, Gone gone = nullptr, Accepted accepted = nullptr);
 
 // Ends serve once the events it has are handled.

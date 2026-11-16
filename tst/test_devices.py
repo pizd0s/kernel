@@ -2,7 +2,9 @@
 """The devices of /dev are services': rootfs's /dev/init takes a name, a
 mode and the end of a pair (REGISTER, bin/tools/protocol.h), and every
 open of /dev/<name> goes on to the service that registered it, which
-serves the open file from then on. copy_file_range between such a file and
+serves the open file from then on. A read that waits there ends for a
+signal: the kernel sends CANCEL, and the read restarts if the handler
+says so, or dies with the process for SIGKILL. copy_file_range between such a file and
 a memfd brings the memfd itself in the READ or WRITE, at its offset. The system's own, null, zero, random
 and urandom, are /bin/devices', there before the shell starts. A service
 here is a program the test brings: it registers a device whose bytes
@@ -64,6 +66,12 @@ except OSError as e: print(e.strerror)
 '
 ls /dev/hello 2>&1
 /tmp/service hello 020644 'hello again' && cat /dev/hello; echo
+/tmp/service mbox 020666 '' wait
+/tmp/service wait /dev/mbox 0
+(sleep 2; printf ping > /dev/mbox) & /tmp/service wait /dev/mbox 1; wait
+/tmp/service wait /dev/mbox 1 & sleep 1.5; kill -9 $!; wait $! 2> /dev/null; echo $?
+(sleep 2; printf pong > /dev/mbox) & /tmp/service wait /dev/mbox 1; wait
+printf mail > /dev/mbox; /tmp/service wait /dev/mbox 1
 """
 
 WANT = """\
@@ -100,6 +108,12 @@ Input/output error
 ls: /dev/hello: No such file or directory
 registered hello
 hello again
+registered mbox
+Interrupted system call 1
+ping 1
+137
+pong 1
+mail 0
 """
 
 
