@@ -144,10 +144,11 @@ type Process struct {
 	token   atomic.Uintptr
 	chasing atomic.Bool
 	// events is the queue the process sleeps on (kernel_queue.go):
-	// whatever may change for a wait of its puts an event there.
-	// lastSubscription is the last id a wait of its subscribed with.
-	events           eventQueue
-	lastSubscription uint64
+	// whatever may change for a wait of its puts an event there; own are
+	// its events of its own, spare its subscriptions spare.
+	events eventQueue
+	own    ownEvents
+	spare  *subscription
 }
 
 // execImage is a program a process runs; panicked by exec, it unwinds the
@@ -284,6 +285,8 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 	k.lastPid++
 	p := &Process{k: k, pid: k.lastPid, umask: 0o022, regexes: map[uint32]*posixRegex{}, seed: 0,
 		events: eventQueue{bell: make(chan struct{}, 1)}}
+	p.own.signal.kind, p.own.continued.kind = eventSignal, eventContinued
+	p.own.child.kind, p.own.compiled.kind = eventChild, eventCompiled
 
 	if parent == nil {
 		p.pgid, p.sid = p.pid, p.pid
@@ -495,7 +498,7 @@ func (p *Process) terminate(status int) {
 	k.orphans(joined)
 
 	if adopted && p != k.first {
-		k.first.childChanged(p.pid, int(syscall.SIGCHLD))
+		k.first.childChanged(int(syscall.SIGCHLD))
 	}
 
 	for _, q := range bereaved {
@@ -503,7 +506,7 @@ func (p *Process) terminate(status int) {
 	}
 
 	if notify {
-		parent.childChanged(p.pid, int(syscall.SIGCHLD))
+		parent.childChanged(int(syscall.SIGCHLD))
 	}
 
 	if p == k.first {
@@ -523,15 +526,15 @@ func (p *Process) discardsChildren() bool {
 }
 
 // childChanged tells the process that a child changed, with a signal or
-// none: the event of the child.
-func (p *Process) childChanged(child int32, sig int) {
+// none: its event of a child.
+func (p *Process) childChanged(sig int) {
 	p.childEvents.Add(1)
 
 	if sig != 0 {
 		p.send(sig)
 	}
 
-	p.post(event{kind: eventChild, id: uint64(child)})
+	p.post(&p.own.child)
 }
 
 // hostCode is vm's exit code for a wait status.

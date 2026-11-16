@@ -196,12 +196,12 @@ func (f *remoteFile) asListener() *unixListener { return nil }
 func (f *remoteFile) asConsole() *consoleEnd    { return nil }
 func (f *remoteFile) asVFS() *remoteDir         { return nil }
 
-func (f *remoteFile) stat(p *Process, st *syscall.Stat_t) error   { return f.node.stat(p, st) }
-func (f *remoteFile) poll(events int16) int16                     { return f.node.poll(events) }
-func (f *remoteFile) subscribe(to waker, id uint64, events int16) { f.node.subscribe(to, id, events) }
-func (f *remoteFile) unsubscribe(to waker, id uint64)             { f.node.unsubscribe(to, id) }
-func (f *remoteFile) flags() (int, error)                         { return f.node.flags() }
-func (f *remoteFile) setFlags(fl int) error                       { return f.node.setFlags(fl) }
+func (f *remoteFile) stat(p *Process, st *syscall.Stat_t) error { return f.node.stat(p, st) }
+func (f *remoteFile) poll(events int16) int16                   { return f.node.poll(events) }
+func (f *remoteFile) subscribe(s *subscription, events int16)   { f.node.subscribe(s, events) }
+func (f *remoteFile) unsubscribe(s *subscription)               { f.node.unsubscribe(s) }
+func (f *remoteFile) flags() (int, error)                       { return f.node.flags() }
+func (f *remoteFile) setFlags(fl int) error                     { return f.node.setFlags(fl) }
 
 func (f *remoteFile) read(p *Process, b []byte, mode ioMode) (int, error) {
 	return f.node.read(p, b, mode)
@@ -261,12 +261,12 @@ func (d *remoteDir) asListener() *unixListener { return nil }
 func (d *remoteDir) asConsole() *consoleEnd    { return nil }
 func (d *remoteDir) asVFS() *remoteDir         { return d }
 
-func (d *remoteDir) stat(p *Process, st *syscall.Stat_t) error   { return d.node.stat(p, st) }
-func (d *remoteDir) poll(events int16) int16                     { return d.node.poll(events) }
-func (d *remoteDir) subscribe(to waker, id uint64, events int16) { d.node.subscribe(to, id, events) }
-func (d *remoteDir) unsubscribe(to waker, id uint64)             { d.node.unsubscribe(to, id) }
-func (d *remoteDir) flags() (int, error)                         { return d.node.flags() }
-func (d *remoteDir) setFlags(fl int) error                       { return d.node.setFlags(fl) }
+func (d *remoteDir) stat(p *Process, st *syscall.Stat_t) error { return d.node.stat(p, st) }
+func (d *remoteDir) poll(events int16) int16                   { return d.node.poll(events) }
+func (d *remoteDir) subscribe(s *subscription, events int16)   { d.node.subscribe(s, events) }
+func (d *remoteDir) unsubscribe(s *subscription)               { d.node.unsubscribe(s) }
+func (d *remoteDir) flags() (int, error)                       { return d.node.flags() }
+func (d *remoteDir) setFlags(fl int) error                     { return d.node.setFlags(fl) }
 
 func (d *remoteDir) truncate(p *Process, size int64) error          { return d.node.truncate(p, size) }
 func (d *remoteDir) sync(p *Process, data bool) error               { return d.node.sync(p, data) }
@@ -303,12 +303,12 @@ func (h *remotePath) asListener() *unixListener { return nil }
 func (h *remotePath) asConsole() *consoleEnd    { return nil }
 func (h *remotePath) asVFS() *remoteDir         { return nil }
 
-func (h *remotePath) stat(p *Process, st *syscall.Stat_t) error   { return h.node.stat(p, st) }
-func (h *remotePath) poll(events int16) int16                     { return h.node.poll(events) }
-func (h *remotePath) subscribe(to waker, id uint64, events int16) { h.node.subscribe(to, id, events) }
-func (h *remotePath) unsubscribe(to waker, id uint64)             { h.node.unsubscribe(to, id) }
-func (h *remotePath) flags() (int, error)                         { return h.node.flags() }
-func (h *remotePath) setFlags(fl int) error                       { return h.node.setFlags(fl) }
+func (h *remotePath) stat(p *Process, st *syscall.Stat_t) error { return h.node.stat(p, st) }
+func (h *remotePath) poll(events int16) int16                   { return h.node.poll(events) }
+func (h *remotePath) subscribe(s *subscription, events int16)   { h.node.subscribe(s, events) }
+func (h *remotePath) unsubscribe(s *subscription)               { h.node.unsubscribe(s) }
+func (h *remotePath) flags() (int, error)                       { return h.node.flags() }
+func (h *remotePath) setFlags(fl int) error                     { return h.node.setFlags(fl) }
 
 func (h *remotePath) truncate(p *Process, size int64) error          { return h.node.truncate(p, size) }
 func (h *remotePath) sync(p *Process, data bool) error               { return h.node.sync(p, data) }
@@ -408,15 +408,15 @@ func (n *remoteNode) unref() {
 
 // A file whose server tells its readiness wakes its subscriptions as a
 // READY comes; any other is ready whenever asked.
-func (n *remoteNode) subscribe(to waker, id uint64, events int16) {
+func (n *remoteNode) subscribe(s *subscription, events int16) {
 	if n.tells {
-		n.end.from.readers.add(to, id)
+		n.end.from.readers.add(&s.in)
 	}
 }
 
-func (n *remoteNode) unsubscribe(to waker, id uint64) {
+func (n *remoteNode) unsubscribe(s *subscription) {
 	if n.tells {
-		n.end.from.readers.remove(to, id)
+		n.end.from.readers.remove(&s.in)
 	}
 }
 
@@ -556,9 +556,11 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 	}
 
 	defer mine.unref()
-	id := p.subscriptions(1)
-	mine.subscribe(p, id, pollIn)
-	defer mine.unsubscribe(p, id)
+	sub := p.subscription(0)
+	mine.subscribe(sub, pollIn)
+
+	defer p.release(sub)
+	defer mine.unsubscribe(sub)
 
 	_, err = p.wait(time.Time{}, func(*event) (bool, error) {
 		for {
@@ -1147,12 +1149,12 @@ func (r *noRoot) poll(events int16) int16 {
 	return events & (pollIn | pollOut | pollRdnorm | pollWrnorm)
 }
 
-func (r *noRoot) subscribe(to waker, id uint64, events int16) {}
-func (r *noRoot) unsubscribe(to waker, id uint64)             {}
-func (r *noRoot) flags() (int, error)                         { return syscall.O_RDONLY, nil }
-func (r *noRoot) setFlags(fl int) error                       { return nil }
-func (r *noRoot) readdir(p *Process, b []byte) (int, error)   { return 0, nil }
-func (r *noRoot) path(p *Process) (string, error)             { return "/", nil }
+func (r *noRoot) subscribe(s *subscription, events int16)   {}
+func (r *noRoot) unsubscribe(s *subscription)               {}
+func (r *noRoot) flags() (int, error)                       { return syscall.O_RDONLY, nil }
+func (r *noRoot) setFlags(fl int) error                     { return nil }
+func (r *noRoot) readdir(p *Process, b []byte) (int, error) { return 0, nil }
+func (r *noRoot) path(p *Process) (string, error)           { return "/", nil }
 
 // itself tells whether a path names the root itself: none but dots and
 // slashes, ".", "..", "/". Anything else is not there.

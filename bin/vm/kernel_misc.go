@@ -208,7 +208,7 @@ func (p *Process) daemon(nochdir, noclose uint32) uint32 {
 		k.mu.Lock()
 		k.procs[old] = &Process{k: k, pid: old, ppid: parent.pid, pgid: parent.pgid, sid: parent.sid, zombie: true}
 		k.mu.Unlock()
-		parent.childChanged(old, int(syscall.SIGCHLD))
+		parent.childChanged(int(syscall.SIGCHLD))
 	}
 
 	return p.result(0, nil)

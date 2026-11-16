@@ -422,7 +422,7 @@ func (p *Process) cont() {
 	p.k.mu.Unlock()
 
 	if was {
-		p.post(event{kind: eventContinued})
+		p.post(&p.own.continued)
 		p.tellParent(saNocldstop)
 	}
 }
@@ -443,9 +443,9 @@ func (p *Process) tellParent(flag uint32) {
 	parent.sig.mu.Unlock()
 
 	if quiet {
-		parent.childChanged(p.pid, 0)
+		parent.childChanged(0)
 	} else {
-		parent.childChanged(p.pid, int(syscall.SIGCHLD))
+		parent.childChanged(int(syscall.SIGCHLD))
 	}
 }
 

@@ -33,19 +33,15 @@ type unixSocket struct {
 	listener *unixListener
 	conn     *pairEnd
 	peer     string
-	// subs are the socket's subscriptions, which go on to its connection
-	// or its listener as it gets one.
-	subs []socketSub
+	// readers and writers are the subscriptions to the socket, which its
+	// inner subscription, to its listener or its connection as it has one,
+	// wakes as that changes (wake).
+	readers, writers subscribers
+	inner            subscription
 	// The options are the socket's until it is connected, and its
 	// connection's then, which gets them, as a connection accept takes
 	// gets the listening socket's.
 	options sockOptions
-}
-
-type socketSub struct {
-	to     waker
-	id     uint64
-	events int16
 }
 
 // unixListener is a bound socket's: the connections that wait for accept,
@@ -69,6 +65,7 @@ func newUnixSocket(kind int, nonblock bool) *unixSocket {
 	s := &unixSocket{kind: kind}
 	s.refs.Store(1)
 	s.nonblock.Store(nonblock)
+	s.inner.init(s, 0)
 
 	return s
 }
@@ -114,11 +111,13 @@ func (s *unixSocket) unref() {
 	s.mu.Unlock()
 
 	if l != nil {
+		l.unsubscribe(&s.inner)
 		l.shut()
 		l.unref()
 	}
 
 	if c != nil {
+		c.unsubscribe(&s.inner)
 		c.unref()
 	}
 }
@@ -172,43 +171,42 @@ func (s *unixSocket) poll(events int16) int16 {
 	return 0
 }
 
-// subscribe is to the connection or the listener, and to the one the
-// socket gets when it has neither yet.
-func (s *unixSocket) subscribe(to waker, id uint64, events int16) {
-	s.mu.Lock()
-	s.subs = append(s.subs, socketSub{to, id, events})
-	l, c := s.listener, s.conn
-	s.mu.Unlock()
+// subscribe is to the socket's own lists, which its listener or its
+// connection wakes through its inner subscription (wake).
+func (s *unixSocket) subscribe(sub *subscription, events int16) {
+	in, out := ioSides(events)
 
-	switch {
-	case c != nil:
-		c.subscribe(to, id, events)
-	case l != nil:
-		l.subscribe(to, id, events)
+	if in {
+		s.readers.add(&sub.in)
+	}
+
+	if out {
+		s.writers.add(&sub.out)
 	}
 }
 
-func (s *unixSocket) unsubscribe(to waker, id uint64) {
-	s.mu.Lock()
-	s.subs = slices.DeleteFunc(s.subs, func(sub socketSub) bool { return sub.to == to && sub.id == id })
-	l, c := s.listener, s.conn
-	s.mu.Unlock()
-
-	if c != nil {
-		c.unsubscribe(to, id)
-	}
-
-	if l != nil {
-		l.unsubscribe(to, id)
-	}
+func (s *unixSocket) unsubscribe(sub *subscription) {
+	s.readers.remove(&sub.in)
+	s.writers.remove(&sub.out)
 }
 
-// attach gives the subscriptions of the socket to what it now is, which
-// it took in the same hold of its lock, and wakes them.
-func attach(subs []socketSub, f Object) {
-	for _, sub := range subs {
-		f.subscribe(sub.to, sub.id, sub.events)
-		sub.to.wake(sub.id)
+// attach gives the socket's inner subscription to what it now is, its
+// listener or its connection, and wakes the socket's subscriptions: it
+// may be ready now.
+func (s *unixSocket) attach(to Object) {
+	to.subscribe(&s.inner, pollIn|pollOut)
+	s.readers.tell()
+	s.writers.tell()
+}
+
+// wake is the socket as the waker of its inner subscription: a change of
+// its listener's or its connection's goes on to its subscriptions, of
+// reading or of writing as it came.
+func (s *unixSocket) wake(l *hook) {
+	if l == &s.inner.in {
+		s.readers.tell()
+	} else {
+		s.writers.tell()
 	}
 }
 
@@ -263,9 +261,8 @@ func (s *unixSocket) bind(p *Process, at, n uint32) error {
 
 	s.mu.Lock()
 	s.name, s.listener = path, l
-	subs := slices.Clone(s.subs)
 	s.mu.Unlock()
-	attach(subs, l)
+	s.attach(l)
 
 	return nil
 }
@@ -342,9 +339,8 @@ func (s *unixSocket) connect(p *Process, at, n uint32) error {
 	conn.options.copyOptions(&s.options)
 	s.mu.Lock()
 	s.conn, s.peer = conn, path
-	subs := slices.Clone(s.subs)
 	s.mu.Unlock()
-	attach(subs, conn)
+	s.attach(conn)
 
 	return nil
 }
@@ -664,21 +660,21 @@ func (l *unixListener) poll(events int16) int16 {
 
 // subscribe makes to learn of the connections that come, for accept's
 // input, and of the room for them, for connect's output.
-func (l *unixListener) subscribe(to waker, id uint64, events int16) {
+func (l *unixListener) subscribe(s *subscription, events int16) {
 	in, out := l.sides(events)
 
 	if in {
-		l.conns.readers.add(to, id)
+		l.conns.readers.add(&s.in)
 	}
 
 	if out {
-		l.conns.writers.add(to, id)
+		l.conns.writers.add(&s.out)
 	}
 }
 
-func (l *unixListener) unsubscribe(to waker, id uint64) {
-	l.conns.readers.remove(to, id)
-	l.conns.writers.remove(to, id)
+func (l *unixListener) unsubscribe(s *subscription) {
+	l.conns.readers.remove(&s.in)
+	l.conns.writers.remove(&s.out)
 }
 
 // sides are what of the listener a wait for events is on: accept's input,
@@ -716,7 +712,10 @@ type unixDgram struct {
 	mu           sync.Mutex
 	name, peer   string
 	target       *pairEnd
-	subs         []socketSub
+	// writers are the subscriptions to the socket's room, which its inner
+	// subscription, to its target's, wakes (wake).
+	writers subscribers
+	inner   subscription
 }
 
 func newUnixDgram(nonblock bool) *unixDgram {
@@ -724,6 +723,7 @@ func newUnixDgram(nonblock bool) *unixDgram {
 	s.refs.Store(1)
 	s.nonblock.Store(nonblock)
 	s.inbox, s.mouth = newPairOf(sockDgram, false)
+	s.inner.init(s, 0)
 
 	return s
 }
@@ -745,6 +745,7 @@ func (s *unixDgram) unref() {
 	s.mu.Unlock()
 
 	if t != nil {
+		t.unsubscribe(&s.inner)
 		t.unref()
 	}
 
@@ -801,28 +802,27 @@ func (s *unixDgram) poll(events int16) int16 {
 	return ready | out
 }
 
-func (s *unixDgram) subscribe(to waker, id uint64, events int16) {
-	s.mu.Lock()
-	s.subs = append(s.subs, socketSub{to, id, events})
-	s.mu.Unlock()
-	s.inbox.subscribe(to, id, events)
+func (s *unixDgram) subscribe(sub *subscription, events int16) {
+	in, out := ioSides(events)
 
-	if t := s.targetEnd(); t != nil {
-		t.subscribe(to, id, pollOut)
-		t.unref()
+	if in {
+		s.inbox.subscribe(sub, pollIn)
+	}
+
+	if out {
+		s.writers.add(&sub.out)
 	}
 }
 
-func (s *unixDgram) unsubscribe(to waker, id uint64) {
-	s.mu.Lock()
-	s.subs = slices.DeleteFunc(s.subs, func(sub socketSub) bool { return sub.to == to && sub.id == id })
-	s.mu.Unlock()
-	s.inbox.unsubscribe(to, id)
+func (s *unixDgram) unsubscribe(sub *subscription) {
+	s.inbox.unsubscribe(sub)
+	s.writers.remove(&sub.out)
+}
 
-	if t := s.targetEnd(); t != nil {
-		t.unsubscribe(to, id)
-		t.unref()
-	}
+// wake is the socket as the waker of its inner subscription: room in its
+// target is room in the socket.
+func (s *unixDgram) wake(*hook) {
+	s.writers.tell()
 }
 
 func (s *unixDgram) flags() (int, error) {
@@ -916,21 +916,15 @@ func (s *unixDgram) connect(p *Process, at, n uint32) error {
 	s.mu.Lock()
 	old := s.target
 	s.target, s.peer = mouth, path
-	subs := slices.Clone(s.subs)
 	s.mu.Unlock()
 
 	if old != nil {
-		for _, sub := range subs {
-			old.unsubscribe(sub.to, sub.id)
-		}
-
+		old.unsubscribe(&s.inner)
 		old.unref()
 	}
 
-	for _, sub := range subs {
-		mouth.subscribe(sub.to, sub.id, pollOut)
-		sub.to.wake(sub.id)
-	}
+	mouth.subscribe(&s.inner, pollOut)
+	s.writers.tell()
 
 	return nil
 }

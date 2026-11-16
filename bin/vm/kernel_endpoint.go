@@ -226,21 +226,21 @@ func (e *pairEnd) asVFS() *remoteDir         { return nil }
 
 // subscribe makes to learn of what may make the end readable, for input,
 // and writable, for output; of both when neither is asked.
-func (e *pairEnd) subscribe(to waker, id uint64, events int16) {
+func (e *pairEnd) subscribe(s *subscription, events int16) {
 	in, out := ioSides(events)
 
 	if in {
-		e.from.readers.add(to, id)
+		e.from.readers.add(&s.in)
 	}
 
 	if out {
-		e.to.writers.add(to, id)
+		e.to.writers.add(&s.out)
 	}
 }
 
-func (e *pairEnd) unsubscribe(to waker, id uint64) {
-	e.from.readers.remove(to, id)
-	e.to.writers.remove(to, id)
+func (e *pairEnd) unsubscribe(s *subscription) {
+	e.from.readers.remove(&s.in)
+	e.to.writers.remove(&s.out)
 }
 
 // ioSides tells whether events ask for input, for output; both when they
@@ -439,11 +439,12 @@ func (e *pairEnd) kernelSend(p *Process, data []byte, files []Object) error {
 }
 
 func (e *pairEnd) kernelPut(p *Process, pk packet) error {
-	id, waiting := uint64(0), false
+	var sub *subscription
 
 	defer func() {
-		if waiting {
-			e.unsubscribe(p, id)
+		if sub != nil {
+			e.unsubscribe(sub)
+			p.release(sub)
 		}
 	}()
 
@@ -463,13 +464,13 @@ func (e *pairEnd) kernelPut(p *Process, pk packet) error {
 				return true, syscall.EAGAIN
 			}
 
-			if waiting {
+			if sub != nil {
 				return false, nil
 			}
 
 			// A take from the full channel wakes its writers.
-			id, waiting = p.subscriptions(1), true
-			e.subscribe(p, id, pollOut)
+			sub = p.subscription(0)
+			e.subscribe(sub, pollOut)
 		}
 	})
 
@@ -605,9 +606,11 @@ func (e *pairEnd) kernelRecv(p *Process) (packet, bool, error) {
 		return pk, eof, nil
 	}
 
-	id := p.subscriptions(1)
-	e.subscribe(p, id, pollIn)
-	defer e.unsubscribe(p, id)
+	sub := p.subscription(0)
+	e.subscribe(sub, pollIn)
+
+	defer p.release(sub)
+	defer e.unsubscribe(sub)
 
 	var pk packet
 	var eof bool

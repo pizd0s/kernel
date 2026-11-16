@@ -44,20 +44,20 @@ type epoll struct {
 	members map[epollKey]*epollMember
 	// order is the members as added, byID by the ids of their
 	// subscriptions; ready the marked ones, the oldest mark first, spare
-	// the list a wait gave back; sleepers the processes of the waits
-	// asleep, which a mark wakes and forgets.
-	order    []*epollMember
-	byID     map[uint64]*epollMember
-	lastID   uint64
-	ready    []*epollMember
-	spare    []*epollMember
-	sleepers []*Process
-	// subs are the subscriptions to the set: of the waits it is asked by,
-	// of the sets it is a member of.
-	subs subscribers
-	refs atomic.Int32
-	ino  uint64
-	made time.Time
+	// the list a wait gave back.
+	order  []*epollMember
+	byID   map[uint64]*epollMember
+	lastID uint64
+	ready  []*epollMember
+	spare  []*epollMember
+	// subs are the subscriptions to the set: of the polls it is asked by,
+	// of the sets it is a member of; waiters those of its waits, which a
+	// mark wakes.
+	subs    subscribers
+	waiters subscribers
+	refs    atomic.Int32
+	ino     uint64
+	made    time.Time
 }
 
 // An epollKey names a member as Linux does: by the descriptor it was
@@ -76,6 +76,7 @@ type epollKey struct {
 // edge-triggered: the report gives what the mark told.
 type epollMember struct {
 	key      epollKey
+	sub      subscription
 	id       uint64
 	events   uint32
 	data     uint64
@@ -120,7 +121,7 @@ func (ep *epoll) unref() {
 	ep.mu.Unlock()
 
 	for _, m := range members {
-		m.key.obj.unsubscribe(ep, m.id)
+		m.key.obj.unsubscribe(&m.sub)
 		m.key.obj.unref()
 	}
 }
@@ -182,20 +183,20 @@ func (ep *epoll) poll(events int16) int16 {
 
 // subscribe is to the changes of the members: a wait for the set, or a
 // set the set is a member of.
-func (ep *epoll) subscribe(to waker, id uint64, events int16) {
-	ep.subs.add(to, id)
+func (ep *epoll) subscribe(s *subscription, events int16) {
+	ep.subs.add(&s.in)
 }
 
-func (ep *epoll) unsubscribe(to waker, id uint64) {
-	ep.subs.remove(to, id)
+func (ep *epoll) unsubscribe(s *subscription) {
+	ep.subs.remove(&s.in)
 }
 
-// wake marks the member of an id, a change of its file, and wakes those
-// subscribed to the set.
-func (ep *epoll) wake(id uint64) {
+// wake marks the member of a subscription, a change of its object, and
+// wakes those subscribed to the set.
+func (ep *epoll) wake(l *hook) {
 	ep.mu.Lock()
 
-	if m := ep.byID[id]; m != nil {
+	if m := ep.byID[l.sub.id]; m != nil {
 		ep.mark(m)
 	}
 
@@ -218,21 +219,7 @@ func (ep *epoll) mark(m *epollMember) {
 
 	m.queued = true
 	ep.ready = append(ep.ready, m)
-
-	for _, p := range ep.sleepers {
-		p.post(event{kind: eventEpoll, id: ep.ino})
-	}
-
-	clear(ep.sleepers)
-	ep.sleepers = ep.sleepers[:0]
-}
-
-// forget takes a process that sleeps no more out of the sleepers, with
-// the lock.
-func (ep *epoll) forget(p *Process) {
-	if i := slices.Index(ep.sleepers, p); i >= 0 {
-		ep.sleepers = slices.Delete(ep.sleepers, i, i+1)
-	}
+	ep.waiters.tell()
 }
 
 func (ep *epoll) flags() (int, error) {
@@ -294,9 +281,9 @@ func (ep *epoll) ctl(op uint32, key epollKey, events uint32, data uint64) error 
 
 		m.events, m.data, m.disabled = events, data, false
 		ep.mu.Unlock()
-		key.obj.unsubscribe(ep, m.id)
-		key.obj.subscribe(ep, m.id, int16(events))
-		ep.wake(m.id)
+		key.obj.unsubscribe(&m.sub)
+		key.obj.subscribe(&m.sub, int16(events))
+		ep.wake(&m.sub.in)
 
 		return nil
 	case epollCtlDel:
@@ -311,7 +298,7 @@ func (ep *epoll) ctl(op uint32, key epollKey, events uint32, data uint64) error 
 
 		ep.remove(m)
 		ep.mu.Unlock()
-		key.obj.unsubscribe(ep, m.id)
+		key.obj.unsubscribe(&m.sub)
 		key.obj.unref()
 
 		return nil
@@ -345,13 +332,14 @@ func (ep *epoll) add(key epollKey, events uint32, data uint64) error {
 
 	ep.lastID++
 	m := &epollMember{key: key, id: ep.lastID, events: events, data: data}
+	m.sub.init(ep, m.id)
 	ep.members[key], ep.byID[m.id] = m, m
 	ep.order = append(ep.order, m)
 	ep.mu.Unlock()
 
-	key.obj.subscribe(ep, m.id, int16(events))
+	key.obj.subscribe(&m.sub, int16(events))
 	key.obj.ref()
-	ep.wake(m.id)
+	ep.wake(&m.sub.in)
 
 	return nil
 }
@@ -362,9 +350,8 @@ func (ep *epoll) add(key epollKey, events uint32, data uint64) error {
 // file's held, a pipe's, which its poll takes too. One not ready waits for
 // its next change; a level-triggered one reported is marked again, after
 // the others; those max left unasked stay first.
-func (ep *epoll) collect(p *Process, buf []byte, max int) int {
+func (ep *epoll) collect(buf []byte, max int) int {
 	ep.mu.Lock()
-	ep.forget(p)
 	marked := ep.ready
 	ep.ready, ep.spare = ep.spare[:0], nil
 
@@ -436,41 +423,32 @@ func (ep *epoll) collect(p *Process, buf []byte, max int) int {
 	return n
 }
 
-// wait waits for up to max ready members until end, zero for never: the
-// process among the sleepers of the set, so a mark is an event of its, as
-// a signal is, which interrupts it. Done, it is no sleeper.
+// wait waits for up to max ready members until end, zero for never: its
+// subscription to the set's marks makes each an event of the process's,
+// as a signal is, which interrupts it.
 func (ep *epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, error) {
+	sub := p.subscription(0)
+	ep.waiters.add(&sub.in)
+
+	defer p.release(sub)
+	defer ep.waiters.remove(&sub.in)
+
 	n := 0
 	_, err := p.wait(end, func(*event) (bool, error) {
-		for {
-			if n = ep.collect(p, buf, max); n > 0 {
-				return true, nil
-			}
-
-			if !end.IsZero() && !time.Now().Before(end) {
-				return true, nil
-			}
-
-			if p.sig.deliverable() != 0 {
-				return true, syscall.EINTR
-			}
-
-			ep.mu.Lock()
-
-			if len(ep.ready) == 0 {
-				ep.sleepers = append(ep.sleepers, p)
-				ep.mu.Unlock()
-
-				return false, nil
-			}
-
-			ep.mu.Unlock()
+		if n = ep.collect(buf, max); n > 0 {
+			return true, nil
 		}
-	})
 
-	ep.mu.Lock()
-	ep.forget(p)
-	ep.mu.Unlock()
+		if !end.IsZero() && !time.Now().Before(end) {
+			return true, nil
+		}
+
+		if p.sig.deliverable() != 0 {
+			return true, syscall.EINTR
+		}
+
+		return false, nil
+	})
 
 	return n, err
 }

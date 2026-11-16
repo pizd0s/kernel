@@ -123,20 +123,20 @@ func (c *consoleEnd) poll(events int16) int16 {
 	return ready
 }
 
-func (c *consoleEnd) subscribe(to waker, id uint64, events int16) {
+func (c *consoleEnd) subscribe(s *subscription, events int16) {
 	if c.in != nil && (events == 0 || events&inEvents != 0) {
-		c.in.subscribe(to, id, events&inEvents)
+		c.in.subscribe(s, events&inEvents)
 	}
 
 	if c.out != nil && (events == 0 || events&outEvents != 0) {
-		c.out.subscribe(to, id, events&outEvents)
+		c.out.subscribe(s, events&outEvents)
 	}
 }
 
-func (c *consoleEnd) unsubscribe(to waker, id uint64) {
+func (c *consoleEnd) unsubscribe(s *subscription) {
 	for _, e := range []*pipeEnd{c.in, c.out} {
 		if e != nil {
-			e.unsubscribe(to, id)
+			e.unsubscribe(s)
 		}
 	}
 }
@@ -202,13 +202,18 @@ type mover struct {
 	ready chan struct{}
 	busy  atomic.Bool
 	pipe  *pipe
+	// sub is the mover's subscription to the pipe it moves through.
+	sub subscription
 }
 
 func newMover() *mover {
-	return &mover{ready: make(chan struct{}, 1)}
+	m := &mover{ready: make(chan struct{}, 1)}
+	m.sub.init(m, 0)
+
+	return m
 }
 
-func (m *mover) wake(uint64) {
+func (m *mover) wake(*hook) {
 	select {
 	case m.ready <- struct{}{}:
 	default:
@@ -377,16 +382,16 @@ func (m *mover) put(pp *pipe, b []byte) bool {
 			return err == nil
 		}
 
-		ch.writers.add(m, 0)
+		ch.writers.add(&m.sub.out)
 
 		if ch.room() || ch.gone() {
-			ch.writers.remove(m, 0)
+			ch.writers.remove(&m.sub.out)
 
 			continue
 		}
 
 		<-m.ready
-		ch.writers.remove(m, 0)
+		ch.writers.remove(&m.sub.out)
 	}
 }
 
@@ -422,13 +427,13 @@ func (m *mover) drain(r *pipeEnd, host int, c *console) {
 		}
 
 		ch := r.pipe.channel()
-		ch.readers.add(m, 0)
+		ch.readers.add(&m.sub.in)
 
 		if ch.count() == 0 && !ch.ended.Load() && !c.stop.Load() {
 			<-m.ready
 		}
 
-		ch.readers.remove(m, 0)
+		ch.readers.remove(&m.sub.in)
 	}
 }
 
@@ -459,7 +464,7 @@ func (c *console) flush() {
 	c.stop.Store(true)
 
 	for _, m := range c.movers {
-		m.wake(0)
+		m.wake(nil)
 	}
 
 	done := make(chan struct{})
@@ -603,10 +608,10 @@ func (f *diskFile) poll(events int16) int16 {
 	return events & (pollIn | pollRdnorm | pollOut | pollWrnorm)
 }
 
-func (f *diskFile) subscribe(to waker, id uint64, events int16) {
+func (f *diskFile) subscribe(s *subscription, events int16) {
 }
 
-func (f *diskFile) unsubscribe(to waker, id uint64) {
+func (f *diskFile) unsubscribe(s *subscription) {
 }
 
 func (f *diskFile) flags() (int, error) {

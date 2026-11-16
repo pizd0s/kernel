@@ -150,7 +150,7 @@ func (p *Process) send(sig int) {
 	}
 
 	p.sig.mu.Unlock()
-	p.post(event{kind: eventSignal, id: uint64(sig)})
+	p.post(&p.own.signal)
 
 	if token != 0 {
 		runtime.Interrupt(token)

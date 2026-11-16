@@ -63,12 +63,10 @@ func (t *remoteTerminal) asVFS() *remoteDir         { return nil }
 
 func (t *remoteTerminal) stat(p *Process, st *syscall.Stat_t) error { return t.node.stat(p, st) }
 func (t *remoteTerminal) poll(events int16) int16                   { return t.node.poll(events) }
-func (t *remoteTerminal) subscribe(to waker, id uint64, events int16) {
-	t.node.subscribe(to, id, events)
-}
-func (t *remoteTerminal) unsubscribe(to waker, id uint64) { t.node.unsubscribe(to, id) }
-func (t *remoteTerminal) flags() (int, error)             { return t.node.flags() }
-func (t *remoteTerminal) setFlags(fl int) error           { return t.node.setFlags(fl) }
+func (t *remoteTerminal) subscribe(s *subscription, events int16)   { t.node.subscribe(s, events) }
+func (t *remoteTerminal) unsubscribe(s *subscription)               { t.node.unsubscribe(s) }
+func (t *remoteTerminal) flags() (int, error)                       { return t.node.flags() }
+func (t *remoteTerminal) setFlags(fl int) error                     { return t.node.setFlags(fl) }
 
 func (t *remoteTerminal) truncate(p *Process, size int64) error          { return t.node.truncate(p, size) }
 func (t *remoteTerminal) sync(p *Process, data bool) error               { return t.node.sync(p, data) }

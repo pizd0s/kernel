@@ -126,10 +126,10 @@ func (f *memfdFile) poll(events int16) int16 {
 	return events & (pollIn | pollRdnorm | pollOut | pollWrnorm)
 }
 
-func (f *memfdFile) subscribe(to waker, id uint64, events int16) {
+func (f *memfdFile) subscribe(s *subscription, events int16) {
 }
 
-func (f *memfdFile) unsubscribe(to waker, id uint64) {
+func (f *memfdFile) unsubscribe(s *subscription) {
 }
 
 func (f *memfdFile) flags() (int, error) {

@@ -3,7 +3,6 @@
 package main
 
 import (
-	"slices"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -11,94 +10,139 @@ import (
 )
 
 // Waits. A process sleeps in one place, its queue of events: whatever may
-// change for a wait of the process's puts an event there, an object it
-// subscribed to, as the waker of the subscription, a signal, a child, the
-// epoll it sleeps on, a module compiled; putting one never blocks, and
-// none is lost. Every wait is one function, wait: it takes the events in
-// order, runs each one's callback, and asks the predicate the wait gives
-// whether it is over on that event or goes on; with the queue empty the
-// process sleeps until an event comes or the wait's deadline passes. A
-// wait subscribes to what it waits for before it first looks, so a change
-// after the look is an event. An event names what changed, and the
-// predicate asks what it is now: an event a predicate passes over,
-// another wait's or an earlier one's, is lost to nobody. An object that
-// poll finds not ready for events wakes the subscriptions for them as it
-// may become ready.
+// change for a wait of the process's puts an event there. An event is a
+// node its source keeps, in the queue once at most, as Zircon's port
+// packet is its observer's: a subscription's, the process's own for its
+// signals, its continuing, its children and a module compiled, and a
+// wait's for its deadline. Putting one never blocks, and one put again
+// while it waits there stays as it is. Every wait is one function, wait:
+// it takes the events in order, runs each one's callback, and asks the
+// predicate the wait gives whether it is over on that event or goes on;
+// with the queue empty the process sleeps on the queue's bell. A wait
+// subscribes to what it waits for before it first looks, so a change
+// after the look is an event; taking a subscription back takes its event
+// out of the queue, so none outlives what it is of. An event names what
+// changed, and the predicate asks what it is now. An object that poll
+// finds not ready for events wakes the subscriptions for them as it may
+// become ready.
+//
+// A subscription is its subscriber's, and so are its hooks, by which an
+// object keeps it in its lists: subscribing and taking back hook and
+// unhook, and allocate nothing.
 
-// A waker is what an object wakes as it changes.
+// A waker is what an object wakes as it changes: by the hook of the
+// subscription, which says by which of its lists.
 type waker interface {
-	wake(id uint64)
+	wake(l *hook)
 }
 
+// A hook is a subscription's place in one list of an object's
+// (subscribers). A subscription has two: in, for the changes of what the
+// object reads, and out, for those of what it writes; an object of one
+// kind of change takes in.
+type hook struct {
+	prev, next *hook
+	list       *subscribers
+	sub        *subscription
+}
+
+// A subscription is a subscriber's: what it wakes, its id there, its two
+// hooks and its event, for a process it wakes. Its subscriber makes it
+// before it subscribes and keeps it until it took it back; spare is the
+// next of a process's spare ones.
 type subscription struct {
-	to waker
-	id uint64
+	to      waker
+	id      uint64
+	in, out hook
+	event   event
+	spare   *subscription
+}
+
+// init makes s a subscription that wakes to with id.
+func (s *subscription) init(to waker, id uint64) {
+	s.to, s.id = to, id
+	s.in.sub, s.out.sub = s, s
+	s.event.kind, s.event.id = eventChanged, id
 }
 
 // subscribers are the subscriptions an object wakes for one kind of its
-// changes.
+// changes: a list of their hooks.
 type subscribers struct {
-	mu   sync.Mutex
-	list []subscription
+	mu    sync.Mutex
+	first *hook
 }
 
-func (s *subscribers) add(to waker, id uint64) {
+// add puts a hook that is in no list in the list.
+func (s *subscribers) add(l *hook) {
 	s.mu.Lock()
-	s.list = append(s.list, subscription{to, id})
+	l.list, l.prev, l.next = s, nil, s.first
+
+	if s.first != nil {
+		s.first.prev = l
+	}
+
+	s.first = l
 	s.mu.Unlock()
 }
 
-func (s *subscribers) remove(to waker, id uint64) {
+// remove takes a hook out of the list, when it is there.
+func (s *subscribers) remove(l *hook) {
 	s.mu.Lock()
 
-	for i, sub := range s.list {
-		if sub.to == to && sub.id == id {
-			last := len(s.list) - 1
-			s.list[i], s.list[last] = s.list[last], subscription{}
-			s.list = s.list[:last]
-
-			break
+	if l.list == s {
+		if l.prev != nil {
+			l.prev.next = l.next
+		} else {
+			s.first = l.next
 		}
+
+		if l.next != nil {
+			l.next.prev = l.prev
+		}
+
+		l.list, l.prev, l.next = nil, nil, nil
 	}
 
 	s.mu.Unlock()
 }
 
-// tell wakes every subscription.
+// tell wakes every subscription of the list.
 func (s *subscribers) tell() {
 	s.mu.Lock()
 
-	for _, sub := range s.list {
-		sub.to.wake(sub.id)
+	for l := s.first; l != nil; l = l.next {
+		l.sub.to.wake(l)
 	}
 
 	s.mu.Unlock()
 }
 
-// any tells whether there is a subscription.
-func (s *subscribers) any() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return len(s.list) > 0
-}
-
-// takeOver gives the subscriptions of from to s: a channel in place of
-// another one.
+// takeOver gives the hooks of from to s, a channel's in place of another
+// one's, as the caller keeps both from changing otherwise.
 func (s *subscribers) takeOver(from *subscribers) {
 	from.mu.Lock()
-	list := slices.Clone(from.list)
-	from.mu.Unlock()
 	s.mu.Lock()
-	s.list = append(s.list, list...)
+
+	for l := from.first; l != nil; {
+		next := l.next
+		l.list, l.prev, l.next = s, nil, s.first
+
+		if s.first != nil {
+			s.first.prev = l
+		}
+
+		s.first, l = l, next
+	}
+
+	from.first = nil
 	s.mu.Unlock()
+	from.mu.Unlock()
 }
 
 // The kinds of events: an object the process subscribed to changed, id
-// the subscription's; a signal came, id its number; the process stopped
-// no more; a child changed, id its pid; an epoll the process sleeps on
-// marked a member, id the epoll's inode; a module the process waits for
-// compiled.
+// the subscription's; a signal came; the process stopped no more; a child
+// changed; a module the process waits for compiled; a wait's deadline
+// passed.
 type eventKind uint8
 
 const (
@@ -106,39 +150,51 @@ const (
 	eventSignal
 	eventContinued
 	eventChild
-	eventEpoll
 	eventCompiled
+	eventDeadline
 )
 
-// An event is what came to a process's queue: its kind and id, and a
-// callback the wait that takes it runs on the process first, nil for one
-// that only tells.
+// An event is a node of a process's queue: its kind and id, a callback
+// the wait that takes it runs on the process first, nil for none, and its
+// place in the queue, queued while it is there.
 type event struct {
-	kind eventKind
-	id   uint64
-	run  func(*Process)
+	kind       eventKind
+	id         uint64
+	run        func(*Process)
+	prev, next *event
+	queued     bool
 }
 
-// eventQueue is a process's queue: its events, the oldest first, and its
-// bell, which a put rings and the process sleeps on. An event that only
-// tells, queued already, is put once.
+// eventQueue is a process's queue of events, the oldest first, and its
+// bell, which a put rings and the process sleeps on.
 type eventQueue struct {
-	mu     sync.Mutex
-	events []event
-	bell   chan struct{}
+	mu          sync.Mutex
+	first, last *event
+	bell        chan struct{}
 }
 
-// post puts an event in the process's queue and rings its bell; it never
-// blocks.
-func (p *Process) post(e event) {
+// ownEvents are the events of a process's own: a signal came, it stopped
+// no more, a child changed, a module it waits for compiled.
+type ownEvents struct {
+	signal, continued, child, compiled event
+}
+
+// post puts an event at the end of the process's queue, unless it is
+// there, and rings the bell; it never blocks.
+func (p *Process) post(e *event) {
 	q := &p.events
 	q.mu.Lock()
-	queued := e.run == nil && slices.ContainsFunc(q.events, func(o event) bool {
-		return o.run == nil && o.kind == e.kind && o.id == e.id
-	})
 
-	if !queued {
-		q.events = append(q.events, e)
+	if !e.queued {
+		e.queued, e.prev, e.next = true, q.last, nil
+
+		if q.last != nil {
+			q.last.next = e
+		} else {
+			q.first = e
+		}
+
+		q.last = e
 	}
 
 	q.mu.Unlock()
@@ -149,74 +205,125 @@ func (p *Process) post(e event) {
 	}
 }
 
-// next takes the oldest event of the queue, none when it is empty.
-func (q *eventQueue) next() (event, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if len(q.events) == 0 {
-		return event{}, false
+// unlink takes an event out of the queue, with the lock.
+func (q *eventQueue) unlink(e *event) {
+	if e.prev != nil {
+		e.prev.next = e.next
+	} else {
+		q.first = e.next
 	}
 
-	e := q.events[0]
-	q.events[0] = event{}
-	q.events = q.events[1:]
+	if e.next != nil {
+		e.next.prev = e.prev
+	} else {
+		q.last = e.prev
+	}
 
-	return e, true
+	e.queued, e.prev, e.next = false, nil, nil
+}
+
+// next takes the oldest event out of the queue, nil when it is empty.
+func (q *eventQueue) next() *event {
+	q.mu.Lock()
+	e := q.first
+
+	if e != nil {
+		q.unlink(e)
+	}
+
+	q.mu.Unlock()
+
+	return e
+}
+
+// drop takes an event out of the queue, when it is there.
+func (q *eventQueue) drop(e *event) {
+	q.mu.Lock()
+
+	if e.queued {
+		q.unlink(e)
+	}
+
+	q.mu.Unlock()
 }
 
 // wake is the process as the waker of its subscriptions: the event of the
-// subscription id.
-func (p *Process) wake(id uint64) {
-	p.post(event{kind: eventChanged, id: id})
+// subscription.
+func (p *Process) wake(l *hook) {
+	p.post(&l.sub.event)
 }
 
-// subscriptions are n fresh ids for the subscriptions of a wait: none is
-// an earlier wait's, whose events may still come.
-func (p *Process) subscriptions(n int) uint64 {
-	first := p.lastSubscription + 1
-	p.lastSubscription += uint64(n)
+// subscription is a spare subscription of the process's, or a new one,
+// which wakes the process with id.
+func (p *Process) subscription(id uint64) *subscription {
+	s := p.spare
 
-	return first
+	if s == nil {
+		s = &subscription{}
+	} else {
+		p.spare, s.spare = s.spare, nil
+	}
+
+	s.init(p, id)
+
+	return s
+}
+
+// release gives back a subscription of the process's that nothing has any
+// more: its event goes out of the queue.
+func (p *Process) release(s *subscription) {
+	p.events.drop(&s.event)
+	s.spare, p.spare = p.spare, s
 }
 
 // wait is every wait of the process. done says whether the wait is over,
 // and with what error: first on no event, nil, then on each event of the
 // queue, the oldest first, after its callback ran. With the queue empty
-// the process sleeps on its bell until end, zero for never; end passing
-// ends the wait, timedOut.
+// the process sleeps on its bell. A deadline, end, zero for none, is an
+// event of the wait's, which a timer puts in the queue: on it the wait
+// ends, timedOut. Another's, an earlier wait's or one a wait in a signal
+// handler of this one's took, it passes over; so the wait looks at the
+// time too before it sleeps.
 func (p *Process) wait(end time.Time, done func(e *event) (bool, error)) (timedOut bool, err error) {
 	if over, err := done(nil); over {
 		return false, err
 	}
 
-	var expired <-chan time.Time
+	var deadline *event
 
 	if !end.IsZero() {
-		t := time.NewTimer(time.Until(end))
-		defer t.Stop()
+		deadline = &event{kind: eventDeadline}
+		t := time.AfterFunc(time.Until(end), func() { p.post(deadline) })
 
-		expired = t.C
+		defer func() {
+			t.Stop()
+			p.events.drop(deadline)
+		}()
 	}
 
 	for {
-		e, ok := p.events.next()
+		e := p.events.next()
 
-		if !ok {
-			select {
-			case <-p.events.bell:
-			case <-expired:
+		switch {
+		case e == nil:
+			if deadline != nil && !time.Now().Before(end) {
+				return true, nil
+			}
+
+			<-p.events.bell
+
+			continue
+		case e.kind == eventDeadline:
+			if e == deadline {
 				return true, nil
 			}
 
 			continue
-		}
-
-		if e.run != nil {
+		case e.run != nil:
 			e.run(p)
 		}
 
-		if over, err := done(&e); over {
+		if over, err := done(e); over {
 			return false, err
 		}
 	}

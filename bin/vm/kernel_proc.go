@@ -184,7 +184,7 @@ func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*
 			k.mu.Unlock()
 
 			for _, w := range waiting {
-				w.post(event{kind: eventCompiled})
+				w.post(&w.own.compiled)
 			}
 		}()
 	}
@@ -812,7 +812,7 @@ func (p *Process) libcSystem(cmd uint32) uint32 {
 	go func() {
 		c.run(img)
 		ended.Store(true)
-		p.post(event{kind: eventChild, id: uint64(c.pid)})
+		p.post(&p.own.child)
 	}()
 
 	p.wait(time.Time{}, func(*event) (bool, error) {

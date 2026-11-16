@@ -33,15 +33,15 @@ type Object interface {
 	// ref takes a reference, unref drops one; the last closes the object.
 	ref()
 	unref()
-	// poll is the events ready now of those asked. subscribe makes the
-	// object wake to, with id, as it may become ready for events;
-	// unsubscribe takes that back. An object poll found not ready for
-	// events wakes its subscriptions for them as it may become ready; one
-	// that never changes, ready whenever asked, keeps no subscription and
-	// wakes none.
+	// poll is the events ready now of those asked. subscribe links the
+	// subscription, its subscriber's, in the lists of the object's changes
+	// as it may become ready for events, which wake its waker; unsubscribe
+	// takes it back. An object poll found not ready for events wakes its
+	// subscriptions for them as it may become ready; one that never
+	// changes, ready whenever asked, keeps no subscription and wakes none.
 	poll(events int16) int16
-	subscribe(to waker, id uint64, events int16)
-	unsubscribe(to waker, id uint64)
+	subscribe(s *subscription, events int16)
+	unsubscribe(s *subscription)
 	// asFile and the rest are the object in a role, nil for one it does
 	// not play, or the type of the kernel's it is.
 	asFile() File
@@ -484,6 +484,7 @@ type pollEntry struct {
 	obj     Object
 	events  int16
 	revents int16
+	sub     *subscription
 }
 
 // waitObjects waits until an object is ready for its events: it
@@ -493,15 +494,15 @@ type pollEntry struct {
 // after the handlers ran when all of them restart calls and restart is
 // set. It returns how many are ready.
 func (p *Process) waitObjects(entries []pollEntry, timeout int, restart bool) (int, error) {
-	first := p.subscriptions(len(entries))
-
 	for i := range entries {
-		entries[i].obj.subscribe(p, first+uint64(i), entries[i].events)
+		entries[i].sub = p.subscription(uint64(i))
+		entries[i].obj.subscribe(entries[i].sub, entries[i].events)
 	}
 
 	defer func() {
 		for i := range entries {
-			entries[i].obj.unsubscribe(p, first+uint64(i))
+			entries[i].obj.unsubscribe(entries[i].sub)
+			p.release(entries[i].sub)
 		}
 	}()
 
@@ -510,9 +511,9 @@ func (p *Process) waitObjects(entries []pollEntry, timeout int, restart bool) (i
 		switch {
 		case e == nil || e.kind == eventSignal:
 			// The first look, or a signal: all of it.
-		case e.kind != eventChanged || e.id < first || e.id-first >= uint64(len(entries)):
+		case e.kind != eventChanged || e.id >= uint64(len(entries)) || e != &entries[e.id].sub.event:
 			return false, nil
-		case entries[e.id-first].obj.poll(entries[e.id-first].events) == 0:
+		case entries[e.id].obj.poll(entries[e.id].events) == 0:
 			return false, nil
 		}
 
@@ -550,9 +551,11 @@ func pollEntries(entries []pollEntry) int {
 // process subscribed to the changes of list. A signal interrupts it,
 // restart as there.
 func (p *Process) waitFor(ready func() bool, list *subscribers, restart bool) error {
-	id := p.subscriptions(1)
-	list.add(p, id)
-	defer list.remove(p, id)
+	sub := p.subscription(0)
+	list.add(&sub.in)
+
+	defer p.release(sub)
+	defer list.remove(&sub.in)
 
 	_, err := p.wait(time.Time{}, func(*event) (bool, error) {
 		for p.sig.deliverable() != 0 {
