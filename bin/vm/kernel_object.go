@@ -490,9 +490,9 @@ type pollEntry struct {
 // waitObjects waits until an object is ready for its events: it
 // subscribes the process to them all and asks them all, then, as long as
 // none is ready, asks one on its event, until the deadline of timeout
-// milliseconds. A signal interrupts it, its handlers run by the signal
-// event: then the error is EINTR, unless they all asked to restart calls
-// and restart is set. It returns how many are ready.
+// milliseconds. A signal the call took interrupts it, in this wait or in
+// one before it: then the error is EINTR, unless its handlers all asked
+// to restart calls and restart is set. It returns how many are ready.
 func (p *Process) waitObjects(entries []pollEntry, timeout int, restart bool) (int, error) {
 	for i := range entries {
 		entries[i].sub = p.subscription(uint64(i))
@@ -509,22 +509,19 @@ func (p *Process) waitObjects(entries []pollEntry, timeout int, restart bool) (i
 	ready := 0
 	_, err := p.wait(deadline(timeout), func(e *event) (bool, error) {
 		switch {
-		case e == nil:
-			// The first look: all of it.
-		case e.kind == eventSignal:
-			// After the handlers, all of it again.
-			if e.interrupts(restart) {
-				return true, syscall.EINTR
-			}
+		case e == nil || e.kind == eventSignal:
+			// The first look, or after the handlers: all of it.
 		case e.kind != eventChanged || e.id >= uint64(len(entries)) || e != &entries[e.id].sub.event:
 			return false, nil
 		case entries[e.id].obj.poll(entries[e.id].events) == 0:
 			return false, nil
 		}
 
-		ready = pollEntries(entries)
+		if ready = pollEntries(entries); ready > 0 {
+			return true, nil
+		}
 
-		return ready > 0, nil
+		return p.interrupts(restart), syscall.EINTR
 	})
 
 	return ready, err
@@ -556,12 +553,12 @@ func (p *Process) waitFor(ready func() bool, list *subscribers, restart bool) er
 	defer p.release(sub)
 	defer list.remove(&sub.in)
 
-	_, err := p.wait(time.Time{}, func(e *event) (bool, error) {
-		if e.interrupts(restart) {
-			return true, syscall.EINTR
+	_, err := p.wait(time.Time{}, func(*event) (bool, error) {
+		if ready() {
+			return true, nil
 		}
 
-		return ready(), nil
+		return p.interrupts(restart), syscall.EINTR
 	})
 
 	return err

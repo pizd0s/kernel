@@ -286,64 +286,88 @@ func (p *Process) signalled() {
 	}
 }
 
-// What the process's signal event says, in its id, to the predicate a
-// wait asks on it, after its callback took the signals: none was taken;
-// some were, and every handler run asked to restart calls; a handler ran
-// that did not.
+// What the signals a call took say of it (Process.interruption): none
+// was taken; some were, and every handler run asked to restart calls; a
+// handler ran that did not.
 const (
 	signalNone = iota
 	signalTaken
 	signalFinal
 )
 
-// interrupts tells whether the event is the signal event of signals that
-// end a wait: any taken ends one that does not restart, a handler that
-// did not ask to restart ends any.
-func (e *event) interrupts(restart bool) bool {
-	return e != nil && e.kind == eventSignal && (e.id == signalFinal || e.id == signalTaken && !restart)
+// interrupts tells whether the signals the call took end a wait of its:
+// any taken ends one that does not restart, a handler that did not ask to
+// restart ends any. Told so, the wait ends with EINTR, and the call's
+// signals are told of: what the call does after, to put back what it
+// changed, they interrupt no more.
+func (p *Process) interrupts(restart bool) bool {
+	if p.interruption == signalFinal || p.interruption == signalTaken && !restart {
+		p.interruption = signalNone
+
+		return true
+	}
+
+	return false
 }
 
 // takeSignals is the callback of the process's signal event, which the
-// wait that takes the event runs, and the process's own code interrupted:
-// it delivers the signals the process has, their handlers and default
-// actions, and says in the event what it took. In a wait of the kernel's
-// own (holdSignals) they stay for after it.
+// wait that takes the event runs, any wait, and the process's own code
+// interrupted: it delivers the signals the process has, their handlers
+// and default actions, and notes for the call what it took (interruption):
+// the calls a handler makes are calls of their own. With a request
+// at a server, the process sends CANCEL for it first, once, and takes its
+// signals at once after, not waiting for the server's word: a process
+// stopped, or in a handler, has asked nothing of a server that the next
+// to ask would wait behind, and its call finds on its return what the
+// server said, its answer or that it took the request back. A process
+// whose image ended, by its exit or an exec, has no code to run a handler
+// of, and a stopped one runs none: their signals stay pending, for the
+// next image or the end of the stop, which SIGKILL is.
 func (p *Process) takeSignals() {
-	e := &p.own.signal
-
-	if p.holds > 0 {
-		p.skipped, e.id = true, signalNone
-
+	if p.unwound || p.inst == nil {
 		return
 	}
 
+	p.k.mu.Lock()
+	halted := p.halted
+	p.k.mu.Unlock()
+
+	if halted {
+		return
+	}
+
+	if end := p.asking; end != nil && !p.cancelled && p.sig.deliverable() != 0 {
+		// A server that answered already closed its end.
+		p.cancelled = true
+		request(p, end, rCancel, 0, nil, nil)
+	}
+
+	before := p.interruption
 	taken, restart := p.handleSignals()
 
 	switch {
 	case !taken:
-		e.id = signalNone
+		p.interruption = before
 	case restart:
-		e.id = signalTaken
+		p.interruption = max(before, signalTaken)
 	default:
-		e.id = signalFinal
+		p.interruption = signalFinal
 	}
 }
 
-// holdSignals begins a wait of the kernel's own, a call to a server, a
-// module's compile, a stop: the process takes no signal in it.
-// passSignals ends it, and puts the signal event again when one came
-// meanwhile, for the next wait or the process's way out.
-func (p *Process) holdSignals() {
-	p.holds++
+// ask notes the request the process has at a server from now on, by the
+// end its reply comes on; it returns what was noted before, the request
+// of a call a handler of whose wait makes this one, for unask to put back
+// as this one ends.
+func (p *Process) ask(end *pairEnd) (*pairEnd, bool) {
+	outer, was := p.asking, p.cancelled
+	p.asking, p.cancelled = end, false
+
+	return outer, was
 }
 
-func (p *Process) passSignals() {
-	p.holds--
-
-	if p.holds == 0 && p.skipped {
-		p.skipped = false
-		p.post(&p.own.signal)
-	}
+func (p *Process) unask(outer *pairEnd, was bool) {
+	p.asking, p.cancelled = outer, was
 }
 
 // take removes the lowest deliverable signal and returns it with its
@@ -377,9 +401,9 @@ func (p *Process) deliver() {
 	p.handleSignals()
 }
 
-// interrupted takes the signals that interrupted a call to a server, held
-// until its end, and tells whether the call restarts: when every handler
-// run asked for SA_RESTART.
+// interrupted takes the signals the process has now, those it sent its
+// own group, and tells whether its call restarts: when every handler run
+// asked for SA_RESTART.
 func (p *Process) interrupted() bool {
 	_, restart := p.handleSignals()
 
@@ -535,8 +559,10 @@ func (p *Process) sigwait(set uint64, timeout time.Duration) (int, error) {
 		end = time.Now().Add(timeout)
 	}
 
-	p.holdSignals()
-	defer p.passSignals()
+	// The signals of set are the wait's to take: blocked while it waits,
+	// so the signal event's callback leaves them, and takes the others.
+	old := p.setMask(p.mask() | set)
+	defer p.setMask(old)
 
 	sig := 0
 	timedOut, err := p.wait(end, func(*event) (bool, error) {
@@ -545,21 +571,15 @@ func (p *Process) sigwait(set uint64, timeout time.Duration) (int, error) {
 		if ready := p.sig.pending & set; ready != 0 {
 			sig = bits.TrailingZeros64(ready) + 1
 			p.sig.pending &^= sigBit(sig)
-			p.sig.mu.Unlock()
+		}
 
+		p.sig.mu.Unlock()
+
+		if sig != 0 {
 			return true, nil
 		}
 
-		other := p.sig.pending &^ p.sig.blocked
-		p.sig.mu.Unlock()
-
-		if other != 0 {
-			p.handleSignals()
-
-			return true, syscall.EINTR
-		}
-
-		return false, nil
+		return p.interrupts(false), syscall.EINTR
 	})
 
 	if timedOut {

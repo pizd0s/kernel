@@ -489,8 +489,9 @@ func (n *remoteNode) setFlags(fl int) error {
 }
 
 // request sends a request on an endpoint, the files with it, as the
-// process's effective user and group. The kernel waits as itself, not as
-// the process: nothing of the process's interrupts a call to a server.
+// process's effective user and group. The process waits for a server as
+// for anything: it takes its signals meanwhile, and a call goes on after
+// their handlers.
 func request(p *Process, to *pairEnd, op, arg uint32, body []byte, files []Object) error {
 	data := make([]byte, remoteHeader+len(body))
 	binary.LittleEndian.PutUint32(data, op)
@@ -534,13 +535,18 @@ func replyOf(pk packet, eof bool) (packet, error) {
 	return pk, nil
 }
 
-// waiting is a READ or a WRITE, which may wait as long as the file says:
-// once the process has a signal to take, the kernel sends CANCEL on the
-// request's endpoint and waits on for the reply it brings, the count so
-// far or EINTR, which cancelled marks: the caller restarts the call when
-// the handlers ask for that. For SIGKILL it waits no more: the process
-// ends. The reply brings no files.
-func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Object) (pk packet, cancelled bool, err error) {
+// waiting is a READ or a WRITE, which may wait at its server as long as
+// the file says. A signal the process takes meanwhile sends CANCEL for
+// it (takeSignals), and the server's word comes after all the same: the
+// count so far, or EINTR. restart says the request was cancelled so and
+// no handler the call ran asked not to restart calls: the caller makes
+// the call again. A call such a handler interrupted already asks nothing
+// more: EINTR. The reply brings no files.
+func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Object) (pk packet, restart bool, err error) {
+	if p.interrupts(true) {
+		return packet{}, false, syscall.EINTR
+	}
+
 	mine, theirs := newPair(false)
 	err = request(p, n.end, op, arg, body, append(files, theirs))
 	theirs.unref()
@@ -558,41 +564,25 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 	defer mine.unref()
 	sub := p.subscription(0)
 	mine.subscribe(sub, pollIn)
-	p.holdSignals()
+	outer, was := p.ask(mine)
 
-	defer p.passSignals()
+	defer p.unask(outer, was)
 	defer p.release(sub)
 	defer mine.unsubscribe(sub)
 
 	_, err = p.wait(time.Time{}, func(*event) (bool, error) {
-		for {
-			if got, eof, ok := mine.take(false); ok {
-				pk, err = replyOf(got, eof)
-				dropFiles(pk.files)
-				pk.files = nil
+		if got, eof, ok := mine.take(false); ok {
+			pk, err = replyOf(got, eof)
+			dropFiles(pk.files)
+			pk.files = nil
 
-				return true, err
-			}
-
-			signals := p.sig.deliverable()
-
-			if signals&sigBit(int(syscall.SIGKILL)) != 0 {
-				pk, cancelled = packet{}, true
-
-				return true, syscall.EINTR
-			}
-
-			if signals == 0 || cancelled {
-				return false, nil
-			}
-
-			// A server that answered already closed its end.
-			cancelled = true
-			request(p, mine, rCancel, 0, nil, nil)
+			return true, err
 		}
+
+		return false, nil
 	})
 
-	return pk, cancelled, err
+	return pk, p.cancelled && !p.interrupts(true), err
 }
 
 // call is a call on the node: a fresh pair, its one end with the
@@ -613,6 +603,9 @@ func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []Objec
 	if err != nil {
 		return packet{}, err
 	}
+
+	outer, was := p.ask(mine)
+	defer p.unask(outer, was)
 
 	pk, err := reply(p, mine)
 

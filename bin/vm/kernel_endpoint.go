@@ -416,10 +416,9 @@ func totalLength(spans [][]byte) int {
 	return n
 }
 
-// kernelSend is a send of the kernel's own for p, a request to a server:
-// data given away, with files, quiet, and no signal of p's ends its wait
-// for room, which sleeps on p's mail. A nonblocking end is EAGAIN when
-// full.
+// kernelSend is a send for p of the kernel's making, a request to a
+// server: data given away, with files, quiet; p takes its signals as it
+// waits for room, and waits on. A nonblocking end is EAGAIN when full.
 func (e *pairEnd) kernelSend(p *Process, data []byte, files []Object) error {
 	if len(data) > packetMax {
 		return syscall.EMSGSIZE
@@ -448,7 +447,6 @@ func (e *pairEnd) kernelPut(p *Process, pk packet) error {
 		}
 	}()
 
-	p.holdSignals()
 	_, err := p.wait(time.Time{}, func(*event) (bool, error) {
 		for {
 			if e.noWrite.Load() {
@@ -474,7 +472,6 @@ func (e *pairEnd) kernelPut(p *Process, pk packet) error {
 			e.subscribe(sub, pollOut)
 		}
 	})
-	p.passSignals()
 
 	return err
 }
@@ -601,8 +598,8 @@ func (e *pairEnd) recv(p *Process, mode ioMode, peek bool) (packet, bool, error)
 	}
 }
 
-// kernelRecv takes the next packet as the kernel for p, the reply of a
-// server: its wait sleeps on p's mail, which no signal of p's ends.
+// kernelRecv takes the next packet for p, the reply of a server: p takes
+// its signals as it waits, and waits on.
 func (e *pairEnd) kernelRecv(p *Process) (packet, bool, error) {
 	if pk, eof, ok := e.take(false); ok {
 		return pk, eof, nil
@@ -617,14 +614,12 @@ func (e *pairEnd) kernelRecv(p *Process) (packet, bool, error) {
 	var pk packet
 	var eof bool
 
-	p.holdSignals()
 	p.wait(time.Time{}, func(*event) (bool, error) {
 		var ok bool
 		pk, eof, ok = e.take(false)
 
 		return ok, nil
 	})
-	p.passSignals()
 
 	return pk, eof, nil
 }

@@ -157,10 +157,10 @@ type codeEntry struct {
 // failure is not kept: the next exec tries again.
 //
 // The compiler runs on a goroutine of its own, and the process p waits
-// for its end on its mail, which no signal ends: in the frames of the
-// process's code, a compiler that ends in a panic, a module it refuses,
-// would leave the goroutine's instance its own (aot.cpp's entry thunk
-// restores it only on return).
+// for its end, taking its signals meanwhile as in any wait: in the frames
+// of the process's code, a compiler that ends in a panic, a module it
+// refuses, would leave the goroutine's instance its own (aot.cpp's entry
+// thunk restores it only on return).
 func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*Code, error) {
 	key := sha256.Sum256(data)
 	k.mu.Lock()
@@ -194,14 +194,12 @@ func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*
 	}
 
 	k.mu.Unlock()
-	p.holdSignals()
 	p.wait(time.Time{}, func(*event) (bool, error) {
 		k.mu.Lock()
 		defer k.mu.Unlock()
 
 		return e.done, nil
 	})
-	p.passSignals()
 
 	return e.code, e.err
 }
@@ -809,19 +807,24 @@ func (p *Process) libcSystem(cmd uint32) uint32 {
 	c.execReset()
 	var ended atomic.Bool
 
-	// The child's end is an event of p's, which waits for it, its signals
-	// left for after.
+	// The child's end is an event of p's, which waits for it as POSIX has
+	// system: SIGINT and SIGQUIT ignored and SIGCHLD blocked while the
+	// command runs, its other signals taken.
 	go func() {
 		c.run(img)
 		ended.Store(true)
 		p.post(&p.own.child)
 	}()
 
-	p.holdSignals()
+	intr := p.setAction(int(syscall.SIGINT), sigAction{handler: sigIgn})
+	quit := p.setAction(int(syscall.SIGQUIT), sigAction{handler: sigIgn})
+	mask := p.setMask(p.mask() | sigBit(int(syscall.SIGCHLD)))
 	p.wait(time.Time{}, func(*event) (bool, error) {
 		return ended.Load(), nil
 	})
-	p.passSignals()
+	p.setAction(int(syscall.SIGINT), intr)
+	p.setAction(int(syscall.SIGQUIT), quit)
+	p.setMask(mask)
 
 	status := c.status
 	// its parent never waits for it: the child is reaped here

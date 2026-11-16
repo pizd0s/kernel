@@ -381,9 +381,9 @@ func (p *Process) terminalAt(fd uint32) (Terminal, error) {
 // cancels it, and it restarts when the handlers ask for that.
 func (t *remoteTerminal) waits(p *Process, op, arg uint32, body []byte) error {
 	for {
-		_, cancelled, err := t.node.waiting(p, op, arg, body, nil)
+		_, restart, err := t.node.waiting(p, op, arg, body, nil)
 
-		if err == syscall.EINTR && cancelled && p.interrupted() {
+		if err == syscall.EINTR && restart {
 			continue
 		}
 

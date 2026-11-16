@@ -149,11 +149,20 @@ type Process struct {
 	events eventQueue
 	own    ownEvents
 	spare  *subscription
-	// holds counts the waits of the kernel's own the process is in, which
-	// take none of its signals (holdSignals); skipped says one came in
-	// such a wait.
-	holds   int
-	skipped bool
+	// unwound says the process's image ended, by its exit or an exec, and
+	// no handler of its runs until its next image starts.
+	unwound bool
+	// asking is the request the process has at a server now, by the end
+	// its reply comes on, nil for none; cancelled says a CANCEL went for
+	// it, as the process took a signal (takeSignals).
+	asking    *pairEnd
+	cancelled bool
+	// interruption is what the signals the process took in its waits said
+	// since its call began: none taken, some, or one whose handler did not
+	// ask to restart calls. A wait of the call that a signal ends asks it
+	// (interrupts): the call may have taken the signal in another of its
+	// waits, for a server's answer.
+	interruption uint64
 }
 
 // execImage is a program a process runs; panicked by exec, it unwinds the
@@ -188,9 +197,14 @@ func newKernel(options CompileOptions, user cred) *Kernel {
 	return k
 }
 
-// proc is the process of the instance ctx.
+// proc is the process of the instance ctx, as a call of the kernel's
+// begins: every call takes its process so, once, and what the signals
+// taken in the call before said (interruption) is not this call's.
 func proc(ctx uintptr) *Process {
-	return instanceAt(ctx).proc
+	p := instanceAt(ctx).proc
+	p.interruption = signalNone
+
+	return p
 }
 
 // Imports: the kernel's functions, and WASI's (kernel_wasi.go).
@@ -378,7 +392,7 @@ func (p *Process) runImage(img *execImage, i *Instance, enter func()) (next *exe
 	}
 
 	p.setInstance(i)
-	p.image = img
+	p.image, p.unwound = img, false
 	funcs, ok := i.functionCode()
 
 	if ok {
@@ -388,6 +402,7 @@ func (p *Process) runImage(img *execImage, i *Instance, enter func()) (next *exe
 	defer func() {
 		runtime.SetInterrupt(0, 0, 0)
 		p.token.Store(0)
+		p.unwound = true
 		e := recover()
 		who := i.host.(*Process)
 
@@ -453,6 +468,7 @@ func trapSignal(code uint32) int {
 // or nothing when the parent ignores SIGCHLD, and the groups it joined to
 // its session may be orphaned (orphans); with the first process vm ends.
 func (p *Process) terminate(status int) {
+	p.unwound = true
 	p.stopTimers()
 	p.leaveSession(true)
 

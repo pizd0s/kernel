@@ -190,6 +190,7 @@ func (p *Process) execImage(img *execImage) {
 	}
 
 	p.vfork = nil
+	p.unwound = true
 	p.execReset()
 	p.setInstance(nil)
 	go p.run(img)
@@ -392,15 +393,13 @@ func (p *Process) waitid(idtype, id, info, options uint32) uint32 {
 }
 
 // stopped stops the process by sig: its parent learns it, and it waits
-// until it is continued or a SIGKILL is pending.
+// until it is continued or a SIGKILL is pending; its other signals wait
+// with it (takeSignals).
 func (p *Process) stopped(sig int) {
 	p.k.mu.Lock()
 	p.halted, p.report = true, sig<<8|stoppedBy
 	p.k.mu.Unlock()
 	p.tellParent(saNocldstop)
-	p.holdSignals()
-	defer p.passSignals()
-
 	p.wait(time.Time{}, func(*event) (bool, error) {
 		p.k.mu.Lock()
 		halted := p.halted
@@ -457,12 +456,12 @@ func (p *Process) tellParent(flag uint32) {
 // handlers ran when they all restart calls. Ready comes first, as a call
 // that has its result returns it.
 func (p *Process) waitEvent(ready func() bool) error {
-	_, err := p.wait(time.Time{}, func(e *event) (bool, error) {
+	_, err := p.wait(time.Time{}, func(*event) (bool, error) {
 		if ready() {
 			return true, nil
 		}
 
-		return e.interrupts(true), syscall.EINTR
+		return p.interrupts(true), syscall.EINTR
 	})
 
 	return err
