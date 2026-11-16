@@ -284,15 +284,9 @@ func (p *Process) loadFrom(path string, first File, argv []string) (*execImage, 
 			return nil, syscall.EACCES
 		}
 
-		// Execute permission: a node of the host says, a file of a server
-		// shows its mode, which says it for the process's class.
-		if node, ok := f.(Node); ok {
-			if err := node.access(1, 0); err != nil {
-				f.unref()
-
-				return nil, err
-			}
-		} else if !p.permits(&st, 1) {
+		// Execute permission: a file of a server shows its mode, which
+		// says it for the process's class.
+		if !p.permits(&st, 1) {
 			f.unref()
 
 			return nil, syscall.EACCES
@@ -328,11 +322,6 @@ func (p *Process) loadFrom(path string, first File, argv []string) (*execImage, 
 		}
 
 		code, err := p.k.code(p, f, path)
-
-		if program == "" {
-			program = p.programPath(f)
-		}
-
 		f.unref()
 
 		if err != nil {
@@ -346,41 +335,19 @@ func (p *Process) loadFrom(path string, first File, argv []string) (*execImage, 
 }
 
 // openProgram opens the file a path names for exec, a last link followed,
-// and says its path from the root: its directory's and its name, as
-// Linux's /proc/self/exe does. A directory is EACCES.
+// and says its path from the root, as Linux's /proc/self/exe does.
 func (p *Process) openProgram(path string) (File, string, error) {
 	var f File
 	var program string
-
-	if handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
+	err := p.onPath(atFdcwd, path, func(d Dir) error {
 		var err error
 
-		if f, err = v.openPath(p, path, syscall.O_RDONLY, 0); err != nil {
+		if f, err = d.openPath(p, path, syscall.O_RDONLY, 0); err != nil {
 			return err
 		}
 
-		if real, err := v.realpathOf(p, path); err == nil {
+		if real, err := d.realpathOf(p, path); err == nil {
 			program = real
-		}
-
-		return nil
-	}); handled {
-		return f, program, err
-	}
-
-	err := p.onName(atFdcwd, path, true, func(d Dir, name string, st *syscall.Stat_t) error {
-		if name == "" {
-			return syscall.EACCES
-		}
-
-		var err error
-
-		if f, err = d.openName(p, name, syscall.O_RDONLY, 0); err != nil {
-			return err
-		}
-
-		if base, err := d.path(p); err == nil {
-			program = strings.TrimSuffix(base, "/") + "/" + name
 		}
 
 		return nil
@@ -787,19 +754,8 @@ func (p *Process) libcFexecve(fd, argv, envp uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	// A file of the host is its path under the root; another, a memfd or a
-	// server's file, has none but its descriptor's.
+	// A memfd or a server's file has no path but its descriptor's.
 	path := fmt.Sprintf("/dev/fd/%d", fd)
-
-	if pathed, ok := obj.(Pathed); ok {
-		host, err := pathed.hostPath()
-
-		if err != nil {
-			return p.result(0, err)
-		}
-
-		path = p.guestPath(host)
-	}
 
 	return p.result(0, p.execFrom(path, obj, p.strings(argv), p.strings(envp)))
 }

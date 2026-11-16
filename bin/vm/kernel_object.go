@@ -11,10 +11,10 @@ import (
 // An open file is a File: what a descriptor refers to, shared by the
 // descriptors and processes that refer to it, and what every kind of call
 // asks of it. What else a file can do is a role, an interface a call
-// casts to: a Transfer reads and writes, a Seeker seeks, a Dir lists
-// entries, a Node is a file of a host file system with its metadata, a
-// Socket speaks sockets, an Ioctl takes ioctls, a Locker takes locks, an
-// Epoll watches files (kernel_epoll.go). Every file is the kernel's: one
+// casts to: a Transfer reads and writes, a Seeker seeks, a Dir takes the
+// calls with a path, a Terminal a terminal's, a Socket speaks sockets, an
+// Ioctl takes ioctls, a Locker takes locks, an Epoll watches files
+// (kernel_epoll.go). Every file is the kernel's: one
 // of a server (kernel_remote.go), a pipe (kernel_pipe.go), a socket, a
 // memfd, the console or a disk (kernel_console.go); each plays its own
 // roles.
@@ -67,57 +67,109 @@ type Seeker interface {
 	seek(p *Process, off int64, whence int) (int64, error)
 }
 
-// A Dir is a directory: where a path is walked from, and what holds the
-// names the calls make their last step on, as Linux's namei has it
-// (kernel_path.go). resolve walks a path from the directory to the
-// directory of its last name, or to where the walk goes on, which only it
-// knows. A handle of rootfs's is a Dir, but the kernel walks nothing of
-// the VFS's: a call with a path goes to rootfs whole (kernel_vfs.go), and
-// its names are paths of one name from it.
-// The calls on a name never follow it: a symbolic link is itself, and the
-// caller follows it when it means to; "" names the directory itself for
-// the calls that look at a name. path is the directory's path from the
-// process's root, for getcwd and realpath. An open directory lists its
-// entries as getdents64 does, into a buffer of the guest's struct dirent
-// layout.
+// A Dir is a directory a process holds: its root, its working directory,
+// a directory descriptor. A call with a path goes whole to the directory
+// it starts at (Process.start), the root for an absolute path, else the
+// working directory or the descriptor's, and what serves the directory
+// walks it, follows its links and makes its last step as Linux's does:
+// rootfs, the VFS, for its handles (kernel_vfs.go), and the empty root of
+// a process that has none (noRoot). follow says whether a last symbolic
+// link is followed.
 type Dir interface {
 	File
-	resolve(p *Process, path string, w *walk) (step, error)
+	// path is the directory's own path from the process's root.
 	path(p *Process) (string, error)
+	// readdir gives the entries after the last it gave, as getdents64
+	// does, in the guest's struct dirent layout.
 	readdir(p *Process, b []byte) (int, error)
-	statName(p *Process, name string, st *syscall.Stat_t) error
-	readlinkName(p *Process, name string) (string, error)
-	openName(p *Process, name string, flags int, mode uint32) (File, error)
-	mkdir(p *Process, name string, mode uint32) error
-	mknod(p *Process, name string, mode uint32, dev uint64) error
-	symlink(p *Process, target, name string) error
-	unlink(p *Process, name string, dir bool) error
-	rename(p *Process, name string, to Dir, toName string) error
-	link(p *Process, name string, to Dir, toName string) error
-	accessName(p *Process, name string, mode, flags uint32) error
-	chmodName(p *Process, name string, mode uint32) error
-	chownName(p *Process, name string, uid, gid int) error
-	utimesName(p *Process, name string, ts []syscall.Timespec) error
-	truncateName(p *Process, name string, size int64) error
-	statfsName(p *Process, name string, st *syscall.Statfs_t) error
+	openPath(p *Process, path string, flags int, mode uint32) (File, error)
+	statPath(p *Process, path string, follow bool, st *syscall.Stat_t) error
+	readlinkPath(p *Process, path string) (string, error)
+	mkdirPath(p *Process, path string, mode uint32) error
+	// mknodPath makes a FIFO or a regular file.
+	mknodPath(p *Process, path string, mode uint32) error
+	symlinkPath(p *Process, target, path string) error
+	unlinkPath(p *Process, path string, dir bool) error
+	// renamePath and linkPath take the new path from to.
+	renamePath(p *Process, old string, to Dir, new string) error
+	linkPath(p *Process, old string, to Dir, new string, follow bool) error
+	chmodPath(p *Process, path string, mode uint32, follow bool) error
+	chownPath(p *Process, path string, uid, gid int, follow bool) error
+	utimesPath(p *Process, path string, ts []syscall.Timespec, follow bool) error
+	truncatePath(p *Process, path string, size int64) error
+	statfsPath(p *Process, path string, st *syscall.Statfs_t) error
+	// realpathOf is the path from the root of what path names, with no
+	// ".", ".." or link in it.
+	realpathOf(p *Process, path string) (string, error)
+	// mountPath mounts on target the directory source names, or the root
+	// of the file system conn is a connection to; unmountPath lets what
+	// is mounted on path go.
+	mountPath(p *Process, target, source string, conn File) error
+	unmountPath(p *Process, path string, flags uint32) error
+	// bindPath makes a socket node of path, which holds held;
+	// connectPath is what the socket node path names holds.
+	bindPath(p *Process, path string, mode uint32, held File) error
+	connectPath(p *Process, path string) (File, error)
 }
 
-// A Pathed object has a path on the host: a file of a host file system.
-type Pathed interface {
-	File
-	hostPath() (string, error)
+// A Terminal is a terminal's open file (kernel_terminal.go): its server
+// keeps all of the terminal, its settings, its window, its foreground
+// group and its discipline, which these calls ask; the kernel keeps the
+// processes' side of it, the session it controls and job control, which
+// its reads and writes go through.
+type Terminal interface {
+	Transfer
+	// device is the terminal's device, the same for each open of it.
+	device() (uint64, uint64)
+	// jobs is what job control asks of the terminal, as its server said
+	// it last: the foreground group, TOSTOP, and whether it hung up.
+	jobs() (foreground int32, tostop, hungUp bool)
+	getattr(p *Process) ([]byte, error)
+	// setattr sets the settings when TCSANOW, TCSADRAIN or TCSAFLUSH
+	// says: one that drains waits for the output to go.
+	setattr(p *Process, when uint32, termios []byte) error
+	flush(p *Process, queue uint32) error
+	flow(p *Process, action uint32) error
+	drain(p *Process) error
+	window(p *Process) ([]byte, error)
+	setWindow(p *Process, size []byte) error
+	// pending is what a read would find, unsent what was written that the
+	// other end has not read.
+	pending(p *Process) (uint32, error)
+	unsent(p *Process) (uint32, error)
+	// name is the path of the terminal's device; with peer a master's
+	// slave's, ENOTTY of a slave.
+	name(p *Process, peer bool) (string, error)
+	foreground(p *Process) (uint32, error)
+	setForeground(p *Process, pgrp uint32) error
+	// control makes the terminal control the session sid, pgrp its
+	// foreground group; sid 0 none.
+	control(p *Process, sid, pgrp int32) error
+	// reopen is another open of the terminal, /dev/tty's.
+	reopen(p *Process, flags int) (Terminal, error)
 }
 
-// A Named file knows its guest path: a file of a server, which says it
-// from the root of the process.
-type Named interface {
+// A Windowed file moves bytes straight between itself and a memfd's
+// window, the memory the memfd is of (kernel_memfd.go): a server's file,
+// by a READ or WRITE that brings the memfd, and a disk of vm's, which vm
+// reads into it or writes from it. from and to are the file's offsets,
+// nil for its position, which moves.
+type Windowed interface {
 	File
-	name(p *Process) (string, error)
+	readWindow(p *Process, w *memfdFile, woff uint32, n int, from *int64) (int, error)
+	writeWindow(p *Process, w *memfdFile, woff uint32, n int, to *int64) (int, error)
+}
+
+// A Link is a descriptor of what O_PATH opened that is no directory,
+// which readlinkat reads by an empty path: a symbolic link's target, or
+// ENOENT for what is no link, as Linux has it.
+type Link interface {
+	File
+	readlink(p *Process) (string, error)
 }
 
 // An Attrs has the attributes a descriptor's calls set, and knows the file
-// system it is on: a file of the host and an open file of a server
-// (kernel_remote.go) both.
+// system it is on: an open file of a server (kernel_remote.go).
 type Attrs interface {
 	File
 	truncate(p *Process, size int64) error
@@ -128,26 +180,11 @@ type Attrs interface {
 	statfs(p *Process, st *syscall.Statfs_t) error
 }
 
-// A Node is a file of a host file system: what the calls the host makes
-// on a descriptor work on.
-type Node interface {
-	Attrs
-	Pathed
-	syncfs() error
-	access(mode, flags uint32) error
-	readlink(out []byte) (int, error)
-	fadvise(off, n int64, advice int) error
-	fallocate(off, n int64) error
-	// copyRange is copy_file_range to another node, with the offsets of
-	// the call when given.
-	copyRange(dst Node, from, to *int64, n int, flags int) (int, error)
-}
-
 // A Socket takes the socket calls as libc makes them, with the guest's
-// addresses and buffers; the addresses it returns are the guest's. A
-// socket of the host or a pair of the kernel is a Transfer too; an open
-// file of a server (kernel_remote.go) is a Socket for the program that
-// speaks the protocol on it itself, and a Transfer only when a file.
+// addresses and buffers; the addresses it returns are the guest's. A pair
+// of the kernel's is a Transfer too; an open file of a server
+// (kernel_remote.go) is a Socket for the program that speaks the protocol
+// on it itself, and a Transfer only when a file.
 type Socket interface {
 	File
 	bind(p *Process, at, n uint32) error
@@ -266,20 +303,6 @@ func (p *Process) attrsAt(fd uint32) (Attrs, error) {
 
 	if a, ok := obj.(Attrs); ok {
 		return a, nil
-	}
-
-	return nil, syscall.EINVAL
-}
-
-func (p *Process) nodeAt(fd uint32) (Node, error) {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if n, ok := obj.(Node); ok {
-		return n, nil
 	}
 
 	return nil, syscall.EINVAL

@@ -209,11 +209,9 @@ func (f *memfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 
 // copyWindow is copy_file_range between a memfd and another file: the
 // memfd's bytes are the memory it is of, so the other file's go straight
-// there or come straight from there, one copy. A file of the host is read
-// into that memory or written from it by the host, a server's file
-// through a READ or WRITE that brings the memfd itself; another memfd's
-// bytes are moved. from and to are the offsets given, nil for the files'
-// positions, which move.
+// there or come straight from there, one copy, a Windowed file's; another
+// memfd's bytes are moved. from and to are the offsets given, nil for the
+// files' positions, which move.
 func copyWindow(p *Process, src, dst File, from, to *int64, n int) (int, error) {
 	if w, ok := dst.(*memfdFile); ok {
 		return w.fill(p, src, from, to, n)
@@ -253,10 +251,10 @@ func (f *memfdFile) fill(p *Process, src File, from, to *int64, n int) (int, err
 	switch s := src.(type) {
 	case *memfdFile:
 		count, err = s.moveTo(f.mem[at:int(at)+n], from)
-	case *remoteFile:
+	case Windowed:
 		count, err = s.readWindow(p, f, uint32(at), n, from)
 	default:
-		count, err = diskTransfer(p, src, f.mem[at:int(at)+n], from, false)
+		err = syscall.EINVAL // as copy_file_range has it
 	}
 
 	f.moved(to, count)
@@ -284,11 +282,10 @@ func (f *memfdFile) drain(p *Process, dst File, from, to *int64, n int) (int, er
 	var count int
 	var err error
 
-	switch d := dst.(type) {
-	case *remoteFile:
+	if d, ok := dst.(Windowed); ok {
 		count, err = d.writeWindow(p, f, uint32(at), n, to)
-	default:
-		count, err = diskTransfer(p, dst, f.mem[at:int(at)+n], to, true)
+	} else {
+		err = syscall.EINVAL // as copy_file_range has it
 	}
 
 	f.moved(from, count)
@@ -368,16 +365,19 @@ func (f *remoteFile) writeWindow(p *Process, w *memfdFile, woff uint32, n int, t
 	return count, err
 }
 
-// diskTransfer reads a disk into b, or with write writes b into it, at off
-// or at its position, which moves: vm's calls copy between the disk and the
-// memory of b. Any other file is EINVAL, as copy_file_range has it.
-func diskTransfer(p *Process, f File, b []byte, off *int64, write bool) (int, error) {
-	d, ok := f.(*diskFile)
+// readWindow and writeWindow move a disk's bytes into a memfd's window or
+// from it: vm's calls copy between the disk and the window's memory.
+func (d *diskFile) readWindow(p *Process, w *memfdFile, woff uint32, n int, from *int64) (int, error) {
+	return d.transfer(p, w.mem[woff:int(woff)+n], from, false)
+}
 
-	if !ok {
-		return 0, syscall.EINVAL
-	}
+func (d *diskFile) writeWindow(p *Process, w *memfdFile, woff uint32, n int, to *int64) (int, error) {
+	return d.transfer(p, w.mem[woff:int(woff)+n], to, true)
+}
 
+// transfer reads the disk into b, or with write writes b into it, at off
+// or at its position, which moves.
+func (d *diskFile) transfer(p *Process, b []byte, off *int64, write bool) (int, error) {
 	switch {
 	case off == nil && write:
 		return d.write(p, b, ioMode{})

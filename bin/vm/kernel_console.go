@@ -534,6 +534,7 @@ var (
 	_ Transfer = (*diskFile)(nil)
 	_ Seeker   = (*diskFile)(nil)
 	_ Attrs    = (*diskFile)(nil)
+	_ Windowed = (*diskFile)(nil)
 )
 
 func newDiskFile(fd int) *diskFile {

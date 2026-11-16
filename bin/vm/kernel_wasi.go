@@ -639,14 +639,16 @@ func wasiFdReaddir(ctx uintptr, fd, buf, n uint32, cookie uint64, used uint32) u
 		return wasiEfault
 	}
 
-	d, ok := obj.(*remoteDir)
+	d, ok := obj.(Dir)
 
 	if !ok {
 		return wasiEnotdir
 	}
 
-	if _, err := d.seek(p, 0, 0); err != nil {
-		return wasiErrno(err)
+	if s, ok := obj.(Seeker); ok {
+		if _, err := s.seek(p, 0, 0); err != nil {
+			return wasiErrno(err)
+		}
 	}
 
 	index := uint64(0)

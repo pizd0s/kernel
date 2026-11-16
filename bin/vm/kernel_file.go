@@ -366,10 +366,8 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 
 	_, fromWindow := src.(*memfdFile)
 	_, toWindow := dst.(*memfdFile)
-	srcNode, srcIsNode := src.(Node)
-	dstNode, dstIsNode := dst.(Node)
 
-	if srcIsNode != dstIsNode && !fromWindow && !toWindow || !(srcIsNode && dstIsNode) && flags != 0 {
+	if flags != 0 {
 		return p.result(0, syscall.EINVAL)
 	}
 
@@ -387,12 +385,9 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 
 	var r int
 
-	switch {
-	case fromWindow || toWindow:
+	if fromWindow || toWindow {
 		r, err = copyWindow(p, src, dst, from, to, int(n))
-	case srcIsNode:
-		r, err = srcNode.copyRange(dstNode, from, to, int(n), int(flags))
-	default:
+	} else {
 		r, err = copyFiles(p, src, dst, from, to, int(n))
 	}
 
@@ -505,18 +500,9 @@ func (p *Process) libcSync() {
 	syscall.Sync()
 }
 
-// syncfs syncs the file system of a node; another file has nothing to
-// sync.
+// syncfs has nothing to sync: a server's file system syncs as it writes.
 func (p *Process) libcSyncfs(fd uint32) uint32 {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	if n, ok := obj.(Node); ok {
-		err = n.syncfs()
-	}
+	_, err := p.fd(fd)
 
 	return p.result(0, err)
 }
@@ -575,10 +561,6 @@ func (p *Process) libcPosix_fadvise(fd uint32, off, n uint64, advice uint32) uin
 		return uint32(errnoOf(err))
 	}
 
-	if node, ok := obj.(Node); ok {
-		return uint32(errnoOf(node.fadvise(int64(off), int64(n), int(advice))))
-	}
-
 	var st syscall.Stat_t
 
 	if err := obj.stat(p, &st); err != nil {
@@ -602,10 +584,6 @@ func (p *Process) libcPosix_fallocate(fd uint32, off, n uint64) uint32 {
 
 	if err != nil {
 		return uint32(errnoOf(err))
-	}
-
-	if node, ok := obj.(Node); ok {
-		return uint32(errnoOf(node.fallocate(int64(off), int64(n))))
 	}
 
 	return uint32(errnoOf(p.fallocate(obj, int64(off), int64(n))))
@@ -1131,7 +1109,7 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	if t, ok := obj.(*remoteTerminal); ok {
+	if t, ok := obj.(Terminal); ok {
 		if r, done := p.terminalIoctl(t, fd, req, va); done {
 			return r
 		}

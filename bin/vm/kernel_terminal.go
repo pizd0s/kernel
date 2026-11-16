@@ -14,8 +14,9 @@ import (
 // pair of SERVED_TERMINAL: an end of a pseudoterminal of
 // bin/tools/pty.cpp, the system's only terminals. The kernel keeps nothing
 // of one: its settings, its window, its foreground group and its
-// discipline are its server's, and a terminal's call is a request to it
-// (lib/protocol/protocol.h). A terminal has no offsets: seek and the
+// discipline are its server's. The kernel's calls see it as the Terminal
+// role (kernel_object.go), which remoteTerminal answers by requests to its
+// server (lib/protocol/protocol.h). A terminal has no offsets: seek and the
 // positioned reads and writes are ESPIPE. The console is no terminal
 // (kernel_console.go).
 //
@@ -68,12 +69,16 @@ const (
 	tiocsptlck = 0x40045431
 )
 
-func sameTerminal(a, b *remoteTerminal) bool {
-	return a.dev == b.dev && a.ino == b.ino
+// sameTerminal tells whether two opens are of one terminal.
+func sameTerminal(a, b Terminal) bool {
+	ad, ai := a.device()
+	bd, bi := b.device()
+
+	return ad == bd && ai == bi
 }
 
 // isCtty tells whether a terminal is the caller's controlling terminal.
-func (p *Process) isCtty(t *remoteTerminal) bool {
+func (p *Process) isCtty(t Terminal) bool {
 	p.k.mu.Lock()
 	c := p.k.cttys[p.sid]
 	p.k.mu.Unlock()
@@ -82,9 +87,9 @@ func (p *Process) isCtty(t *remoteTerminal) bool {
 }
 
 // openControlling opens the caller's controlling terminal anew, /dev/tty's
-// open: its server's other open of the slave the kernel keeps, which no
-// owner's permission keeps out, as Linux's does not; ENXIO for a session
-// that has none, or whose terminal hung up, which controls it no more.
+// open: another open of the terminal, which no owner's permission keeps
+// out, as Linux's does not; ENXIO for a session that has none, or whose
+// terminal hung up, which controls it no more.
 func (p *Process) openControlling(flags int) (File, error) {
 	p.k.mu.Lock()
 	c := p.k.cttys[p.sid]
@@ -101,31 +106,17 @@ func (p *Process) openControlling(flags int) (File, error) {
 
 	defer c.unref()
 
-	if c.readiness()&pollHup != 0 {
+	if _, _, hungUp := c.jobs(); hungUp {
 		return nil, syscall.ENXIO
 	}
 
-	pk, err := c.call(p, rOpen, uint32(flags), nil, nil)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if len(pk.files) == 1 {
-		if t, ok := pk.files[0].(*remoteTerminal); ok {
-			return t, nil
-		}
-	}
-
-	dropFiles(pk.files)
-
-	return nil, syscall.EIO
+	return c.reopen(p, flags)
 }
 
 // acquire makes a terminal opened without O_NOCTTY the controlling
 // terminal of the caller's session when it leads one that has none, as
 // Linux's open does; one that controls another stays as it is.
-func (p *Process) acquire(t *remoteTerminal) {
+func (p *Process) acquire(t Terminal) {
 	p.k.mu.Lock()
 	_, has := p.k.cttys[p.sid]
 	leads := p.sid == p.pid
@@ -222,10 +213,9 @@ func (k *Kernel) signalGroup(pgid int32, sig int) {
 // a change that ignores or blocks SIGTTOU goes on, one of an orphaned
 // group is EIO. Else the group hears sig, and the call goes on once the
 // process does, when its handlers ask for that: EINTR else.
-func (p *Process) background(t *remoteTerminal, sig syscall.Signal) error {
+func (p *Process) background(t Terminal, sig syscall.Signal) error {
 	for {
-		t.readiness()
-		foreground := t.foreground.Load()
+		foreground, _, _ := t.jobs()
 		p.k.mu.Lock()
 		pgid := p.pgid
 		p.k.mu.Unlock()
@@ -263,7 +253,7 @@ func (t *remoteTerminal) read(p *Process, b []byte, mode ioMode) (int, error) {
 }
 
 func (t *remoteTerminal) write(p *Process, b []byte, mode ioMode) (int, error) {
-	if t.readiness(); t.tostop.Load() {
+	if _, tostop, _ := t.jobs(); tostop {
 		if err := p.background(t, syscall.SIGTTOU); err != nil {
 			return 0, err
 		}
@@ -274,7 +264,7 @@ func (t *remoteTerminal) write(p *Process, b []byte, mode ioMode) (int, error) {
 
 // changeAt is the terminal of a descriptor for a call that changes it,
 // past job control's check.
-func (p *Process) changeAt(fd uint32) (*remoteTerminal, error) {
+func (p *Process) changeAt(fd uint32) (Terminal, error) {
 	t, err := p.terminalAt(fd)
 
 	if err == nil {
@@ -303,11 +293,8 @@ func (p *Process) leaveSession(going bool) {
 		return
 	}
 
-	t.readiness()
-	foreground := t.foreground.Load()
-
-	var body [4]byte
-	t.simple(p, rSetCtty, 0, body[:])
+	foreground, _, _ := t.jobs()
+	t.control(p, 0, 0)
 
 	if foreground > 0 {
 		p.k.signalGroup(foreground, int(syscall.SIGHUP))
@@ -318,6 +305,16 @@ func (p *Process) leaveSession(going bool) {
 	}
 
 	t.unref()
+}
+
+// A terminal moves no window: copy_file_range is EINVAL, as Linux's of
+// what is no regular file.
+func (t *remoteTerminal) readWindow(p *Process, w *memfdFile, woff uint32, n int, from *int64) (int, error) {
+	return 0, syscall.EINVAL
+}
+
+func (t *remoteTerminal) writeWindow(p *Process, w *memfdFile, woff uint32, n int, to *int64) (int, error) {
+	return 0, syscall.EINVAL
 }
 
 func (t *remoteTerminal) seek(p *Process, off int64, whence int) (int64, error) {
@@ -334,14 +331,14 @@ func (t *remoteTerminal) pwrite(p *Process, b []byte, off int64) (int, error) {
 
 // terminalAt is the terminal of a descriptor: EBADF for none open, ENOTTY
 // for a file that is no terminal.
-func (p *Process) terminalAt(fd uint32) (*remoteTerminal, error) {
+func (p *Process) terminalAt(fd uint32) (Terminal, error) {
 	f, err := p.fd(fd)
 
 	if err != nil {
 		return nil, err
 	}
 
-	t, ok := f.(*remoteTerminal)
+	t, ok := f.(Terminal)
 
 	if !ok {
 		return nil, syscall.ENOTTY
@@ -377,6 +374,107 @@ func (t *remoteTerminal) count(p *Process, op uint32) (uint32, error) {
 	}
 
 	return binary.LittleEndian.Uint32(pk.data), nil
+}
+
+// The Terminal role of a terminal's open file: each call is a request to
+// its server (lib/protocol/protocol.h).
+
+func (t *remoteTerminal) device() (uint64, uint64) {
+	return t.dev, t.ino
+}
+
+// jobs is what the terminal's READY said last.
+func (t *remoteTerminal) jobs() (int32, bool, bool) {
+	hungUp := t.readiness()&pollHup != 0
+
+	return t.remoteNode.foreground.Load(), t.tostop.Load(), hungUp
+}
+
+func (t *remoteTerminal) getattr(p *Process) ([]byte, error) {
+	pk, err := t.on(p, rTcgetattr, 0, nil)
+
+	if err == nil && len(pk.data) != sizeofTermios {
+		err = syscall.EIO
+	}
+
+	return pk.data, err
+}
+
+func (t *remoteTerminal) setattr(p *Process, when uint32, termios []byte) error {
+	if when == 0 {
+		return t.simple(p, rTcsetattr, when, termios)
+	}
+
+	return t.waits(p, rTcsetattr, when, termios)
+}
+
+func (t *remoteTerminal) flush(p *Process, queue uint32) error {
+	return t.simple(p, rTcflush, queue, nil)
+}
+
+func (t *remoteTerminal) flow(p *Process, action uint32) error {
+	return t.simple(p, rTcflow, action, nil)
+}
+
+func (t *remoteTerminal) drain(p *Process) error {
+	return t.waits(p, rTcdrain, 0, nil)
+}
+
+func (t *remoteTerminal) window(p *Process) ([]byte, error) {
+	pk, err := t.on(p, rGetWinsize, 0, nil)
+
+	if err == nil && len(pk.data) != sizeofWinsize {
+		err = syscall.EIO
+	}
+
+	return pk.data, err
+}
+
+func (t *remoteTerminal) setWindow(p *Process, size []byte) error {
+	return t.simple(p, rSetWinsize, 0, size)
+}
+
+func (t *remoteTerminal) pending(p *Process) (uint32, error) {
+	return t.count(p, rInq)
+}
+
+func (t *remoteTerminal) unsent(p *Process) (uint32, error) {
+	return t.count(p, rOutq)
+}
+
+func (t *remoteTerminal) foreground(p *Process) (uint32, error) {
+	return t.count(p, rGetPgrp)
+}
+
+func (t *remoteTerminal) setForeground(p *Process, pgrp uint32) error {
+	return t.simple(p, rSetPgrp, pgrp, nil)
+}
+
+func (t *remoteTerminal) control(p *Process, sid, pgrp int32) error {
+	var body [4]byte
+	binary.LittleEndian.PutUint32(body[:], uint32(pgrp))
+
+	return t.simple(p, rSetCtty, uint32(sid), body[:])
+}
+
+// reopen is the server's other open of the slave, which the OK brings, a
+// terminal's.
+func (t *remoteTerminal) reopen(p *Process, flags int) (Terminal, error) {
+	pk, err := t.call(p, rOpen, uint32(flags), nil, nil)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if len(pk.files) == 1 {
+		if r, ok := pk.files[0].(Terminal); ok {
+			return r, nil
+		}
+	}
+
+	dropFiles(pk.files)
+
+	return nil, syscall.EIO
 }
 
 // name is the path of the terminal's device, or with peer that of a
@@ -420,14 +518,10 @@ func (p *Process) tcgetattr(fd, at uint32) error {
 		return err
 	}
 
-	pk, err := t.on(p, rTcgetattr, 0, nil)
-
-	if err == nil && len(pk.data) != sizeofTermios {
-		err = syscall.EIO
-	}
+	settings, err := t.getattr(p)
 
 	if err == nil {
-		copy(p.span(at, sizeofTermios), pk.data)
+		copy(p.span(at, sizeofTermios), settings)
 	}
 
 	return err
@@ -450,42 +544,37 @@ func (p *Process) tcsetattr(fd, action, at uint32) error {
 		return err
 	}
 
-	body := append([]byte(nil), p.span(at, sizeofTermios)...)
-
-	if action == 0 {
-		return t.simple(p, rTcsetattr, action, body)
-	}
-
-	return t.waits(p, rTcsetattr, action, body)
+	return t.setattr(p, action, append([]byte(nil), p.span(at, sizeofTermios)...))
 }
 
 func (p *Process) libcTcflow(fd, action uint32) uint32 {
-	return p.result(0, p.onTerminal(fd, rTcflow, action))
+	t, err := p.changeAt(fd)
+
+	if err == nil {
+		err = t.flow(p, action)
+	}
+
+	return p.result(0, err)
 }
 
 func (p *Process) libcTcflush(fd, queue uint32) uint32 {
-	return p.result(0, p.onTerminal(fd, rTcflush, queue))
-}
-
-// onTerminal is a call that changes a terminal and answers nothing.
-func (p *Process) onTerminal(fd, op, arg uint32) error {
 	t, err := p.changeAt(fd)
 
-	if err != nil {
-		return err
+	if err == nil {
+		err = t.flush(p, queue)
 	}
 
-	return t.simple(p, op, arg, nil)
+	return p.result(0, err)
 }
 
 func (p *Process) libcTcdrain(fd uint32) uint32 {
 	t, err := p.changeAt(fd)
 
-	if err != nil {
-		return p.result(0, err)
+	if err == nil {
+		err = t.drain(p)
 	}
 
-	return p.result(0, t.waits(p, rTcdrain, 0, nil))
+	return p.result(0, err)
 }
 
 // A pseudoterminal has no line to break.
@@ -500,7 +589,7 @@ func (p *Process) libcTcsendbreak(fd, duration uint32) uint32 {
 // tells its slave's. The group set is one of the caller's session.
 func (p *Process) libcTcgetpgrp(fd uint32) uint32 {
 	if t, err := p.terminalAt(fd); err != syscall.ENOTTY {
-		if err == nil && !p.isCtty(t) && !t.master(p) {
+		if err == nil && !p.isCtty(t) && !isMaster(p, t) {
 			err = syscall.ENOTTY
 		}
 
@@ -508,7 +597,7 @@ func (p *Process) libcTcgetpgrp(fd uint32) uint32 {
 			return p.result(0, err)
 		}
 
-		group, err := t.count(p, rGetPgrp)
+		group, err := t.foreground(p)
 
 		return p.result(int(group), err)
 	}
@@ -541,7 +630,7 @@ func (p *Process) libcTcsetpgrp(fd, pgrp uint32) uint32 {
 	case !p.groupExists(int32(pgrp)):
 		return p.result(0, syscall.EPERM)
 	case t != nil:
-		return p.result(0, t.simple(p, rSetPgrp, pgrp, nil))
+		return p.result(0, t.setForeground(p, pgrp))
 	}
 
 	p.k.mu.Lock()
@@ -569,8 +658,8 @@ func (p *Process) libcTcgetsid(fd uint32) uint32 {
 	return p.result(int(p.sid), nil)
 }
 
-// master tells whether a terminal is a master, which has a slave.
-func (t *remoteTerminal) master(p *Process) bool {
+// isMaster tells whether a terminal is a master, which has a slave.
+func isMaster(p *Process, t Terminal) bool {
 	_, err := t.name(p, true)
 
 	return err == nil
@@ -580,7 +669,7 @@ func (t *remoteTerminal) master(p *Process) bool {
 // session, TIOCSCTTY's: the caller leads a session that has none, or has
 // this one, and its group is the foreground group. EPERM when the
 // terminal controls another session.
-func (p *Process) controls(t *remoteTerminal) error {
+func (p *Process) controls(t Terminal) error {
 	p.k.mu.Lock()
 	sid, pgid, leads := p.sid, p.pgid, p.sid == p.pid
 	c := p.k.cttys[sid]
@@ -593,10 +682,7 @@ func (p *Process) controls(t *remoteTerminal) error {
 		return syscall.EPERM
 	}
 
-	var body [4]byte
-	binary.LittleEndian.PutUint32(body[:], uint32(pgid))
-
-	if err := t.simple(p, rSetCtty, uint32(sid), body[:]); err != nil {
+	if err := t.control(p, sid, pgid); err != nil {
 		return err
 	}
 
@@ -610,7 +696,7 @@ func (p *Process) controls(t *remoteTerminal) error {
 
 // notty is TIOCNOTTY: the caller gives up its controlling terminal; a
 // leader, for its session, as it does going.
-func (p *Process) notty(t *remoteTerminal) error {
+func (p *Process) notty(t Terminal) error {
 	if !p.isCtty(t) {
 		return syscall.ENOTTY
 	}
@@ -622,7 +708,7 @@ func (p *Process) notty(t *remoteTerminal) error {
 
 // terminalIoctl is ioctl's request on a terminal, and whether it is one
 // of a terminal's.
-func (p *Process) terminalIoctl(t *remoteTerminal, fd, req, va uint32) (uint32, bool) {
+func (p *Process) terminalIoctl(t Terminal, fd, req, va uint32) (uint32, bool) {
 	arg := p.varArg(va, 0)
 
 	switch req {
@@ -631,39 +717,33 @@ func (p *Process) terminalIoctl(t *remoteTerminal, fd, req, va uint32) (uint32, 
 	case tcsets, tcsets + 1, tcsets + 2:
 		return p.result(0, p.tcsetattr(fd, req-tcsets, arg)), true
 	case tcflsh:
-		return p.result(0, p.onTerminal(fd, rTcflush, arg)), true
+		return p.libcTcflush(fd, arg), true
 	case tcxonc:
-		return p.result(0, p.onTerminal(fd, rTcflow, arg)), true
+		return p.libcTcflow(fd, arg), true
 	case tcsbrk:
 		if err := p.background(t, syscall.SIGTTOU); err != nil || arg == 0 {
 			return p.result(0, err), true
 		}
 
-		return p.result(0, t.waits(p, rTcdrain, 0, nil)), true
+		return p.result(0, t.drain(p)), true
 	case tiocgwinsz:
-		pk, err := t.on(p, rGetWinsize, 0, nil)
-
-		if err == nil && len(pk.data) != sizeofWinsize {
-			err = syscall.EIO
-		}
+		size, err := t.window(p)
 
 		if err == nil {
-			copy(p.span(arg, sizeofWinsize), pk.data)
+			copy(p.span(arg, sizeofWinsize), size)
 		}
 
 		return p.result(0, err), true
 	case tiocswinsz:
-		body := append([]byte(nil), p.span(arg, sizeofWinsize)...)
-
-		return p.result(0, t.simple(p, rSetWinsize, 0, body)), true
+		return p.result(0, t.setWindow(p, append([]byte(nil), p.span(arg, sizeofWinsize)...))), true
 	case fionread, tiocoutq:
-		op := rInq
+		count := t.pending
 
 		if req == tiocoutq {
-			op = rOutq
+			count = t.unsent
 		}
 
-		n, err := t.count(p, op)
+		n, err := count(p)
 
 		if err == nil {
 			p.put32(arg, n)
@@ -701,7 +781,7 @@ func (p *Process) terminalIoctl(t *remoteTerminal, fd, req, va uint32) (uint32, 
 }
 
 // slaveNumber is the number of a master's slave, /dev/pts/N's.
-func (p *Process) slaveNumber(t *remoteTerminal) (int, error) {
+func (p *Process) slaveNumber(t Terminal) (int, error) {
 	name, err := t.name(p, true)
 
 	if err != nil {
@@ -817,10 +897,10 @@ func (p *Process) openPty(termp, winp uint32) (int, int, string, error) {
 	}
 
 	if err == nil && winp != 0 {
-		var t *remoteTerminal
+		var t Terminal
 
 		if t, err = p.terminalAt(uint32(slave)); err == nil {
-			err = t.simple(p, rSetWinsize, 0, append([]byte(nil), p.span(winp, sizeofWinsize)...))
+			err = t.setWindow(p, append([]byte(nil), p.span(winp, sizeofWinsize)...))
 		}
 	}
 
@@ -875,10 +955,7 @@ func (p *Process) libcForkpty(amaster, name, termp, winp uint32) uint32 {
 		c.sid, c.pgid = c.pid, c.pid
 		c.k.mu.Unlock()
 
-		var body [4]byte
-		binary.LittleEndian.PutUint32(body[:], uint32(c.pid))
-
-		if t.simple(p, rSetCtty, uint32(c.pid), body[:]) == nil {
+		if t.control(p, c.pid, c.pid) == nil {
 			t.ref()
 			c.k.mu.Lock()
 			c.k.cttys[c.pid] = t
@@ -948,20 +1025,19 @@ func (p *Process) libcGetpass(prompt uint32) uint32 {
 	}
 
 	at := p.passwordAt
-	pk, err := t.on(p, rTcgetattr, 0, nil)
+	saved, err := t.getattr(p)
 
-	if err != nil || len(pk.data) != sizeofTermios {
-		p.setErrno(syscall.EIO)
+	if err != nil {
+		p.setErrno(errnoOf(err))
 
 		return 0
 	}
 
-	saved := pk.data
 	quiet := append([]byte(nil), saved...)
 	le := binary.LittleEndian
 	le.PutUint32(quiet, le.Uint32(quiet)&^(inlcr|igncr)|icrnl)
 	le.PutUint32(quiet[12:], le.Uint32(quiet[12:])&^(echo|isig)|icanon)
-	t.waits(p, rTcsetattr, 2, quiet)
+	t.setattr(p, 2, quiet)
 	t.write(p, p.span(prompt, uint32(len(p.str(prompt)))), ioMode{})
 	n, err := t.read(p, p.span(at, passwordSize), ioMode{})
 
@@ -973,7 +1049,7 @@ func (p *Process) libcGetpass(prompt uint32) uint32 {
 		p.span(at, passwordSize)[n] = 0
 	}
 
-	t.waits(p, rTcsetattr, 2, saved)
+	t.setattr(p, 2, saved)
 	newline := p.span(at+passwordSize, 1)
 	newline[0] = '\n'
 	t.write(p, newline, ioMode{})

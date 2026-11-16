@@ -6,85 +6,16 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math/rand/v2"
-	"slices"
 	"strings"
 	"syscall"
 )
 
-// Paths are the guest's, walked as Linux's namei walks them. A path
-// starts at the process's root when it is absolute, else at the working
-// directory or at the directory of a directory descriptor: directories
-// the process holds, not names. resolve walks it from there to the
-// directory of its last name (walkFrom); the directories walk
-// (Dir.resolve), and a walk that leaves one goes on where it says. Each call makes the last
-// step itself, as only it knows how:
-//   - a call that looks follows a last symbolic link when it means to, or
-//     when a slash ends the path, which then wants a directory;
-//   - open with O_CREAT makes the name, or what a link there points to,
-//     and with O_EXCL follows nothing; O_NOFOLLOW on a link is ELOOP;
-//   - the calls that make and remove names take the last name as it is,
-//     refuse "." and ".." as Linux refuses them, and a slash on a name
-//     that is no directory.
-
-// walk is what one resolution carries from directory to directory: the
-// root of the process, where ".." stops and absolute links start, and the
-// symbolic links it went through, no more than maxLinks.
-type walk struct {
-	root  Dir
-	links int
-}
-
-// maxLinks is how many symbolic links a path goes through, Linux's.
-const maxLinks = 40
-
-// The kinds of a path's last name.
-const (
-	lastName = iota
-	lastDot
-	lastDotdot
-	// lastNone is the kind of the root alone, "/".
-	lastNone
-)
-
-// step is where a resolution stops: the directory of the last name, the
-// name, its kind and whether a slash ends the path. For ".", ".." and the
-// root alone the directory is what the path names. With more, the walk
-// goes on in dir with rest.
-type step struct {
-	dir   Dir
-	last  string
-	kind  int
-	slash bool
-	more  bool
-	rest  string
-}
-
-// splitPath is a path's names, the empty ones dropped, and whether a
-// slash ends it.
-func splitPath(path string) ([]string, bool) {
-	var names []string
-
-	for _, name := range strings.Split(path, "/") {
-		if name != "" {
-			names = append(names, name)
-		}
-	}
-
-	return names, strings.HasSuffix(path, "/")
-}
-
-// lastOf is a step's last name, its kind and the slash after it, of the
-// last name of a path a slash may end.
-func lastOf(name string, slash bool) (string, int, bool) {
-	switch name {
-	case ".":
-		return "", lastDot, false
-	case "..":
-		return "", lastDotdot, false
-	}
-
-	return name, lastName, slash
-}
+// Paths are the guest's. A path starts at the process's root when it is
+// absolute, else at the working directory or at the directory of a
+// directory descriptor: directories the process holds, not names. The
+// kernel walks none: a call goes to the directory it starts at with the
+// path whole (Dir), and what serves the directory walks it, follows its
+// links and makes the last step as Linux's namei and the call make it.
 
 // checked is a path a call takes: none is ENOENT, one of PATH_MAX or more
 // ENAMETOOLONG.
@@ -110,39 +41,31 @@ const (
 	sIfifo            = 0o10000
 )
 
-// onVFS runs call on the handle a path relative to dirfd starts at when
-// it is rootfs's, the VFS's, which walks the path whole: handled says it
-// did, or that the path is none a call takes.
-func (p *Process) onVFS(dirfd int32, path string, call func(v *remoteDir) error) (bool, error) {
+// onPath runs call on the directory a path relative to dirfd starts at,
+// which walks it: none, or one of PATH_MAX or more, is the path's error.
+func (p *Process) onPath(dirfd int32, path string, call func(d Dir) error) error {
 	if err := checked(path); err != nil {
-		return true, err
+		return err
 	}
 
-	v, err := p.vfsAt(dirfd, path)
+	d, err := p.start(dirfd, path)
 
 	if err != nil {
-		return true, err
+		return err
 	}
 
-	if v == nil {
-		return false, nil
-	}
+	defer d.unref()
 
-	defer v.unref()
-
-	return true, call(v)
+	return call(d)
 }
 
-// onVFSTo runs call on the handle a second path of a call starts at,
-// which must be rootfs's too: EXDEV for a directory of the host's.
-func (p *Process) onVFSTo(dirfd int32, path string, call func(v *remoteDir) error) error {
-	handled, err := p.onVFS(dirfd, path, call)
-
-	if !handled {
-		return syscall.EXDEV
-	}
-
-	return err
+// onPaths runs call on the directories two paths start at.
+func (p *Process) onPaths(olddir int32, old string, newdir int32, new string, call func(from, to Dir) error) error {
+	return p.onPath(olddir, old, func(from Dir) error {
+		return p.onPath(newdir, new, func(to Dir) error {
+			return call(from, to)
+		})
+	})
 }
 
 // start is the directory a path starts at, which the caller holds a
@@ -168,164 +91,10 @@ func (p *Process) start(dirfd int32, path string) (Dir, error) {
 	return d, nil
 }
 
-// walkFrom walks path from d, whose reference it takes, to the step of
-// its last name.
-func (p *Process) walkFrom(d Dir, path string, w *walk) (step, error) {
-	// A path of "." alone names where it starts, which no directory is
-	// asked about, as Linux asks no file system.
-	if names, _ := splitPath(path); !slices.ContainsFunc(names, func(name string) bool { return name != "." }) {
-		kind := lastDot
-
-		if len(names) == 0 {
-			kind = lastNone
-		}
-
-		return step{dir: d, kind: kind}, nil
-	}
-
-	for {
-		s, err := d.resolve(p, path, w)
-		d.unref()
-
-		if err != nil || !s.more {
-			return s, err
-		}
-
-		d, path = s.dir, s.rest
-	}
-}
-
-// walkTo is the step of the last name of a path relative to dirfd.
-func (p *Process) walkTo(dirfd int32, path string) (step, error) {
-	if err := checked(path); err != nil {
-		return step{}, err
-	}
-
-	d, err := p.start(dirfd, path)
-
-	if err != nil {
-		return step{}, err
-	}
-
-	return p.walkFrom(d, path, &walk{root: p.root})
-}
-
-// through is where a last symbolic link leads, with a reference: the
-// link's directory, or the root for an absolute target, and the target,
-// which keeps a slash that ended the path. The step's directory goes with
-// it.
-func (p *Process) through(s step, w *walk) (Dir, string, error) {
-	if w.links >= maxLinks {
-		s.dir.unref()
-
-		return nil, "", syscall.ELOOP
-	}
-
-	w.links++
-	target, err := s.dir.readlinkName(p, s.last)
-
-	if err == nil && target == "" {
-		err = syscall.ENOENT
-	}
-
-	if err != nil {
-		s.dir.unref()
-
-		return nil, "", err
-	}
-
-	if s.slash {
-		target += "/"
-	}
-
-	if target[0] == '/' {
-		s.dir.unref()
-		p.root.ref()
-
-		return p.root, target, nil
-	}
-
-	return s.dir, target, nil
-}
-
-// lookup is what a path relative to dirfd names to a call that looks at
-// it: the directory of the last name, the name, "" when the directory is
-// itself what the path names, and its stat. A last symbolic link is
-// followed when follow says or a slash ends the path, which then wants a
-// directory. The directory's reference is the caller's.
-func (p *Process) lookup(dirfd int32, path string, follow bool, st *syscall.Stat_t) (Dir, string, error) {
-	if err := checked(path); err != nil {
-		return nil, "", err
-	}
-
-	d, err := p.start(dirfd, path)
-
-	if err != nil {
-		return nil, "", err
-	}
-
-	w := &walk{root: p.root}
-
-	for {
-		s, err := p.walkFrom(d, path, w)
-
-		if err != nil {
-			return nil, "", err
-		}
-
-		name := s.last
-
-		if s.kind != lastName {
-			name = ""
-		}
-
-		if err := s.dir.statName(p, name, st); err != nil {
-			s.dir.unref()
-
-			return nil, "", err
-		}
-
-		if name != "" && st.Mode&syscall.S_IFMT == syscall.S_IFLNK && (follow || s.slash) {
-			next, target, err := p.through(s, w)
-
-			if err != nil {
-				return nil, "", err
-			}
-
-			d, path = next, target
-
-			continue
-		}
-
-		if s.slash && st.Mode&syscall.S_IFMT != syscall.S_IFDIR {
-			s.dir.unref()
-
-			return nil, "", syscall.ENOTDIR
-		}
-
-		return s.dir, name, nil
-	}
-}
-
-// onName runs a call on what a path relative to dirfd names, a last link
-// followed when follow says: its directory, its name and its stat.
-func (p *Process) onName(dirfd int32, path string, follow bool, call func(d Dir, name string, st *syscall.Stat_t) error) error {
-	var st syscall.Stat_t
-	d, name, err := p.lookup(dirfd, path, follow, &st)
-
-	if err != nil {
-		return err
-	}
-
-	defer d.unref()
-
-	return call(d, name, &st)
-}
-
-// onAt runs a call on what an *at call names: byName on the path, a last
+// onAt runs a call on what an *at call names: byPath on the path, a last
 // link followed unless AT_SYMLINK_NOFOLLOW, or byFile on the descriptor's
 // own file when the path is empty with AT_EMPTY_PATH.
-func (p *Process) onAt(dirfd int32, path string, flags uint32, byName func(d Dir, name string, st *syscall.Stat_t) error, byFile func(f File) error, byVFS func(v *remoteDir, follow bool) error) error {
+func (p *Process) onAt(dirfd int32, path string, flags uint32, byFile func(f File) error, byPath func(d Dir, follow bool) error) error {
 	if path == "" && flags&atEmptyPath != 0 {
 		if dirfd == atFdcwd {
 			return byFile(p.cwd)
@@ -340,13 +109,9 @@ func (p *Process) onAt(dirfd int32, path string, flags uint32, byName func(d Dir
 		return byFile(obj)
 	}
 
-	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
-		return byVFS(v, flags&atSymlinkNofollow == 0)
-	}); handled {
-		return err
-	}
-
-	return p.onName(dirfd, path, flags&atSymlinkNofollow == 0, byName)
+	return p.onPath(dirfd, path, func(d Dir) error {
+		return byPath(d, flags&atSymlinkNofollow == 0)
+	})
 }
 
 // attrsCall is a call on a descriptor's attributes; a file without any
@@ -361,94 +126,17 @@ func attrsCall(call func(a Attrs) error) func(f File) error {
 	}
 }
 
-// openAt opens what a path relative to dirfd names, as open(2) does. A
-// last link is followed unless O_NOFOLLOW says not, or O_CREAT with
-// O_EXCL asks for a name of its own; a slash at the end wants a
-// directory, and with O_CREAT is EISDIR, as ".", ".." and "/" are.
+// openAt opens what a path relative to dirfd names, as open(2) does.
 func (p *Process) openAt(dirfd int32, path string, flags int, mode uint32) (File, error) {
-	if err := checked(path); err != nil {
-		return nil, err
-	}
+	var f File
+	err := p.onPath(dirfd, path, func(d Dir) error {
+		var err error
+		f, err = d.openPath(p, path, flags, mode)
 
-	d, err := p.start(dirfd, path)
+		return err
+	})
 
-	if err != nil {
-		return nil, err
-	}
-
-	if v, ok := d.(*remoteDir); ok {
-		defer v.unref()
-
-		return v.openPath(p, path, flags, mode)
-	}
-
-	follow := flags&syscall.O_NOFOLLOW == 0 && flags&(syscall.O_CREAT|syscall.O_EXCL) != syscall.O_CREAT|syscall.O_EXCL
-	w := &walk{root: p.root}
-
-	for {
-		s, err := p.walkFrom(d, path, w)
-
-		if err != nil {
-			return nil, err
-		}
-
-		if s.kind != lastName {
-			if flags&syscall.O_CREAT != 0 {
-				s.dir.unref()
-
-				return nil, syscall.EISDIR
-			}
-
-			f, err := s.dir.openName(p, "", flags, mode)
-			s.dir.unref()
-
-			return f, err
-		}
-
-		fl := flags
-
-		if s.slash {
-			if flags&syscall.O_CREAT != 0 {
-				s.dir.unref()
-
-				return nil, syscall.EISDIR
-			}
-
-			fl |= syscall.O_DIRECTORY
-		}
-
-		// The name is never followed where it is: O_NOFOLLOW tells the
-		// directory the call does not follow it either.
-		follows := follow || s.slash
-
-		if follows {
-			fl &^= syscall.O_NOFOLLOW
-		} else {
-			fl |= syscall.O_NOFOLLOW
-		}
-
-		f, err := s.dir.openName(p, s.last, fl, mode)
-
-		if err == syscall.ELOOP && follows {
-			next, target, err := p.through(s, w)
-
-			if err != nil {
-				return nil, err
-			}
-
-			d, path = next, target
-
-			continue
-		}
-
-		s.dir.unref()
-
-		if err == syscall.ELOOP && flags&syscall.O_DIRECTORY != 0 {
-			err = syscall.ENOTDIR
-		}
-
-		return f, err
-	}
+	return f, err
 }
 
 // open opens a guest path relative to dirfd and installs the file at the
@@ -512,62 +200,23 @@ func (p *Process) readPath(path string, max int) ([]byte, error) {
 	return data, nil
 }
 
-// makeAt makes the last name of a path relative to dirfd: one that is
-// there, ".", ".." and the root alone are EEXIST, and a slash after a
-// name is for a directory only: EEXIST for one that is there, else
-// ENOENT.
-func (p *Process) makeAt(dirfd int32, path string, dir bool, make func(d Dir, name string) error) error {
-	s, err := p.walkTo(dirfd, path)
-
-	if err != nil {
-		return err
-	}
-
-	defer s.dir.unref()
-
-	if s.kind != lastName {
-		return syscall.EEXIST
-	}
-
-	if s.slash && !dir {
-		var st syscall.Stat_t
-
-		if s.dir.statName(p, s.last, &st) == nil {
-			return syscall.EEXIST
-		}
-
-		return syscall.ENOENT
-	}
-
-	return make(s.dir, s.last)
-}
-
 func (p *Process) mkdir(dirfd int32, path string, mode uint32) error {
-	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
-		return v.makePath(p, vMkdir, mode&0o7777&^p.umask, "", path)
-	}); handled {
-		return err
-	}
-
-	return p.makeAt(dirfd, path, true, func(d Dir, name string) error {
-		return d.mkdir(p, name, mode&0o7777&^p.umask)
+	return p.onPath(dirfd, path, func(d Dir) error {
+		return d.mkdirPath(p, path, mode&0o7777&^p.umask)
 	})
 }
 
+// mknod makes a FIFO or a regular file; a device is none the system
+// makes, EPERM.
 func (p *Process) mknod(dirfd int32, path string, mode uint32, dev uint64) error {
-	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
-		switch mode & syscall.S_IFMT {
-		case 0, syscall.S_IFREG, syscall.S_IFIFO:
-			return v.makePath(p, vMknod, mode&^(p.umask&0o777), "", path)
-		}
-
+	switch mode & syscall.S_IFMT {
+	case 0, syscall.S_IFREG, syscall.S_IFIFO:
+	default:
 		return syscall.EPERM
-	}); handled {
-		return err
 	}
 
-	return p.makeAt(dirfd, path, false, func(d Dir, name string) error {
-		return d.mknod(p, name, mode&^(p.umask&0o777), dev)
+	return p.onPath(dirfd, path, func(d Dir) error {
+		return d.mknodPath(p, path, mode&^(p.umask&0o777))
 	})
 }
 
@@ -576,172 +225,64 @@ func (p *Process) symlink(target string, dirfd int32, path string) error {
 		return syscall.ENOENT
 	}
 
-	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
-		return v.makePath(p, vSymlink, 0, target, path)
-	}); handled {
-		return err
-	}
-
-	return p.makeAt(dirfd, path, false, func(d Dir, name string) error {
-		return d.symlink(p, target, name)
+	return p.onPath(dirfd, path, func(d Dir) error {
+		return d.symlinkPath(p, target, path)
 	})
 }
 
 // remove takes the last name of a path relative to dirfd away, a
-// directory's with dir. "." is EINVAL to rmdir, ".." ENOTEMPTY, the root
-// alone EBUSY, and all three EISDIR to unlink; a slash after a name that
-// is no directory is ENOTDIR to unlink, EISDIR after one that is.
+// directory's with dir.
 func (p *Process) remove(dirfd int32, path string, dir bool) error {
-	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
-		return v.unlinkPath(p, path, dir)
-	}); handled {
-		return err
-	}
-
-	s, err := p.walkTo(dirfd, path)
-
-	if err != nil {
-		return err
-	}
-
-	defer s.dir.unref()
-
-	switch {
-	case s.kind == lastName:
-	case !dir:
-		return syscall.EISDIR
-	case s.kind == lastDot:
-		return syscall.EINVAL
-	case s.kind == lastDotdot:
-		return syscall.ENOTEMPTY
-	default:
-		return syscall.EBUSY
-	}
-
-	if s.slash && !dir {
-		var st syscall.Stat_t
-
-		if err := s.dir.statName(p, s.last, &st); err != nil {
-			return err
-		}
-
-		if st.Mode&syscall.S_IFMT == syscall.S_IFDIR {
-			return syscall.EISDIR
-		}
-
-		return syscall.ENOTDIR
-	}
-
-	return s.dir.unlink(p, s.last, dir)
+	return p.onPath(dirfd, path, func(d Dir) error {
+		return d.unlinkPath(p, path, dir)
+	})
 }
 
-// rename moves the last name of one path to the last name of another:
-// ".", ".." and the root alone are EBUSY, a slash after either is for a
-// directory only.
+// rename moves the last name of one path to the last name of another.
 func (p *Process) rename(olddir int32, old string, newdir int32, new string) error {
-	if handled, err := p.onVFS(olddir, old, func(v *remoteDir) error {
-		return p.onVFSTo(newdir, new, func(to *remoteDir) error {
-			return v.renamePath(p, old, to, new)
-		})
-	}); handled {
-		return err
-	}
-
-	a, err := p.walkTo(olddir, old)
-
-	if err != nil {
-		return err
-	}
-
-	defer a.dir.unref()
-	b, err := p.walkTo(newdir, new)
-
-	if err != nil {
-		return err
-	}
-
-	defer b.dir.unref()
-
-	if a.kind != lastName || b.kind != lastName {
-		return syscall.EBUSY
-	}
-
-	if a.slash || b.slash {
-		var st syscall.Stat_t
-
-		if err := a.dir.statName(p, a.last, &st); err != nil {
-			return err
-		}
-
-		if st.Mode&syscall.S_IFMT != syscall.S_IFDIR {
-			return syscall.ENOTDIR
-		}
-	}
-
-	return a.dir.rename(p, a.last, b.dir, b.last)
+	return p.onPaths(olddir, old, newdir, new, func(from, to Dir) error {
+		return from.renamePath(p, old, to, new)
+	})
 }
 
 // link makes the last name of a new path a name of what an old one
-// names, a last link of it followed when follow says: a directory is
-// EPERM, and the new name is made as makeAt makes one.
+// names, a last link of it followed when follow says.
 func (p *Process) link(olddir int32, old string, newdir int32, new string, follow bool) error {
-	if handled, err := p.onVFS(olddir, old, func(v *remoteDir) error {
-		return p.onVFSTo(newdir, new, func(to *remoteDir) error {
-			return v.linkPath(p, old, to, new, follow)
-		})
-	}); handled {
-		return err
-	}
-
-	return p.onName(olddir, old, follow, func(d Dir, name string, st *syscall.Stat_t) error {
-		if name == "" || st.Mode&syscall.S_IFMT == syscall.S_IFDIR {
-			return syscall.EPERM
-		}
-
-		return p.makeAt(newdir, new, false, func(to Dir, toName string) error {
-			return d.link(p, name, to, toName)
-		})
+	return p.onPaths(olddir, old, newdir, new, func(from, to Dir) error {
+		return from.linkPath(p, old, to, new, follow)
 	})
 }
 
 // statPath is the metadata of what a path names, or of a last symbolic
 // link itself.
 func (p *Process) statPath(path string, follow bool, st *syscall.Stat_t) error {
-	if handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
-		return v.statPath(p, path, follow, st)
-	}); handled {
-		return err
-	}
-
-	return p.onName(atFdcwd, path, follow, func(d Dir, name string, found *syscall.Stat_t) error {
-		*st = *found
-
-		return nil
+	return p.onPath(atFdcwd, path, func(d Dir) error {
+		return d.statPath(p, path, follow, st)
 	})
 }
 
 // accessAt checks what a path names for mode, as access does, or with
 // AT_SYMLINK_NOFOLLOW a last link itself.
 func (p *Process) accessAt(dirfd int32, path string, mode, flags uint32) error {
-	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
-		return v.accessName(p, path, mode, flags)
-	}); handled {
-		return err
-	}
-
-	return p.onName(dirfd, path, flags&atSymlinkNofollow == 0, func(d Dir, name string, st *syscall.Stat_t) error {
-		return d.accessName(p, name, mode, flags)
+	return p.onPath(dirfd, path, func(d Dir) error {
+		return p.access(d, path, mode, flags)
 	})
 }
 
-// chmodName changes the mode of a name: a symbolic link has none to
-// change, EOPNOTSUPP as Linux's fchmodat says.
-func (p *Process) chmodName(d Dir, name string, st *syscall.Stat_t, mode uint32) error {
-	if st.Mode&syscall.S_IFMT == syscall.S_IFLNK {
-		return syscall.EOPNOTSUPP
+// access is what a path from d lets the process do, by its stat: the ids
+// are vm's, real and effective alike.
+func (p *Process) access(d Dir, path string, mode, flags uint32) error {
+	var st syscall.Stat_t
+
+	if err := d.statPath(p, path, flags&atSymlinkNofollow == 0, &st); err != nil {
+		return err
 	}
 
-	return d.chmodName(p, name, mode&0o7777)
+	if !p.permits(&st, mode&7) {
+		return syscall.EACCES
+	}
+
+	return nil
 }
 
 // putStatvfs writes a guest struct statvfs.
@@ -782,16 +323,9 @@ func (p *Process) putStatfsOf(at uint32, st *syscall.Statfs_t) {
 	le.PutUint32(b[64:], uint32(st.Flags))
 }
 
-// statfsPath is the file system of what a path names.
 func (p *Process) statfsPath(path string, st *syscall.Statfs_t) error {
-	if handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
-		return v.statfsPath(p, path, st)
-	}); handled {
-		return err
-	}
-
-	return p.onName(atFdcwd, path, true, func(d Dir, name string, _ *syscall.Stat_t) error {
-		return d.statfsName(p, name, st)
+	return p.onPath(atFdcwd, path, func(d Dir) error {
+		return d.statfsPath(p, path, st)
 	})
 }
 
@@ -818,14 +352,10 @@ func (p *Process) libcFstatat(dirfd, path, at, flags uint32) uint32 {
 // statAt follows the last link with follow, as WASI's path_filestat_get
 // does (kernel_wasi.go).
 func (p *Process) statFlags(dirfd int32, path string, flags uint32, st *syscall.Stat_t) error {
-	return p.onAt(dirfd, path, flags, func(d Dir, name string, found *syscall.Stat_t) error {
-		*st = *found
-
-		return nil
-	}, func(f File) error {
+	return p.onAt(dirfd, path, flags, func(f File) error {
 		return statFile(p, f, st)
-	}, func(v *remoteDir, follow bool) error {
-		return v.statPath(p, path, follow, st)
+	}, func(d Dir, follow bool) error {
+		return d.statPath(p, path, follow, st)
 	})
 }
 
@@ -844,28 +374,16 @@ func (p *Process) libcAccess(path, mode uint32) uint32 {
 // faccessat of a descriptor's own file: a file of the kernel is the
 // process's to use.
 func (p *Process) libcFaccessat(dirfd, path, mode, flags uint32) uint32 {
-	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(d Dir, name string, st *syscall.Stat_t) error {
-		return d.accessName(p, name, mode, flags)
-	}, func(f File) error {
-		if n, ok := f.(Node); ok {
-			return n.access(mode, flags)
-		}
-
+	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(f File) error {
 		return nil
-	}, func(v *remoteDir, follow bool) error {
-		return v.accessName(p, p.str(path), mode, flags)
+	}, func(d Dir, follow bool) error {
+		return p.access(d, p.str(path), mode, flags)
 	}))
 }
 
 func (p *Process) libcTruncate(path uint32, size uint64) uint32 {
-	if handled, err := p.onVFS(atFdcwd, p.str(path), func(v *remoteDir) error {
-		return v.truncatePath(p, p.str(path), int64(size))
-	}); handled {
-		return p.result(0, err)
-	}
-
-	return p.result(0, p.onName(atFdcwd, p.str(path), true, func(d Dir, name string, st *syscall.Stat_t) error {
-		return d.truncateName(p, name, int64(size))
+	return p.result(0, p.onPath(atFdcwd, p.str(path), func(d Dir) error {
+		return d.truncatePath(p, p.str(path), int64(size))
 	}))
 }
 
@@ -908,45 +426,18 @@ func (p *Process) setCwd(d Dir) {
 	}
 }
 
-// dirOf is the directory a name of d is, held: for a working directory
-// or a root. "" is d itself.
-func (p *Process) dirOf(d Dir, name string) (Dir, error) {
-	if name == "" {
-		d.ref()
-
-		return d, nil
-	}
-
-	f, err := d.openName(p, name, oPath|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
-
-	if err != nil {
-		return nil, err
-	}
-
-	nd, ok := f.(Dir)
-
-	if !ok {
-		f.unref()
-
-		return nil, syscall.ENOTDIR
-	}
-
-	return nd, nil
-}
-
 // directory is the directory a path names, one the process may search,
 // held: for a working directory or a root.
 func (p *Process) directory(path string) (Dir, error) {
 	var nd Dir
-
-	if handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
-		f, err := v.openPath(p, path, oPath|syscall.O_DIRECTORY, 0)
+	err := p.onPath(atFdcwd, path, func(d Dir) error {
+		f, err := d.openPath(p, path, oPath|syscall.O_DIRECTORY, 0)
 
 		if err != nil {
 			return err
 		}
 
-		h, ok := f.(*remoteDir)
+		h, ok := f.(Dir)
 
 		if !ok {
 			f.unref()
@@ -954,7 +445,7 @@ func (p *Process) directory(path string) (Dir, error) {
 			return syscall.ENOTDIR
 		}
 
-		if err := h.accessName(p, "", 1, 0); err != nil {
+		if err := p.access(h, "", 1, 0); err != nil {
 			h.unref()
 
 			return err
@@ -963,23 +454,6 @@ func (p *Process) directory(path string) (Dir, error) {
 		nd = h
 
 		return nil
-	}); handled {
-		return nd, err
-	}
-
-	err := p.onName(atFdcwd, path, true, func(d Dir, name string, st *syscall.Stat_t) error {
-		if st.Mode&syscall.S_IFMT != syscall.S_IFDIR {
-			return syscall.ENOTDIR
-		}
-
-		if err := d.accessName(p, name, 1, 0); err != nil {
-			return err
-		}
-
-		var err error
-		nd, err = p.dirOf(d, name)
-
-		return err
 	})
 
 	return nd, err
@@ -1018,7 +492,7 @@ func (p *Process) libcFchdir(fd uint32) uint32 {
 		return p.result(0, syscall.ENOTDIR)
 	}
 
-	if err := d.accessName(p, "", 1, 0); err != nil {
+	if err := p.access(d, "", 1, 0); err != nil {
 		d.unref()
 
 		return p.result(0, err)
@@ -1039,22 +513,8 @@ func (p *Process) libcChroot(path uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	rootPath := ""
-
-	if pathed, ok := d.(Pathed); ok {
-		host, err := pathed.hostPath()
-
-		if err != nil {
-			d.unref()
-
-			return p.result(0, err)
-		}
-
-		rootPath = host
-	}
-
 	p.root.unref()
-	p.root, p.rootPath = d, rootPath
+	p.root = d
 
 	return p.result(0, nil)
 }
@@ -1160,35 +620,16 @@ func (p *Process) libcSymlinkat(target, dirfd, path uint32) uint32 {
 	return p.result(0, p.symlink(p.str(target), int32(dirfd), p.str(path)))
 }
 
-// readlinkAt writes a link's target, as much as the buffer holds: what is
-// no link is EINVAL, a slash after one follows it.
+// readlinkAt writes a link's target, as much as the buffer holds.
 func (p *Process) readlinkAt(dirfd int32, path string, buf, size uint32) (int, error) {
 	if p.chaosFail("readlink") {
 		return 0, syscall.EIO
 	}
 
 	var target string
-
-	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
+	err := p.onPath(dirfd, path, func(d Dir) error {
 		var err error
-		target, err = v.readlinkPath(p, path)
-
-		return err
-	}); handled {
-		if err != nil {
-			return 0, err
-		}
-
-		return copy(p.span(buf, size), target), nil
-	}
-
-	err := p.onName(dirfd, path, false, func(d Dir, name string, st *syscall.Stat_t) error {
-		if name == "" || st.Mode&syscall.S_IFMT != syscall.S_IFLNK {
-			return syscall.EINVAL
-		}
-
-		var err error
-		target, err = d.readlinkName(p, name)
+		target, err = d.readlinkPath(p, path)
 
 		return err
 	})
@@ -1207,73 +648,42 @@ func (p *Process) libcReadlink(path, buf, size uint32) uint32 {
 // readlinkat with an empty path reads the link a descriptor is: what is
 // no link is ENOENT then, as Linux has it, not the named path's EINVAL.
 func (p *Process) libcReadlinkat(dirfd, path, buf, size uint32) uint32 {
-	if p.u8(path) == 0 {
-		obj, err := p.fd(dirfd)
-
-		if dirfd == uint32(atFdcwd&0xffffffff) {
-			obj, err = p.cwd, nil
-		}
-
-		if err != nil {
-			return p.result(0, err)
-		}
-
-		n, err := 0, error(syscall.ENOENT)
-
-		switch o := obj.(type) {
-		case Node:
-			if n, err = o.readlink(p.span(buf, size)); err == syscall.EINVAL {
-				err = syscall.ENOENT
-			}
-		case *remotePath:
-			var target string
-
-			if target, err = o.readlinkPath(p, ""); err == nil {
-				n = copy(p.span(buf, size), target)
-			}
-		}
-
-		return p.result(n, err)
+	if p.u8(path) != 0 {
+		return p.result(p.readlinkAt(int32(dirfd), p.str(path), buf, size))
 	}
 
-	return p.result(p.readlinkAt(int32(dirfd), p.str(path), buf, size))
+	obj, err := p.fd(dirfd)
+
+	if dirfd == uint32(atFdcwd&0xffffffff) {
+		obj, err = p.cwd, nil
+	}
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	l, ok := obj.(Link)
+
+	if !ok {
+		return p.result(0, syscall.ENOENT)
+	}
+
+	target, err := l.readlink(p)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	return p.result(copy(p.span(buf, size), target), nil)
 }
 
 // realpath is the path from the root of what a path names, with no ".",
-// ".." or link in it: its directory's path and its name, or a
-// directory's own.
+// ".." or link in it.
 func (p *Process) realpath(path string) (string, error) {
 	var out string
-
-	if handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
+	err := p.onPath(atFdcwd, path, func(d Dir) error {
 		var err error
-		out, err = v.realpathOf(p, path)
-
-		return err
-	}); handled {
-		if err == nil && len(out) >= 4096 {
-			err = syscall.ENAMETOOLONG
-		}
-
-		return out, err
-	}
-
-	err := p.onName(atFdcwd, path, true, func(d Dir, name string, st *syscall.Stat_t) error {
-		if name == "" || st.Mode&syscall.S_IFMT == syscall.S_IFDIR {
-			nd, err := p.dirOf(d, name)
-
-			if err != nil {
-				return err
-			}
-
-			defer nd.unref()
-			out, err = nd.path(p)
-
-			return err
-		}
-
-		base, err := d.path(p)
-		out = strings.TrimSuffix(base, "/") + "/" + name
+		out, err = d.realpathOf(p, path)
 
 		return err
 	})
@@ -1387,34 +797,24 @@ func (p *Process) libcRealpath(path, resolved uint32) uint32 {
 }
 
 func (p *Process) libcChmod(path, mode uint32) uint32 {
-	if handled, err := p.onVFS(atFdcwd, p.str(path), func(v *remoteDir) error {
-		return v.chmodPath(p, p.str(path), mode&0o7777, true)
-	}); handled {
-		return p.result(0, err)
-	}
-
-	return p.result(0, p.onName(atFdcwd, p.str(path), true, func(d Dir, name string, st *syscall.Stat_t) error {
-		return p.chmodName(d, name, st, mode)
+	return p.result(0, p.onPath(atFdcwd, p.str(path), func(d Dir) error {
+		return d.chmodPath(p, p.str(path), mode&0o7777, true)
 	}))
 }
 
 func (p *Process) libcFchmodat(dirfd, path, mode, flags uint32) uint32 {
-	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(d Dir, name string, st *syscall.Stat_t) error {
-		return p.chmodName(d, name, st, mode)
-	}, attrsCall(func(a Attrs) error {
+	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, attrsCall(func(a Attrs) error {
 		return a.chmod(p, mode&0o7777)
-	}), func(v *remoteDir, follow bool) error {
-		return v.chmodPath(p, p.str(path), mode&0o7777, follow)
+	}), func(d Dir, follow bool) error {
+		return d.chmodPath(p, p.str(path), mode&0o7777, follow)
 	}))
 }
 
 func (p *Process) libcFchownat(dirfd, path, uid, gid, flags uint32) uint32 {
-	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(d Dir, name string, st *syscall.Stat_t) error {
-		return d.chownName(p, name, int(int32(uid)), int(int32(gid)))
-	}, attrsCall(func(a Attrs) error {
+	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, attrsCall(func(a Attrs) error {
 		return a.chown(p, int(int32(uid)), int(int32(gid)))
-	}), func(v *remoteDir, follow bool) error {
-		return v.chownPath(p, p.str(path), int(int32(uid)), int(int32(gid)), follow)
+	}), func(d Dir, follow bool) error {
+		return d.chownPath(p, p.str(path), int(int32(uid)), int(int32(gid)), follow)
 	}))
 }
 
@@ -1558,28 +958,16 @@ func (p *Process) stat(path, at uint32, follow bool) uint32 {
 }
 
 func (p *Process) chown(path, uid, gid uint32, follow bool) uint32 {
-	if handled, err := p.onVFS(atFdcwd, p.str(path), func(v *remoteDir) error {
-		return v.chownPath(p, p.str(path), int(int32(uid)), int(int32(gid)), follow)
-	}); handled {
-		return p.result(0, err)
-	}
-
-	return p.result(0, p.onName(atFdcwd, p.str(path), follow, func(d Dir, name string, st *syscall.Stat_t) error {
-		return d.chownName(p, name, int(int32(uid)), int(int32(gid)))
+	return p.result(0, p.onPath(atFdcwd, p.str(path), func(d Dir) error {
+		return d.chownPath(p, p.str(path), int(int32(uid)), int(int32(gid)), follow)
 	}))
 }
 
 // utimens sets the times of what a path names, or of a last symbolic
 // link itself.
 func (p *Process) utimens(dirfd int32, path string, ts []syscall.Timespec, follow bool) error {
-	if handled, err := p.onVFS(dirfd, path, func(v *remoteDir) error {
-		return v.utimesPath(p, path, ts, follow)
-	}); handled {
-		return err
-	}
-
-	return p.onName(dirfd, path, follow, func(d Dir, name string, st *syscall.Stat_t) error {
-		return d.utimesName(p, name, ts)
+	return p.onPath(dirfd, path, func(d Dir) error {
+		return d.utimesPath(p, path, ts, follow)
 	})
 }
 

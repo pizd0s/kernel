@@ -236,13 +236,9 @@ func (s *unixSocket) bind(p *Process, at, n uint32) error {
 
 	l := &unixListener{ino: pairInodes.Add(1), conns: newMsgChannel(1), kind: s.kind}
 	l.refs.Store(1)
-	handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
+	err = p.onPath(atFdcwd, path, func(v Dir) error {
 		return v.bindPath(p, path, 0o777&^p.umask, l)
 	})
-
-	if !handled {
-		err = syscall.EOPNOTSUPP
-	}
 
 	if err == syscall.EEXIST {
 		err = syscall.EADDRINUSE
@@ -321,16 +317,12 @@ func (s *unixSocket) connect(p *Process, at, n uint32) error {
 	}
 
 	var conn *pairEnd
-	handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
+	err = p.onPath(atFdcwd, path, func(v Dir) error {
 		var err error
 		conn, err = p.connectUnix(v, path, s.kind, s.nonblock.Load(), &s.sndTimeout)
 
 		return err
 	})
-
-	if !handled {
-		err = syscall.EOPNOTSUPP
-	}
 
 	if err != nil {
 		return err
@@ -351,7 +343,7 @@ func (s *unixSocket) connect(p *Process, at, n uint32) error {
 // the queue of the socket's listener. A full queue is EAGAIN for nonblock,
 // else a wait for room, which the timeout of to ends, SO_SNDTIMEO's,
 // EAGAIN too.
-func (p *Process) connectUnix(v *remoteDir, path string, kind int, nonblock bool, to *atomic.Int64) (*pairEnd, error) {
+func (p *Process) connectUnix(v Dir, path string, kind int, nonblock bool, to *atomic.Int64) (*pairEnd, error) {
 	f, err := v.connectPath(p, path)
 
 	if err != nil {
@@ -822,13 +814,9 @@ func (s *unixDgram) bind(p *Process, at, n uint32) error {
 		return syscall.EINVAL
 	}
 
-	handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
+	err = p.onPath(atFdcwd, path, func(v Dir) error {
 		return v.bindPath(p, path, 0o777&^p.umask, s.mouth)
 	})
-
-	if !handled {
-		err = syscall.EOPNOTSUPP
-	}
 
 	if err == syscall.EEXIST {
 		err = syscall.EADDRINUSE
@@ -846,7 +834,7 @@ func (s *unixDgram) bind(p *Process, at, n uint32) error {
 // mouthOf is the mouth of the datagram socket a path names, held.
 func (p *Process) mouthOf(path string) (*pairEnd, error) {
 	var mouth *pairEnd
-	handled, err := p.onVFS(atFdcwd, path, func(v *remoteDir) error {
+	err := p.onPath(atFdcwd, path, func(v Dir) error {
 		f, err := v.connectPath(p, path)
 
 		if err != nil {
@@ -863,10 +851,6 @@ func (p *Process) mouthOf(path string) (*pairEnd, error) {
 
 		return syscall.EPROTOTYPE
 	})
-
-	if !handled {
-		err = syscall.EOPNOTSUPP
-	}
 
 	return mouth, err
 }

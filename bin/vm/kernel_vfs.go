@@ -52,25 +52,6 @@ func (p *Process) rootID(d *remoteHandle) uint64 {
 	return d.id
 }
 
-// vfsAt is the handle a path relative to dirfd starts at when it is one
-// of rootfs's, with a reference of the caller's, or nil for a directory
-// of the host's.
-func (p *Process) vfsAt(dirfd int32, path string) (*remoteDir, error) {
-	d, err := p.start(dirfd, path)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if v, ok := d.(*remoteDir); ok {
-		return v, nil
-	}
-
-	d.unref()
-
-	return nil, nil
-}
-
 // vfs is a call of the VFS's on the handle: the root's id, then the body,
 // the files with it; the reply's packet.
 func (d *remoteHandle) vfs(p *Process, op, arg uint32, body []byte, files ...File) (packet, error) {
@@ -131,7 +112,7 @@ func (d *remoteHandle) openPath(p *Process, path string, flags int, mode uint32)
 		return nil, syscall.ENOTDIR
 	}
 
-	if t, ok := f.(*remoteTerminal); ok && flags&syscall.O_NOCTTY == 0 {
+	if t, ok := f.(Terminal); ok && flags&syscall.O_NOCTTY == 0 {
 		p.acquire(t)
 	}
 
@@ -170,16 +151,20 @@ func (d *remoteHandle) readlinkPath(p *Process, path string) (string, error) {
 	return string(pk.data), nil
 }
 
-// makePath makes the last name of a path: MKDIR and MKNOD of a mode,
-// SYMLINK of a target.
-func (d *remoteHandle) makePath(p *Process, op, mode uint32, target, path string) error {
-	body := []byte(path)
+func (d *remoteHandle) mkdirPath(p *Process, path string, mode uint32) error {
+	_, err := d.vfs(p, vMkdir, mode, []byte(path))
 
-	if op == vSymlink {
-		body = append(append([]byte(target), 0), path...)
-	}
+	return err
+}
 
-	_, err := d.vfs(p, op, mode, body)
+func (d *remoteHandle) mknodPath(p *Process, path string, mode uint32) error {
+	_, err := d.vfs(p, vMknod, mode, []byte(path))
+
+	return err
+}
+
+func (d *remoteHandle) symlinkPath(p *Process, target, path string) error {
+	_, err := d.vfs(p, vSymlink, 0, append(append([]byte(target), 0), path...))
 
 	return err
 }
@@ -197,29 +182,42 @@ func (d *remoteHandle) unlinkPath(p *Process, path string, dir bool) error {
 }
 
 // twoPaths is the body of a call on two paths, the second from the
-// handle to: to's id, the old path and the new.
-func twoPaths(to *remoteDir, old, new string) []byte {
-	body := make([]byte, 8, 8+len(old)+1+len(new))
-	binary.LittleEndian.PutUint64(body, to.id)
+// handle to, rootfs's too: to's id, the old path and the new. Another
+// directory's is another server's: EXDEV.
+func twoPaths(to Dir, old, new string) ([]byte, error) {
+	h, ok := to.(*remoteDir)
 
-	return append(append(append(body, old...), 0), new...)
+	if !ok {
+		return nil, syscall.EXDEV
+	}
+
+	body := make([]byte, 8, 8+len(old)+1+len(new))
+	binary.LittleEndian.PutUint64(body, h.id)
+
+	return append(append(append(body, old...), 0), new...), nil
 }
 
-func (d *remoteHandle) renamePath(p *Process, old string, to *remoteDir, new string) error {
-	_, err := d.vfs(p, vRename, 0, twoPaths(to, old, new))
+func (d *remoteHandle) renamePath(p *Process, old string, to Dir, new string) error {
+	body, err := twoPaths(to, old, new)
+
+	if err == nil {
+		_, err = d.vfs(p, vRename, 0, body)
+	}
 
 	return err
 }
 
-func (d *remoteHandle) linkPath(p *Process, old string, to *remoteDir, new string, follow bool) error {
-	body := twoPaths(to, old, new)
+func (d *remoteHandle) linkPath(p *Process, old string, to Dir, new string, follow bool) error {
+	body, err := twoPaths(to, old, new)
 	arg := uint32(0)
 
 	if follow {
 		arg = 1
 	}
 
-	_, err := d.vfs(p, vLink, arg, body)
+	if err == nil {
+		_, err = d.vfs(p, vLink, arg, body)
+	}
 
 	return err
 }
@@ -295,7 +293,7 @@ func (d *remoteHandle) path(p *Process) (string, error) {
 // mountPath mounts on the directory target names the directory source
 // names, or, with a connection to the file system whose socket source
 // names, its root: the connection is its channel from then on.
-func (d *remoteHandle) mountPath(p *Process, target, source string, conn *pairEnd) error {
+func (d *remoteHandle) mountPath(p *Process, target, source string, conn File) error {
 	body := append(append([]byte(target), 0), source...)
 
 	if conn != nil {
@@ -339,93 +337,8 @@ func (d *remoteHandle) unmountPath(p *Process, path string, flags uint32) error 
 	return err
 }
 
-// The Dir role of a handle: the kernel walks nothing of the VFS's, and a
-// name of a handle is a path of one name from it, the VFS's to walk.
-
-func (d *remoteDir) resolve(p *Process, path string, w *walk) (step, error) {
-	return step{}, syscall.EIO // the VFS walks its paths, never the kernel
-}
-
-func (d *remoteDir) statName(p *Process, name string, st *syscall.Stat_t) error {
-	return d.statPath(p, name, false, st)
-}
-
-func (d *remoteDir) readlinkName(p *Process, name string) (string, error) {
-	return d.readlinkPath(p, name)
-}
-
-func (d *remoteDir) openName(p *Process, name string, flags int, mode uint32) (File, error) {
-	return d.openPath(p, name, flags, mode)
-}
-
-func (d *remoteDir) mkdir(p *Process, name string, mode uint32) error {
-	return d.makePath(p, vMkdir, mode, "", name)
-}
-
-func (d *remoteDir) mknod(p *Process, name string, mode uint32, dev uint64) error {
-	return d.makePath(p, vMknod, mode, "", name)
-}
-
-func (d *remoteDir) symlink(p *Process, target, name string) error {
-	return d.makePath(p, vSymlink, 0, target, name)
-}
-
-func (d *remoteDir) unlink(p *Process, name string, dir bool) error {
-	return d.unlinkPath(p, name, dir)
-}
-
-func (d *remoteDir) rename(p *Process, name string, to Dir, toName string) error {
-	other, ok := to.(*remoteDir)
-
-	if !ok {
-		return syscall.EXDEV
-	}
-
-	return d.renamePath(p, name, other, toName)
-}
-
-func (d *remoteDir) link(p *Process, name string, to Dir, toName string) error {
-	other, ok := to.(*remoteDir)
-
-	if !ok {
-		return syscall.EXDEV
-	}
-
-	return d.linkPath(p, name, other, toName, false)
-}
-
-// accessName is what a name of the handle, "" the handle itself, lets the
-// process do: the ids are vm's, real and effective alike.
-func (d *remoteDir) accessName(p *Process, name string, mode, flags uint32) error {
-	var st syscall.Stat_t
-
-	if err := d.statPath(p, name, flags&atSymlinkNofollow == 0, &st); err != nil {
-		return err
-	}
-
-	if !p.permits(&st, mode&7) {
-		return syscall.EACCES
-	}
-
-	return nil
-}
-
-func (d *remoteDir) chmodName(p *Process, name string, mode uint32) error {
-	return d.chmodPath(p, name, mode, false)
-}
-
-func (d *remoteDir) chownName(p *Process, name string, uid, gid int) error {
-	return d.chownPath(p, name, uid, gid, false)
-}
-
-func (d *remoteDir) utimesName(p *Process, name string, ts []syscall.Timespec) error {
-	return d.utimesPath(p, name, ts, false)
-}
-
-func (d *remoteDir) truncateName(p *Process, name string, size int64) error {
-	return d.truncatePath(p, name, size)
-}
-
-func (d *remoteDir) statfsName(p *Process, name string, st *syscall.Statfs_t) error {
-	return d.statfsPath(p, name, st)
+// readlink is the target of the link a handle of O_PATH is, by an empty
+// path.
+func (h *remotePath) readlink(p *Process) (string, error) {
+	return h.readlinkPath(p, "")
 }

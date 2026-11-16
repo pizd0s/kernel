@@ -23,7 +23,7 @@ func (p *Process) libcMount(source, target, fstype, flags, data uint32) uint32 {
 		}
 	}
 
-	handled, err := p.onVFS(atFdcwd, ".", func(v *remoteDir) error {
+	err := p.onPath(atFdcwd, ".", func(v Dir) error {
 		var st syscall.Stat_t
 
 		if v.statPath(p, from, true, &st) != nil || st.Mode&syscall.S_IFMT != syscall.S_IFSOCK {
@@ -41,23 +41,15 @@ func (p *Process) libcMount(source, target, fstype, flags, data uint32) uint32 {
 		return v.mountPath(p, to, from, conn)
 	})
 
-	if !handled {
-		err = syscall.EINVAL
-	}
-
 	return p.result(0, err)
 }
 
 // umount2 unmounts what is mounted on the directory target names; the
 // flags but UMOUNT_NOFOLLOW are not used.
 func (p *Process) libcUmount2(target, flags uint32) uint32 {
-	handled, err := p.onVFS(atFdcwd, p.str(target), func(v *remoteDir) error {
+	err := p.onPath(atFdcwd, p.str(target), func(v Dir) error {
 		return v.unmountPath(p, p.str(target), flags&umountNofollow)
 	})
-
-	if !handled {
-		err = syscall.EINVAL
-	}
 
 	return p.result(0, err)
 }

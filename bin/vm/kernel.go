@@ -51,7 +51,7 @@ type Kernel struct {
 	// fg is the foreground process group of the console; cttys are the
 	// sessions' controlling terminals (kernel_terminal.go).
 	fg        int32
-	cttys     map[int32]*remoteTerminal
+	cttys     map[int32]Terminal
 	first     *Process
 	exit      chan int
 	functions map[string]any
@@ -77,14 +77,12 @@ type Process struct {
 	// image is what the instance runs: its code, arguments and environment.
 	image *execImage
 	files fdTable
-	// root is the directory absolute paths start at and ".." stops at,
-	// rootPath its host path for a root of the host; cwd is the working
-	// directory, which relative paths start at. Both are directories the
-	// process holds, not names (kernel_path.go).
-	root     Dir
-	rootPath string
-	cwd      Dir
-	umask    uint32
+	// root is the directory absolute paths start at and ".." stops at;
+	// cwd is the working directory, which relative paths start at. Both
+	// are directories the process holds, not names (kernel_path.go).
+	root  Dir
+	cwd   Dir
+	umask uint32
 	// errnoAt and environAt are where the crt keeps errno and environ, tzAt
 	// tzname, timezone and daylight, herrnoAt h_errno; passwordAt is
 	// getpass's buffer.
@@ -172,7 +170,7 @@ type procExit struct {
 // is a server, or a program of none. Its programs compile with options.
 func newKernel(options CompileOptions, user cred) *Kernel {
 	k := &Kernel{procs: map[int32]*Process{}, codes: map[[sha256.Size]byte]*codeEntry{}, options: options, fifos: map[fifoKey]*pipe{},
-		exit: make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]*remoteTerminal{}}
+		exit: make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]Terminal{}}
 	k.names.host, k.names.domain = "pizdos", "(none)"
 
 	k.functions = k.functionTable()
@@ -298,7 +296,7 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 		p.cwd, p.umask, p.limits, p.seed = parent.cwd, parent.umask, parent.limits, parent.seed
 		p.cred = parent.cred.clone()
 		p.chaos = parent.chaos
-		p.root, p.rootPath = parent.root, parent.rootPath
+		p.root = parent.root
 	}
 
 	p.root.ref()
@@ -314,62 +312,6 @@ func (p *Process) firstCwd() (Dir, string) {
 	p.root.ref()
 
 	return p.root, "/"
-}
-
-// programPath is the guest's path of a program's file, or empty when it
-// is outside the root or has no path: a file of a server says its path,
-// its directory's and the name it was opened by, a file of the host is
-// found under the root.
-func (p *Process) programPath(f File) string {
-	if named, ok := f.(Named); ok {
-		if name, err := named.name(p); err == nil {
-			return name
-		}
-
-		return ""
-	}
-
-	pathed, ok := f.(Pathed)
-
-	if !ok || p.rootPath == "" {
-		return ""
-	}
-
-	host, err := pathed.hostPath()
-
-	if err != nil || host != p.rootPath && p.rootPath != "/" && !strings.HasPrefix(host, p.rootPath+"/") {
-		return ""
-	}
-
-	return p.guestPath(host)
-}
-
-// guestPath is the guest's path of a host path, which is inside the root
-// or else the root itself.
-func (p *Process) guestPath(host string) string {
-	return guestPathIn(p.rootPath, host)
-}
-
-// guestPathIn is the guest path of a host path in a root of the host at
-// root; a root of a server has none.
-func guestPathIn(root, host string) string {
-	if root == "" {
-		return "/"
-	}
-
-	if root == "/" {
-		return host
-	}
-
-	if host == root {
-		return "/"
-	}
-
-	if strings.HasPrefix(host, root+"/") {
-		return host[len(root):]
-	}
-
-	return "/"
 }
 
 // run runs the process's programs, one after another as it execs, then

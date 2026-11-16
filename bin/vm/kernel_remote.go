@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/binary"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -173,6 +174,7 @@ type remotePath struct {
 
 var (
 	_ Transfer = (*remoteFile)(nil)
+	_ Windowed = (*remoteFile)(nil)
 	_ Seeker   = (*remoteFile)(nil)
 	_ Socket   = (*remoteFile)(nil)
 	_ Attrs    = (*remoteFile)(nil)
@@ -1054,52 +1056,35 @@ func (r *noRoot) setFlags(fl int) error                            { return nil 
 func (r *noRoot) readdir(p *Process, b []byte) (int, error)        { return 0, nil }
 func (r *noRoot) path(p *Process) (string, error)                  { return "/", nil }
 
-// resolve walks a path in the one directory there is: a name in it is
-// none, but ".", ".." and the last name, which the calls find missing.
-func (r *noRoot) resolve(p *Process, path string, w *walk) (step, error) {
-	names, slash := splitPath(path)
-
-	for len(names) > 1 {
-		if names[0] != "." && names[0] != ".." {
-			return step{}, syscall.ENOENT
+// itself tells whether a path names the root itself: none but dots and
+// slashes, ".", "..", "/". Anything else is not there.
+func (r *noRoot) itself(path string) bool {
+	for _, name := range strings.Split(path, "/") {
+		if name != "" && name != "." && name != ".." {
+			return false
 		}
-
-		names = names[1:]
 	}
 
-	r.ref()
-	s := step{dir: r, kind: lastNone}
-
-	if len(names) == 1 {
-		s.last, s.kind, s.slash = lastOf(names[0], slash)
-	}
-
-	return s, nil
+	return true
 }
 
-func (r *noRoot) statName(p *Process, name string, st *syscall.Stat_t) error {
-	if name != "" {
-		return syscall.ENOENT
+// gone is the error of a call on a path: the root's own, or ENOENT for
+// what is not there.
+func (r *noRoot) gone(path string, own error) error {
+	if r.itself(path) {
+		return own
 	}
 
-	return r.stat(p, st)
+	return syscall.ENOENT
 }
 
-func (r *noRoot) readlinkName(p *Process, name string) (string, error) {
-	if name != "" {
-		return "", syscall.ENOENT
-	}
-
-	return "", syscall.EINVAL
-}
-
-func (r *noRoot) openName(p *Process, name string, flags int, mode uint32) (File, error) {
+func (r *noRoot) openPath(p *Process, path string, flags int, mode uint32) (File, error) {
 	switch {
-	case name != "" && flags&syscall.O_CREAT != 0:
+	case !r.itself(path) && flags&syscall.O_CREAT != 0:
 		return nil, syscall.EROFS
-	case name != "":
+	case !r.itself(path):
 		return nil, syscall.ENOENT
-	case flags&3 != syscall.O_RDONLY:
+	case flags&syscall.O_CREAT != 0 || flags&3 != syscall.O_RDONLY:
 		return nil, syscall.EISDIR
 	}
 
@@ -1108,40 +1093,98 @@ func (r *noRoot) openName(p *Process, name string, flags int, mode uint32) (File
 	return r, nil
 }
 
-func (r *noRoot) mkdir(p *Process, name string, mode uint32) error             { return syscall.EROFS }
-func (r *noRoot) mknod(p *Process, name string, mode uint32, dev uint64) error { return syscall.EROFS }
-func (r *noRoot) symlink(p *Process, target, name string) error                { return syscall.EROFS }
-func (r *noRoot) unlink(p *Process, name string, dir bool) error               { return syscall.ENOENT }
-func (r *noRoot) rename(p *Process, name string, to Dir, toName string) error  { return syscall.ENOENT }
-func (r *noRoot) link(p *Process, name string, to Dir, toName string) error    { return syscall.ENOENT }
-
-func (r *noRoot) accessName(p *Process, name string, mode, flags uint32) error {
-	if name != "" {
+func (r *noRoot) statPath(p *Process, path string, follow bool, st *syscall.Stat_t) error {
+	if !r.itself(path) {
 		return syscall.ENOENT
 	}
 
-	if mode&2 != 0 {
-		return syscall.EROFS
+	return r.stat(p, st)
+}
+
+func (r *noRoot) readlinkPath(p *Process, path string) (string, error) {
+	return "", r.gone(path, syscall.EINVAL)
+}
+
+// Nothing is made in the root: what names it is there, EEXIST.
+func (r *noRoot) mkdirPath(p *Process, path string, mode uint32) error {
+	return r.makes(path)
+}
+
+func (r *noRoot) mknodPath(p *Process, path string, mode uint32) error {
+	return r.makes(path)
+}
+
+func (r *noRoot) symlinkPath(p *Process, target, path string) error {
+	return r.makes(path)
+}
+
+func (r *noRoot) makes(path string) error {
+	if r.itself(path) {
+		return syscall.EEXIST
 	}
 
-	return nil
-}
-
-func (r *noRoot) chmodName(p *Process, name string, mode uint32) error { return syscall.EROFS }
-func (r *noRoot) chownName(p *Process, name string, uid, gid int) error {
 	return syscall.EROFS
 }
-func (r *noRoot) utimesName(p *Process, name string, ts []syscall.Timespec) error {
-	return syscall.EROFS
-}
-func (r *noRoot) truncateName(p *Process, name string, size int64) error { return syscall.EISDIR }
 
-func (r *noRoot) statfsName(p *Process, name string, st *syscall.Statfs_t) error {
-	if name != "" {
+func (r *noRoot) unlinkPath(p *Process, path string, dir bool) error {
+	if dir {
+		return r.gone(path, syscall.EBUSY)
+	}
+
+	return r.gone(path, syscall.EISDIR)
+}
+
+func (r *noRoot) renamePath(p *Process, old string, to Dir, new string) error {
+	return r.gone(old, syscall.EBUSY)
+}
+
+func (r *noRoot) linkPath(p *Process, old string, to Dir, new string, follow bool) error {
+	return r.gone(old, syscall.EPERM)
+}
+
+func (r *noRoot) chmodPath(p *Process, path string, mode uint32, follow bool) error {
+	return r.gone(path, syscall.EROFS)
+}
+
+func (r *noRoot) chownPath(p *Process, path string, uid, gid int, follow bool) error {
+	return r.gone(path, syscall.EROFS)
+}
+
+func (r *noRoot) utimesPath(p *Process, path string, ts []syscall.Timespec, follow bool) error {
+	return r.gone(path, syscall.EROFS)
+}
+
+func (r *noRoot) truncatePath(p *Process, path string, size int64) error {
+	return r.gone(path, syscall.EISDIR)
+}
+
+func (r *noRoot) statfsPath(p *Process, path string, st *syscall.Statfs_t) error {
+	if !r.itself(path) {
 		return syscall.ENOENT
 	}
 
 	*st = syscall.Statfs_t{Bsize: 4096, Frsize: 4096, Namelen: 255}
 
 	return nil
+}
+
+func (r *noRoot) realpathOf(p *Process, path string) (string, error) {
+	return "/", r.gone(path, nil)
+}
+
+// No file system is mounted on the root, and no socket is in it.
+func (r *noRoot) mountPath(p *Process, target, source string, conn File) error {
+	return syscall.EINVAL
+}
+
+func (r *noRoot) unmountPath(p *Process, path string, flags uint32) error {
+	return syscall.EINVAL
+}
+
+func (r *noRoot) bindPath(p *Process, path string, mode uint32, held File) error {
+	return syscall.EOPNOTSUPP
+}
+
+func (r *noRoot) connectPath(p *Process, path string) (File, error) {
+	return nil, syscall.EOPNOTSUPP
 }
