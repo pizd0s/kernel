@@ -3228,11 +3228,26 @@ static pid_t spawn(const char* path, char* const* argv, char* const* env, int ro
 // What rootfs starts runs with a clean environment, its root the far
 // end of our own pair, never ours: a server does not walk its own tree
 // by path, and could not ask itself before it serves. erofs has none.
+// HOME is /tmp, where a program may write what it keeps. TERM is the
+// console's type (consoleType).
 static char pathVariable[] = "PATH=/bin";
-static char homeVariable[] = "HOME=/";
-static char termVariable[] = "TERM=vt100";
-static char* const environment[] = {pathVariable, homeVariable, termVariable, nullptr};
+static char homeVariable[] = "HOME=/tmp";
+static char* environment[] = {pathVariable, homeVariable, nullptr, nullptr};
 static int rootEnd = -1;
+
+// The console is a terminal of the host's, and of what type only the
+// host says: TERM as vm gave it to us is TERM for what we start, and
+// with none given there is none.
+static void consoleType() {
+    const char* type = getenv("TERM");
+    if (type == nullptr) {
+        return;
+    }
+    const usize size = strlen(type) + sizeof "TERM=";
+    char* variable = static_cast<char*>(allocate(size));
+    snprintf(variable, size, "TERM=%s", type);
+    environment[2] = variable;
+}
 
 // A file system rootfs starts: its channel, ours, on the loop.
 static Fs* started(int channel) {
@@ -3472,6 +3487,7 @@ static void booted() {
 int main(int argc, char** argv) {
     command = argv + 1;
     commandCount = argc - 1;
+    consoleType();
     reapOnChild();
     watcher = epoll_create1(EPOLL_CLOEXEC);
     if (watcher < 0) {

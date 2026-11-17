@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Midnight Commander in the system (bin/mc), on a terminal of the host's:
 it runs on the system's pseudoterminal joined to the console, finds the
-terminal in the terminfo database, draws its panels and takes the
-terminal's keys and mouse. The test is a terminal: it keeps the screen mc
-draws, as a VT100 with xterm's additions would show it, and types.
+terminal the host names (TERM) in the terminfo database, draws its panels
+and takes the terminal's keys and mouse, and keeps what it keeps in the
+shell's HOME. The test is a terminal: it keeps the screen mc draws, as a
+VT100 with xterm's additions would show it, and types.
 
 On an xterm: the panels list two directories; the arrows move the bar; F3
 views a file and F4 edits it, F2 saving what was typed; F5 copies to the
@@ -12,9 +13,8 @@ directory; F9 pulls a menu down; a click of the mouse moves the bar; a
 command typed in mc's line runs in the subshell, and ^O shows the
 subshell itself, mc's own child on a pseudoterminal it made; a window of
 another size is redrawn; F10 leaves, the screen the shell's again. mcedit
-and mcview are mc by other names. On the console's own terminal, vt100,
-there are no colours and the keys are the few a VT100 has: mc draws and
-moves all the same. And under the kernel's checks of memory (vm run
+and mcview are mc by other names. On a VT100 there are no colours and
+the keys are the few it has: mc draws and moves all the same. And under the kernel's checks of memory (vm run
 --asan) a tree in a panel forgets the directory under its bar after
 another tree was open and closed: the panel's tree is still told of the
 entry removed, and draws no freed one (bin/mc/mc-tree-hook.patch).
@@ -269,16 +269,16 @@ class Screen:
 
 
 class Terminal:
-    """A terminal of rows by cols with the system on it, its shell at the
-    prompt."""
+    """A terminal of rows by cols, of the type kind as the host names it,
+    with the system on it, its shell at the prompt."""
 
     # xterm's keys: the arrows are the application's while mc asks for them.
     KEYS = {"f2": "\x1bOQ", "f3": "\x1bOR", "f4": "\x1bOS", "f5": "\x1b[15~", "f7": "\x1b[18~", "f9": "\x1b[20~", "f10": "\x1b[21~"}
     ARROWS = {"up": "A", "down": "B", "right": "C", "left": "D"}
 
-    def __init__(self, vm, rootfs, image, rows=24, cols=80, flags=()):
+    def __init__(self, vm, rootfs, image, rows=24, cols=80, flags=(), kind="xterm-256color"):
         self.screen = Screen(rows, cols)
-        env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+        env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="", TERM=kind)
         self.pid, self.fd = pty.fork()
 
         if self.pid == 0:
@@ -375,8 +375,8 @@ def status(term, name, what, side=0):
 def xterm(vm, rootfs, image):
     term = Terminal(vm, rootfs, image)
     term.send(SETUP)
-    term.until(lambda text: text.strip() == "/tmp #", "the files of the test")
-    term.send("HOME=/tmp TERM=xterm-256color mc /tmp/work /tmp/other\r")
+    term.until(lambda text: text.strip() == "~ #", "the files of the test")
+    term.send("mc /tmp/work /tmp/other\r")
     term.until("10Quit", "mc's keys line")
     text = term.screen.text()
     assert term.row(0).split() == ["Left", "File", "Command", "Options", "Right"], text
@@ -481,12 +481,12 @@ def xterm(vm, rootfs, image):
     assert text.startswith("XYZ hello mc\nsecond line\nXYZ hello mc\nsecond line\nfrom-mc\nwork/made\nstatus 0\n"), text
 
     # mcview and mcedit are mc by other names
-    term.send("clear; HOME=/tmp TERM=xterm-256color mcview work/a.txt\r")
+    term.send("clear; mcview work/a.txt\r")
     term.until("3Quit", "mcview")
     assert term.row(1) == "XYZ hello mc", term.screen.text()
     term.key("f10")
     term.until(lambda text: "3Quit" not in text and prompt(text), "the shell after mcview")
-    term.send("clear; HOME=/tmp TERM=xterm-256color mcedit work/a.txt\r")
+    term.send("clear; mcedit work/a.txt\r")
     term.until("2Save", "mcedit")
     assert term.row(1) == "XYZ hello mc", term.screen.text()
     term.key("f10")
@@ -497,12 +497,12 @@ def xterm(vm, rootfs, image):
 
 
 def vt100(vm, rootfs, image):
-    """The console's own terminal: mc draws without colours and takes the
-    keys of a VT100, a function key as Esc and its digit."""
-    term = Terminal(vm, rootfs, image)
+    """A VT100: mc draws without colours and takes the keys of one, a
+    function key as Esc and its digit."""
+    term = Terminal(vm, rootfs, image, kind="vt100")
     term.send(SETUP)
-    term.until(lambda text: text.strip() == "/tmp #", "the files of the test")
-    term.send("echo $TERM; HOME=/tmp mc /tmp/work /tmp/other\r")
+    term.until(lambda text: text.strip() == "~ #", "the files of the test")
+    term.send("echo $TERM; mc /tmp/work /tmp/other\r")
     term.until("10Quit", "mc's keys line")
     text = term.screen.text()
     assert term.row(0).split() == ["Left", "File", "Command", "Options", "Right"], text
@@ -519,7 +519,7 @@ def vt100(vm, rootfs, image):
     term.send("\x1b0")
     term.until(lambda text: "10Quit" not in text and prompt(text), "the shell after mc")
     term.send("clear; echo $TERM\r")
-    term.until("vt100\n", "the console's terminal")
+    term.until("vt100\n", "the terminal's type")
 
     if (code := term.close()) != 7:
         raise AssertionError(f"vm's status is {code}, not the shell's 7")
@@ -531,8 +531,8 @@ def trees(vm, rootfs, image):
     every access of memory here, so a freed entry read is mc's end."""
     term = Terminal(vm, rootfs, image, flags=["--asan"])
     term.send(SETUP)
-    term.until(lambda text: text.strip() == "/tmp #", "the files of the test")
-    term.send("HOME=/tmp TERM=xterm-256color mc /tmp/work /tmp/other\r")
+    term.until(lambda text: text.strip() == "~ #", "the files of the test")
+    term.send("mc /tmp/work /tmp/other\r")
     term.until("10Quit", "mc's keys line")
 
     # the left panel is a tree
@@ -581,7 +581,7 @@ def main():
     xterm(vm, rootfs, image)
     vt100(vm, rootfs, image)
     trees(vm, rootfs, image)
-    print("mc: panels, keys, mouse, viewer, editor, copy, archive, menu, subshell and resize on an xterm; a VT100's keys on the console's; "
+    print("mc: panels, keys, mouse, viewer, editor, copy, archive, menu, subshell and resize on an xterm; a VT100's keys on one; "
           "a tree's forgotten directory under the checks of memory")
 
 

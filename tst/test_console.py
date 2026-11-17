@@ -2,8 +2,9 @@
 """The console on a terminal of the host's: vm makes the terminal raw
 while it runs, and rootfs runs the shell on a pseudoterminal of the
 system's joined to the console (bin/tools/console.cpp), so the shell is
-interactive and edits its lines; the terminal's window is the host's,
-again as it changes; ^C interrupts the command in the foreground, not
+interactive and edits its lines; the terminal's type (TERM) and its
+window are the host's, the window again as it changes; ^C interrupts the
+command in the foreground, not
 the shell; the shell's status is vm's, and the host's terminal is as it
 was once vm ends.
 
@@ -39,12 +40,12 @@ def read_for(fd, seconds, until=None):
 
 def main():
     vm, rootfs = sys.argv[1:]
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="", TERM="vt220")
     pid, fd = pty.fork()
     if pid == 0:
         fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
         os.execve("/bin/sh", ["sh", "-c", f"stty -g; exec 3>&1; '{vm}' run -- '{rootfs}'; echo status $?; stty -g"], env)
-    prompt = b"~ # "
+    prompt = b"/ # "
     start = read_for(fd, 120, prompt)
     assert start.endswith(prompt), start
     before = start.split(b"\r\n")[0]
@@ -55,6 +56,7 @@ def main():
 
     assert typed(b"echo hel\x7flo\r") == b"echo hel\blo\r\nhelo\r\n" + prompt
     assert typed(b"tty; stty size\r") == b"tty; stty size\r\n/dev/pts/0\r\n30 100\r\n" + prompt
+    assert typed(b"echo $TERM\r") == b"echo $TERM\r\nvt220\r\n" + prompt
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
     os.kill(pid, signal.SIGWINCH)
     time.sleep(1)

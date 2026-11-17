@@ -3,7 +3,9 @@
 host's file system. rootfs has the image linked into it, which erofs
 serves at the root, the executables of busybox and python, whose modules
 the kernel compiles as they are executed, a /dev and a /tmp, and starts
-busybox's shell on the terminal; the shell's status is vm's. Each
+busybox's shell on the terminal; the shell's status is vm's. The shell's
+HOME is /tmp, and its TERM the host's name of the console's type, which
+the terminfo database describes: none where the host has none. Each
 server's files are on a device of their own and belong to who made them,
 a directory keeps its mode, a directory removed while it is read is
 removed whole, mkdir -p finds what is there, and rename keeps a directory
@@ -23,6 +25,7 @@ from pathlib import Path
 
 SCRIPT = """\
 echo hello from $0
+echo "$PATH $HOME ${TERM-of no type}"; cd && pwd && cd /
 for i in 1 2 3; do ls /tmp > /dev/null; done; echo fresh > /tmp/fresh && cat /tmp/fresh && rm /tmp/fresh
 cat /etc/motd
 ls /bin | grep -x -e ash -e cat -e sh
@@ -130,6 +133,8 @@ ls: /tmp/sd/z: Permission denied
 
 WANT = """\
 hello from sh
+/bin /tmp of no type
+/tmp
 fresh
 pizdos
 ash
@@ -225,6 +230,10 @@ def main():
         assert not os.listdir(empty), os.listdir(empty)
         result = subprocess.run([vm, "run", "--", rootfs], input=b"ls /missing\n", capture_output=True, cwd=empty, env=env, timeout=120)
         assert result.returncode == 1 and b"No such file" in result.stderr and result.stdout == b"", result
+        # The console's type is the host's to name.
+        result = subprocess.run([vm, "run", "--", rootfs], input=b"echo $TERM; ls /usr/share/terminfo/w/$TERM\n", capture_output=True,
+                                cwd=empty, env=dict(env, TERM="wy60"), timeout=120)
+        assert (result.returncode, result.stdout, result.stderr) == (0, b"wy60\n/usr/share/terminfo/w/wy60\n", b""), result
     print("rootfs: busybox's shell runs from the image erofs serves, without the host's files")
 
 
