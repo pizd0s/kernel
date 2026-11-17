@@ -66,10 +66,13 @@ func (s *subscription) init(to waker, id uint64) {
 }
 
 // subscribers are the subscriptions an object wakes for one kind of its
-// changes: a list of their hooks.
+// changes: a list of their hooks. count is how many there are, for a tell
+// to find none without the lock: who subscribes looks at the object again
+// after, so a change told before its hook was counted is not lost.
 type subscribers struct {
 	mu    sync.Mutex
 	first *hook
+	count atomic.Int32
 }
 
 // add puts a hook that is in no list in the list.
@@ -82,6 +85,7 @@ func (s *subscribers) add(l *hook) {
 	}
 
 	s.first = l
+	s.count.Add(1)
 	s.mu.Unlock()
 }
 
@@ -101,6 +105,7 @@ func (s *subscribers) remove(l *hook) {
 		}
 
 		l.list, l.prev, l.next = nil, nil, nil
+		s.count.Add(-1)
 	}
 
 	s.mu.Unlock()
@@ -108,6 +113,10 @@ func (s *subscribers) remove(l *hook) {
 
 // tell wakes every subscription of the list.
 func (s *subscribers) tell() {
+	if s.count.Load() == 0 {
+		return
+	}
+
 	s.mu.Lock()
 
 	for l := s.first; l != nil; l = l.next {
@@ -135,6 +144,7 @@ func (s *subscribers) takeOver(from *subscribers) {
 	}
 
 	from.first = nil
+	s.count.Add(from.count.Swap(0))
 	s.mu.Unlock()
 	from.mu.Unlock()
 }
@@ -345,6 +355,9 @@ type msgChannel struct {
 	limit    atomic.Int32
 	messages []packet
 	head     int
+	// one is where the first message is kept: a channel that never holds
+	// two, a reply's, allocates nothing for them.
+	one      [1]packet
 	held     atomic.Int32
 	ended    atomic.Bool
 	finished atomic.Bool
@@ -355,9 +368,14 @@ type msgChannel struct {
 // newMsgChannel is a channel of limit messages.
 func newMsgChannel(limit int) *msgChannel {
 	c := &msgChannel{}
-	c.limit.Store(int32(limit))
+	c.init(limit)
 
 	return c
+}
+
+func (c *msgChannel) init(limit int) {
+	c.limit.Store(int32(limit))
+	c.messages = c.one[:0]
 }
 
 // nudge wakes the readers, nudgeWriter the writers: something of the

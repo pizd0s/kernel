@@ -550,7 +550,10 @@ func (e *pairEnd) takeLocked(peek bool) (pk packet, eof, ok bool) {
 	}
 
 	if ok && !eof && peek {
-		e.front = &pk
+		// A copy of its own: pk itself stays off the heap for a take that
+		// does not peek.
+		kept := pk
+		e.front = &kept
 		e.peeked.Store(true)
 	}
 
