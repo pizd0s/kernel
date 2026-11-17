@@ -2,7 +2,8 @@
 """The terminfo database of the system (dev/terminfo.py) is what ncurses'
 own compiler, tic, makes of ncurses' source of the terminals, byte for
 byte: every name has its description, in the directory of its first
-letter. And a source of our own with what tic's reading has that a plain
+letter, the file under a description's first name and a symbolic link to
+it under each other, as tic links them. And a source of our own with what tic's reading has that a plain
 one has not is compiled as tic compiles it: numbers of other bases and a
 number past 16 bits; ^ and \\ in strings, ^ after % a character of its
 own; a string that ends with @, one that goes on in the next line, one
@@ -22,6 +23,7 @@ source and of ours: `test_terminfo.py --tic` prints it, with the tic of
 the tarball's ncurses.
 """
 import hashlib
+import os
 import struct
 import subprocess
 import sys
@@ -127,9 +129,19 @@ def main():
 
     with tarfile.open(database) as archive:
         files = {m.name: archive.extractfile(m).read() for m in archive.getmembers() if m.isfile()}
+        links = {m.name: m.linkname for m in archive.getmembers() if m.issym()}
 
-    assert all(path == f"terminfo/{path.rsplit('/', 1)[1][0]}/{path.rsplit('/', 1)[1]}" for path in files), "a terminfo directory's layout"
-    assert digest({path.rsplit("/", 1)[1]: data for path, data in files.items()}) == TIC["database"], "the database is not tic's"
+    # a link is to the file of a description's first name, from its own
+    # directory
+    assert (links["terminfo/v/vt100-am"], links["terminfo/a/ansis"]) == ("vt100", "../c/cons25"), "tic's links"
+    assert len(links) == 1038, len(links)
+
+    for path, target in links.items():
+        files[path] = files[os.path.normpath(os.path.join(os.path.dirname(path), target))]
+
+    named = {path.rsplit("/", 1)[1]: data for path, data in files.items()}
+    assert all(f"terminfo/{name[0]}/{name}" in files for name in named) and len(named) == len(files), "a terminfo directory's layout"
+    assert digest(named) == TIC["database"], "the database is not tic's"
     xterm = read(files["terminfo/x/xterm-256color"], caps)
     assert xterm["colors"] == 256 and xterm["kcuu1"] == b"\x1bOA" and xterm["ich"] == b"\x1b[%p1%d@", xterm
 
@@ -148,7 +160,8 @@ def main():
     assert uses["cols"] == 132 and uses["kf1"] == base["kf1"] and uses["kf3"] == b"\x1b[13~" and uses["xenl"], uses
     assert "am" not in uses and "kf2" not in uses, uses
     assert later["kf2"] == other["kf2"] and "am" not in later and later["cols"] == 132, later
-    assert (boxed["acsc"], boxed["s0ds"], boxed["am"], boxed["smul"]) == (b"llqqkkxxjjmmwwuuvvttnn", b"\x1b(B", True, b"") and "box1" not in boxed, boxed
+    assert (boxed["acsc"], boxed["s0ds"]) == (b"llqqkkxxjjmmwwuuvvttnn", b"\x1b(B") and "box1" not in boxed, boxed
+    assert (boxed["am"], boxed["smul"]) == (True, b""), boxed
     print(f"terminfo: {TIC['database'].split(',')[0]} and the test's own source are compiled as tic compiles them")
 
 

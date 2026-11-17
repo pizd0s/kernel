@@ -652,7 +652,7 @@ mc_exe = executable("mc_exe", mc, "$(B)/bin/mc/mc")
 # describes, as the console's type is the host's to name (TERM).
 terminfo = command(
     name="terminfo",
-    inputs=["$(S)/dev/terminfo.py", "$(S)/dev/wasm.py"],
+    inputs=["$(S)/dev/terminfo.py"],
     outputs=["$(B)/share/terminfo.tar"],
     deps=[ncurses_tarball],
     cmd=["python3", "$(S)/dev/terminfo.py", ncurses_tarball.outputs[0], "$(B)/share/terminfo.tar"],

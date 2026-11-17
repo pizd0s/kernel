@@ -13,8 +13,9 @@ directory; F9 pulls a menu down; a click of the mouse moves the bar; a
 command typed in mc's line runs in the subshell, and ^O shows the
 subshell itself, mc's own child on a pseudoterminal it made; a window of
 another size is redrawn; F10 leaves, the screen the shell's again. mcedit
-and mcview are mc by other names. On a VT100 there are no colours and
-the keys are the few it has: mc draws and moves all the same. And under the kernel's checks of memory (vm run
+and mcview are mc by other names. On a VT100, by its other name, which
+the database has as a link, there are no colours and the keys are the
+few it has: mc draws and moves all the same. And under the kernel's checks of memory (vm run
 --asan) a tree in a panel forgets the directory under its bar after
 another tree was open and closed: the panel's tree is still told of the
 entry removed, and draws no freed one (bin/mc/mc-tree-hook.patch).
@@ -497,9 +498,10 @@ def xterm(vm, rootfs, image):
 
 
 def vt100(vm, rootfs, image):
-    """A VT100: mc draws without colours and takes the keys of one, a
-    function key as Esc and its digit."""
-    term = Terminal(vm, rootfs, image, kind="vt100")
+    """A VT100, by its other name, a link in the database: mc draws
+    without colours and takes the keys of one, a function key as Esc and
+    its digit."""
+    term = Terminal(vm, rootfs, image, kind="vt100-am")
     term.send(SETUP)
     term.until(lambda text: text.strip() == "~ #", "the files of the test")
     term.send("echo $TERM; mc /tmp/work /tmp/other\r")
@@ -519,7 +521,7 @@ def vt100(vm, rootfs, image):
     term.send("\x1b0")
     term.until(lambda text: "10Quit" not in text and prompt(text), "the shell after mc")
     term.send("clear; echo $TERM\r")
-    term.until("vt100\n", "the terminal's type")
+    term.until("vt100-am\n", "the terminal's type")
 
     if (code := term.close()) != 7:
         raise AssertionError(f"vm's status is {code}, not the shell's 7")

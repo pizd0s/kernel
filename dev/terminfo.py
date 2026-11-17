@@ -11,8 +11,10 @@ and a string's place there the order Caps lists them in, those after its
 mark of the end, termcap's obsolete ones, read and never written; its
 include/Caps-ncurses has other names of some. Every description is
 compiled with those it uses, and the archive has it as
-terminfo/<first letter>/<name>, under each of its names but the last, its
-title, a terminfo directory's layout.
+terminfo/<first letter>/<name> under its first name; each other name of
+it but the last, its title, is a symbolic link to that file, as a tic
+built to link by name makes them (--enable-symlinks): a terminfo
+directory's layout.
 
 The source is read as tic reads it (ncurses/tinfo/comp_scan.c,
 parse_entry.c): a line that begins with # is a comment and the white space
@@ -36,16 +38,12 @@ An absent number or string is -1 and a cancelled one -2. Capabilities
 outside Caps, a terminal's own extensions, are left out, as tic leaves
 them without -x.
 """
+import io
 import re
 import struct
 import sys
 import tarfile
-import tempfile
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-import wasm  # noqa: E402
 
 MAGIC, MAGIC32 = 0o432, 0o1036
 ABSENT, CANCELLED = -1, -2
@@ -389,6 +387,9 @@ def entries(text, caps):
             if alias in found:
                 raise SystemExit(f"terminfo: {alias} is two descriptions")
 
+            if "/" in alias:
+                raise SystemExit(f"terminfo: {alias} is no name of a file")
+
             found[alias] = entry
 
     return found
@@ -526,22 +527,65 @@ def descriptions(text, caps):
     return {name: compiled(entry, source, caps) for name, entry in source.items()}
 
 
+def database(text, caps):
+    """The files of a source's database by path: a description's bytes
+    under its first name, and under each other name of it the way to that
+    file, a link's target."""
+    source = entries(text, caps)
+    files = {}
+
+    for name, entry in source.items():
+        first = entry.aliases()[0]
+
+        if name == first:
+            files[f"terminfo/{name[0]}/{name}"] = compiled(entry, source, caps)
+        else:
+            files[f"terminfo/{name[0]}/{name}"] = first if first[0] == name[0] else f"../{first[0]}/{first}"
+
+    return files
+
+
+def archived(output, files):
+    """Writes files to an archive, a file's bytes and a link's target by
+    path, with no times or owners: the same files are the same archive."""
+    def entry(name, kind, mode):
+        info = tarfile.TarInfo(name)
+        info.type, info.mode, info.mtime, info.uid, info.gid, info.uname, info.gname = kind, mode, 0, 0, 0, "", ""
+
+        return info
+
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
+
+    with tarfile.open(output, "w", format=tarfile.PAX_FORMAT) as archive:
+        made = set()
+
+        for path in sorted(files):
+            parts = path.split("/")
+
+            for depth in range(1, len(parts)):
+                parent = "/".join(parts[:depth])
+
+                if parent not in made:
+                    made.add(parent)
+                    archive.addfile(entry(parent, tarfile.DIRTYPE, 0o755))
+
+            if isinstance(files[path], str):
+                info = entry(path, tarfile.SYMTYPE, 0o777)
+                info.linkname = files[path]
+                archive.addfile(info)
+            else:
+                info = entry(path, tarfile.REGTYPE, 0o644)
+                info.size = len(files[path])
+                archive.addfile(info, io.BytesIO(files[path]))
+
+
 def main():
     if len(sys.argv) != 3:
         raise SystemExit(__doc__)
 
     tarball, output = sys.argv[1:]
     caps, text = ncurses(tarball)
-
-    with tempfile.TemporaryDirectory(dir=Path(output).parent, prefix="terminfo-") as work:
-        root = Path(work) / "terminfo"
-
-        for name, data in descriptions(text, caps).items():
-            path = root / name[0] / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-
-        wasm.write_tar(output, Path(work), root)
+    archived(output, database(text, caps))
 
 
 if __name__ == "__main__":

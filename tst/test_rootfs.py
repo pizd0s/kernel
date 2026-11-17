@@ -5,7 +5,8 @@ serves at the root, the executables of busybox and python, whose modules
 the kernel compiles as they are executed, a /dev and a /tmp, and starts
 busybox's shell on the terminal; the shell's status is vm's. The shell's
 HOME is /tmp, and its TERM the host's name of the console's type, which
-the terminfo database describes: none where the host has none. Each
+the terminfo database describes, under a terminal's other name by a
+link: none where the host has none. Each
 server's files are on a device of their own and belong to who made them,
 a directory keeps its mode, a directory removed while it is read is
 removed whole, mkdir -p finds what is there, and rename keeps a directory
@@ -230,10 +231,12 @@ def main():
         assert not os.listdir(empty), os.listdir(empty)
         result = subprocess.run([vm, "run", "--", rootfs], input=b"ls /missing\n", capture_output=True, cwd=empty, env=env, timeout=120)
         assert result.returncode == 1 and b"No such file" in result.stderr and result.stdout == b"", result
-        # The console's type is the host's to name.
-        result = subprocess.run([vm, "run", "--", rootfs], input=b"echo $TERM; ls /usr/share/terminfo/w/$TERM\n", capture_output=True,
-                                cwd=empty, env=dict(env, TERM="wy60"), timeout=120)
-        assert (result.returncode, result.stdout, result.stderr) == (0, b"wy60\n/usr/share/terminfo/w/wy60\n", b""), result
+        # The console's type is the host's to name: here another name of
+        # FreeBSD's console, whose description is under its first.
+        script = b"cd /usr/share/terminfo && echo $TERM && readlink a/$TERM && cmp a/$TERM c/cons25 && head -c 2 a/$TERM | od -An -tx1\n"
+        result = subprocess.run([vm, "run", "--", rootfs], input=script, capture_output=True, cwd=empty, env=dict(env, TERM="ansis"),
+                                timeout=120)
+        assert (result.returncode, result.stdout, result.stderr) == (0, b"ansis\n../c/cons25\n 1a 01\n", b""), result
     print("rootfs: busybox's shell runs from the image erofs serves, without the host's files")
 
 
