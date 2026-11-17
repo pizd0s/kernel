@@ -1469,7 +1469,7 @@ Answer Ask::await_resume() const noexcept {
 static int makeHandle(const Place& at, int flags, int& theirs) {
     const bool opath = (flags & O_PATH) != 0;
     const u64 id = ++handleIds;
-    const served what{u32(isDir(at) ? SERVED_DIR : SERVED_PATH), u32(flags) & (O_ACCMODE | O_APPEND | O_NONBLOCK), 0, 0, id};
+    const served what{u32(isDir(at) ? SERVED_DIR : SERVED_PATH), u32(flags) & (O_ACCMODE | O_APPEND | O_NONBLOCK | O_PATH), 0, 0, id};
     int pair[2];
     if (servedpair(&what, pair) != 0) {
         return -1;

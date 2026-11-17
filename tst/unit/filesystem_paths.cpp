@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -60,7 +61,12 @@ int main() {
     int regularPath = open("file", O_PATH);
     assert(regularPath >= 0);
     assert(readlinkat(regularPath, "", buffer, sizeof(buffer)) == -1 && errno == ENOENT);
+    // What O_PATH opened takes no locks, a file or a directory.
+    assert(flock(regularPath, LOCK_EX) == -1 && errno == EBADF);
     assert(close(regularPath) == 0);
+    int directoryPath = open("sub", O_PATH | O_DIRECTORY);
+    assert(directoryPath >= 0 && flock(directoryPath, LOCK_EX) == -1 && errno == EBADF);
+    assert(close(directoryPath) == 0);
     int symlinkPath = openat(subdirectory, "link", O_PATH | O_NOFOLLOW);
     assert(symlinkPath >= 0 && readlinkat(symlinkPath, "", buffer, sizeof(buffer)) == 7);
     assert(memcmp(buffer, "../file", 7) == 0 && close(symlinkPath) == 0);

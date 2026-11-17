@@ -163,6 +163,8 @@ type remoteFile struct {
 type remoteDir struct {
 	node remoteNode
 	id   uint64
+	// opath is set of one O_PATH opened: it takes no locks, EBADF.
+	opath bool
 }
 
 // remotePath is a handle of rootfs's of what O_PATH opened that is no
@@ -243,17 +245,23 @@ func (d *remoteDir) unref() { d.node.unref() }
 // A remoteDir is a File, a Seeker, a Dir, an Attrs and a Locker, and
 // itself to a call that wants the VFS's handle: its node answers but
 // the Dir's calls (kernel_vfs.go), readdir and seek.
-func (d *remoteDir) asFile() File              { return d }
-func (d *remoteDir) asTransfer() Transfer      { return nil }
-func (d *remoteDir) asSeeker() Seeker          { return d }
-func (d *remoteDir) asDir() Dir                { return d }
-func (d *remoteDir) asTerminal() Terminal      { return nil }
-func (d *remoteDir) asWindowed() Windowed      { return nil }
-func (d *remoteDir) asLink() Link              { return nil }
-func (d *remoteDir) asAttrs() Attrs            { return d }
-func (d *remoteDir) asSocket() Socket          { return nil }
-func (d *remoteDir) asIoctl() Ioctl            { return nil }
-func (d *remoteDir) asLocker() Locker          { return d }
+func (d *remoteDir) asFile() File         { return d }
+func (d *remoteDir) asTransfer() Transfer { return nil }
+func (d *remoteDir) asSeeker() Seeker     { return d }
+func (d *remoteDir) asDir() Dir           { return d }
+func (d *remoteDir) asTerminal() Terminal { return nil }
+func (d *remoteDir) asWindowed() Windowed { return nil }
+func (d *remoteDir) asLink() Link         { return nil }
+func (d *remoteDir) asAttrs() Attrs       { return d }
+func (d *remoteDir) asSocket() Socket     { return nil }
+func (d *remoteDir) asIoctl() Ioctl       { return nil }
+func (d *remoteDir) asLocker() Locker {
+	if d.opath {
+		return nil
+	}
+
+	return d
+}
 func (d *remoteDir) asEpoll() *epoll           { return nil }
 func (d *remoteDir) asMemfd() *memfdFile       { return nil }
 func (d *remoteDir) asPair() *pairEnd          { return nil }
@@ -376,7 +384,7 @@ func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *pairEn
 		t := &remoteTerminal{dev: dev, ino: ino}
 		n, f = &t.node, t
 	case servedDir:
-		d := &remoteDir{id: id}
+		d := &remoteDir{id: id, opath: flags&oPath != 0}
 		n, f = &d.node, d
 	case servedPath:
 		h := &remotePath{id: id}

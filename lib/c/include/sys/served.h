@@ -13,7 +13,8 @@
  * too; SERVED_DIR, a handle of a directory of the VFS's, which calls with
  * a path go to; or SERVED_PATH, a handle of what O_PATH opened that is no
  * directory; with SERVED_TELLS the server tells its readiness (READY).
- * flags are the open's: O_ACCMODE, O_APPEND and O_NONBLOCK. dev and ino
+ * flags are the open's: O_ACCMODE, O_APPEND and O_NONBLOCK, and O_PATH
+ * of a directory's handle, which takes no locks then. dev and ino
  * are the file's, as its stat has them, or a terminal's device's: the
  * kernel keeps the locks of flock and fcntl by them and by the process
  * that made the pair, so the open files one process gave one dev and ino
