@@ -1,0 +1,59 @@
+A tree is told when the tree store removes an entry, so that the entry
+under its bar is never one that is gone; every tree registers the same
+function for that, with itself as the data. A tree that was destroyed
+took its hook back by the function alone, and delete_hook removes every
+hook of a function: with a tree in a panel, closing the Directory tree
+dialog left the panel's tree untold. Forget, or a directory's removal,
+then left its bar on freed memory, and the next drawing read it.
+
+The hook is taken back by the function and the data.
+
+--- a/src/filemanager/tree.c
++++ b/src/filemanager/tree.c
+@@ -192,7 +192,7 @@
+ static void
+ tree_destroy (WTree *tree)
+ {
+-    tree_store_remove_entry_remove_hook (remove_callback);
++    tree_store_remove_entry_remove_hook (remove_callback, tree);
+     save_tree (tree);
+ 
+     MC_PTR_FREE (tree->tree_shown);
+--- a/src/filemanager/treestore.c
++++ b/src/filemanager/treestore.c
+@@ -675,10 +675,22 @@
+ 
+ /* --------------------------------------------------------------------------------------------- */
+ 
++/** Remove the hook of this callback and this data only: every tree has one of the same callback */
++
+ void
+-tree_store_remove_entry_remove_hook (tree_store_remove_fn callback)
++tree_store_remove_entry_remove_hook (tree_store_remove_fn callback, void *data)
+ {
+-    delete_hook (&remove_entry_hooks, (void (*)(void *)) callback);
++    hook_t **p;
++
++    for (p = &remove_entry_hooks; *p != NULL; p = &(*p)->next)
++        if ((*p)->hook_fn == (void (*)(void *)) callback && (*p)->hook_data == data)
++        {
++            hook_t *hook = *p;
++
++            *p = hook->next;
++            g_free (hook);
++            break;
++        }
+ }
+ 
+ /* --------------------------------------------------------------------------------------------- */
+--- a/src/filemanager/treestore.h
++++ b/src/filemanager/treestore.h
+@@ -57,7 +57,7 @@
+ tree_entry *tree_store_rescan (const vfs_path_t * vpath);
+ 
+ void tree_store_add_entry_remove_hook (tree_store_remove_fn callback, void *data);
+-void tree_store_remove_entry_remove_hook (tree_store_remove_fn callback);
++void tree_store_remove_entry_remove_hook (tree_store_remove_fn callback, void *data);
+ 
+ /*** inline functions ****************************************************************************/
+ #endif /* MC__TREE_STORE_H */

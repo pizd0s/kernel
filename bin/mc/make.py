@@ -23,8 +23,9 @@ GLib and mc are patched as they are unpacked, by the patches here, each
 one's reason at its head: errors of their own, which their authors have
 too. They call functions through pointers of other types, which C leaves
 undefined and WebAssembly traps on (glib-function-types.patch,
-mc-function-types.patch). A patch applies to the lines it names, exactly,
-or the build stops.
+mc-function-types.patch), and a tree of mc's loses its word of a removed
+entry when another tree closes (mc-tree-hook.patch). A patch applies to
+the lines it names, exactly, or the build stops.
 
 mc.tar is what mc reads as it runs, as its make install lays it out: its
 members etc/mc, share/mc and libexec/mc are the system's /etc/mc,
@@ -105,7 +106,7 @@ GLIBCONFIG_SYSTEM = {"g_pollin": "POLLIN", "g_pollout": "POLLOUT", "g_pollpri": 
                      "g_af_inet6": "AF_INET6", "g_msg_oob": "MSG_OOB", "g_msg_peek": "MSG_PEEK", "g_msg_dontroute": "MSG_DONTROUTE"}
 
 # The patches of a tree, by its name before the version.
-PATCHES = {"glib": ["glib-function-types.patch"], "mc": ["mc-function-types.patch"]}
+PATCHES = {"glib": ["glib-function-types.patch"], "mc": ["mc-function-types.patch", "mc-tree-hook.patch"]}
 
 # What of mc's lib and src is not built: the other screen library, X11,
 # the network and its file systems, ext2's attributes and undelete, the

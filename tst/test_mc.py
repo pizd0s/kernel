@@ -14,7 +14,10 @@ subshell itself, mc's own child on a pseudoterminal it made; a window of
 another size is redrawn; F10 leaves, the screen the shell's again. mcedit
 and mcview are mc by other names. On the console's own terminal, vt100,
 there are no colours and the keys are the few a VT100 has: mc draws and
-moves all the same.
+moves all the same. And under the kernel's checks of memory (vm run
+--asan) a tree in a panel forgets the directory under its bar after
+another tree was open and closed: the panel's tree is still told of the
+entry removed, and draws no freed one (bin/mc/mc-tree-hook.patch).
 
     test_mc.py <vm> <rootfs> <tests.img>
 """
@@ -273,14 +276,14 @@ class Terminal:
     KEYS = {"f2": "\x1bOQ", "f3": "\x1bOR", "f4": "\x1bOS", "f5": "\x1b[15~", "f7": "\x1b[18~", "f9": "\x1b[20~", "f10": "\x1b[21~"}
     ARROWS = {"up": "A", "down": "B", "right": "C", "left": "D"}
 
-    def __init__(self, vm, rootfs, image, rows=24, cols=80):
+    def __init__(self, vm, rootfs, image, rows=24, cols=80, flags=()):
         self.screen = Screen(rows, cols)
         env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
         self.pid, self.fd = pty.fork()
 
         if self.pid == 0:
             fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-            os.execve(vm, [vm, "run", "--disk", f"image={image}", "--", rootfs], env)
+            os.execve(vm, [vm, "run", *flags, "--disk", f"image={image}", "--", rootfs], env)
 
         self.until(prompt, "the shell's prompt", 120)
 
@@ -522,11 +525,64 @@ def vt100(vm, rootfs, image):
         raise AssertionError(f"vm's status is {code}, not the shell's 7")
 
 
+def trees(vm, rootfs, image):
+    """A panel's tree and a dialog's: the dialog's closing leaves the
+    panel's tree told of what the tree store removes. The kernel checks
+    every access of memory here, so a freed entry read is mc's end."""
+    term = Terminal(vm, rootfs, image, flags=["--asan"])
+    term.send(SETUP)
+    term.until(lambda text: text.strip() == "/tmp #", "the files of the test")
+    term.send("HOME=/tmp TERM=xterm-256color mc /tmp/work /tmp/other\r")
+    term.until("10Quit", "mc's keys line")
+
+    # the left panel is a tree
+    term.key("f9")
+    term.send("\r")
+    term.until("Listing format...", "the menu of the left panel")
+    term.send("t")
+    term.until(lambda text: "Directory tree" in term.row(1) and "3Forget" in term.row(23), "the tree in the panel")
+
+    # the Directory tree dialog, another tree, opens and closes
+    term.key("f9")
+    term.send("c")
+    term.until("Directory tree", "the Command menu")
+    term.send("d")
+    term.until(lambda text: text.count("Directory tree") == 2, "the dialog of the tree")
+    term.send("\x1b\x1b")
+    term.until(lambda text: text.count("Directory tree") == 1, "the dialog closed")
+
+    # the root's directories, the bar on the first, and it is forgotten
+    term.key("f2")
+    term.until("─ bin", "the root's directories in the tree")
+    term.key("down")
+    status(term, "/bin", "the bar on /bin")
+    term.key("f3")
+    term.until(lambda text: "─ bin" not in text, "the directory forgotten")
+    status(term, "/dev", "the bar on the next directory")
+
+    # the tree is drawn again: after a menu, and as the bar moves
+    term.key("f9")
+    term.send("\x1b\x1b")
+    term.key("down")
+    status(term, "/etc", "the bar on /etc")
+    term.key("up")
+    status(term, "/dev", "the bar on /dev again")
+    text = term.screen.text()
+    assert "asan" not in text and "3Forget" in term.row(23), text
+    term.key("f10")
+    term.until(lambda text: "3Forget" not in text and prompt(text), "the shell after mc")
+
+    if (code := term.close()) != 7:
+        raise AssertionError(f"vm's status is {code}, not the shell's 7")
+
+
 def main():
     vm, rootfs, image = sys.argv[1:]
     xterm(vm, rootfs, image)
     vt100(vm, rootfs, image)
-    print("mc: panels, keys, mouse, viewer, editor, copy, archive, menu, subshell and resize on an xterm; a VT100's keys on the console's")
+    trees(vm, rootfs, image)
+    print("mc: panels, keys, mouse, viewer, editor, copy, archive, menu, subshell and resize on an xterm; a VT100's keys on the console's; "
+          "a tree's forgotten directory under the checks of memory")
 
 
 if __name__ == "__main__":
