@@ -152,7 +152,7 @@ func (s *subscribers) takeOver(from *subscribers) {
 // The kinds of events: an object the process subscribed to changed, id
 // the subscription's; a signal came; the process stopped no more; a child
 // changed; a module the process waits for compiled; a wait's deadline
-// passed.
+// passed; a timer of the process's fired (kernel_time.go).
 type eventKind uint8
 
 const (
@@ -162,6 +162,7 @@ const (
 	eventChild
 	eventCompiled
 	eventDeadline
+	eventTimer
 )
 
 // An event is a node of a process's queue: its kind and id, a callback
@@ -246,6 +247,29 @@ func (q *eventQueue) next() *event {
 
 	q.mu.Lock()
 	e := q.first
+
+	if e != nil {
+		q.unlink(e)
+	}
+
+	q.mu.Unlock()
+
+	return e
+}
+
+// nextOf takes the oldest event of a kind out of the queue, nil when
+// there is none.
+func (q *eventQueue) nextOf(kind eventKind) *event {
+	if q.count.Load() == 0 {
+		return nil
+	}
+
+	q.mu.Lock()
+	e := q.first
+
+	for e != nil && e.kind != kind {
+		e = e.next
+	}
 
 	if e != nil {
 		q.unlink(e)

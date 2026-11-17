@@ -162,9 +162,10 @@ func (p *Process) send(sig int) {
 }
 
 // chase interrupts the process again until it takes its deliverable
-// signals: Go's signal may find it outside its own code, in a stub, or in a
-// long call of the kernel. It gives up when the process stops or leaves its
-// image, and after 32 ms it tries every 10 ms.
+// signals and the events of its timers: Go's signal may find it outside
+// its own code, in a stub, or in a long call of the kernel. It gives up
+// when the process stops or leaves its image, and after 32 ms it tries
+// every 10 ms.
 func (p *Process) chase() {
 	if !p.chasing.CompareAndSwap(false, true) {
 		return
@@ -184,7 +185,7 @@ func (p *Process) chase() {
 			halted := p.halted
 			p.k.mu.Unlock()
 
-			if token != 0 && !halted && p.sig.deliverable() != 0 {
+			if token != 0 && !halted && p.interruptDue() {
 				runtime.Interrupt(token)
 
 				continue
@@ -193,11 +194,38 @@ func (p *Process) chase() {
 			p.chasing.Store(false)
 
 			// a signal sent meanwhile found the flag set
-			if token == 0 || halted || p.sig.deliverable() == 0 || !p.chasing.CompareAndSwap(false, true) {
+			if token == 0 || halted || !p.interruptDue() || !p.chasing.CompareAndSwap(false, true) {
 				return
 			}
 		}
 	}()
+}
+
+// interruptDue tells whether the process has something to take where its
+// code is interrupted: a deliverable signal, or the event of a timer.
+func (p *Process) interruptDue() bool {
+	return p.timersDue.Load() != 0 || p.sig.deliverable() != 0
+}
+
+// nudge has the process take the events of its queue that do not wait for
+// a wait of its, a timer's, though it runs its own code: its interrupt
+// word, and Go's interrupt of the code, as for a signal sent.
+func (p *Process) nudge() {
+	p.sig.mu.Lock()
+	token := p.token.Load()
+
+	if p.sig.dead {
+		token = 0
+	} else {
+		p.setInterrupt(1)
+	}
+
+	p.sig.mu.Unlock()
+
+	if token != 0 {
+		runtime.Interrupt(token)
+		p.chase()
+	}
 }
 
 // setInstance sets the instance the process runs, under the lock of its
@@ -232,12 +260,23 @@ func (p *Process) raiseInterrupt() {
 // without moving it, as LLVM's wasm code does.
 const redZone = 128
 
-// interrupt takes the process's signal event out of its queue and runs
-// its callback where the process's own code was interrupted, by Go or on
-// its way out of an import: a handler's frames on the shadow stack go
-// below the red zone of the function interrupted. Taking the signals all
-// clears the interrupt word.
+// interrupt takes the events of the process's timers and its signal
+// event out of its queue and runs their callbacks where the process's own
+// code was interrupted, by Go or on its way out of an import: a timer
+// that fired sends its signal, and a handler's frames on the shadow stack
+// go below the red zone of the function interrupted. Taking the signals
+// all, with no timer's event on its way, clears the interrupt word.
 func (p *Process) interrupt() {
+	for p.timersDue.Load() != 0 {
+		e := p.events.nextOf(eventTimer)
+
+		if e == nil {
+			break
+		}
+
+		e.run(p)
+	}
+
 	p.events.drop(&p.own.signal)
 	at, ok := p.inst.globalAt("__stack_pointer")
 
@@ -378,7 +417,11 @@ func (p *Process) take() (int, sigAction) {
 	ready := p.sig.pending &^ p.sig.blocked
 
 	if ready == 0 {
-		p.setInterrupt(0)
+		// A timer's event on its way keeps the word: the process takes
+		// it at the next interrupt.
+		if p.timersDue.Load() == 0 {
+			p.setInterrupt(0)
+		}
 
 		return 0, sigAction{}
 	}

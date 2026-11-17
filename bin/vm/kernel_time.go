@@ -8,7 +8,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -79,6 +78,18 @@ func (p *Process) putTimeval(at uint32, d time.Duration) {
 // The interval timers of setitimer: each sends its signal when its value
 // passes, then every interval. All of them count real time, vm having
 // no CPU clocks of the processes. They live through exec; a child has none.
+//
+// A timer is the process's own, and only the process touches it: no lock.
+// Its epoch counts every time it is set, stopped, or taken as it fires.
+// Setting it asks Go to put an event in the process's queue when the time
+// comes, one that bears the epoch the timer had then; the process, as it
+// takes the event, in a wait or where its code is interrupted, finds the
+// epoch the timer's still, and then the timer has fired: it is set for
+// its interval, and the process sends itself the signal. An event of
+// another epoch is of a timer stopped or set again since, and is passed
+// over. So a timer that is stopped sends nothing after: its signal is
+// sent by the process itself, as it takes the event, before whatever it
+// does next.
 const (
 	itimerReal = 0
 	itimerProf = 2
@@ -86,18 +97,14 @@ const (
 
 var itimerSignals = [3]int{int(syscall.SIGALRM), int(syscall.SIGVTALRM), int(syscall.SIGPROF)}
 
-type itimers struct {
-	mu sync.Mutex
-	t  [3]itimer
-}
-
-// itimer is armed while timer is not nil, to fire at end; gen tells a
-// firing that it was set again meanwhile.
+// itimer is armed while timer is not nil, to fire at end, then every
+// interval: end and interval are what is left of it and what it repeats
+// by, for those who ask.
 type itimer struct {
+	epoch    uint64
 	timer    *time.Timer
 	end      time.Time
 	interval time.Duration
-	gen      uint64
 }
 
 // left is what remains of an armed timer, at least a microsecond, or 0.
@@ -112,74 +119,82 @@ func (t *itimer) left() time.Duration {
 // setTimer arms a timer, or disarms it for a zero value, and returns what
 // was left of it and its interval.
 func (p *Process) setTimer(which int, value, interval time.Duration) (time.Duration, time.Duration) {
-	ts := &p.timers
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-
-	t := &ts.t[which]
+	t := &p.timers[which]
 	left, every := t.left(), t.interval
 
 	if t.timer != nil {
 		t.timer.Stop()
 	}
 
-	t.gen++
+	t.epoch++
 	t.timer, t.interval = nil, 0
 
 	if value > 0 {
-		t.end, t.interval = time.Now().Add(value), interval
-		gen := t.gen
-		t.timer = time.AfterFunc(value, func() { p.timerFired(which, gen) })
+		t.interval = interval
+		p.armTimer(which, time.Now().Add(value))
 	}
 
 	return left, every
 }
 
-func (p *Process) timerFired(which int, gen uint64) {
-	ts := &p.timers
-	ts.mu.Lock()
-	t := &ts.t[which]
+// armTimer has a timer fire at end: Go puts an event of the timer's epoch
+// now in the process's queue then, and has the process take it though it
+// runs its own code (nudge). timersDue counts such events on their way.
+func (p *Process) armTimer(which int, end time.Time) {
+	t := &p.timers[which]
+	t.end = end
+	epoch := t.epoch
+	e := &event{kind: eventTimer}
 
-	if t.gen != gen {
-		ts.mu.Unlock()
+	e.run = func(p *Process) {
+		p.timersDue.Add(-1)
+		p.timerDue(which, epoch)
+	}
 
+	t.timer = time.AfterFunc(time.Until(end), func() {
+		p.timersDue.Add(1)
+		p.post(e)
+		p.nudge()
+	})
+}
+
+// timerDue is the process taking the event of a timer set at epoch: the
+// timer's still, it has fired.
+func (p *Process) timerDue(which int, epoch uint64) {
+	t := &p.timers[which]
+
+	if epoch != t.epoch {
 		return
 	}
 
-	if t.interval > 0 {
-		t.end = t.end.Add(t.interval)
+	t.epoch++
 
-		if now := time.Now(); t.end.Before(now) {
-			t.end = now.Add(t.interval)
+	if t.interval > 0 {
+		end := t.end.Add(t.interval)
+
+		if now := time.Now(); end.Before(now) {
+			end = now.Add(t.interval)
 		}
 
-		t.timer = time.AfterFunc(time.Until(t.end), func() { p.timerFired(which, gen) })
+		p.armTimer(which, end)
 	} else {
 		t.timer = nil
 	}
 
-	// The signal goes with the lock held: a call that sets the timer or
-	// stops it after this (setTimer) finds the signal sent, and the
-	// process takes it as that call returns, while what it has set for
-	// the signal still stands. Sent after the lock, it could come once
-	// the process had stopped the timer and put the default action back.
-	p.send(itimerSignals[which])
-	ts.mu.Unlock()
+	p.sendSelf(itimerSignals[which])
 }
 
 // stopTimers disarms the timers of an ending process.
 func (p *Process) stopTimers() {
-	ts := &p.timers
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
+	for i := range p.timers {
+		t := &p.timers[i]
 
-	for i := range ts.t {
-		if ts.t[i].timer != nil {
-			ts.t[i].timer.Stop()
+		if t.timer != nil {
+			t.timer.Stop()
 		}
 
-		ts.t[i].gen++
-		ts.t[i].timer = nil
+		t.epoch++
+		t.timer = nil
 	}
 }
 
@@ -634,10 +649,8 @@ func (p *Process) libcGetitimer(which, at uint32) uint32 {
 		return p.result(0, syscall.EINVAL)
 	}
 
-	p.timers.mu.Lock()
-	t := &p.timers.t[which]
+	t := &p.timers[which]
 	left, every := t.left(), t.interval
-	p.timers.mu.Unlock()
 	p.putTimeval(at, every)
 	p.putTimeval(at+16, left)
 
