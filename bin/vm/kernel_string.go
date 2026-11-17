@@ -79,16 +79,40 @@ func (p *Process) strnlen(at, n uint32) uint32 {
 	return end - at
 }
 
+// limited is the string at at as a call that looks at no more than n
+// bytes of it sees it: its bytes with its NUL, or its first n with none
+// among them. Past the memory's end short of both it traps.
+func (p *Process) limited(at, n uint32) []byte {
+	b := p.bounded(at, n)
+
+	if i := bytes.IndexByte(b, 0); i >= 0 {
+		b = b[:i+1]
+	} else if uint32(len(b)) < n {
+		oob()
+	}
+
+	if p.inst.memory.shadow != nil {
+		p.asanCheck(at, uint32(len(b)))
+	}
+
+	return b
+}
+
+// strncmp compares two strings by their first n bytes at most: where
+// one ends first its NUL is the lesser byte, so the bytes both have, the
+// NUL with them, decide. The result is -1, 0 or 1; without regard to
+// case, fold, the difference of the first two letters that differ.
 func (p *Process) strncmp(a, b, n uint32, fold bool) uint32 {
-	for i := uint32(0); i < n; i++ {
-		x, y := p.u8(a+i), p.u8(b+i)
+	x, y := p.limited(a, n), p.limited(b, n)
+	m := min(len(x), len(y))
 
-		if fold {
-			x, y = lower(x), lower(y)
-		}
+	if !fold {
+		return uint32(int32(bytes.Compare(x[:m], y[:m])))
+	}
 
-		if x != y || x == 0 {
-			return cmp(int(x), int(y))
+	for i := range m {
+		if c, d := lower(x[i]), lower(y[i]); c != d {
+			return cmp(int(c), int(d))
 		}
 	}
 
