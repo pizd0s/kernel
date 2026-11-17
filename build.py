@@ -632,12 +632,13 @@ python = command(
 )
 python_exe = executable("python_exe", python, "$(B)/bin/python/python3", tail=python.outputs[1])
 
-# mc: Midnight Commander on GLib and S-Lang, mc.wasm, and mc.tar, what it
-# reads as it runs: its configuration, skins, syntax rules and scripts.
+# mc: Midnight Commander on GLib and S-Lang, both with bin/mc's patches,
+# mc.wasm, and mc.tar, what it reads as it runs: its configuration, skins,
+# syntax rules and scripts.
 mc = command(
     name="mc",
     inputs=[*LIBC_HEADERS, "$(S)/bin/mc/make.py", "$(S)/bin/mc/mc-config.h", "$(S)/bin/mc/glib-config.h", "$(S)/bin/mc/slang-config.h",
-            "$(S)/dev/wasm.py", "$(S)/dev/fpcast.py"],
+            *build.glob("$(S)/bin/mc/*.patch"), "$(S)/dev/wasm.py"],
     outputs=["$(B)/bin/mc/mc.wasm", "$(B)/bin/mc/mc.tar"],
     deps=[mc_tarball, glib_tarball, slang_tarball, pcre2_tarball, libc],
     cmd=["python3", "$(S)/bin/mc/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], mc_tarball.outputs[0],
@@ -720,30 +721,6 @@ libc_check = command(
     color="green",
 )
 libc_check_exe = executable("libc_check_exe", libc_check, "$(B)/tst/libc/check")
-
-# test_fpcast's program, as the linker leaves it and as dev/fpcast.py
-# rewrites it.
-fpcast_plain = command(
-    name="fpcast_plain",
-    inputs=[*LIBC_HEADERS, "$(S)/tst/fpcast/check.c", "$(S)/tst/libc/make.py", "$(S)/dev/wasm.py"],
-    outputs=["$(B)/tst/fpcast/plain.wasm"],
-    deps=[libc],
-    cmd=["python3", "$(S)/tst/libc/make.py", CLANG, WASM_LD, "$(S)/tst/fpcast/check.c", "$(S)/lib/c/include", libc.outputs[0],
-         "$(B)/tst/fpcast/plain.wasm"],
-    descr="CC",
-    color="green",
-)
-fpcast_check = command(
-    name="fpcast_check",
-    inputs=["$(S)/dev/fpcast.py"],
-    outputs=["$(B)/tst/fpcast/check.wasm"],
-    deps=[fpcast_plain],
-    cmd=["python3", "$(S)/dev/fpcast.py", fpcast_plain.outputs[0], "$(B)/tst/fpcast/check.wasm"],
-    descr="FP",
-    color="green",
-)
-fpcast_plain_exe = executable("fpcast_plain_exe", fpcast_plain, "$(B)/tst/fpcast/plain")
-fpcast_check_exe = executable("fpcast_check_exe", fpcast_check, "$(B)/tst/fpcast/check")
 
 # test_asan's program: lib/c's allocator, string functions and calls misused,
 # one memory error a case, built as test_libc's is but with -g, so the
@@ -975,8 +952,6 @@ TEST_FILES = [
     ("/tests/doom/doom", doom_exe),
     ("/tests/doom/doom1.wad", doom_wad),
     ("/tests/chaos/check", chaos_check_exe),
-    ("/tests/fpcast/plain", fpcast_plain_exe),
-    ("/tests/fpcast/check", fpcast_check_exe),
 ]
 TEST_TREES = [("/tests/libc/etc", "$(S)/tst/libc/etc"), ("/tests/busybox", "$(S)/tst/busybox")]
 # CPython's own tests, in the standard library's directory, which python
@@ -1082,7 +1057,6 @@ APPLICATION_TESTED = {
     "busybox": [vm, rootfs, tests_image],
     "clang": [vm, rootfs, clang_image],
     "doom": [vm, rootfs, tests_image],
-    "fpcast": [vm, rootfs, tests_image],
     "mc": [vm, rootfs, tests_image],
     "python": [vm, rootfs, tests_image],
 }

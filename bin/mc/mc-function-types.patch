@@ -1,0 +1,91 @@
+mc calls functions through pointers of other types, as GLib does
+(glib-function-types.patch): a group destroys its widgets and tar runs a
+header's overrides through g_list_foreach with a function of another
+type, and the events' trees compare names with g_ascii_strcasecmp, a
+function of two parameters, where a GCompareDataFunc of three is called.
+The loops are written out, and the trees get a function of the type
+called.
+
+--- a/lib/event/event.c
++++ b/lib/event/event.c
+@@ -45,6 +45,14 @@
+ /*** file scope functions ************************************************************************/
+ /* --------------------------------------------------------------------------------------------- */
+ /*** public functions ****************************************************************************/
++static gint
++mc_event_name_compare (gconstpointer a, gconstpointer b, gpointer user_data)
++{
++    (void) user_data;
++
++    return g_ascii_strcasecmp ((const char *) a, (const char *) b);
++}
++
+ /* --------------------------------------------------------------------------------------------- */
+ 
+ gboolean
+@@ -59,7 +67,7 @@
+     }
+ 
+     mc_event_grouplist =
+-        g_tree_new_full ((GCompareDataFunc) g_ascii_strcasecmp,
++        g_tree_new_full (mc_event_name_compare,
+                          NULL, (GDestroyNotify) g_free, (GDestroyNotify) g_tree_destroy);
+ 
+     if (mc_event_grouplist == NULL)
+--- a/lib/event/manage.c
++++ b/lib/event/manage.c
+@@ -143,6 +143,14 @@
+         g_tree_remove (mc_event_grouplist, (gconstpointer) event_group_name);
+ }
+ 
++static gint
++mc_event_name_compare (gconstpointer a, gconstpointer b, gpointer user_data)
++{
++    (void) user_data;
++
++    return g_ascii_strcasecmp ((const char *) a, (const char *) b);
++}
++
+ /* --------------------------------------------------------------------------------------------- */
+ 
+ GTree *
+@@ -157,7 +165,7 @@
+     if (event_group == NULL && create_new)
+     {
+         event_group =
+-            g_tree_new_full ((GCompareDataFunc) g_ascii_strcasecmp,
++            g_tree_new_full (mc_event_name_compare,
+                              NULL,
+                              (GDestroyNotify) g_free,
+                              (GDestroyNotify) mc_event_group_destroy_value);
+--- a/lib/widget/group.c
++++ b/lib/widget/group.c
+@@ -647,7 +647,15 @@
+         return MSG_HANDLED;
+ 
+     case MSG_DESTROY:
+-        g_list_foreach (g->widgets, (GFunc) widget_destroy, NULL);
++        {
++            GList *l, *next;
++
++            for (l = g->widgets; l != NULL; l = next)
++            {
++                next = l->next;
++                widget_destroy (WIDGET (l->data));
++            }
++        }
+         g_list_free (g->widgets);
+         g->widgets = NULL;
+         return MSG_HANDLED;
+--- a/src/vfs/tar/tar-xheader.c
++++ b/src/vfs/tar/tar-xheader.c
+@@ -246,7 +246,8 @@
+ static inline void
+ run_override_list (GSList *kp, struct tar_stat_info *st)
+ {
+-    g_slist_foreach (kp, (GFunc) keyword_item_run, st);
++    for (; kp != NULL; kp = kp->next)
++        keyword_item_run (kp->data, st);
+ }
+ 
+ /* --------------------------------------------------------------------------------------------- */

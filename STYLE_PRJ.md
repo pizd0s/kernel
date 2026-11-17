@@ -27,5 +27,8 @@ Per-project settings that the shared [STYLE.md](STYLE.md) delegates here.
   missing definition. No other declaration has the attribute.
 - **Third-party code.** musl and busybox sources are fetched as release
   tarballs and are never edited; what they need from us lives in `lib/c/musl`
-  (replacement internal headers) and `lib/c/src`.
+  (replacement internal headers) and `lib/c/src`. A program whose own error
+  the system cannot live with is patched as it is built, by patch files
+  beside its build script, each with its reason at its head and fit to send
+  to its authors: GLib and mc (`bin/mc/*.patch`).
 - **Formatter.** None yet: `style.py` covers C++ only.

@@ -1,0 +1,427 @@
+GLib calls functions through pointers of other types: a function of one
+parameter as one of two, a comparison of two parameters as one of three.
+C leaves such a call undefined; the native ABIs let it pass, WebAssembly
+checks a called function's type and traps.
+
+A function that frees every element of a list or a queue called
+g_list_foreach with the free function cast to a GFunc: it walks the
+elements itself. The sorted insert and the sort of the lists, the sort of
+the arrays and g_tree_new passed a GCompareFunc where the work is done
+through a GCompareDataFunc: they pass a function of that type, which
+calls the GCompareFunc it gets as its user data, and the internal
+functions take the type they call. The copies of a bookmark file's lists
+passed functions of one parameter as GCopyFunc: they pass functions of
+that type.
+
+Not here: gtestutils.c, whose test cases keep a test of no parameters,
+or of one, as a function of a fixture and its data.
+
+--- a/glib/garray.c
++++ b/glib/garray.c
+@@ -923,6 +923,18 @@
+   return farray;
+ }
+ 
++/* A GCompareFunc called where a GCompareDataFunc is: the function is the
++ * user data. */
++static gint
++compare_func_with_data (gconstpointer a,
++                        gconstpointer b,
++                        gpointer      user_data)
++{
++  GCompareFunc func = (GCompareFunc) user_data;
++
++  return func (a, b);
++}
++
+ /**
+  * g_array_sort:
+  * @array: an array
+@@ -948,8 +960,8 @@
+     g_sort_array (array->data,
+                   array->len,
+                   array->elt_size,
+-                  (GCompareDataFunc) compare_func,
+-                  NULL);
++                  compare_func_with_data,
++                  (gpointer) compare_func);
+ }
+ 
+ /**
+@@ -2435,8 +2447,8 @@
+     g_sort_array (array->pdata,
+                   array->len,
+                   sizeof (gpointer),
+-                  (GCompareDataFunc) compare_func,
+-                  NULL);
++                  compare_func_with_data,
++                  (gpointer) compare_func);
+ }
+ 
+ /* Please keep this doc-comment in sync with
+--- a/glib/gasyncqueue.c
++++ b/glib/gasyncqueue.c
+@@ -182,8 +182,9 @@
+       g_mutex_clear (&queue->mutex);
+       g_cond_clear (&queue->cond);
+       if (queue->item_free_func)
+-        g_queue_foreach (&queue->queue, (GFunc) queue->item_free_func, NULL);
+-      g_queue_clear (&queue->queue);
++        g_queue_clear_full (&queue->queue, queue->item_free_func);
++      else
++        g_queue_clear (&queue->queue);
+       g_free (queue);
+     }
+ }
+--- a/glib/gbookmarkfile.c
++++ b/glib/gbookmarkfile.c
+@@ -355,6 +355,20 @@
+   g_slice_free (BookmarkMetadata, metadata);
+ }
+ 
++static gpointer
++copy_string (gconstpointer src,
++             gpointer      data)
++{
++  return g_strdup (src);
++}
++
++static gpointer
++copy_app_info (gconstpointer src,
++               gpointer      data)
++{
++  return bookmark_app_info_copy ((BookmarkAppInfo *) src);
++}
++
+ static BookmarkMetadata *
+ bookmark_metadata_copy (BookmarkMetadata *metadata)
+ {
+@@ -370,9 +384,9 @@
+   copy->icon_href = g_strdup (metadata->icon_href);
+   copy->icon_mime = g_strdup (metadata->icon_mime);
+ 
+-  copy->groups = g_list_copy_deep (metadata->groups, (GCopyFunc) g_strdup, NULL);
++  copy->groups = g_list_copy_deep (metadata->groups, copy_string, NULL);
+   copy->applications =
+-    g_list_copy_deep (metadata->applications, (GCopyFunc) bookmark_app_info_copy, NULL);
++    g_list_copy_deep (metadata->applications, copy_app_info, NULL);
+ 
+   for (l = copy->applications; l; l = l->next)
+     {
+@@ -1716,6 +1730,13 @@
+   return bookmark;
+ }
+ 
++static gpointer
++copy_item (gconstpointer src,
++           gpointer      data)
++{
++  return bookmark_item_copy ((BookmarkItem *) src);
++}
++
+ /**
+  * g_bookmark_file_copy:
+  * @bookmark: A #GBookmarkFile
+@@ -1738,7 +1759,7 @@
+   copy = g_bookmark_file_new ();
+   copy->title = g_strdup (bookmark->title);
+   copy->description = g_strdup (bookmark->description);
+-  copy->items = g_list_copy_deep (bookmark->items, (GCopyFunc) bookmark_item_copy, NULL);
++  copy->items = g_list_copy_deep (bookmark->items, copy_item, NULL);
+ 
+   for (l = copy->items; l; l = l->next)
+     {
+--- a/glib/glist.c
++++ b/glib/glist.c
+@@ -159,7 +159,11 @@
+ g_list_free_full (GList          *list,
+                   GDestroyNotify  free_func)
+ {
+-  g_list_foreach (list, (GFunc) free_func, NULL);
++  GList *l;
++
++  for (l = list; l != NULL; l = l->next)
++    free_func (l->data);
++
+   g_list_free (list);
+ }
+ 
+@@ -1010,10 +1014,22 @@
+     }
+ }
+ 
++/* A GCompareFunc called where a GCompareDataFunc is: the function is the
++ * user data. */
++static gint
++compare_func_with_data (gconstpointer a,
++                        gconstpointer b,
++                        gpointer      user_data)
++{
++  GCompareFunc func = (GCompareFunc) user_data;
++
++  return func (a, b);
++}
++
+ static GList*
+ g_list_insert_sorted_real (GList    *list,
+                            gpointer  data,
+-                           GFunc     func,
++                           GCompareDataFunc func,
+                            gpointer  user_data)
+ {
+   GList *tmp_list = list;
+@@ -1029,13 +1045,13 @@
+       return new_list;
+     }
+   
+-  cmp = ((GCompareDataFunc) func) (data, tmp_list->data, user_data);
++  cmp = func (data, tmp_list->data, user_data);
+ 
+   while ((tmp_list->next) && (cmp > 0))
+     {
+       tmp_list = tmp_list->next;
+ 
+-      cmp = ((GCompareDataFunc) func) (data, tmp_list->data, user_data);
++      cmp = func (data, tmp_list->data, user_data);
+     }
+ 
+   new_list = _g_list_alloc0 ();
+@@ -1086,7 +1102,7 @@
+                       gpointer      data,
+                       GCompareFunc  func)
+ {
+-  return g_list_insert_sorted_real (list, data, (GFunc) func, NULL);
++  return g_list_insert_sorted_real (list, data, compare_func_with_data, (gpointer) func);
+ }
+ 
+ /**
+@@ -1117,13 +1133,13 @@
+                                 GCompareDataFunc  func,
+                                 gpointer          user_data)
+ {
+-  return g_list_insert_sorted_real (list, data, (GFunc) func, user_data);
++  return g_list_insert_sorted_real (list, data, func, user_data);
+ }
+ 
+ static GList *
+ g_list_sort_merge (GList     *l1, 
+                    GList     *l2,
+-                   GFunc     compare_func,
++                   GCompareDataFunc compare_func,
+                    gpointer  user_data)
+ {
+   GList list, *l, *lprev;
+@@ -1134,7 +1150,7 @@
+ 
+   while (l1 && l2)
+     {
+-      cmp = ((GCompareDataFunc) compare_func) (l1->data, l2->data, user_data);
++      cmp = compare_func (l1->data, l2->data, user_data);
+ 
+       if (cmp <= 0)
+         {
+@@ -1158,7 +1174,7 @@
+ 
+ static GList * 
+ g_list_sort_real (GList    *list,
+-                  GFunc     compare_func,
++                  GCompareDataFunc compare_func,
+                   gpointer  user_data)
+ {
+   GList *l1, *l2;
+@@ -1217,7 +1233,7 @@
+ g_list_sort (GList        *list,
+              GCompareFunc  compare_func)
+ {
+-  return g_list_sort_real (list, (GFunc) compare_func, NULL);
++  return g_list_sort_real (list, compare_func_with_data, (gpointer) compare_func);
+ }
+ 
+ /**
+@@ -1250,7 +1266,7 @@
+                        GCompareDataFunc  compare_func,
+                        gpointer          user_data)
+ {
+-  return g_list_sort_real (list, (GFunc) compare_func, user_data);
++  return g_list_sort_real (list, compare_func, user_data);
+ }
+ 
+ /**
+--- a/glib/gqueue.c
++++ b/glib/gqueue.c
+@@ -81,7 +81,13 @@
+ g_queue_free_full (GQueue        *queue,
+                   GDestroyNotify  free_func)
+ {
+-  g_queue_foreach (queue, (GFunc) free_func, NULL);
++  GList *l;
++
++  g_return_if_fail (queue != NULL);
++
++  for (l = queue->head; l != NULL; l = l->next)
++    free_func (l->data);
++
+   g_queue_free (queue);
+ }
+ 
+@@ -140,7 +146,12 @@
+   g_return_if_fail (queue != NULL);
+ 
+   if (free_func != NULL)
+-    g_queue_foreach (queue, (GFunc) free_func, NULL);
++    {
++      GList *l;
++
++      for (l = queue->head; l != NULL; l = l->next)
++        free_func (l->data);
++    }
+ 
+   g_queue_clear (queue);
+ }
+--- a/glib/gslist.c
++++ b/glib/gslist.c
+@@ -146,7 +146,11 @@
+ g_slist_free_full (GSList         *list,
+ 		   GDestroyNotify  free_func)
+ {
+-  g_slist_foreach (list, (GFunc) free_func, NULL);
++  GSList *l;
++
++  for (l = list; l != NULL; l = l->next)
++    free_func (l->data);
++
+   g_slist_free (list);
+ }
+ 
+@@ -839,10 +843,22 @@
+     }
+ }
+ 
++/* A GCompareFunc called where a GCompareDataFunc is: the function is the
++ * user data. */
++static gint
++compare_func_with_data (gconstpointer a,
++                        gconstpointer b,
++                        gpointer      user_data)
++{
++  GCompareFunc func = (GCompareFunc) user_data;
++
++  return func (a, b);
++}
++
+ static GSList*
+ g_slist_insert_sorted_real (GSList   *list,
+                             gpointer  data,
+-                            GFunc     func,
++                            GCompareDataFunc func,
+                             gpointer  user_data)
+ {
+   GSList *tmp_list = list;
+@@ -860,14 +876,14 @@
+       return new_list;
+     }
+ 
+-  cmp = ((GCompareDataFunc) func) (data, tmp_list->data, user_data);
++  cmp = func (data, tmp_list->data, user_data);
+ 
+   while ((tmp_list->next) && (cmp > 0))
+     {
+       prev_list = tmp_list;
+       tmp_list = tmp_list->next;
+ 
+-      cmp = ((GCompareDataFunc) func) (data, tmp_list->data, user_data);
++      cmp = func (data, tmp_list->data, user_data);
+     }
+ 
+   new_list = _g_slist_alloc ();
+@@ -911,7 +927,7 @@
+                        gpointer      data,
+                        GCompareFunc  func)
+ {
+-  return g_slist_insert_sorted_real (list, data, (GFunc) func, NULL);
++  return g_slist_insert_sorted_real (list, data, compare_func_with_data, (gpointer) func);
+ }
+ 
+ /**
+@@ -936,13 +952,13 @@
+                                  GCompareDataFunc  func,
+                                  gpointer          user_data)
+ {
+-  return g_slist_insert_sorted_real (list, data, (GFunc) func, user_data);
++  return g_slist_insert_sorted_real (list, data, func, user_data);
+ }
+ 
+ static GSList *
+ g_slist_sort_merge (GSList   *l1,
+                     GSList   *l2,
+-                    GFunc     compare_func,
++                    GCompareDataFunc compare_func,
+                     gpointer  user_data)
+ {
+   GSList list, *l;
+@@ -952,7 +968,7 @@
+ 
+   while (l1 && l2)
+     {
+-      cmp = ((GCompareDataFunc) compare_func) (l1->data, l2->data, user_data);
++      cmp = compare_func (l1->data, l2->data, user_data);
+ 
+       if (cmp <= 0)
+         {
+@@ -972,7 +988,7 @@
+ 
+ static GSList *
+ g_slist_sort_real (GSList   *list,
+-                   GFunc     compare_func,
++                   GCompareDataFunc compare_func,
+                    gpointer  user_data)
+ {
+   GSList *l1, *l2;
+@@ -1018,7 +1034,7 @@
+ g_slist_sort (GSList       *list,
+               GCompareFunc  compare_func)
+ {
+-  return g_slist_sort_real (list, (GFunc) compare_func, NULL);
++  return g_slist_sort_real (list, compare_func_with_data, (gpointer) compare_func);
+ }
+ 
+ /**
+@@ -1036,7 +1052,7 @@
+                         GCompareDataFunc  compare_func,
+                         gpointer          user_data)
+ {
+-  return g_slist_sort_real (list, (GFunc) compare_func, user_data);
++  return g_slist_sort_real (list, compare_func, user_data);
+ }
+ 
+ /**
+--- a/glib/gtree.c
++++ b/glib/gtree.c
+@@ -119,6 +119,18 @@
+   return node;
+ }
+ 
++/* A GCompareFunc called where a GCompareDataFunc is: the function is the
++ * user data. */
++static gint
++compare_func_with_data (gconstpointer a,
++                        gconstpointer b,
++                        gpointer      user_data)
++{
++  GCompareFunc func = (GCompareFunc) user_data;
++
++  return func (a, b);
++}
++
+ /**
+  * g_tree_new: (constructor)
+  * @key_compare_func: the function used to order the nodes in the #GTree.
+@@ -136,7 +148,7 @@
+ {
+   g_return_val_if_fail (key_compare_func != NULL, NULL);
+ 
+-  return g_tree_new_full ((GCompareDataFunc) key_compare_func, NULL,
++  return g_tree_new_full (compare_func_with_data, (gpointer) key_compare_func,
+                           NULL, NULL);
+ }
+ 

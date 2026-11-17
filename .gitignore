@@ -87,7 +87,3 @@ __pycache__/
 /pcre2_tarball
 /ncurses_tarball
 /terminfo
-/fpcast_plain
-/fpcast_check
-/fpcast_plain_exe
-/fpcast_check_exe

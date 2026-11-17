@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build Midnight Commander for the system, from the release tarballs of mc
-and of what it stands on, none of them edited: GLib, its utility library,
-with PCRE2 under GLib's regular expressions, and S-Lang, its screen.
+and of what it stands on: GLib, its utility library, with PCRE2 under
+GLib's regular expressions, and S-Lang, its screen.
 
     make.py <clang> <wasm-ld> <libc-include> <libc.a> <mc.tar.xz> <glib.tar.xz> <slang.tar.bz2> <pcre2.tar.bz2> <mc.wasm> <mc.tar>
 
@@ -17,8 +17,14 @@ file systems of local archives; nothing of the network.
 clang compiles all of it for wasm32 against lib/c's headers and wasm-ld
 links it with libc.a. Threads are lib/c's one thread: GLib locks and
 keeps thread-local values through it and starts no thread for what mc
-asks of it. GLib and mc call functions through pointers of other types,
-which dev/fpcast.py makes work in the linked module.
+asks of it.
+
+GLib and mc are patched as they are unpacked, by the patches here, each
+one's reason at its head: errors of their own, which their authors have
+too. They call functions through pointers of other types, which C leaves
+undefined and WebAssembly traps on (glib-function-types.patch,
+mc-function-types.patch). A patch applies to the lines it names, exactly,
+or the build stops.
 
 mc.tar is what mc reads as it runs, as its make install lays it out: its
 members etc/mc, share/mc and libexec/mc are the system's /etc/mc,
@@ -39,7 +45,6 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(ROOT / "dev"))
 
-import fpcast  # noqa: E402
 import wasm  # noqa: E402
 
 CFLAGS = ["-O2", "-w", "-DHAVE_CONFIG_H"]
@@ -99,6 +104,9 @@ GLIBCONFIG_SYSTEM = {"g_pollin": "POLLIN", "g_pollout": "POLLOUT", "g_pollpri": 
                      "g_pollerr": "POLLERR", "g_pollnval": "POLLNVAL", "g_af_unix": "AF_UNIX", "g_af_inet": "AF_INET",
                      "g_af_inet6": "AF_INET6", "g_msg_oob": "MSG_OOB", "g_msg_peek": "MSG_PEEK", "g_msg_dontroute": "MSG_DONTROUTE"}
 
+# The patches of a tree, by its name before the version.
+PATCHES = {"glib": ["glib-function-types.patch"], "mc": ["mc-function-types.patch"]}
+
 # What of mc's lib and src is not built: the other screen library, X11,
 # the network and its file systems, ext2's attributes and undelete, the
 # speller, the log of a maintainer's build, programs of their own.
@@ -140,6 +148,45 @@ def glibconfig(cc, include, template, output):
                   lambda m: f"#define {m[1]}{GLIBCONFIG_DEFINED[m[1]]}" if m[1] in GLIBCONFIG_DEFINED else f"/* #undef {m[1]} */",
                   text, flags=re.M)
     output.write_text(re.sub(r"@(\w+)@", lambda m: values[m[1]], text))
+
+
+def patched(tree, patch):
+    """Applies a unified diff to a tree: every hunk's old lines are the
+    file's at the place the hunk names, or it is an error. What comes
+    before the first file's header is the patch's explanation."""
+    name = None
+    files = {}
+
+    for line in patch.read_text().split("\n"):
+        if line.startswith("--- a/"):
+            name = None
+        elif line.startswith("+++ b/"):
+            name = line[len("+++ b/"):]
+            files[name] = []
+        elif name is not None and line.startswith("@@"):
+            start = int(re.match(r"@@ -(\d+)", line)[1])
+            files[name].append((start, [], []))
+        elif name is not None and files[name] and line[:1] in (" ", "-", "+"):
+            _, old, new = files[name][-1]
+
+            if line[0] != "+":
+                old.append(line[1:])
+
+            if line[0] != "-":
+                new.append(line[1:])
+
+    for name, hunks in files.items():
+        path = tree / name
+        lines = path.read_text().split("\n")
+
+        # from the last hunk to the first, so that the lines before keep their numbers
+        for start, old, new in reversed(hunks):
+            if lines[start - 1:start - 1 + len(old)] != old:
+                raise SystemExit(f"{patch.name}: {name}: the lines at {start} are not the patch's")
+
+            lines[start - 1:start - 1 + len(old)] = new
+
+        path.write_text("\n".join(lines))
 
 
 def units(sources, objects, flags):
@@ -297,15 +344,18 @@ def main():
             archive.extractall(work / "src", filter="data")
 
     mc_tree, glib_tree, slang_tree, pcre2_tree = (next((work / "src").glob(f"{name}-*")) for name in ("mc", "glib", "slang", "pcre2"))
+
+    for tree in (glib_tree, mc_tree):
+        for patch in PATCHES[tree.name.split("-")[0]]:
+            patched(tree, HERE / patch)
+
     system = ["-isystem", include]
     regex, pcre2_headers = pcre2(pcre2_tree, work, system)
     utility, glib_includes = glib(cc, include, glib_tree, work, system, pcre2_headers)
     built = [*regex, *slang(slang_tree, work, system), *utility, *mc(mc_tree, work, system, glib_includes, slang_tree)]
     wasm.compile_all(cc, built)
-    linked = work / "mc.wasm"
-    subprocess.run([ld, *LINK, "-o", str(linked), *(str(obj) for _, obj, _ in built), libc], check=True)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(fpcast.convert(linked.read_bytes()))
+    subprocess.run([ld, *LINK, "-o", str(output), *(str(obj) for _, obj, _ in built), libc], check=True)
     data(mc_tree, share)
     shutil.rmtree(work)
 
