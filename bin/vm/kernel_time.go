@@ -158,8 +158,13 @@ func (p *Process) timerFired(which int, gen uint64) {
 		t.timer = nil
 	}
 
-	ts.mu.Unlock()
+	// The signal goes with the lock held: a call that sets the timer or
+	// stops it after this (setTimer) finds the signal sent, and the
+	// process takes it as that call returns, while what it has set for
+	// the signal still stands. Sent after the lock, it could come once
+	// the process had stopped the timer and put the default action back.
 	p.send(itimerSignals[which])
+	ts.mu.Unlock()
 }
 
 // stopTimers disarms the timers of an ending process.
