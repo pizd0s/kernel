@@ -19,7 +19,10 @@ followed, an absolute one from the root of the process; ".." out of the
 root goes to where it is mounted, and so does the path of a directory.
 Names are made, moved, linked and removed, modes, times and bytes
 written, and all of it is there when the system starts again: it writes
-what it holds as it goes down. A directory made after one was removed
+what it holds as it goes down. flock's and fcntl's locks, which libfuse
+keeps for fuse2fs, are an open file's: one another holds is busy to try
+and waited for, a range's as the file's, and goes with its open. A
+directory made after one was removed
 gets its inode, and nothing of the removed one's: not its names, not
 its "..". A file system of
 features fuse2fs does not know is refused.
@@ -348,6 +351,32 @@ os.ftruncate(f, 1000)
 os.write(os.open("/tmp/four/written", os.O_WRONLY | os.O_APPEND), b"tail")
 print(os.fstat(f).st_size, os.pread(f, 4, 1000))
 '
+python3 -c '
+import fcntl, os, time
+for root in ("/tmp/two", "/tmp/four"):
+    a = os.open(root + "/big", os.O_RDWR)
+    b = os.open(root + "/big", os.O_RDWR)
+    fcntl.flock(a, fcntl.LOCK_EX)
+    try: fcntl.flock(b, fcntl.LOCK_SH | fcntl.LOCK_NB); tried = "taken"
+    except BlockingIOError: tried = "busy"
+    r, w = os.pipe()
+    child = os.fork()
+    if child == 0:
+        fcntl.flock(b, fcntl.LOCK_SH)
+        os.write(w, b"c")
+        os._exit(0)
+    time.sleep(0.2)
+    os.write(w, b"p")
+    fcntl.flock(a, fcntl.LOCK_UN)
+    os.waitpid(child, 0)
+    fcntl.lockf(a, fcntl.LOCK_EX | fcntl.LOCK_NB, 10, 0)
+    try: fcntl.lockf(b, fcntl.LOCK_SH | fcntl.LOCK_NB, 5, 5); ranged = "taken"
+    except OSError: ranged = "busy"
+    fcntl.lockf(b, fcntl.LOCK_SH | fcntl.LOCK_NB, 5, 10)
+    os.close(a)
+    fcntl.lockf(b, fcntl.LOCK_SH | fcntl.LOCK_NB, 5, 5)
+    print("locks:", tried, os.read(r, 2), ranged)
+'
 """
 
 EXT_WANT = """\
@@ -391,6 +420,8 @@ nothing of gone in back
 nothing of gone in back
 1048576 True
 1004 b'tail'
+locks: busy b'pc' busy
+locks: busy b'pc' busy
 """
 
 EXT_ERRORS = """\

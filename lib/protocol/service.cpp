@@ -15,8 +15,7 @@ static bool stopping = false;
 static size_t watched = 0;
 // What unwatch let go of during a batch of events, freed after it: an
 // event of the batch may still name it.
-static Endpoint* released[64];
-static size_t releasedCount = 0;
+static Endpoint* released;
 
 void fatal(const char* format, ...) {
     va_list args;
@@ -135,10 +134,10 @@ Endpoint* watch(int epoll, Endpoint e) {
 }
 
 static void releaseAll() {
-    for (size_t i = 0; i < releasedCount; ++i) {
-        free(released[i]);
+    while (Endpoint* e = released) {
+        released = e->next;
+        free(e);
     }
-    releasedCount = 0;
 }
 
 void unwatch(int epoll, Endpoint* e) {
@@ -146,10 +145,8 @@ void unwatch(int epoll, Endpoint* e) {
     close(e->fd);
     e->fd = -1;
     --watched;
-    if (releasedCount == sizeof released / sizeof released[0]) {
-        fatal("service: too many endpoints let go of at once");
-    }
-    released[releasedCount++] = e;
+    e->next = released;
+    released = e;
 }
 
 int Request::reply() const {

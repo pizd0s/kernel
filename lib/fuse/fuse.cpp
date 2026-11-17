@@ -17,6 +17,13 @@
 // brings. A directory's entries are read from the file system when a
 // reading starts, their positions their places then.
 //
+// The locks of flock and fcntl are kept here, by node, an open file's
+// each, as libfuse has it for a file system with no lock and flock of its
+// own: the system keeps them, and one that has them is not asked. A lock
+// that waits is a request kept until the lock is the open file's, those
+// that wait the first to come first, as bin/tools/lib.cpp keeps tmpfs's
+// and erofs's.
+//
 // When the last channel closes, the file system unmounted, it is destroyed
 // and fuse_main returns, as libfuse's does when its mount point is
 // unmounted.
@@ -33,6 +40,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/file.h>
 #include <sys/param.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -42,12 +50,38 @@
 #include <unistd.h>
 
 namespace {
+    // What an endpoint of ours is of, the first of what it points at.
+    enum class Kind : uint8_t {
+        Channel, // rootfs's: its calls by node come on it
+        File,    // an open file: its requests come on it
+        Lock,    // a lock's request that waits: its CANCEL comes on it
+    };
+
+    struct Open;
+
+    // A lock of an open file on a node, held or waited for: flock's,
+    // LOCK_SH or LOCK_EX, or fcntl's on the bytes [start, stop), F_RDLCK
+    // or F_WRLCK. One waited for is what the endpoint of its request is
+    // of: the request is answered there once the lock is held.
+    struct Lock {
+        Kind kind;
+        Open* owner;
+        bool ranged;
+        uint32_t type;
+        uint64_t start;
+        uint64_t stop;
+        Endpoint* reply;
+        Lock* next;
+    };
+
     // A node of the file system, an inode, at the path it was last looked
-    // up by.
+    // up by, and the locks on it.
     struct Node {
         uint64_t ino;
         char* path;
-        Node* next; // in its bucket
+        Lock* held;
+        Lock* waiting; // the first to come first
+        Node* next;    // in its bucket
     };
 
     // An entry of a directory, as a READDIR from its start read them.
@@ -66,10 +100,11 @@ namespace {
         Listing* next;
     };
 
-    // An endpoint's: a channel of rootfs's, or an open file at its path,
-    // with the file system's information of the open.
+    // An endpoint's: a channel of rootfs's, or an open file of a node at
+    // its path, with the file system's information of the open.
     struct Open {
-        bool channel;
+        Kind kind;
+        Node* node;
         char* path;
         bool opened;
         fuse_file_info info;
@@ -180,8 +215,8 @@ static const char* pathOf(uint64_t ino) {
     return nullptr;
 }
 
-// A node is at path now.
-static void know(uint64_t ino, const char* path) {
+// A node is at path now: the node.
+static Node* know(uint64_t ino, const char* path) {
     Node** bucket = bucketOf(ino);
     for (Node* n = *bucket; n; n = n->next) {
         if (n->ino == ino) {
@@ -189,12 +224,13 @@ static void know(uint64_t ino, const char* path) {
                 free(n->path);
                 n->path = copied(path, strlen(path));
             }
-            return;
+            return n;
         }
     }
     auto* n = static_cast<Node*>(allocate(sizeof(Node)));
-    *n = {ino, copied(path, strlen(path)), *bucket};
+    *n = {ino, copied(path, strlen(path)), nullptr, nullptr, *bucket};
     *bucket = n;
+    return n;
 }
 
 // A path under from, or from itself, is under to now: what follows from.
@@ -232,10 +268,10 @@ static void moved(const char* from, const char* to) {
 
 // What an endpoint of ours is, a channel or an open file of a path, among
 // the others; the endpoint watched is the caller's.
-static Open* listed(bool channel, char* path) {
+static Open* listed(Kind kind, char* path) {
     auto* o = static_cast<Open*>(allocate(sizeof(Open)));
     *o = {};
-    o->channel = channel;
+    o->kind = kind;
     o->path = path;
     o->next = opens;
     if (opens) {
@@ -335,8 +371,9 @@ static void openFile(Request& r, char* path, uint32_t mode, bool creates) {
         free(path);
         return fail(r.reply(), e);
     }
-    know(uint64_t(st.st_ino), path);
-    Open* o = listed(false, path);
+    Node* node = know(uint64_t(st.st_ino), path);
+    Open* o = listed(Kind::File, path);
+    o->node = node;
     o->opened = opened;
     o->info = info;
     if (!answerOpen(epoll, r, {SERVED_FILE, 0, 0, 0, 0}, o)) {
@@ -684,6 +721,232 @@ static void fsCall(Request& r) {
     }
 }
 
+// Whether two locks of a node are in each other's way: two open files',
+// flock's with one exclusive, or fcntl's on bytes they share with one to
+// write.
+static bool crossing(const Lock& a, const Lock& b) {
+    if (a.owner == b.owner || a.ranged != b.ranged) {
+        return false;
+    }
+    if (!a.ranged) {
+        return a.type == LOCK_EX || b.type == LOCK_EX;
+    }
+    return a.start < b.stop && b.start < a.stop && (a.type == F_WRLCK || b.type == F_WRLCK);
+}
+
+// The lock held on a node in the way of one.
+static const Lock* inWay(const Node& n, const Lock& want) {
+    for (const Lock* l = n.held; l; l = l->next) {
+        if (crossing(*l, want)) {
+            return l;
+        }
+    }
+    return nullptr;
+}
+
+// Whether a lock is its open file's to take now: none held in its way,
+// and none waited for before it, self, or by any for one that does not
+// wait yet. None is taken past one that waits for it.
+static bool ready(const Node& n, const Lock& want, const Lock* self) {
+    if (inWay(n, want)) {
+        return false;
+    }
+    for (const Lock* w = n.waiting; w != self; w = w->next) {
+        if (crossing(*w, want)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// What an open file holds on a node goes: flock's lock, or with ranged
+// fcntl's of the bytes [start, stop), a lock across an edge cut there.
+static void drop(Node& n, const Open* owner, bool ranged, uint64_t start, uint64_t stop) {
+    for (Lock** at = &n.held; *at;) {
+        Lock* l = *at;
+        if (l->owner != owner || l->ranged != ranged || (ranged && (l->stop <= start || l->start >= stop))) {
+            at = &l->next;
+        } else if (ranged && l->start < start && l->stop > stop) {
+            // The middle goes: what is past it is a lock of its own.
+            auto* rest = static_cast<Lock*>(allocate(sizeof(Lock)));
+            *rest = *l;
+            rest->start = stop;
+            l->stop = start;
+            l->next = rest;
+            at = &rest->next;
+        } else if (ranged && l->start < start) {
+            l->stop = start;
+            at = &l->next;
+        } else if (ranged && l->stop > stop) {
+            l->start = stop;
+            at = &l->next;
+        } else {
+            *at = l->next;
+            free(l);
+        }
+    }
+}
+
+// A lock becomes its open file's, in place of what it held there.
+static void take(Node& n, const Lock& want) {
+    drop(n, want.owner, want.ranged, want.start, want.stop);
+    auto* l = static_cast<Lock*>(allocate(sizeof(Lock)));
+    *l = want;
+    l->reply = nullptr;
+    l->next = n.held;
+    n.held = l;
+}
+
+// A lock waits no more: it leaves its node's queue, and its request's
+// endpoint is let go of, unless serve does that, the asker gone.
+static void settle(Node& n, Lock* w, bool ours) {
+    for (Lock** at = &n.waiting; *at; at = &(*at)->next) {
+        if (*at == w) {
+            *at = w->next;
+            break;
+        }
+    }
+    if (ours) {
+        unwatch(epoll, w->reply);
+    }
+    free(w);
+}
+
+// Gives the locks waited for on a node to those they are free for now,
+// the first to come first, each answered OK on its request's endpoint.
+// One that takes a range in place of what it held may free an earlier
+// one's: from the first again then.
+static void grant(Node& n) {
+    for (Lock* w = n.waiting; w;) {
+        if (!ready(n, *w, w)) {
+            w = w->next;
+            continue;
+        }
+        take(n, *w);
+        answer(w->reply->fd, opOk, 0);
+        settle(n, w, true);
+        w = n.waiting;
+    }
+}
+
+// The lock a request asks, answered on its reply's endpoint: taken when
+// it is the open file's to take; else EAGAIN, or the request waits: its
+// endpoint is kept and watched, a CANCEL comes on it, and what the open
+// file held of flock's lock goes meanwhile, as a change of flock's lock
+// is no single step.
+static void lock(Node& n, const Lock& want, bool waits, Request& r) {
+    if (ready(n, want, nullptr)) {
+        take(n, want);
+        answer(r.reply(), opOk, 0);
+        return grant(n);
+    }
+    if (!waits) {
+        return fail(r.reply(), EAGAIN);
+    }
+    if (r.onEndpoint) {
+        return fail(r.reply(), EINVAL); // no endpoint of its own to wait on
+    }
+    if (!want.ranged) {
+        drop(n, want.owner, false, 0, 0);
+    }
+    auto* w = static_cast<Lock*>(allocate(sizeof(Lock)));
+    *w = want;
+    w->reply = watch(epoll, {r.reply(), false, false, false, w});
+    r.fds[r.count - 1] = -1;
+    Lock** last = &n.waiting;
+    while (*last) {
+        last = &(*last)->next;
+    }
+    *last = w;
+    grant(n);
+}
+
+// flock's lock of an open file on its node: shared, exclusive, or none.
+static void flockFile(Open& o, Request& r) {
+    Node& n = *o.node;
+    const uint32_t kind = r.h.arg & ~uint32_t(LOCK_NB);
+    switch (kind) {
+        case LOCK_UN:
+            drop(n, &o, false, 0, 0);
+            answer(r.reply(), opOk, 0);
+            return grant(n);
+        case LOCK_SH:
+        case LOCK_EX:
+            return lock(n, {Kind::Lock, &o, false, kind, 0, 0, nullptr, nullptr}, (r.h.arg & LOCK_NB) == 0, r);
+        default:
+            return fail(r.reply(), EINVAL);
+    }
+}
+
+// fcntl's lock of an open file on a range of its node, to the end and
+// past with a length of 0: with lockGet the first lock of another open
+// file in the way of the one described, else F_UNLCK; else the lock is
+// set in place of what the open file held of the range, at once or, with
+// lockWait, once it is free; F_UNLCK lets the range go.
+static void lockFile(Open& o, Request& r) {
+    Node& n = *o.node;
+    uint32_t type;
+    uint64_t start;
+    uint64_t length;
+    if (!r.at(0, type) || !r.at(4, start) || !r.at(12, length) || type > F_UNLCK || r.h.arg > lockWait) {
+        return fail(r.reply(), EINVAL);
+    }
+    const uint64_t stop = length == 0 || start > UINT64_MAX - length ? UINT64_MAX : start + length;
+    const Lock want{Kind::Lock, &o, true, type, start, stop, nullptr, nullptr};
+    if (r.h.arg == lockGet) {
+        const Lock* way = inWay(n, want);
+        const uint32_t found = way ? way->type : uint32_t(F_UNLCK);
+        const uint64_t from = way ? way->start : start;
+        const uint64_t size = !way ? length : way->stop == UINT64_MAX ? 0 : way->stop - way->start;
+        unsigned char out[20];
+        memcpy(out, &found, 4);
+        memcpy(out + 4, &from, 8);
+        memcpy(out + 12, &size, 8);
+        return answer(r.reply(), opOk, 0, out, sizeof out);
+    }
+    if (type != F_UNLCK) {
+        return lock(n, want, r.h.arg == lockWait, r);
+    }
+    drop(n, &o, true, start, stop);
+    answer(r.reply(), opOk, 0);
+    grant(n);
+}
+
+// What an open file that closes held of its node's locks goes, and what
+// it waited for there; those that waited for it get theirs.
+static void unlock(Open& o) {
+    Node* n = o.node;
+    if (!n) {
+        return;
+    }
+    for (Lock** at = &n->held; *at;) {
+        Lock* l = *at;
+        if (l->owner == &o) {
+            *at = l->next;
+            free(l);
+        } else {
+            at = &l->next;
+        }
+    }
+    for (Lock* w = n->waiting; w;) {
+        Lock* next = w->next;
+        if (w->owner == &o) {
+            settle(*n, w, true);
+        }
+        w = next;
+    }
+    grant(*n);
+}
+
+// A CANCEL of a lock's request that waits: it is taken back, EINTR, and
+// those behind it may have theirs.
+static void cancel(Lock& w) {
+    Node& n = *w.owner->node;
+    fail(w.reply->fd, EINTR);
+    settle(n, &w, true);
+    grant(n);
+}
+
 // The calls on an open file.
 static void fileCall(Open& o, const Endpoint& e, Request& r) {
     struct stat st;
@@ -734,22 +997,9 @@ static void fileCall(Open& o, const Endpoint& e, Request& r) {
             }
             break;
         case opFlock:
-            break;
-        case opLock: {
-            // No lock of the file system's is in the way of another.
-            uint32_t type;
-            uint64_t start;
-            uint64_t length;
-            if (r.h.arg == lockGet && r.at(0, type) && r.at(4, start) && r.at(12, length)) {
-                unsigned char none[20];
-                const uint32_t unlocked = F_UNLCK;
-                memcpy(none, &unlocked, 4);
-                memcpy(none + 4, &start, 8);
-                memcpy(none + 12, &length, 8);
-                return answer(r.reply(), opOk, 0, none, sizeof none);
-            }
-            break;
-        }
+            return flockFile(o, r);
+        case opLock:
+            return lockFile(o, r);
         default:
             failed = ENOSYS;
     }
@@ -759,34 +1009,52 @@ static void fileCall(Open& o, const Endpoint& e, Request& r) {
     answer(r.reply(), opOk, 0);
 }
 
+// What an endpoint is of starts with its kind.
+static Kind kindOf(const void* of) {
+    return *static_cast<const Kind*>(of);
+}
+
 static void handle(Endpoint& e, Request& r) {
     context.uid = uid_t(r.h.uid);
     context.gid = gid_t(r.h.gid);
-    Open& o = *static_cast<Open*>(e.of);
-    if (o.channel) {
-        fsCall(r);
-    } else {
-        fileCall(o, e, r);
+    switch (kindOf(e.of)) {
+        case Kind::Channel:
+            return fsCall(r);
+        case Kind::File:
+            return fileCall(*static_cast<Open*>(e.of), e, r);
+        case Kind::Lock:
+            if (r.h.op == opCancel) {
+                cancel(*static_cast<Lock*>(e.of));
+            }
     }
 }
 
 // A connection mount(2) made to the file system's socket: a channel of
 // rootfs's calls, ROOT the first.
 static void accepted(Endpoint&, int connection) {
-    watch(epoll, {connection, false, true, true, listed(true, nullptr)});
+    watch(epoll, {connection, false, true, true, listed(Kind::Channel, nullptr)});
     ++channels;
 }
 
-// An endpoint closed: the file system's release of an open file; the
-// last channel's end is the unmount.
+// An endpoint closed: who asked a lock that waits went, and it waits no
+// more, serve letting go of its endpoint; or the file system's release
+// of an open file, its locks gone first; the last channel's end is the
+// unmount.
 static void gone(Endpoint& e) {
-    auto* o = static_cast<Open*>(e.of);
-    if (!o) {
+    if (!e.of) {
         return;
     }
-    if (o->channel && --channels == 0) {
+    if (kindOf(e.of) == Kind::Lock) {
+        auto* w = static_cast<Lock*>(e.of);
+        Node& n = *w->owner->node;
+        settle(n, w, false);
+        return grant(n);
+    }
+    auto* o = static_cast<Open*>(e.of);
+    if (o->kind == Kind::Channel && --channels == 0) {
         stopServing();
     }
+    unlock(*o);
     unlisted(o);
 }
 

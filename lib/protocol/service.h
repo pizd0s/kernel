@@ -50,6 +50,7 @@ struct Endpoint {
     bool writes;
     void* of;
     bool listens = false;
+    Endpoint* next = nullptr; // among those let go of, the loop's
 };
 
 Endpoint* watch(int epoll, Endpoint e);
