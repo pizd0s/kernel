@@ -9,10 +9,10 @@
 
 // What the file systems of the tools share, erofs's and tmpfs's: memory
 // that is there or ends the program, bin/aot/aot.cpp's containers over
-// malloc, the names and bodies of requests, their replies, the locks of
-// flock and fcntl, and the loop of their endpoints, rootfs's channel and
-// the open files, which hands what comes on them to the file system's
-// calls. A file system's own are its nodes and those calls.
+// malloc, the names and bodies of requests, their replies, and the loop
+// of their endpoints, rootfs's channel and the open files, which hands
+// what comes on them to the file system's calls. A file system's own are
+// its nodes and those calls.
 //
 // Memory. A request is received into one buffer and answered before the
 // next: its names are read where they are in it. What a reply assembles
@@ -31,7 +31,6 @@ namespace tools {
 
     constexpr usize maxPacket = 65536;
     constexpr u64 blockSize = 4096;
-    constexpr u64 past = UINT64_MAX; // the stop of a lock to the end of a file and past it
 
     [[noreturn, gnu::format(printf, 1, 2)]] void fatal(const char* format, ...);
 
@@ -180,71 +179,12 @@ namespace tools {
     // other pair in the kernel has, as it never gives a number twice.
     u64 device();
 
-    // A lock of fcntl: an endpoint's, on the bytes [start, stop), to read
-    // or to write.
-    struct Range {
-        int owner;
-        bool write;
-        u64 start;
-        u64 stop;
-    };
-
-    struct Endpoint;
-
-    // A lock an endpoint waits for: its request, which the file system
-    // keeps and answers on reply, the request's endpoint, once the lock is
-    // the endpoint's. flock's, LOCK_SH or LOCK_EX, or fcntl's of a range,
-    // F_RDLCK or F_WRLCK.
-    struct Waiter {
-        int owner;
-        Endpoint* reply;
-        bool ranged;
-        u32 type;
-        u64 start;
-        u64 stop;
-    };
-
-    // The locks of a node: flock's, exclusive or shared, and fcntl's, and
-    // those that wait for one, the first to come first. A lock is an
-    // endpoint's, an open file's, as Linux's open file description locks
-    // are.
-    struct Locks {
-        int exclusive = -1;   // the endpoint that holds flock's exclusive lock, or -1
-        SmallVec<int> shared; // the endpoints that hold flock's shared lock
-        SmallVec<Range> ranges;
-        SmallVec<Waiter> waiting;
-    };
-
-    // flock's lock of an endpoint, me, on a node: shared, which no other
-    // endpoint's exclusive one is in the way of, exclusive, which no other
-    // endpoint's lock is, or none. A lock is in the way held, and asked by
-    // one that waits: none is taken past those that wait for it. That is
-    // EAGAIN with LOCK_NB; without it the request waits: fd is kept until
-    // the lock is the endpoint's, behind those that came before, and what
-    // the endpoint held goes meanwhile, as a change of flock's lock is no
-    // single step.
-    void flockNode(Locks& locks, int me, const Header& h, int fd);
-
-    // fcntl's locks of an endpoint, me, on a range of a node, to the end
-    // and past with a length of 0. With lockGet, the first lock of another
-    // endpoint in the way of the one described, else F_UNLCK. Else that
-    // lock is set in place of what the endpoint held of the range, unless
-    // another endpoint's lock is in the way, held or waited for: EAGAIN,
-    // or with lockWait the request waits, fd kept, until it is not;
-    // F_UNLCK lets the range go.
-    void lockNode(Locks& locks, int me, const Header& h, Body body, int fd);
-
-    // What an endpoint that closes, me, held of the locks of a node goes,
-    // and what it waited for there; those that waited for it get theirs.
-    void unlock(Locks& locks, int me);
-
     // ---- the loop's endpoints ----------------------------------------------------------
 
     // What an endpoint is to the loop.
     enum class Role : u8 {
         File,    // an open file: requests come on it
         Channel, // rootfs's channel: its calls by node come on it
-        Lock,    // the endpoint of a lock's request that waits: a CANCEL comes on it
     };
 
     struct Endpoint {
@@ -271,11 +211,12 @@ namespace tools {
     Endpoint* listen(int fd, Role role, void* node, bool reads, bool writes);
 
     // Answers an open on fd, of flags, with a new open file of node: a
-    // served pair of SERVED_FILE, whose second end, the open file, goes
+    // served pair of SERVED_FILE, of the file's dev and ino, which the
+    // kernel keeps its locks by, whose second end, the open file, goes
     // with the OK to who asked, and whose first, an endpoint of the
     // loop's, to read, to write or both, its requests come on. That
     // endpoint, or none, the error answered.
-    Endpoint* openFile(int fd, u32 flags, void* node, bool reads, bool writes);
+    Endpoint* openFile(int fd, u32 flags, void* node, u64 dev, u64 ino, bool reads, bool writes);
 
     // Serves the endpoints until the last of them closes: rootfs's channel,
     // and the open files after it. A question of rootfs's, which brings no

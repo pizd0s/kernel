@@ -2777,9 +2777,6 @@ static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
             changing(at);
             forgetStat(knownAt(at), h.op != opFutimes);
             return hand(at, h, h.op == opFchmod ? fsChmod : h.op == opFchown ? fsChown : fsUtimes, h.arg, body.at, body.size(), {}, fd);
-        case opFlock:
-        case opLock:
-            return error(fd, opath ? EBADF : EINVAL);
         default:
             return error(fd, ENOSYS);
     }

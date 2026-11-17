@@ -2,8 +2,8 @@
 //@ compile-flags: -D_GNU_SOURCE
 //@ stdout: "given in the order asked: 1234\na shared lock behind an exclusive one that waits: waited 1, tried 1, then WR\na waiter that ended: the next has the lock 1\na handler that restarts: ran 1, then the lock 1\na range that waits: 1\n"
 
-// A lock that waits is a request its file system keeps: those that wait
-// have the lock in the order they asked, a shared one behind an
+// A lock that waits waits in the kernel, which keeps the locks: those that
+// wait have the lock in the order they asked, a shared one behind an
 // exclusive one that waits too, and one tried with LOCK_NB is not taken
 // past it; one whose process ended is in nobody's way; a handler that
 // restarts calls leaves its call waiting; and a range of fcntl's waits

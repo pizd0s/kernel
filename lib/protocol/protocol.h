@@ -139,23 +139,8 @@
 //     FTRUNCATE             size u64
 //     FSYNC     arg data
 //     FSTATFS                             OK statfs
-//     FLOCK     arg op                    LOCK_SH, LOCK_EX, LOCK_UN; with
-//                                         LOCK_NB a lock another's is in
-//                                         the way of is EAGAIN, without it
-//                                         the server keeps the request
-//                                         until the lock is the file's
-//     LOCK      arg how     type u32 start u64 len u64
-//                                         OK; how lockSet, EAGAIN for a
-//                                         lock in the way; lockWait, the
-//                                         request kept until the lock is
-//                                         the file's; lockGet, the lock in
-//                                         the way, F_UNLCK for none: type
-//                                         u32 start u64 len u64
 //     CANCEL                              on a request's endpoint, which
-//                                         the server keeps while it waits:
-//                                         a READ, a WRITE, a lock; the
-//                                         request is answered now, EINTR
-//                                         for a lock
+//                                         the server keeps while it waits
 //   and from the server, on its end of an open file it made telling
 //   (SERVED_TELLS), the file's readiness, which select, poll and epoll
 //   find: until the first, nothing is ready; the last counts.
@@ -305,8 +290,6 @@ enum : uint32_t {
     opFtruncate,
     opFsync,
     opFstatfs,
-    opFlock,
-    opLock,
     opCancel,
     opReady,
     // A service's.
@@ -330,11 +313,6 @@ enum : uint32_t {
     opOk = 128,
     opErr,
 };
-
-// How a LOCK is asked.
-constexpr uint32_t lockSet = 0;
-constexpr uint32_t lockGet = 1;
-constexpr uint32_t lockWait = 2;
 
 // The most descriptors a packet brings: a READ's or WRITE's memfd and its
 // endpoint, a REGISTER's end and its endpoint.

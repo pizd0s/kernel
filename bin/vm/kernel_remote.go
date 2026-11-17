@@ -47,17 +47,10 @@ import (
 //	  FTRUNCATE           size u64
 //	  FSYNC     arg data
 //	  FSTATFS                              OK statfs
-//	  FLOCK     arg op                     LOCK_SH, LOCK_EX, LOCK_UN; with
-//	                                       LOCK_NB at once, else the server
-//	                                       keeps it until the lock is free
-//	  LOCK      arg how   type u32 start u64 len u64   OK; lockSet at
-//	                      once, lockWait kept until the lock is free,
-//	                      lockGet the lock in the way, F_UNLCK for none:
-//	                      type u32 start u64 len u64
-//	  CANCEL              on the endpoint of a request the server keeps
-//	                      while it waits, a READ, a WRITE, a lock, from
-//	                      the kernel (waiting): the server answers that
-//	                      request now, with the count so far or ERR EINTR
+//	  CANCEL              on the endpoint of a READ or a WRITE the server
+//	                      keeps while it waits, from the kernel (waiting):
+//	                      the server answers that request now, with the
+//	                      count so far or ERR EINTR
 //	  READY     arg events                 from the server, on its end of an
 //	                                       open file it made telling
 //	                                       (servedTells): what poll finds
@@ -76,9 +69,9 @@ import (
 // reading has to come to. dev is the file system's own, the files of two
 // never share one. A WRITE with append goes at the end the file has when
 // the server takes it: O_APPEND is the server's, so no write of another
-// comes between. A lock is the endpoint's, an open file's, as the host's
-// open file description locks are, and goes when it closes; a FIFO's pipe
-// is the kernel's (kernel_fifo.go).
+// comes between. The locks of flock and fcntl are the kernel's
+// (kernel_lock.go), kept by the dev and ino the server made the open file
+// with; a FIFO's pipe is the kernel's too (kernel_fifo.go).
 const (
 	rRead uint32 = iota + 64
 	rWrite
@@ -90,8 +83,6 @@ const (
 	rFtruncate
 	rFsync
 	rFstatfs
-	rFlock
-	rLock
 	rCancel
 	rReady
 )
@@ -106,14 +97,6 @@ const (
 	servedPath     = 4
 	servedTells    = 16
 	readyTostop    = 1
-)
-
-// How a LOCK is asked: set at once, the lock in the way told, or set
-// once it is free.
-const (
-	lockSet  = 0
-	lockGet  = 1
-	lockWait = 2
 )
 
 // The flags of an io.
@@ -161,6 +144,12 @@ type remoteNode struct {
 	ready      atomic.Int32
 	foreground atomic.Int32
 	tostop     atomic.Bool
+	// locks is where the locks of flock and fcntl on the file are kept,
+	// by file, what names it there (kernel_lock.go): none of a file its
+	// server made with no ino. locked is set once it asked for a lock.
+	locks  *lockTable
+	file   lockKey
+	locked atomic.Bool
 }
 
 // remoteFile is a server's file.
@@ -306,7 +295,7 @@ func (h *remotePath) asLink() Link              { return h }
 func (h *remotePath) asAttrs() Attrs            { return h }
 func (h *remotePath) asSocket() Socket          { return nil }
 func (h *remotePath) asIoctl() Ioctl            { return nil }
-func (h *remotePath) asLocker() Locker          { return h }
+func (h *remotePath) asLocker() Locker          { return nil }
 func (h *remotePath) asEpoll() *epoll           { return nil }
 func (h *remotePath) asMemfd() *memfdFile       { return nil }
 func (h *remotePath) asPair() *pairEnd          { return nil }
@@ -328,18 +317,13 @@ func (h *remotePath) chown(p *Process, uid, gid int) error           { return h.
 func (h *remotePath) utimes(p *Process, ts []syscall.Timespec) error { return h.node.utimes(p, ts) }
 func (h *remotePath) statfs(p *Process, st *syscall.Statfs_t) error  { return h.node.statfs(p, st) }
 
-func (h *remotePath) flock(p *Process, op int) error { return h.node.flock(p, op) }
-func (h *remotePath) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
-	return h.node.recordLock(p, cmd, lk)
-}
-
 // servedpair is a pair a server makes for what it serves: the first end
 // is the server's, a plain one; the second is born the open file struct
 // served at what describes, whose calls are requests on the first. Both
 // close on exec.
 func (p *Process) libcServedpair(what, sv uint32) uint32 {
 	a, b := newPair(false)
-	f, err := served(p.u32(what), int(p.u32(what+4)), p.u64(what+8), p.u64(what+16), p.u64(what+24), b)
+	f, err := served(p, p.u32(what), int(p.u32(what+4)), p.u64(what+8), p.u64(what+16), p.u64(what+24), b)
 
 	if err != nil {
 		a.unref()
@@ -371,10 +355,12 @@ func (p *Process) libcServedpair(what, sv uint32) uint32 {
 }
 
 // served is the open file a kind of struct served makes of a pair's
-// second end, as the open flags say: a file, a terminal's of device dev
-// and ino, or a handle of id, of a directory or of what O_PATH opened;
-// with servedTells its server's READY is its readiness.
-func served(kind uint32, flags int, dev, ino, id uint64, end *pairEnd) (Object, error) {
+// second end for the process that serves it, as the open flags say: a
+// file, its locks kept by that process and the dev and ino it gives; a
+// terminal's of device dev and ino; or a handle of id, of a directory or
+// of what O_PATH opened; with servedTells its server's READY is its
+// readiness.
+func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *pairEnd) (Object, error) {
 	var n *remoteNode
 	var f Object
 
@@ -382,6 +368,10 @@ func served(kind uint32, flags int, dev, ino, id uint64, end *pairEnd) (Object, 
 	case servedFile:
 		r := &remoteFile{}
 		n, f = &r.node, r
+
+		if ino != 0 {
+			n.locks, n.file = &p.k.locks, lockKey{p.pid, dev, ino}
+		}
 	case servedTerminal:
 		t := &remoteTerminal{dev: dev, ino: ino}
 		n, f = &t.node, t
@@ -413,6 +403,10 @@ func (n *remoteNode) ref() {
 
 func (n *remoteNode) unref() {
 	if n.refs.Add(-1) == 0 {
+		if n.locked.Load() {
+			n.locks.forget(n)
+		}
+
 		n.end.unref()
 	}
 }
@@ -791,22 +785,33 @@ func (n *remoteNode) statfs(p *Process, st *syscall.Statfs_t) error {
 	return decodeStatfs(pk.data, st)
 }
 
-// The locks of an open file of a server, what its Locker role asks: the
-// locks are the endpoint's, the open file's.
+// The locks of an open file of a server, what its Locker role asks, are
+// the kernel's (kernel_lock.go): a file its server made with no ino has
+// none, EINVAL.
 
-// flock is flock's lock: one that waits, without LOCK_NB, is a request the
-// server keeps until the lock is the file's (waits).
+// flock is flock's lock of the open file, shared, exclusive or none: one
+// another open file's is in the way of is EAGAIN with LOCK_NB, and waited
+// for without.
 func (n *remoteNode) flock(p *Process, op int) error {
-	if op&syscall.LOCK_NB != 0 || op == syscall.LOCK_UN {
-		return n.simple(p, rFlock, uint32(op), nil)
+	if n.locks == nil {
+		return syscall.EINVAL
 	}
 
-	return n.waits(p, rFlock, uint32(op), nil)
+	switch kind := op &^ syscall.LOCK_NB; kind {
+	case syscall.LOCK_UN:
+		n.locks.unlock(n, false, 0, 0)
+
+		return nil
+	case syscall.LOCK_SH, syscall.LOCK_EX:
+		return n.locks.lock(p, &fileLock{owner: n, write: kind == syscall.LOCK_EX}, op&syscall.LOCK_NB == 0)
+	}
+
+	return syscall.EINVAL
 }
 
-// waits is a call its server may keep for as long as it takes, a lock
-// that waits, a terminal's drain: a signal the process takes cancels it,
-// and it is made again when the handlers ask for that.
+// waits is a call its server may keep for as long as it takes, a
+// terminal's drain: a signal the process takes cancels it, and it is made
+// again when the handlers ask for that.
 func (n *remoteNode) waits(p *Process, op, arg uint32, body []byte) error {
 	for {
 		_, restart, err := n.waiting(p, op, arg, body, nil)
@@ -820,9 +825,16 @@ func (n *remoteNode) waits(p *Process, op, arg uint32, body []byte) error {
 }
 
 // recordLock is fcntl's lock on the bytes a struct flock says, from the
-// start, the position or the end, before the start for a negative length;
-// F_OFD_GETLK tells the lock in the way, from the start.
+// start, the position or the end, before the start for a negative length,
+// to the end and past for none: F_OFD_SETLK sets it in place of what the
+// open file held of the bytes, EAGAIN for another open file's in the way,
+// F_OFD_SETLKW waits for it, F_UNLCK lets the bytes go, and F_OFD_GETLK
+// tells the lock in the way, from the start, F_UNLCK for none.
 func (n *remoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
+	if n.locks == nil {
+		return syscall.EINVAL
+	}
+
 	start, length := lk.Start, lk.Len
 
 	switch lk.Whence {
@@ -845,37 +857,45 @@ func (n *remoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error 
 		start, length = start+length, -length
 	}
 
-	if start < 0 {
+	if start < 0 || lk.Type != fRdlck && lk.Type != fWrlck && lk.Type != fUnlck {
 		return syscall.EINVAL
 	}
 
-	body := make([]byte, 20)
-	binary.LittleEndian.PutUint32(body, uint32(lk.Type))
-	binary.LittleEndian.PutUint64(body[4:], uint64(start))
-	binary.LittleEndian.PutUint64(body[12:], uint64(length))
+	want := &fileLock{owner: n, ranged: true, write: lk.Type == fWrlck, start: uint64(start), stop: lockPast}
 
-	switch cmd {
-	case fOfdSetlk:
-		return n.simple(p, rLock, lockSet, body)
-	case fOfdSetlkw:
-		return n.waits(p, rLock, lockWait, body)
+	if length != 0 && want.start <= lockPast-uint64(length) {
+		want.stop = want.start + uint64(length)
 	}
 
-	pk, err := n.on(p, rLock, lockGet, body)
+	switch {
+	case cmd == fOfdGetlk:
+		lk.Whence, lk.Pid = 0, -1
+		way, found := n.locks.way(want)
 
-	if err != nil {
-		return err
+		if !found {
+			lk.Type, lk.Start, lk.Len = fUnlck, start, length
+
+			return nil
+		}
+
+		lk.Type, lk.Start, lk.Len = fRdlck, int64(way.start), 0
+
+		if way.write {
+			lk.Type = fWrlck
+		}
+
+		if way.stop != lockPast {
+			lk.Len = int64(way.stop - way.start)
+		}
+
+		return nil
+	case lk.Type == fUnlck:
+		n.locks.unlock(n, true, want.start, want.stop)
+
+		return nil
 	}
 
-	if len(pk.data) < 20 {
-		return syscall.EIO
-	}
-
-	le := binary.LittleEndian
-	lk.Type, lk.Whence = int16(le.Uint32(pk.data)), 0
-	lk.Start, lk.Len, lk.Pid = int64(le.Uint64(pk.data[4:])), int64(le.Uint64(pk.data[12:])), -1
-
-	return nil
+	return n.locks.lock(p, want, cmd == fOfdSetlkw)
 }
 
 // A directory's readdir and seek; its other calls are the VFS's

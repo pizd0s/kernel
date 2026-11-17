@@ -19,10 +19,11 @@ followed, an absolute one from the root of the process; ".." out of the
 root goes to where it is mounted, and so does the path of a directory.
 Names are made, moved, linked and removed, modes, times and bytes
 written, and all of it is there when the system starts again: it writes
-what it holds as it goes down. flock's and fcntl's locks, which libfuse
-keeps for fuse2fs, are an open file's: one another holds is busy to try
-and waited for, a range's as the file's, and goes with its open. A
-directory made after one was removed
+what it holds as it goes down. flock's and fcntl's locks, which the
+kernel keeps by the dev and ino libfuse makes an open file with, are an
+open file's: one another holds is busy to try and waited for, a range's
+as the file's, and goes with its open. A directory made after one was
+removed
 gets its inode, and nothing of the removed one's: not its names, not
 its "..". A file system of
 features fuse2fs does not know is refused.

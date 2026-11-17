@@ -25,16 +25,14 @@
 // executing what nobody may, the owner what the owner's bits say, the
 // group of gid the group's, everyone else the others'; a name is looked up
 // in a directory who asks may search. Nothing of it changes: a call that
-// would is EROFS, after what Linux finds first. A lock is an endpoint's,
-// an open file's, as Linux's open file description locks are: flock's on
-// the whole file, fcntl's on a range of its bytes, refused with EAGAIN when
-// another endpoint holds one in the way, and gone when the endpoint closes.
+// would is EROFS, after what Linux finds first. The locks of flock and
+// fcntl are the kernel's, kept by the dev and ino an open file is made
+// with.
 //
 // Memory. A request is received into one buffer, packet, and answered
 // before the next: its names are read where they are in it. What a reply
 // assembles, the entries of a directory, a path, a link's target, goes
-// into one buffer of its own, out. What erofs keeps of a node is its
-// locks, once one is taken.
+// into one buffer of its own, out.
 
 #include <bin/tools/lib.h>
 #include <bin/tools/tools.h>
@@ -87,8 +85,7 @@ namespace {
         u32 entryCount = 0;
         const char* names = nullptr;
         u64 dev = 0;
-        u64 used = 0;            // the bytes of its files
-        Locks** locks = nullptr; // a node's, by its number
+        u64 used = 0; // the bytes of its files
     };
 }
 
@@ -201,15 +198,6 @@ static Statfs statfsOf() {
     st.files = image.count;
     st.flags = ST_RDONLY;
     return st;
-}
-
-// The locks of a node, made when there are none yet.
-static Locks* locksOf(const Node* n) {
-    Locks*& l = image.locks[n - image.nodes];
-    if (!l) {
-        l = new (allocate(sizeof(Locks))) Locks();
-    }
-    return l;
 }
 
 // ---- the calls of the image, by node ------------------------------------------
@@ -388,7 +376,7 @@ static void openNode(const Node* n, u32 flags, const Header& h, int fd) {
     if (writes || truncates) {
         return error(fd, EROFS);
     }
-    openFile(fd, flags, const_cast<Node*>(n), true, false);
+    openFile(fd, flags, const_cast<Node*>(n), image.dev, inoOf(n), true, false);
 }
 
 // A call of rootfs's on its channel, by node, answered on fd.
@@ -512,22 +500,13 @@ static void fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
         case opFutimes:
         case opFtruncate:
             return error(fd, EROFS);
-        case opFlock:
-            return flockNode(*locksOf(node), ep->fd, h, fd);
-        case opLock:
-            return lockNode(*locksOf(node), ep->fd, h, body, fd);
         default:
             return error(fd, ENOSYS);
     }
 }
 
-// An endpoint that closes: its locks go with it.
-static void closing(Endpoint* ep) {
-    if (const auto* n = static_cast<const Node*>(ep->node)) {
-        if (Locks* l = image.locks[n - image.nodes]) {
-            unlock(*l, ep->fd);
-        }
-    }
+// An endpoint that closes: nothing is kept of it.
+static void closing(Endpoint*) {
 }
 
 // What is before the image's bytes, its header and tables, read from
@@ -577,8 +556,6 @@ static void openImage(int fd) {
             fatal("erofs: entry %u of the image is out of it", i);
         }
     }
-    image.locks = static_cast<Locks**>(allocate(sizeof(Locks*) * count));
-    memset(image.locks, 0, sizeof(Locks*) * count);
     image.dev = device();
 }
 

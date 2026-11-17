@@ -14,8 +14,12 @@
  * a path go to; or SERVED_PATH, a handle of what O_PATH opened that is no
  * directory; with SERVED_TELLS the server tells its readiness (READY).
  * flags are the open's: O_ACCMODE, O_APPEND and O_NONBLOCK. dev and ino
- * are a terminal's device's, id a handle's, which calls with a path name
- * the root by. Both ends close on exec.
+ * are the file's, as its stat has them, or a terminal's device's: the
+ * kernel keeps the locks of flock and fcntl by them and by the process
+ * that made the pair, so the open files one process gave one dev and ino
+ * are one file to lock, and no other process's are that file; a file of
+ * ino 0 has no locks. id is a handle's, which calls with a path name the
+ * root by. Both ends close on exec.
  */
 #define SERVED_FILE 1
 #define SERVED_TERMINAL 2

@@ -25,13 +25,11 @@
 // and no open file has is gone, and a call by its node ENOENT.
 //
 // A WRITE with append writes at the end the file has when the tree takes
-// it, which no other write comes between. A lock is an endpoint's, an open
-// file's, as Linux's open file description locks are: flock's on the
-// whole file, fcntl's on a range of its bytes, refused with EAGAIN when
-// another endpoint holds one in the way, and gone when the endpoint
-// closes. A FIFO is a node and nothing more: the kernel makes the pipe its
-// openers share. The tree holds what its capacity lets it, in bytes and in
-// nodes, a node a block's worth: past that, ENOSPC.
+// it, which no other write comes between. The locks of flock and fcntl
+// are the kernel's, kept by the dev and ino an open file is made with. A
+// FIFO is a node and nothing more: the kernel makes the pipe its openers
+// share. The tree holds what its capacity lets it, in bytes and in nodes,
+// a node a block's worth: past that, ENOSPC.
 //
 // Memory. A request is received into one buffer, packet, and answered
 // before the next: its names are read where they are in it. A file's bytes
@@ -228,8 +226,7 @@ namespace {
         u32 holds = 0;         // what else points at it: directories under it, files opened in it by name
         bool released = false; // gone from its server, its memory kept for what holds it
         Kind kind = Kind::Dir;
-        int fd = -1; // a socket's listener
-        Locks locks;
+        int fd = -1;     // a socket's listener
         Content content; // a file's, a link's
         // a directory's
         Node* parent = nullptr; // where ".." goes; none for the root
@@ -1039,7 +1036,7 @@ static void openNode(Node* n, u32 flags, bool made, const Header& h, int fd) {
         resize(tree, n, 0);
         touch(n);
     }
-    if (openFile(fd, flags, n, reads, writes)) {
+    if (openFile(fd, flags, n, tree.dev, n->ino, reads, writes)) {
         ++n->opens;
     }
 }
@@ -1208,20 +1205,15 @@ static void fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
         case opFchown:
         case opFutimes:
             return answer(fd, change(tree, node, h.op, h, body));
-        case opFlock:
-            return flockNode(node->locks, ep->fd, h, fd);
-        case opLock:
-            return lockNode(node->locks, ep->fd, h, body, fd);
         default:
             return error(fd, ENOSYS);
     }
 }
 
-// An endpoint that closes: its locks go with it, and its node when no
-// name is left of it.
+// An endpoint that closes: its node goes with it when no name is left
+// of it.
 static void closing(Endpoint* ep) {
     if (auto* n = static_cast<Node*>(ep->node)) {
-        unlock(n->locks, ep->fd);
         --n->opens;
         release(tree, n);
     }

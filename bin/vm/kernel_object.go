@@ -241,9 +241,10 @@ type Ioctl interface {
 	ioctl(req uintptr, arg unsafe.Pointer) error
 }
 
-// A Locker takes flock's locks and the record locks of fcntl: without
-// LOCK_NB, and with F_OFD_SETLKW, the call waits for a lock another holds,
-// else that is EAGAIN or EACCES.
+// A Locker takes flock's locks and the record locks of fcntl, which the
+// kernel keeps (kernel_lock.go): without LOCK_NB, and with F_OFD_SETLKW,
+// the call waits for a lock another open file holds, else that is
+// EAGAIN.
 type Locker interface {
 	Object
 	flock(p *Process, op int) error
