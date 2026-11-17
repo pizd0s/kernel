@@ -143,6 +143,8 @@ sh
 bin
 dev
 etc
+libexec
+share
 tmp
 usr
 var

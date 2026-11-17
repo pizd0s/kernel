@@ -79,3 +79,15 @@ __pycache__/
 /tests_image
 /clang_image
 /chaos_check_exe
+/mc
+/mc_exe
+/mc_tarball
+/glib_tarball
+/slang_tarball
+/pcre2_tarball
+/ncurses_tarball
+/terminfo
+/fpcast_plain
+/fpcast_check
+/fpcast_plain_exe
+/fpcast_check_exe

@@ -14,8 +14,9 @@ and its directory do. Every case starts in a directory of its own under
     test_vfs.py --linux
 
 LINUX is what Linux answers: `test_vfs.py --linux` runs the probe in a
-chroot of a user namespace whose root, read-only, has the image's /etc
-and /usr -> /, and a tmpfs at /tmp, with the host's python. rootfs must
+chroot of a user namespace whose root, read-only, has the image's /etc,
+its files and mc's directory, and /usr -> /, and a tmpfs at /tmp, with
+the host's python. rootfs must
 answer it line for line.
 """
 import os
@@ -364,7 +365,7 @@ B17 chdir ld ; getcwd: ok /tmp/p040/d
 B18 chdir up3 ; getcwd: ok /
 B19 chdir abs ; getcwd: ok /etc
 B20 readlink f: EINVAL
-B21 listdir up3/usr/usr/etc: ok ['group', 'motd', 'passwd']
+B21 listdir up3/usr/usr/etc: ok ['group', 'mc', 'motd', 'passwd']
 B22 open(O_CREAT) through dangling into missing dir: ENOENT
 B23 open(O_CREAT) through abs link into /etc: EROFS
 B24 rmdir ld: ENOTDIR
@@ -418,7 +419,7 @@ G01 open(O_DIRECTORY) /etc/motd: ENOTDIR
 G02 open(O_DIRECTORY|O_NOFOLLOW) /usr: ENOTDIR
 G03 open(O_WRONLY) d: EISDIR
 G04 listdir ld: ok ['x']
-G05 listdir /usr/usr/etc: ok ['group', 'motd', 'passwd']
+G05 listdir /usr/usr/etc: ok ['group', 'mc', 'motd', 'passwd']
 H01 access dl F_OK: ok False
 H02 access dl F_OK, not following: ok True
 H03 chmod lf 600, not following ; f's mode: n/a
@@ -461,6 +462,7 @@ def linux():
             (root / d).mkdir(parents=True, exist_ok=True)
         for name, text in FILES.items():
             (root / name).write_text(text)
+        (root / "etc/mc").mkdir()
         (root / "usr").symlink_to("/")
         (root / "dev/null").touch()
         (root / "probe.py").write_text(PROBE)

@@ -39,6 +39,11 @@ DOOMGENERIC = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
 PYTHON = "3.14.10"
 STR = "1318a0f603c8d23839f02840cc1d9129c82f0839"
 LLVM = "23.1.5"
+MC = "4.8.33"
+GLIB = "2.90.1"
+SLANG = "2.3.3"
+PCRE2 = "10.49"
+NCURSES = "6.6"
 
 
 def fetch(name, url, sha256, output):
@@ -100,6 +105,43 @@ llvm_tarball = fetch(
     f"https://github.com/llvm/llvm-project/releases/download/llvmorg-{LLVM}/llvm-project-{LLVM}.src.tar.xz",
     "fb50b1eac93ddeb3aa8dab4cfe324dff74f4a9c2bdee6160c9e36188f8d06a6e",
     f"$(B)/ext/llvm-project-{LLVM}.src.tar.xz",
+)
+
+# Midnight Commander and what it stands on (bin/mc); ncurses for its
+# source of the terminals' descriptions (dev/terminfo.py).
+mc_tarball = fetch(
+    "mc_tarball",
+    f"http://ftp.midnight-commander.org/mc-{MC}.tar.xz",
+    "cae149d42f844e5185d8c81d7db3913a8fa214c65f852200a9d896b468af164c",
+    f"$(B)/ext/mc-{MC}.tar.xz",
+)
+
+glib_tarball = fetch(
+    "glib_tarball",
+    f"https://download.gnome.org/sources/glib/{GLIB.rsplit('.', 1)[0]}/glib-{GLIB}.tar.xz",
+    "93c941aa17d5eb1d53fe838365f29a8b4e539c222a256d974ec8f30fc413e396",
+    f"$(B)/ext/glib-{GLIB}.tar.xz",
+)
+
+slang_tarball = fetch(
+    "slang_tarball",
+    f"https://www.jedsoft.org/releases/slang/slang-{SLANG}.tar.bz2",
+    "f9145054ae131973c61208ea82486d5dd10e3c5cdad23b7c4a0617743c8f5a18",
+    f"$(B)/ext/slang-{SLANG}.tar.bz2",
+)
+
+pcre2_tarball = fetch(
+    "pcre2_tarball",
+    f"https://github.com/PCRE2Project/pcre2/releases/download/pcre2-{PCRE2}/pcre2-{PCRE2}.tar.bz2",
+    "53c156e1ba416a20da8e65395daa132da0d80e76910424caca3fcdae7831d384",
+    f"$(B)/ext/pcre2-{PCRE2}.tar.bz2",
+)
+
+ncurses_tarball = fetch(
+    "ncurses_tarball",
+    f"https://ftp.gnu.org/gnu/ncurses/ncurses-{NCURSES}.tar.gz",
+    "355b4cbbed880b0381a04c46617b7656e362585d52e9cf84a67e2009b749ff11",
+    f"$(B)/ext/ncurses-{NCURSES}.tar.gz",
 )
 
 # doom1.wad of the shareware 1.9, the last one id released
@@ -590,9 +632,42 @@ python = command(
 )
 python_exe = executable("python_exe", python, "$(B)/bin/python/python3", tail=python.outputs[1])
 
-# The system: the base system and python.
-SYSTEM = [*BASE, python_exe]
-SYSTEM_IMAGE = [*BASE_IMAGE, "--python", python_exe.outputs[0]]
+# mc: Midnight Commander on GLib and S-Lang, mc.wasm, and mc.tar, what it
+# reads as it runs: its configuration, skins, syntax rules and scripts.
+mc = command(
+    name="mc",
+    inputs=[*LIBC_HEADERS, "$(S)/bin/mc/make.py", "$(S)/bin/mc/mc-config.h", "$(S)/bin/mc/glib-config.h", "$(S)/bin/mc/slang-config.h",
+            "$(S)/dev/wasm.py", "$(S)/dev/fpcast.py"],
+    outputs=["$(B)/bin/mc/mc.wasm", "$(B)/bin/mc/mc.tar"],
+    deps=[mc_tarball, glib_tarball, slang_tarball, pcre2_tarball, libc],
+    cmd=["python3", "$(S)/bin/mc/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], mc_tarball.outputs[0],
+         glib_tarball.outputs[0], slang_tarball.outputs[0], pcre2_tarball.outputs[0], "$(B)/bin/mc/mc.wasm", "$(B)/bin/mc/mc.tar"],
+    descr="CC",
+    color="cyan",
+)
+mc_exe = executable("mc_exe", mc, "$(B)/bin/mc/mc")
+
+# The terminfo database, /usr/share/terminfo: the terminals a program of
+# the system may find itself on, the console's own, vt100, first.
+TERMINALS = ["vt100", "vt102", "vt220", "ansi", "dumb", "linux", "xterm", "xterm-256color", "screen", "screen-256color", "tmux",
+             "tmux-256color", "rxvt-256color", "st-256color", "konsole-256color", "alacritty", "foot", "kitty"]
+terminfo = command(
+    name="terminfo",
+    inputs=["$(S)/dev/terminfo.py", "$(S)/dev/wasm.py"],
+    outputs=["$(B)/share/terminfo.tar"],
+    deps=[ncurses_tarball],
+    cmd=["python3", "$(S)/dev/terminfo.py", ncurses_tarball.outputs[0], "$(B)/share/terminfo.tar", *TERMINALS],
+    descr="TI",
+    color="cyan",
+)
+
+# The system: the base system, python, and mc with the terminals'
+# descriptions; mcedit, mcview and mcdiff are mc by another name.
+SYSTEM = [*BASE, python_exe, mc, mc_exe, terminfo]
+SYSTEM_IMAGE = [*BASE_IMAGE, "--python", python_exe.outputs[0],
+                "--program", "mc", mc_exe.outputs[0], *(arg for name in ("mcedit", "mcview", "mcdiff") for arg in ("--link", name, "mc")),
+                *(arg for member in ("etc/mc", "share/mc", "libexec/mc") for arg in ("--tar", "/" + member, mc.outputs[1], member)),
+                "--tar", "/share/terminfo", terminfo.outputs[0], "terminfo"]
 rootfs_image, rootfs = system("rootfs", SYSTEM, SYSTEM_IMAGE, "bin/rootfs")
 
 # clang for this system: LLVM's multicall program of the release lib/cxx
@@ -645,6 +720,30 @@ libc_check = command(
     color="green",
 )
 libc_check_exe = executable("libc_check_exe", libc_check, "$(B)/tst/libc/check")
+
+# test_fpcast's program, as the linker leaves it and as dev/fpcast.py
+# rewrites it.
+fpcast_plain = command(
+    name="fpcast_plain",
+    inputs=[*LIBC_HEADERS, "$(S)/tst/fpcast/check.c", "$(S)/tst/libc/make.py", "$(S)/dev/wasm.py"],
+    outputs=["$(B)/tst/fpcast/plain.wasm"],
+    deps=[libc],
+    cmd=["python3", "$(S)/tst/libc/make.py", CLANG, WASM_LD, "$(S)/tst/fpcast/check.c", "$(S)/lib/c/include", libc.outputs[0],
+         "$(B)/tst/fpcast/plain.wasm"],
+    descr="CC",
+    color="green",
+)
+fpcast_check = command(
+    name="fpcast_check",
+    inputs=["$(S)/dev/fpcast.py"],
+    outputs=["$(B)/tst/fpcast/check.wasm"],
+    deps=[fpcast_plain],
+    cmd=["python3", "$(S)/dev/fpcast.py", fpcast_plain.outputs[0], "$(B)/tst/fpcast/check.wasm"],
+    descr="FP",
+    color="green",
+)
+fpcast_plain_exe = executable("fpcast_plain_exe", fpcast_plain, "$(B)/tst/fpcast/plain")
+fpcast_check_exe = executable("fpcast_check_exe", fpcast_check, "$(B)/tst/fpcast/check")
 
 # test_asan's program: lib/c's allocator, string functions and calls misused,
 # one memory error a case, built as test_libc's is but with -g, so the
@@ -876,6 +975,8 @@ TEST_FILES = [
     ("/tests/doom/doom", doom_exe),
     ("/tests/doom/doom1.wad", doom_wad),
     ("/tests/chaos/check", chaos_check_exe),
+    ("/tests/fpcast/plain", fpcast_plain_exe),
+    ("/tests/fpcast/check", fpcast_check_exe),
 ]
 TEST_TREES = [("/tests/libc/etc", "$(S)/tst/libc/etc"), ("/tests/busybox", "$(S)/tst/busybox")]
 # CPython's own tests, in the standard library's directory, which python
@@ -981,6 +1082,8 @@ APPLICATION_TESTED = {
     "busybox": [vm, rootfs, tests_image],
     "clang": [vm, rootfs, clang_image],
     "doom": [vm, rootfs, tests_image],
+    "fpcast": [vm, rootfs, tests_image],
+    "mc": [vm, rootfs, tests_image],
     "python": [vm, rootfs, tests_image],
 }
 TESTED = {**E2E_TESTED, **APPLICATION_TESTED}
