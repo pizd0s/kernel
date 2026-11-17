@@ -157,7 +157,7 @@ type Process struct {
 	// asking is the request the process has at a server now, by the end
 	// its reply comes on, nil for none; cancelled says a CANCEL went for
 	// it, as the process took a signal (takeSignals).
-	asking    *pairEnd
+	asking    *replyEnd
 	cancelled bool
 	// interruption is what the signals the process took in its waits said
 	// since its call began: none taken, some, or one whose handler did not

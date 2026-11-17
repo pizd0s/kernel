@@ -601,32 +601,6 @@ func (e *pairEnd) recv(p *Process, mode ioMode, peek bool) (packet, bool, error)
 	}
 }
 
-// kernelRecv takes the next packet for p, the reply of a server: p takes
-// its signals as it waits, and waits on.
-func (e *pairEnd) kernelRecv(p *Process) (packet, bool, error) {
-	if pk, eof, ok := e.take(false); ok {
-		return pk, eof, nil
-	}
-
-	sub := p.subscription(0)
-	e.subscribe(sub, pollIn)
-
-	defer p.release(sub)
-	defer e.unsubscribe(sub)
-
-	var pk packet
-	var eof bool
-
-	p.wait(time.Time{}, func(*event) (bool, error) {
-		var ok bool
-		pk, eof, ok = e.take(false)
-
-		return ok, nil
-	})
-
-	return pk, eof, nil
-}
-
 // receive reads into the guest's buffers: a packet, of a seqpacket or a
 // datagram pair, whose whole length is the count with MSG_TRUNC, or the
 // bytes of a stream (receiveStream). The files and the credentials it

@@ -336,10 +336,9 @@ func (p *Process) takeSignals() {
 		return
 	}
 
-	if end := p.asking; end != nil && !p.cancelled && p.sig.deliverable() != 0 {
-		// A server that answered already closed its end.
+	if r := p.asking; r != nil && !p.cancelled && p.sig.deliverable() != 0 {
 		p.cancelled = true
-		request(p, end, rCancel, 0, nil, nil)
+		r.cancel(p)
 	}
 
 	before := p.interruption
@@ -359,14 +358,14 @@ func (p *Process) takeSignals() {
 // end its reply comes on; it returns what was noted before, the request
 // of a call a handler of whose wait makes this one, for unask to put back
 // as this one ends.
-func (p *Process) ask(end *pairEnd) (*pairEnd, bool) {
+func (p *Process) ask(r *replyEnd) (*replyEnd, bool) {
 	outer, was := p.asking, p.cancelled
-	p.asking, p.cancelled = end, false
+	p.asking, p.cancelled = r, false
 
 	return outer, was
 }
 
-func (p *Process) unask(outer *pairEnd, was bool) {
+func (p *Process) unask(outer *replyEnd, was bool) {
 	p.asking, p.cancelled = outer, was
 }
 

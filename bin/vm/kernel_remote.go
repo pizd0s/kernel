@@ -531,36 +531,28 @@ func request(p *Process, to *pairEnd, op, arg uint32, body []byte, files []Objec
 	return to.kernelSend(p, data, files)
 }
 
-// reply waits for the reply on an endpoint: the reply must come to the
-// request that was sent. A server that goes away is EIO; its error is
-// the reply's.
-func reply(p *Process, on *pairEnd) (packet, error) {
-	pk, eof, err := on.kernelRecv(p)
-
-	if err != nil {
-		return pk, err
-	}
-
-	return replyOf(pk, eof)
-}
-
-// replyOf is the reply a packet is: its body after the header, or the
-// server's error.
-func replyOf(pk packet, eof bool) (packet, error) {
+// replyOf makes of the packet a reply came in the reply itself, its body
+// after the header; or it is the server's error, and EIO for a server
+// that went with no answer, eof.
+func replyOf(pk *packet, eof bool) error {
 	if eof || len(pk.data) < remoteHeader {
-		return pk, syscall.EIO
+		dropFiles(pk.files)
+		pk.files = nil
+
+		return syscall.EIO
 	}
 
 	if binary.LittleEndian.Uint32(pk.data) == rErr {
 		dropFiles(pk.files)
+		pk.files = nil
 
-		return pk, syscall.Errno(binary.LittleEndian.Uint32(pk.data[4:]))
+		return syscall.Errno(binary.LittleEndian.Uint32(pk.data[4:]))
 	}
 
 	pk.arg = binary.LittleEndian.Uint32(pk.data[4:])
 	pk.data = pk.data[remoteHeader:]
 
-	return pk, nil
+	return nil
 }
 
 // waiting is a READ or a WRITE, which may wait at its server as long as
@@ -575,54 +567,47 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 		return packet{}, false, syscall.EINTR
 	}
 
-	mine, theirs := newPair(false)
-	err = request(p, n.end, op, arg, body, append(files, theirs))
-	theirs.unref()
+	r := newReply(p)
+	defer r.leave()
+	err = request(p, n.end, op, arg, body, append(files, r))
+	r.unref()
 
 	if err == syscall.EPIPE {
 		err = syscall.EIO // the server is gone
 	}
 
 	if err != nil {
-		mine.unref()
-
 		return packet{}, false, err
 	}
 
-	defer mine.unref()
-	sub := p.subscription(0)
-	mine.subscribe(sub, pollIn)
-	outer, was := p.ask(mine)
-
+	outer, was := p.ask(r)
 	defer p.unask(outer, was)
-	defer p.release(sub)
-	defer mine.unsubscribe(sub)
 
 	_, err = p.wait(time.Time{}, func(*event) (bool, error) {
-		if got, eof, ok := mine.take(false); ok {
-			pk, err = replyOf(got, eof)
-			dropFiles(pk.files)
-			pk.files = nil
-
-			return true, err
+		if r.state.Load() == replyWaits {
+			return false, nil
 		}
 
-		return false, nil
+		err = replyOf(&pk, r.take(&pk))
+		dropFiles(pk.files)
+		pk.files = nil
+
+		return true, err
 	})
 
 	return pk, p.cancelled && !p.interrupts(true), err
 }
 
-// call is a call on the node: a fresh pair, its one end with the
-// request, the reply on the other, the reply's packet. files go with the
+// call is a call on the node: a fresh endpoint for the reply
+// (kernel_reply.go) with the request, the reply's packet. files go with the
 // request and stay the caller's. Only an OPEN's reply brings a file, the
 // open file's endpoint, and a CONNECT's, the listener, which the packet
 // keeps; the files of any other reply, or the rest of theirs, go here.
 func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []Object) (packet, error) {
-	mine, theirs := newPair(false)
-	defer mine.unref()
-	err := request(p, n.end, op, arg, body, append(files, theirs))
-	theirs.unref()
+	r := newReply(p)
+	defer r.leave()
+	err := request(p, n.end, op, arg, body, append(files, r))
+	r.unref()
 
 	if err == syscall.EPIPE {
 		err = syscall.EIO // the server is gone
@@ -632,12 +617,12 @@ func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []Objec
 		return packet{}, err
 	}
 
-	outer, was := p.ask(mine)
+	outer, was := p.ask(r)
 	defer p.unask(outer, was)
 
-	pk, err := reply(p, mine)
+	var pk packet
 
-	if err != nil {
+	if err := replyOf(&pk, r.wait(p, &pk)); err != nil {
 		return packet{}, err
 	}
 
