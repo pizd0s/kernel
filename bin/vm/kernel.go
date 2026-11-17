@@ -39,8 +39,8 @@ type Kernel struct {
 	names systemNames
 	mu    sync.Mutex
 	procs map[int32]*Process
-	// lastPid is the last pid given: a pid is given once, and the locks of
-	// a server's files are kept by it (kernel_lock.go).
+	// lastPid is the last pid given: a pid is given once, and what a
+	// server serves is named by it (fileKey).
 	lastPid int32
 	// codes are the modules compiled, by the digest of their content;
 	// options are what they are compiled with, `vm run --asan` among them:
@@ -50,7 +50,7 @@ type Kernel struct {
 	// fifos are the pipes of the FIFOs of servers with an end open
 	// (kernel_fifo.go); locks the locks of flock and fcntl on the servers'
 	// files (kernel_lock.go).
-	fifos map[fifoKey]*pipe
+	fifos map[fileKey]*pipe
 	locks lockTable
 	// fg is the foreground process group of the console; cttys are the
 	// sessions' controlling terminals (kernel_terminal.go).
@@ -189,9 +189,9 @@ type procExit struct {
 // host for its root, or with no root at all when root is empty: then it
 // is a server, or a program of none. Its programs compile with options.
 func newKernel(options CompileOptions, user cred) *Kernel {
-	k := &Kernel{procs: map[int32]*Process{}, codes: map[[sha256.Size]byte]*codeEntry{}, options: options, fifos: map[fifoKey]*pipe{},
+	k := &Kernel{procs: map[int32]*Process{}, codes: map[[sha256.Size]byte]*codeEntry{}, options: options, fifos: map[fileKey]*pipe{},
 		exit: make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]Terminal{}}
-	k.locks.files = map[lockKey]*lockedFile{}
+	k.locks.files = map[fileKey]*lockedFile{}
 	k.names.host, k.names.domain = "pizdos", "(none)"
 
 	k.functions = k.functionTable()

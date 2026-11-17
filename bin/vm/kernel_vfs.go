@@ -101,7 +101,7 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (O
 			return nil, syscall.EIO
 		}
 
-		return p.openFifo(&st, flags)
+		return p.openFifo(pk.from, &st, flags)
 	}
 
 	f := pk.files[0]

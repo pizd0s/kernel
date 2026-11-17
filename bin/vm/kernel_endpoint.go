@@ -62,6 +62,9 @@ type packet struct {
 	addr  []byte
 	// arg is a server's reply's arg, of its header (replyOf).
 	arg uint32
+	// from is the pid of the process that sent it, none of the kernel's
+	// own: who answered a request.
+	from int32
 }
 
 // ucred is SCM_CREDENTIALS' struct ucred: the pid, uid and gid of a
@@ -354,7 +357,13 @@ func (e *pairEnd) sendCred(p *Process, data []byte, files []Object, cred *ucred,
 		f.ref()
 	}
 
-	err := e.queue(p, packet{data: data, files: files, cred: cred}, mode)
+	pk := packet{data: data, files: files, cred: cred}
+
+	if p != nil {
+		pk.from = p.pid
+	}
+
+	err := e.queue(p, pk, mode)
 
 	if err != nil {
 		dropFiles(files)

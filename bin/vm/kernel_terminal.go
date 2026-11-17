@@ -32,8 +32,10 @@ import (
 // device's, the same for each open of it, which its server's struct
 // served said.
 type remoteTerminal struct {
-	node     remoteNode
-	dev, ino uint64
+	node remoteNode
+	// key names the terminal: its server, and the dev and ino of its
+	// device the server said (fileKey).
+	key fileKey
 }
 
 func (t *remoteTerminal) ref()   { t.node.ref() }
@@ -115,10 +117,7 @@ const (
 
 // sameTerminal tells whether two opens are of one terminal.
 func sameTerminal(a, b Terminal) bool {
-	ad, ai := a.device()
-	bd, bi := b.device()
-
-	return ad == bd && ai == bi
+	return a.device() == b.device()
 }
 
 // isCtty tells whether a terminal is the caller's controlling terminal.
@@ -395,8 +394,8 @@ func (t *remoteTerminal) count(p *Process, op uint32) (uint32, error) {
 // The Terminal role of a terminal's open file: each call is a request to
 // its server (lib/protocol/protocol.h).
 
-func (t *remoteTerminal) device() (uint64, uint64) {
-	return t.dev, t.ino
+func (t *remoteTerminal) device() fileKey {
+	return t.key
 }
 
 // jobs is what the terminal's READY said last.

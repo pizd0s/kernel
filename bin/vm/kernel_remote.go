@@ -148,8 +148,23 @@ type remoteNode struct {
 	// by file, what names it there (kernel_lock.go): none of a file its
 	// server made with no ino. locked is set once it asked for a lock.
 	locks  *lockTable
-	file   lockKey
+	file   fileKey
 	locked atomic.Bool
+}
+
+// fileKey names to the kernel what a server serves, a file, a directory,
+// a FIFO or a terminal: the pid of the server, which the kernel knows
+// itself, no process chooses and no other process ever has, and the dev
+// and ino the server says, its file system's own, as its stat has them.
+// dev and ino are unique while servers are honest, a dev being a number
+// of the kernel's each takes once; but a server says them, and could say
+// another's: by the pid it names what is its own only, and one that gives
+// two of its own one name harms those two. The locks of flock and fcntl
+// are kept by it (kernel_lock.go), a FIFO's pipe (kernel_fifo.go), and
+// two opens of a terminal are one terminal by it (kernel_terminal.go).
+type fileKey struct {
+	pid      int32
+	dev, ino uint64
 }
 
 // remoteFile is a server's file.
@@ -364,10 +379,11 @@ func (p *Process) libcServedpair(what, sv uint32) uint32 {
 
 // served is the open file a kind of struct served makes of a pair's
 // second end for the process that serves it, as the open flags say: a
-// file, its locks kept by that process and the dev and ino it gives; a
-// terminal's of device dev and ino; or a handle of id, of a directory or
-// of what O_PATH opened; with servedTells its server's READY is its
-// readiness.
+// file, a terminal's, or a handle of id, of a directory or of what O_PATH
+// opened; with servedTells its server's READY is its readiness. That
+// process and the dev and ino it gives name it (fileKey): a file and a
+// directory have their locks by the name, unless the ino is none, and a
+// terminal is one terminal by it.
 func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *pairEnd) (Object, error) {
 	var n *remoteNode
 	var f Object
@@ -377,11 +393,8 @@ func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *pairEn
 		r := &remoteFile{}
 		n, f = &r.node, r
 
-		if ino != 0 {
-			n.locks, n.file = &p.k.locks, lockKey{p.pid, dev, ino}
-		}
 	case servedTerminal:
-		t := &remoteTerminal{dev: dev, ino: ino}
+		t := &remoteTerminal{key: fileKey{p.pid, dev, ino}}
 		n, f = &t.node, t
 	case servedDir:
 		d := &remoteDir{id: id, opath: flags&oPath != 0}
@@ -391,6 +404,10 @@ func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *pairEn
 		n, f = &h.node, h
 	default:
 		return nil, syscall.EINVAL
+	}
+
+	if what := kind &^ servedTells; ino != 0 && (what == servedFile || what == servedDir) {
+		n.locks, n.file = &p.k.locks, fileKey{p.pid, dev, ino}
 	}
 
 	n.end, n.accmode, n.tells = end, flags&syscall.O_ACCMODE, kind&servedTells != 0
@@ -837,7 +854,9 @@ func (n *remoteNode) waits(p *Process, op, arg uint32, body []byte) error {
 // to the end and past for none: F_OFD_SETLK sets it in place of what the
 // open file held of the bytes, EAGAIN for another open file's in the way,
 // F_OFD_SETLKW waits for it, F_UNLCK lets the bytes go, and F_OFD_GETLK
-// tells the lock in the way, from the start, F_UNLCK for none.
+// tells the lock in the way, from the start, F_UNLCK for none. A lock to
+// read is set on a file open to read, one to write on a file open to
+// write, as POSIX has it: EBADF else.
 func (n *remoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
 	if n.locks == nil {
 		return syscall.EINVAL
@@ -876,6 +895,8 @@ func (n *remoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error 
 	}
 
 	switch {
+	case cmd != fOfdGetlk && (lk.Type == fRdlck && n.accmode == syscall.O_WRONLY || lk.Type == fWrlck && n.accmode == syscall.O_RDONLY):
+		return syscall.EBADF
 	case cmd == fOfdGetlk:
 		lk.Whence, lk.Pid = 0, -1
 		way, found := n.locks.way(want)

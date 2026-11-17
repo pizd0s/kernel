@@ -5,22 +5,19 @@ package main
 import "syscall"
 
 // A FIFO of a server is a node and nothing more (bin/rootfs/rootfs.cpp):
-// its pipe is the kernel's, kept by the FIFO's device and inode while an
-// end of it is open, and an open of the FIFO joins it as a reader, a
-// writer or, with O_RDWR, both (kernel_pipe.go join). An open to read
+// its pipe is the kernel's, kept by the FIFO's name while an end of it is
+// open, the server that answered its open and the dev and ino it said
+// there (fileKey), and an open of the FIFO joins it as a reader, a writer
+// or, with O_RDWR, both (kernel_pipe.go join). An open to read
 // waits for a writer and one to write for a reader, as POSIX has it,
 // unless O_NONBLOCK: then a reader goes on alone and a writer with no
 // reader is ENXIO.
-
-type fifoKey struct {
-	dev, ino uint64
-}
 
 // fifoName is what a FIFO's pipe knows of the FIFO: where the kernel keeps
 // it, its mode.
 type fifoName struct {
 	k    *Kernel
-	key  fifoKey
+	key  fileKey
 	mode uint32
 }
 
@@ -38,13 +35,13 @@ func (n *fifoName) forget(pp *pipe) {
 	}
 }
 
-// openFifo opens the FIFO of a server whose stat st is, with the flags of
-// open.
-func (p *Process) openFifo(st *syscall.Stat_t, flags int) (Object, error) {
+// openFifo opens the FIFO of a server, the process from that answered its
+// open, whose stat st is, with the flags of open.
+func (p *Process) openFifo(from int32, st *syscall.Stat_t, flags int) (Object, error) {
 	access := flags & syscall.O_ACCMODE
 	reads, writes := access != syscall.O_WRONLY, access != syscall.O_RDONLY
 	nonblock := flags&syscall.O_NONBLOCK != 0
-	key := fifoKey{st.Dev, st.Ino}
+	key := fileKey{from, st.Dev, st.Ino}
 	k := p.k
 	k.mu.Lock()
 	pp := k.fifos[key]

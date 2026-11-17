@@ -147,8 +147,9 @@ type Dir interface {
 // its reads and writes go through.
 type Terminal interface {
 	Transfer
-	// device is the terminal's device, the same for each open of it.
-	device() (uint64, uint64)
+	// device names the terminal, the same for each open of it and for
+	// no open of another, whatever its server says (fileKey).
+	device() fileKey
 	// jobs is what job control asks of the terminal, as its server said
 	// it last: the foreground group, TOSTOP, and whether it hung up.
 	jobs() (foreground int32, tostop, hungUp bool)

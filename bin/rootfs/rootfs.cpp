@@ -1465,11 +1465,15 @@ Answer Ask::await_resume() const noexcept {
 
 // A new handle at a place: a served pair, of a directory's handle or of
 // what O_PATH opened that is no directory, its id the next; our end is
-// the handle, the other end, the kernel's, -1 when there is no pair.
+// the handle, the other end, the kernel's, -1 when there is no pair. The
+// place's dev and ino go with it, its file system's, which the kernel
+// keeps a directory's locks by: none of a place whose file system has not
+// said its stat yet.
 static int makeHandle(const Place& at, int flags, int& theirs) {
     const bool opath = (flags & O_PATH) != 0;
     const u64 id = ++handleIds;
-    const served what{u32(isDir(at) ? SERVED_DIR : SERVED_PATH), u32(flags) & (O_ACCMODE | O_APPEND | O_NONBLOCK | O_PATH), 0, 0, id};
+    const u64 ino = at.st.dev != 0 ? at.st.ino : 0;
+    const served what{u32(isDir(at) ? SERVED_DIR : SERVED_PATH), u32(flags) & (O_ACCMODE | O_APPEND | O_NONBLOCK | O_PATH), at.st.dev, ino, id};
     int pair[2];
     if (servedpair(&what, pair) != 0) {
         return -1;

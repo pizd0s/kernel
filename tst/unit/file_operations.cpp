@@ -114,6 +114,25 @@ int main() {
     assert(flock(fd, LOCK_EX | LOCK_NB) == 0 && flock(fd, LOCK_UN) == 0);
     assert(flock(fd, 0) == -1 && errno == EINVAL);
     assert(flock(-1, LOCK_EX) == -1 && errno == EBADF);
+    // A lock of fcntl's to write wants a file open to write, one to read
+    // a file open to read; flock's lock wants neither.
+    int readOnly = open("data", O_RDONLY);
+    int writeOnly = open("data", O_WRONLY);
+    assert(readOnly >= 0 && writeOnly >= 0);
+    lock.l_type = F_WRLCK;
+    assert(fcntl(readOnly, F_SETLK, &lock) == -1 && errno == EBADF);
+    assert(lockf(readOnly, F_TLOCK, 4) == -1 && errno == EBADF);
+    lock.l_type = F_RDLCK;
+    assert(fcntl(writeOnly, F_SETLK, &lock) == -1 && errno == EBADF);
+    assert(flock(readOnly, LOCK_EX | LOCK_NB) == 0 && flock(readOnly, LOCK_UN) == 0);
+    assert(close(readOnly) == 0 && close(writeOnly) == 0);
+    // A directory has flock's lock, an open's as a file's is.
+    int firstOpen = open(".", O_RDONLY | O_DIRECTORY);
+    int secondOpen = open(".", O_RDONLY | O_DIRECTORY);
+    assert(firstOpen >= 0 && secondOpen >= 0 && flock(firstOpen, LOCK_EX) == 0);
+    assert(flock(secondOpen, LOCK_EX | LOCK_NB) == -1 && errno == EWOULDBLOCK);
+    assert(flock(firstOpen, LOCK_UN) == 0 && flock(secondOpen, LOCK_EX | LOCK_NB) == 0);
+    assert(close(firstOpen) == 0 && close(secondOpen) == 0);
     assert(fchmod(fd, 0640) == 0 && fstat(fd, &metadata) == 0 && (metadata.st_mode & 0777) == 0640);
     assert(fchmod(-1, 0600) == -1 && errno == EBADF);
     assert(fchown(fd, uid_t(-1), gid_t(-1)) == 0);

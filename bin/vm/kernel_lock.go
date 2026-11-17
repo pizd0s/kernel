@@ -12,13 +12,11 @@ import (
 // of them, which of its open files are one file; the kernel knows the
 // rest: who holds a lock, who waits for one, when an open file closes.
 //
-// A file is named by three: the pid of the process that made the open
-// file (servedpair), which the kernel knows itself, no process chooses and
-// no other process ever has; and the dev and ino that process gave the
-// file there, its file system's own numbers, as its stat has them. So a
-// server names its own files only: one that gives the dev and ino of
-// another's file has another file, and one that gives two of its files
-// one name harms those two. An open file made with no ino has no locks.
+// A file is named by its fileKey (kernel_remote.go): the process that
+// made the open file, and the dev and ino it gave the file there. An open
+// file made with no ino has no locks. A directory's handle is rootfs's,
+// which gives it the directory's dev and ino: a directory has flock's
+// lock so.
 //
 // The table is the kernel's and lives as long. A file is in it while a
 // lock on it is held or waited for. A lock is an open file's, as Linux's
@@ -31,12 +29,6 @@ import (
 // tries. A process that waits sleeps as in any wait (waitFor): a signal it
 // takes interrupts it, unless its handlers restart calls, and then it
 // keeps its place.
-
-// lockKey names a file to the table.
-type lockKey struct {
-	pid      int32
-	dev, ino uint64
-}
 
 // lockPast is the stop of a range to the end of a file and past it.
 const lockPast = math.MaxUint64
@@ -64,7 +56,7 @@ type lockedFile struct {
 
 type lockTable struct {
 	mu    sync.Mutex
-	files map[lockKey]*lockedFile
+	files map[fileKey]*lockedFile
 }
 
 // crossing tells whether two locks are in each other's way: two open
@@ -182,7 +174,7 @@ func (f *lockedFile) give() bool {
 // lock held or waited for leaves the table. It tells whether a lock was
 // given: those that wait are told then (given.tell), the table's lock let
 // go of.
-func (t *lockTable) settle(key lockKey, f *lockedFile) bool {
+func (t *lockTable) settle(key fileKey, f *lockedFile) bool {
 	given := f.give()
 
 	if f.held == nil && f.waiting == nil {
