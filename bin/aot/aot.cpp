@@ -5091,6 +5091,12 @@ static constexpr Int intrinsicStrspn = 10;
 
 static constexpr Int intrinsicStrcspn = 11;
 
+static constexpr Int intrinsicStrnlen = 12;
+
+static constexpr Int intrinsicStrstr = 13;
+
+static constexpr Int intrinsicMemmem = 14;
+
 static constexpr Int constF32Sign = 0;
 
 static constexpr Int constF32Abs = 1;
@@ -5472,6 +5478,15 @@ static const String symStrcmp = String("str.strcmp");
 static const String symStrspn = String("str.strspn");
 
 static const String symStrcspn = String("str.strcspn");
+
+// strnlen takes the string and the most to look at, strstr the two
+// strings, memmem the two ranges, each an address and a length; strnlen's
+// result is a length, theirs an address or null.
+static const String symStrnlen = String("str.strnlen");
+
+static const String symStrstr = String("str.strstr");
+
+static const String symMemmem = String("str.memmem");
 
 static constexpr SortedHint unknownHint = SortedHint(0LL);
 
@@ -6001,7 +6016,17 @@ static void lowererCheckEnd(Lowerer* l, VReg a, VReg n, u8 cc);
 
 static void lowererMemCompare(Lowerer* l, i32 v, Span<const i32> args);
 
+static VReg lowererWithin(Lowerer* l, VReg s, VReg n);
+
+static void lowererGuestPointer(Lowerer* l, i32 v, VReg p);
+
 static void lowererMemFind(Lowerer* l, i32 v, Span<const i32> args);
+
+static void lowererStrBound(Lowerer* l, i32 v, Span<const i32> args);
+
+static void lowererStrFind(Lowerer* l, i32 v, Span<const i32> args);
+
+static void lowererMemSearch(Lowerer* l, i32 v, Span<const i32> args);
 
 static void lowererStrCopy(Lowerer* l, i32 v, Span<const i32> args, bool append);
 
@@ -17293,6 +17318,18 @@ static void lowererIntrinsic(Lowerer* l, i32 v, Int intrinsic, Span<const i32> a
             lowererStrPair(l, v, args, symStrcspn);
             return;
         }
+        case intrinsicStrnlen: {
+            lowererStrBound(l, v, args);
+            return;
+        }
+        case intrinsicStrstr: {
+            lowererStrFind(l, v, args);
+            return;
+        }
+        case intrinsicMemmem: {
+            lowererMemSearch(l, v, args);
+            return;
+        }
     }
     if (intrinsic == intrinsicMemset) {
         lowererMemFill(l, args);
@@ -17304,12 +17341,12 @@ static void lowererIntrinsic(Lowerer* l, i32 v, Int intrinsic, Span<const i32> a
     }
 }
 
-// strCall calls the function of lib/str sym names with up to three
-// arguments in AX, CX and DX, as the module's functions call each other:
-// it changes what such a call may, and the instance and the memory base
-// stay. What it returns is in AX after it.
+// strCall calls the function of lib/str sym names with up to four
+// arguments in AX, CX, DX and SI, as the module's functions call each
+// other: it changes what such a call may, and the instance and the memory
+// base stay. What it returns is in AX after it.
 static void lowererStrCall(Lowerer* l, String sym, Span<const VReg> args) {
-    const VReg regs[] = {RAX, RCX, RDX};
+    const VReg regs[] = {RAX, RCX, RDX, RSI};
     Slice<Move> moves = {};
     Slice<VReg> uses = {};
     for (Int i = 0; i < length(args); ++i) {
@@ -17443,13 +17480,9 @@ static void lowererSign(Lowerer* l, i32 v) {
     lowererEmit(l, sub);
 }
 
-// memFind compiles memchr as the kernel's: it searches up to n bytes or
-// to the memory's end, whichever is nearer, and a search that found
-// nothing short of n bytes traps. The result is the address found, or 0.
-static void lowererMemFind(Lowerer* l, i32 v, Span<const i32> args) {
-    VReg s = lowererUse(l, args[0]);
-    VReg c = lowererUse(l, args[1]);
-    VReg n = lowererUse(l, args[2]);
+// within is n or what the memory has from s on, whichever is less: how
+// far a search from s may look. s is within the memory or at its end.
+static VReg lowererWithin(Lowerer* l, VReg s, VReg n) {
     lowererCheckEnd(l, s, noReg, ccA);
     VReg room = mFuncNewReg(l->mf, classGPR);
     MInst ld = inst(mLoad);
@@ -17477,6 +17510,45 @@ static void lowererMemFind(Lowerer* l, i32 v, Span<const i32> args) {
     least.cc = ccA;
     least.size = 8;
     lowererEmit(l, least);
+    return m;
+}
+
+// guestPointer makes v, if used, the address in the memory of the host
+// address p a function of lib/str returned, null for null.
+static void lowererGuestPointer(Lowerer* l, i32 v, VReg p) {
+    if (v < 0 || l->uses[v] == 0) {
+        return;
+    }
+    VReg r = mFuncNewReg(l->mf, classGPR);
+    lowererMov(l, r, p, 8);
+    MInst off = inst(mAlu);
+    off.dst = r;
+    off.src = memReg;
+    off.size = 8;
+    off.aux = convert<u8>(aluSub);
+    lowererEmit(l, off);
+    MInst none = inst(mTest);
+    none.src = p;
+    none.src2 = p;
+    none.size = 8;
+    lowererEmit(l, none);
+    MInst null = inst(mCmov);
+    null.dst = r;
+    null.src = p;
+    null.cc = ccE;
+    null.size = 8;
+    lowererEmit(l, null);
+    lowererMov(l, lowererDef(l, v), r, 4);
+}
+
+// memFind compiles memchr as the kernel's: it searches up to n bytes or
+// to the memory's end, whichever is nearer, and a search that found
+// nothing short of n bytes traps. The result is the address found, or 0.
+static void lowererMemFind(Lowerer* l, i32 v, Span<const i32> args) {
+    VReg s = lowererUse(l, args[0]);
+    VReg c = lowererUse(l, args[1]);
+    VReg n = lowererUse(l, args[2]);
+    VReg m = lowererWithin(l, s, n);
     lowererStrCall(l, symMemchr, Span<const VReg>({lowererHostAddress(l, s), c, m}));
     VReg p = lowererStrResult(l);
     if (l->m->asan) {
@@ -17534,29 +17606,95 @@ static void lowererMemFind(Lowerer* l, i32 v, Span<const i32> args) {
     cut.size = 8;
     lowererEmit(l, cut);
     lowererTrapIf(l, ccB, trapMemoryOOB);
-    if (v < 0 || l->uses[v] == 0) {
-        return;
+    lowererGuestPointer(l, v, p);
+}
+
+// strBound compiles strnlen as memFind compiles memchr: lib/str's strnlen
+// looks at up to n bytes or to the memory's end, whichever is nearer, and
+// a string with no NUL short of n bytes at the memory's end traps. The
+// result is the string's length, n for one with no NUL in n bytes.
+static void lowererStrBound(Lowerer* l, i32 v, Span<const i32> args) {
+    VReg s = lowererUse(l, args[0]);
+    VReg n = lowererUse(l, args[1]);
+    VReg m = lowererWithin(l, s, n);
+    lowererStrCall(l, symStrnlen, Span<const VReg>({lowererHostAddress(l, s), m}));
+    VReg r = lowererStrResult(l);
+    if (l->m->asan) {
+        // The bytes it read: the string and its NUL, or all m of them.
+        VReg read = mFuncNewReg(l->mf, classGPR);
+        lowererMov(l, read, r, 8);
+        MInst nul = inst(mAluImm);
+        nul.dst = read;
+        nul.imm = 1;
+        nul.size = 8;
+        nul.aux = convert<u8>(aluAdd);
+        lowererEmit(l, nul);
+        MInst whole = inst(mCmp);
+        whole.src = r;
+        whole.src2 = m;
+        whole.size = 8;
+        lowererEmit(l, whole);
+        MInst all = inst(mCmov);
+        all.dst = read;
+        all.src = m;
+        all.cc = ccE;
+        all.size = 8;
+        lowererEmit(l, all);
+        lowererAsanRange(l, s, read);
     }
-    VReg r = mFuncNewReg(l->mf, classGPR);
-    lowererMov(l, r, p, 8);
-    MInst off = inst(mAlu);
-    off.dst = r;
-    off.src = memReg;
-    off.size = 8;
-    off.aux = convert<u8>(aluSub);
-    lowererEmit(l, off);
-    MInst none = inst(mTest);
-    none.src = p;
-    none.src2 = p;
-    none.size = 8;
-    lowererEmit(l, none);
-    MInst null = inst(mCmov);
-    null.dst = r;
-    null.src = p;
-    null.cc = ccE;
-    null.size = 8;
-    lowererEmit(l, null);
-    lowererMov(l, lowererDef(l, v), r, 4);
+    // x is n when the NUL was found and m when not: below n it trapped
+    VReg x = mFuncNewReg(l->mf, classGPR);
+    lowererMov(l, x, n, 8);
+    MInst found = inst(mCmp);
+    found.src = r;
+    found.src2 = m;
+    found.size = 8;
+    lowererEmit(l, found);
+    MInst shortened = inst(mCmov);
+    shortened.dst = x;
+    shortened.src = m;
+    shortened.cc = ccE;
+    shortened.size = 8;
+    lowererEmit(l, shortened);
+    MInst cut = inst(mCmp);
+    cut.src = x;
+    cut.src2 = n;
+    cut.size = 8;
+    lowererEmit(l, cut);
+    lowererTrapIf(l, ccB, trapMemoryOOB);
+    if (v >= 0 && l->uses[v] > 0) {
+        lowererMov(l, lowererDef(l, v), r, 4);
+    }
+}
+
+// strFind compiles strstr as strPair compiles strcmp: both strings
+// within the memory, by strlen, before lib/str's function reads them. The
+// result is the address found, or 0.
+static void lowererStrFind(Lowerer* l, i32 v, Span<const i32> args) {
+    VReg h = lowererUse(l, args[0]);
+    VReg n = lowererUse(l, args[1]);
+    lowererStrLength(l, h);
+    lowererStrLength(l, n);
+    lowererStrCall(l, symStrstr, Span<const VReg>({lowererHostAddress(l, h), lowererHostAddress(l, n)}));
+    lowererGuestPointer(l, v, lowererStrResult(l));
+}
+
+// memSearch compiles memmem: both ranges within the memory before
+// lib/str's function reads them. The result is the address found, or 0.
+static void lowererMemSearch(Lowerer* l, i32 v, Span<const i32> args) {
+    VReg h = lowererUse(l, args[0]);
+    VReg hl = lowererUse(l, args[1]);
+    VReg n = lowererUse(l, args[2]);
+    VReg nl = lowererUse(l, args[3]);
+    const Mem end = instanceMem(l->lay->memoryEnd);
+    lowererCheckRange(l, h, hl, end, trapMemoryOOB);
+    lowererCheckRange(l, n, nl, end, trapMemoryOOB);
+    if (l->m->asan) {
+        lowererAsanRange(l, h, hl);
+        lowererAsanRange(l, n, nl);
+    }
+    lowererStrCall(l, symMemmem, Span<const VReg>({lowererHostAddress(l, h), hl, lowererHostAddress(l, n), nl}));
+    lowererGuestPointer(l, v, lowererStrResult(l));
 }
 
 // strPair compiles strcmp, strspn and strcspn as the kernel's: both
@@ -24539,7 +24677,7 @@ static Int intrinsicOf(Import imp, FuncType* t) {
         Int intrinsic;
     };
 
-    const Known known[] = {{String("__kernel_memcpy"), 3, intrinsicMemcpy}, {String("__kernel_memmove"), 3, intrinsicMemmove}, {String("__kernel_memset"), 3, intrinsicMemset}, {String("__kernel_memcmp"), 3, intrinsicMemcmp}, {String("__kernel_memchr"), 3, intrinsicMemchr}, {String("__kernel_strlen"), 1, intrinsicStrlen}, {String("__kernel_strcpy"), 2, intrinsicStrcpy}, {String("__kernel_strcat"), 2, intrinsicStrcat}, {String("__kernel_strcmp"), 2, intrinsicStrcmp}, {String("__kernel_strspn"), 2, intrinsicStrspn}, {String("__kernel_strcspn"), 2, intrinsicStrcspn}};
+    const Known known[] = {{String("__kernel_memcpy"), 3, intrinsicMemcpy}, {String("__kernel_memmove"), 3, intrinsicMemmove}, {String("__kernel_memset"), 3, intrinsicMemset}, {String("__kernel_memcmp"), 3, intrinsicMemcmp}, {String("__kernel_memchr"), 3, intrinsicMemchr}, {String("__kernel_strlen"), 1, intrinsicStrlen}, {String("__kernel_strcpy"), 2, intrinsicStrcpy}, {String("__kernel_strcat"), 2, intrinsicStrcat}, {String("__kernel_strcmp"), 2, intrinsicStrcmp}, {String("__kernel_strspn"), 2, intrinsicStrspn}, {String("__kernel_strcspn"), 2, intrinsicStrcspn}, {String("__kernel_strnlen"), 2, intrinsicStrnlen}, {String("__kernel_strstr"), 2, intrinsicStrstr}, {String("__kernel_memmem"), 4, intrinsicMemmem}};
     for (const Known& k : known) {
         if (imp.name == k.name && length(t->params) == k.params) {
             return k.intrinsic;

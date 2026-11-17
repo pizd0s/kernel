@@ -261,26 +261,10 @@ func (p *Process) libcStrrchr(s, c uint32) uint32 {
 	return 0
 }
 
-func (p *Process) libcStrpbrk(s, accept uint32) uint32 {
-	n := p.spanSet(s, accept, true)
-
-	if p.u8(s+n) == 0 {
-		return 0
-	}
-
-	return s + n
-}
-
 func (p *Process) libcStrncpy(d, s, n uint32) uint32 {
 	p.stpncpy(d, s, n)
 
 	return d
-}
-
-func (p *Process) libcMempcpy(d, s, n uint32) uint32 {
-	copy(p.span(d, n), p.span(s, n))
-
-	return d + n
 }
 
 func (p *Process) libcStrdup(s uint32) uint32 {
@@ -392,14 +376,6 @@ func (p *Process) libcRawmemchr(s, c uint32) uint32 {
 	return at
 }
 
-func (p *Process) libcMemmem(h, hn, n, nn uint32) uint32 {
-	if i := bytes.Index(p.span(h, hn), p.span(n, nn)); i >= 0 {
-		return h + uint32(i)
-	}
-
-	return 0
-}
-
 func (p *Process) libcMemccpy(d, s, c, n uint32) uint32 {
 	end, found := p.search(s, n, byte(c))
 	l := n
@@ -417,18 +393,6 @@ func (p *Process) libcMemccpy(d, s, c, n uint32) uint32 {
 	return 0
 }
 
-func (p *Process) libcBcopy(s, d, n uint32) {
-	copy(p.span(d, n), p.span(s, n))
-}
-
-func (p *Process) libcBzero(d, n uint32) {
-	clear(p.span(d, n))
-}
-
-func (p *Process) libcExplicit_bzero(d, n uint32) {
-	clear(p.span(d, n))
-}
-
 func (p *Process) libcSwab(s, d, n uint32) {
 	if int32(n) < 2 {
 		return
@@ -440,42 +404,6 @@ func (p *Process) libcSwab(s, d, n uint32) {
 	for i := uint32(0); i < n; i += 2 {
 		dst[i], dst[i+1] = src[i+1], src[i]
 	}
-}
-
-func (p *Process) libcStrncat(d, s, n uint32) uint32 {
-	end := d + uint32(len(p.cstr(d)))
-	l := p.strnlen(s, n)
-	copy(p.span(end, l), p.span(s, l))
-	p.span(end+l, 1)[0] = 0
-
-	return d
-}
-
-func (p *Process) libcStrlcpy(d, s, n uint32) uint32 {
-	src := p.cstr(s)
-
-	if n > 0 {
-		k := min(uint32(len(src)), n-1)
-		copy(p.span(d, k), src[:k])
-		p.span(d+k, 1)[0] = 0
-	}
-
-	return uint32(len(src))
-}
-
-func (p *Process) libcStrlcat(d, s, n uint32) uint32 {
-	l := p.strnlen(d, n)
-	src := p.cstr(s)
-
-	if l == n {
-		return l + uint32(len(src))
-	}
-
-	k := min(uint32(len(src)), n-l-1)
-	copy(p.span(d+l, k), src[:k])
-	p.span(d+l+k, 1)[0] = 0
-
-	return l + uint32(len(src))
 }
 
 func (p *Process) libcStrtok(s, delim uint32) uint32 {
@@ -890,20 +818,12 @@ func inClass(class string, c byte) bool {
 	return false
 }
 
-func (p *Process) libcStrnlen(s, n uint32) uint32 {
-	return p.strnlen(s, n)
-}
-
 func (p *Process) libcStrncmp(a, b, n uint32) uint32 {
 	return p.strncmp(a, b, n, false)
 }
 
 func (p *Process) libcStrncasecmp(a, b, n uint32) uint32 {
 	return p.strncmp(a, b, n, true)
-}
-
-func (p *Process) libcStrstr(h, n uint32) uint32 {
-	return p.strstr(h, n, false)
 }
 
 func (p *Process) libcStrcasestr(h, n uint32) uint32 {

@@ -58,8 +58,9 @@ void explicit_bzero(void*, size_t);
 /*
  * These are lib/c's functions over imports the compiler compiles at each
  * call, as the kernel would do them: the ranges and strings checked, a
- * trap past the memory's end. Inline here, so that a call is the import's
- * call; defined in mem.c for a pointer and a call without this header.
+ * trap past the memory's end, and lib/str's function called. Inline here,
+ * so that a call is the import's call; defined in mem.c for a pointer and
+ * a call without this header.
  */
 void* __kernel_memcpy(void* __restrict, const void* __restrict, size_t) __KERNEL(__kernel_memcpy);
 void* __kernel_memmove(void*, const void*, size_t) __KERNEL(__kernel_memmove);
@@ -72,6 +73,9 @@ char* __kernel_strcat(char* __restrict, const char* __restrict) __KERNEL(__kerne
 int __kernel_strcmp(const char*, const char*) __KERNEL(__kernel_strcmp);
 size_t __kernel_strspn(const char*, const char*) __KERNEL(__kernel_strspn);
 size_t __kernel_strcspn(const char*, const char*) __KERNEL(__kernel_strcspn);
+size_t __kernel_strnlen(const char*, size_t) __KERNEL(__kernel_strnlen);
+char* __kernel_strstr(const char*, const char*) __KERNEL(__kernel_strstr);
+void* __kernel_memmem(const void*, size_t, const void*, size_t) __KERNEL(__kernel_memmem);
 
 __INLINE void* memcpy(void* __restrict __d, const void* __restrict __s, size_t __n) {
     return __kernel_memcpy(__d, __s, __n);
@@ -115,6 +119,62 @@ __INLINE size_t strspn(const char* __s, const char* __set) {
 
 __INLINE size_t strcspn(const char* __s, const char* __set) {
     return __kernel_strcspn(__s, __set);
+}
+
+__INLINE size_t strnlen(const char* __s, size_t __n) {
+    return __kernel_strnlen(__s, __n);
+}
+
+__INLINE char* strstr(const char* __h, const char* __n) {
+    return __kernel_strstr(__h, __n);
+}
+
+__INLINE void* memmem(const void* __h, size_t __hl, const void* __n, size_t __nl) {
+    return __kernel_memmem(__h, __hl, __n, __nl);
+}
+
+/*
+ * These are made of those, as lib/str makes them (its derived.c): every
+ * byte they read or write is by a call above, checked there, but the NUL
+ * they put, which is the code's own store.
+ */
+__INLINE void* mempcpy(void* __restrict __d, const void* __restrict __s, size_t __n) {
+    return (char*)__kernel_memcpy(__d, __s, __n) + __n;
+}
+
+__INLINE void explicit_bzero(void* __d, size_t __n) {
+    __kernel_memset(__d, 0, __n);
+}
+
+__INLINE char* strpbrk(const char* __s, const char* __set) {
+    __s += __kernel_strcspn(__s, __set);
+    return *__s ? (char*)__s : 0;
+}
+
+__INLINE char* strncat(char* __restrict __d, const char* __restrict __s, size_t __n) {
+    char* __e = __d + __kernel_strlen(__d);
+    size_t __k = __kernel_strnlen(__s, __n);
+    __kernel_memcpy(__e, __s, __k);
+    __e[__k] = 0;
+    return __d;
+}
+
+__INLINE size_t strlcpy(char* __d, const char* __s, size_t __n) {
+    size_t __l = __kernel_strlen(__s);
+    if (__n) {
+        size_t __k = __l < __n - 1 ? __l : __n - 1;
+        __kernel_memcpy(__d, __s, __k);
+        __d[__k] = 0;
+    }
+    return __l;
+}
+
+__INLINE size_t strlcat(char* __d, const char* __s, size_t __n) {
+    size_t __l = __kernel_strnlen(__d, __n);
+    if (__l == __n) {
+        return __l + __kernel_strlen(__s);
+    }
+    return __l + strlcpy(__d + __l, __s, __n - __l);
 }
 
 __END_DECLS

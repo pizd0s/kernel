@@ -60,6 +60,22 @@ int main() {
     assert(strlen(text) == 15 && strcmp(text, "checked strings") == 0);
     strncpy(other, text, sizeof(other));
     assert(strcmp(other, text) == 0 && strchr(other, ' ') == other + 7);
+    // lib/str's by a call from here, their ranges the sanitizer's too: a
+    // string that ends its block is read to its NUL and written to it,
+    // and no byte past the block is anyone's.
+    char* exact = static_cast<char*>(malloc(16));
+    char* room = static_cast<char*>(malloc(16));
+    assert(exact && room && mempcpy(exact, text, 16) == exact + 16);
+    assert(strnlen(exact, 16) == 15 && strnlen(exact, 4) == 4 && strnlen(exact, 100) == 15);
+    assert(strstr(exact, "strings") == exact + 8 && strstr(exact, "gs") == exact + 13 && strstr(exact, "x") == nullptr);
+    assert(strpbrk(exact, "sx") == exact + 8 && memmem(exact, 16, "ngs", 4) == exact + 12);
+    assert(strlcpy(room, "checked", 16) == 7 && strncat(room, " strings", 8) == room && strcmp(room, exact) == 0);
+    assert(strlcat(room, "", 16) == 15 && strlcat(room, "more", 16) == 19 && bcmp(room, exact, 16) == 0);
+    bzero(room, 16);
+    explicit_bzero(exact, 16);
+    assert(bcmp(room, exact, 16) == 0);
+    free(exact);
+    free(room);
     assert(strncmp(other, "checked stringz", 14) == 0);
     assert(strstr(other, "string") == other + 8);
 
