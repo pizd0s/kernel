@@ -1,13 +1,13 @@
 //@ host: false
 //@ compile-flags: -D_GNU_SOURCE
-//@ stdout: "one name, one file: busy 1, a range busy 1, free after the close 1\nanother ino: free 1\nanother dev: free 1\nanother process, the same name: free 1, and busy among its own 1\nno ino: EINVAL 1\n"
+//@ stdout: "one name, one file: busy 1, a range busy 1, free after the close 1\nanother ino: free 1\nanother dev: free 1\nanother process, the same name: busy 1\nno ino: EINVAL 1\n"
 
 // The kernel keeps the locks of flock and fcntl by what names a file: the
-// process that made the open file with servedpair, and the dev and ino it
-// gave it there. The open files a process gave one dev and ino are one
-// file to lock; those of another ino or dev are other files; and so are
-// those of another process, whatever dev and ino it gives: a server names
-// its own files only. A file made with no ino has no locks.
+// dev and ino its server made the open file with (servedpair). The open
+// files given one dev and ino are one file to lock, whichever process
+// made them, as rootfs makes a directory's handle of its file system's
+// numbers; those of another ino or dev are other files. A file made with
+// no ino has no locks.
 
 #include <assert.h>
 #include <errno.h>
@@ -53,14 +53,13 @@ int main() {
     printf("another ino: free %d\n", taken(file(7, 43)));
     printf("another dev: free %d\n", taken(file(8, 42)));
 
-    // A child is another process: its file of the name b has is another.
+    // A child is another process: its file of the name b has is the same
+    // file, which b holds.
     fflush(stdout);
     const pid_t child = fork();
     assert(child >= 0);
     if (child == 0) {
-        const int mine = file(7, 42);
-        const int free = taken(mine);
-        printf("another process, the same name: free %d, and busy among its own %d\n", free, busy(file(7, 42)));
+        printf("another process, the same name: busy %d\n", busy(file(7, 42)));
         fflush(stdout);
         _exit(0);
     }

@@ -16,12 +16,11 @@
  * flags are the open's: O_ACCMODE, O_APPEND and O_NONBLOCK, and O_PATH
  * of a directory's handle, which takes no locks then. dev and ino are
  * the file's or the directory's, as its stat has them, or a terminal's
- * device's: with the process that made the pair they name it to the
- * kernel. The kernel keeps the locks of flock and fcntl by the name, so
- * what one process gave one dev and ino is one file to lock, and nothing
- * of another process's is that file; a file of ino 0 has no locks. And
- * two opens of a terminal are one terminal by it. id is a handle's, which
- * calls with a path name the root by. Both ends close on exec.
+ * device's: they name it to the kernel. The kernel keeps the locks of
+ * flock and fcntl by them, so the open files given one dev and ino are
+ * one file to lock; a file of ino 0 has no locks. And two opens of a
+ * terminal are one terminal by them. id is a handle's, which calls with
+ * a path name the root by. Both ends close on exec.
  */
 #define SERVED_FILE 1
 #define SERVED_TERMINAL 2

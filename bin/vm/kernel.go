@@ -36,11 +36,9 @@ type Kernel struct {
 	user    cred
 	console *console
 	// names are uname's.
-	names systemNames
-	mu    sync.Mutex
-	procs map[int32]*Process
-	// lastPid is the last pid given: a pid is given once, and what a
-	// server serves is named by it (fileKey).
+	names   systemNames
+	mu      sync.Mutex
+	procs   map[int32]*Process
 	lastPid int32
 	// codes are the modules compiled, by the digest of their content;
 	// options are what they are compiled with, `vm run --asan` among them:

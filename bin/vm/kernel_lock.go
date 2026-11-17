@@ -12,11 +12,10 @@ import (
 // of them, which of its open files are one file; the kernel knows the
 // rest: who holds a lock, who waits for one, when an open file closes.
 //
-// A file is named by its fileKey (kernel_remote.go): the process that
-// made the open file, and the dev and ino it gave the file there. An open
-// file made with no ino has no locks. A directory's handle is rootfs's,
-// which gives it the directory's dev and ino: a directory has flock's
-// lock so.
+// A file is named by its fileKey (kernel_remote.go), the dev and ino its
+// server made the open file with. An open file made with no ino has no
+// locks. A directory's handle is rootfs's, which gives it the directory's
+// dev and ino: a directory has flock's lock so.
 //
 // The table is the kernel's and lives as long. A file is in it while a
 // lock on it is held or waited for. A lock is an open file's, as Linux's

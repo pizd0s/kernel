@@ -33,8 +33,8 @@ import (
 // served said.
 type remoteTerminal struct {
 	node remoteNode
-	// key names the terminal: its server, and the dev and ino of its
-	// device the server said (fileKey).
+	// key names the terminal: the dev and ino of its device, as its
+	// server said them (fileKey).
 	key fileKey
 }
 
