@@ -583,6 +583,18 @@ alignas(Header) static u8 packet[maxPacket];
 static int packetFds[maxFds];
 static usize packetFdCount;
 
+// The answer that waits for the next turn of the loop (turn): one that
+// brings no descriptor and is little enough to copy is not sent at once,
+// when none waits yet. The turn sends it, closes its endpoint and takes
+// the next request in one call of the kernel, servedturn. waitingFd is its
+// endpoint, -1 for none; waitingClosed says its call let go of the
+// endpoint since, as a call does once it answered: else the turn sends
+// the answer alone.
+static int waitingFd = -1;
+static bool waitingClosed;
+static usize waitingSize;
+alignas(Header) static u8 waiting[4096];
+
 // A reply: the header, then the parts where they are.
 static void reply(int fd, u32 op, u32 arg, const iovec* parts, usize count, const int* fds = nullptr, usize fdCount = 0) {
     Header head{op, arg, 0, 0};
@@ -590,10 +602,35 @@ static void reply(int fd, u32 op, u32 arg, const iovec* parts, usize count, cons
     if (count > 2 || fdCount > maxFds) {
         fatal("rootfs: a reply of %zu parts and %zu descriptors", count, fdCount);
     }
+    usize size = sizeof head;
     for (usize i = 0; i < count; ++i) {
         iov[1 + i] = parts[i];
+        size += parts[i].iov_len;
+    }
+    if (fdCount == 0 && waitingFd < 0 && size <= sizeof waiting) {
+        usize at = 0;
+        for (usize i = 0; i < 1 + count; ++i) {
+            if (iov[i].iov_len > 0) {
+                memcpy(waiting + at, iov[i].iov_base, iov[i].iov_len);
+                at += iov[i].iov_len;
+            }
+        }
+        waitingFd = fd;
+        waitingClosed = false;
+        waitingSize = size;
+        return;
     }
     sendPacket(fd, iov, 1 + count, fds, fdCount); // a gone reader is its own loss
+}
+
+// Lets go of a reply's endpoint, its call done with it: closed now, or by
+// the turn that sends the answer waiting on it.
+static void closeReply(int fd) {
+    if (fd == waitingFd) {
+        waitingClosed = true;
+    } else {
+        close(fd);
+    }
 }
 
 static iovec part(const void* data, usize size) {
@@ -618,20 +655,6 @@ static bool answer(int fd, int e) {
     }
     ok(fd);
     return false;
-}
-
-// One packet into packet, its descriptors into packetFds: the length
-// of its body, after the header, or -1 at the end of the endpoint.
-static i64 receive(int fd, Header& h) {
-    const ssize_t n = receivePacket(fd, packet, sizeof packet, packetFds, packetFdCount);
-    if (n <= 0) {
-        return -1;
-    }
-    if (usize(n) < sizeof(Header)) {
-        fatal("a packet without a header");
-    }
-    memcpy(&h, packet, sizeof h);
-    return i64(n) - i64(sizeof(Header));
 }
 
 // ---- the loop's endpoints -------------------------------------------------------
@@ -2704,7 +2727,7 @@ static Task unmountCall(Header h, int fd, Place root, Place from, Name path) {
 
 Reply::~Reply() {
     if (fd >= 0) {
-        close(fd);
+        closeReply(fd);
     }
 }
 
@@ -2907,15 +2930,13 @@ static void ended(Endpoint* ep) {
     }
 }
 
-// The answer to a question on a file system's channel, its first: the
-// call goes on. What nobody asked is dropped.
-static void answeredOn(Endpoint* ep) {
+// The answer to a question on a file system's channel, its first, the
+// packet of n bytes a turn took: the call goes on. What nobody asked is
+// dropped.
+static void answeredOn(Endpoint* ep, ssize_t n) {
     Fs* fs = ep->fs;
-    int fds[maxFds];
-    usize count = 0;
-    const ssize_t n = receivePacket(ep->fd, packet, sizeof packet, fds, count);
-    for (usize i = 0; i < count; ++i) {
-        close(fds[i]);
+    for (usize i = 0; i < packetFdCount; ++i) {
+        close(packetFds[i]);
     }
     if (n <= 0) {
         ended(ep);
@@ -2944,20 +2965,28 @@ static void answeredOn(Endpoint* ep) {
     a->call.resume();
 }
 
-static void handle(Endpoint* ep) {
+// What a turn took on an endpoint: a packet of n bytes in packet, its
+// descriptors in packetFds, or the end of the endpoint, n 0.
+static void handle(Endpoint* ep, ssize_t n) {
     if (ep->dead) {
+        for (usize i = 0; i < packetFdCount; ++i) {
+            close(packetFds[i]);
+        }
         return;
     }
     if (ep->role == Role::Fs) {
-        answeredOn(ep);
+        answeredOn(ep, n);
         return;
     }
-    Header h;
-    const i64 n = receive(ep->fd, h);
-    if (n < 0) {
+    if (n <= 0) {
         closed(ep);
         return;
     }
+    if (usize(n) < sizeof(Header)) {
+        fatal("a packet without a header");
+    }
+    Header h;
+    memcpy(&h, packet, sizeof h);
     if (packetFdCount == 0) {
         return; // a request without its reply endpoint: nobody to answer
     }
@@ -2968,10 +2997,10 @@ static void handle(Endpoint* ep) {
         return;
     }
     const int fd = packetFds[packetFdCount - 1];
-    const Body body{packet + sizeof(Header), packet + sizeof(Header) + n};
+    const Body body{packet + sizeof(Header), packet + n};
     const bool kept = onHandle(ep, h, body, fd);
     if (!kept) {
-        close(fd);
+        closeReply(fd);
     }
     // The request's other descriptors, a READ's or WRITE's window, are
     // done with once it is answered; one a call kept is -1.
@@ -3027,6 +3056,60 @@ static i64 monotonicMilliseconds() {
     return i64(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
 }
 
+// Sends the answer that waits, when one does, and closes its endpoint
+// when its call let go of it.
+static void sendWaiting() {
+    if (waitingFd < 0) {
+        return;
+    }
+    const iovec out{waiting, waitingSize};
+    sendPacket(waitingFd, &out, 1, nullptr, 0); // a gone reader is its own loss
+    if (waitingClosed) {
+        close(waitingFd);
+    }
+    waitingFd = -1;
+}
+
+// A turn of the loop, one call of the kernel: the answer that waits goes
+// and its endpoint closes, then the next packet of an endpoint comes into
+// packet, its descriptors into packetFds, the endpoint's event into
+// event. The packet's length, 0 for an endpoint that ended; -1 when none
+// came, for a signal or the time. An answer whose call keeps its endpoint
+// goes alone, before.
+static ssize_t turn(epoll_event& event, int timeout) {
+    alignas(cmsghdr) static unsigned char control[CMSG_SPACE(maxFds * sizeof(int))];
+    if (waitingFd >= 0 && !waitingClosed) {
+        sendWaiting();
+    }
+    iovec out{waiting, waitingSize};
+    msghdr answer{};
+    answer.msg_iov = &out;
+    answer.msg_iovlen = 1;
+    iovec in{packet, sizeof packet};
+    msghdr request{};
+    request.msg_iov = &in;
+    request.msg_iovlen = 1;
+    request.msg_control = control;
+    request.msg_controllen = sizeof control;
+    const int reply = waitingFd;
+    waitingFd = -1;
+    packetFdCount = 0;
+    const ssize_t n = servedturn(watcher, reply, &answer, &request, &event, timeout, waitMasked ? &waitMask : nullptr);
+    if (n < 0) {
+        return n;
+    }
+    for (cmsghdr* c = CMSG_FIRSTHDR(&request); c; c = CMSG_NXTHDR(&request, c)) {
+        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS || c->cmsg_len < CMSG_LEN(0)) {
+            continue;
+        }
+        const usize count = (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+        for (usize i = 0; i < count && packetFdCount < maxFds; ++i) {
+            memcpy(&packetFds[packetFdCount++], CMSG_DATA(c) + i * sizeof(int), sizeof(int));
+        }
+    }
+    return n;
+}
+
 // Serves the VFS until the last endpoint closes: then nobody can reach
 // it. When the shell ends, the system goes down (shutdown), and it is
 // served until its processes are gone, the last endpoint closed, or for
@@ -3034,31 +3117,31 @@ static i64 monotonicMilliseconds() {
 // services' being up. An endpoint closed while a batch of events is
 // handled stays dead to the rest of the batch.
 static void serve() {
-    epoll_event events[64];
     i64 deadline = -1;
     while (endpointCount > 0) {
         const i64 left = deadline < 0 ? -1 : deadline - monotonicMilliseconds();
         if (deadline >= 0 && left <= 0) {
             break;
         }
-        const int n = epoll_pwait(watcher, events, 64, int(left), waitMasked ? &waitMask : nullptr);
+        epoll_event event{};
+        const ssize_t n = turn(event, int(left));
         if (!reap() && deadline < 0) {
             deadline = monotonicMilliseconds() + 10000;
             shutdown();
-            bury();
-            continue;
         }
-        for (int i = 0; i < n; ++i) {
-            if (events[i].data.ptr == &bootMarker) {
-                if (recv(bootEnd, packet, sizeof packet, MSG_DONTWAIT) == 0) {
-                    booted();
-                }
-                continue;
+        if (n >= 0 && event.data.ptr == &bootMarker) {
+            if (n == 0) {
+                booted();
             }
-            handle(static_cast<Endpoint*>(events[i].data.ptr));
+            for (usize i = 0; i < packetFdCount; ++i) {
+                close(packetFds[i]);
+            }
+        } else if (n >= 0) {
+            handle(static_cast<Endpoint*>(event.data.ptr), n);
         }
         bury();
     }
+    sendWaiting();
     close(watcher);
     watcher = -1;
 }

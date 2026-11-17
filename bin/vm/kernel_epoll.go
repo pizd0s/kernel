@@ -349,8 +349,9 @@ func (ep *epoll) add(key epollKey, events uint32, data uint64) error {
 // without the set's lock, as a file's change can come with a lock of the
 // file's held, a pipe's, which its poll takes too. One not ready waits for
 // its next change; a level-triggered one reported is marked again, after
-// the others; those max left unasked stay first.
-func (ep *epoll) collect(buf []byte, max int) int {
+// the others; those max left unasked stay first. who, when there is one,
+// is the member reported last, for a collect of one.
+func (ep *epoll) collect(buf []byte, max int, who **epollMember) int {
 	ep.mu.Lock()
 	marked := ep.ready
 	ep.ready, ep.spare = ep.spare[:0], nil
@@ -392,6 +393,10 @@ func (ep *epoll) collect(buf []byte, max int) int {
 		binary.LittleEndian.PutUint32(buf[epollEventSize*n:], uint32(uint16(revents)))
 		binary.LittleEndian.PutUint64(buf[epollEventSize*n+8:], m.data)
 		n++
+
+		if who != nil {
+			*who = m
+		}
 		m.disabled = events&epollOneshot != 0
 
 		if events&epollEt == 0 {
@@ -435,7 +440,7 @@ func (ep *epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, erro
 
 	n := 0
 	_, err := p.wait(end, func(*event) (bool, error) {
-		if n = ep.collect(buf, max); n > 0 {
+		if n = ep.collect(buf, max, nil); n > 0 {
 			return true, nil
 		}
 
@@ -447,6 +452,40 @@ func (ep *epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, erro
 	})
 
 	return n, err
+}
+
+// one waits as wait does for one ready member: the member, and its
+// epoll_event in out, or none past the end.
+func (ep *epoll) one(p *Process, out []byte, end time.Time) (*epollMember, error) {
+	var m *epollMember
+
+	if ep.collect(out, 1, &m) > 0 {
+		return m, nil
+	}
+
+	sub := p.subscription(0)
+	ep.waiters.add(&sub.in)
+
+	defer p.release(sub)
+	defer ep.waiters.remove(&sub.in)
+
+	_, err := p.wait(end, func(*event) (bool, error) {
+		if ep.collect(out, 1, &m) > 0 {
+			return true, nil
+		}
+
+		if !end.IsZero() && !time.Now().Before(end) {
+			return true, nil
+		}
+
+		return p.interrupts(false), syscall.EINTR
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return m, nil
 }
 
 // epollAt is the epoll of a descriptor: another file is EINVAL.

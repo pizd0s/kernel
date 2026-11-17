@@ -2,6 +2,8 @@
 
 #include <__base.h>
 #include <stdint.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
 
 /*
  * A pair a server makes for what it serves (lib/protocol/protocol.h):
@@ -39,5 +41,20 @@ struct served {
 };
 
 int servedpair(const struct served*, int[2]);
+
+/*
+ * A server's turn: the answer to the request in hand, then the next
+ * request, in one call of the kernel. With reply not -1, answer goes on
+ * it as sendmsg sends it, MSG_NOSIGNAL and at once, and reply is closed,
+ * answered or not. Then the call waits as epoll_pwait does, timeout
+ * milliseconds and with mask, for an endpoint of the set epfd that has a
+ * packet or has ended, and receives it into request as recvmsg does with
+ * MSG_CMSG_CLOEXEC; *event is the endpoint's. It returns the packet's
+ * length, 0 for an endpoint that ended; or -1 and ETIMEDOUT past the
+ * timeout, EINTR for a signal taken, and EAGAIN, with *event, for an
+ * endpoint ready for something that is no reading. reply is closed and
+ * answered whatever the call returns: the call after an error has none.
+ */
+ssize_t servedturn(int epfd, int reply, const struct msghdr* answer, struct msghdr* request, struct epoll_event* event, int timeout, const sigset_t* mask);
 
 __END_DECLS

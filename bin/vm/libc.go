@@ -478,6 +478,7 @@ func (k *Kernel) functionTable() map[string]any {
 		"socket":                 libcSocket,
 		"socketpair":             libcSocketpair,
 		"servedpair":             libcServedpair,
+		"servedturn":             libcServedturn,
 		"bind":                   libcBind,
 		"connect":                libcConnect,
 		"listen":                 libcListen,
@@ -2874,6 +2875,13 @@ func libcServedpair(ctx uintptr, what, whatSize, sv uint32) uint32 {
 	p.sized("servedpair", whatSize, sizeofServed)
 
 	return p.libcServedpair(what, sv)
+}
+
+func libcServedturn(ctx uintptr, epfd, reply, answer, request, msgSize, iovSize, event, eventSize, timeout, mask, maskSize uint32) uint32 {
+	p := proc(ctx)
+	p.sized("servedturn", msgSize, sizeofMsghdr, iovSize, sizeofIovec, eventSize, sizeofEpollEvent, maskSize, sizeofSigset)
+
+	return p.libcServedturn(epfd, reply, answer, request, event, timeout, mask)
 }
 
 func libcInet_aton(ctx uintptr, s, at, atSize uint32) uint32 {

@@ -402,6 +402,7 @@ KERNEL_SIZED(int, pselect, (int a, fd_set* __restrict b, fd_set* __restrict c, f
 KERNEL(int, socket, (int a, int b, int c), (a, b, c))
 KERNEL(int, socketpair, (int a, int b, int c, int d[2]), (a, b, c, d))
 KERNEL_SIZED(int, servedpair, (const struct served* a, int b[2]), (const struct served* a, size_t a_size, int b[2]), (a, sizeof(struct served), b))
+KERNEL_SIZED(ssize_t, servedturn, (int a, int b, const struct msghdr* c, struct msghdr* d, struct epoll_event* e, int f, const sigset_t* g), (int a, int b, const struct msghdr* c, struct msghdr* d, size_t d_size, size_t iov_size, struct epoll_event* e, size_t e_size, int f, const sigset_t* g, size_t g_size), (a, b, c, d, sizeof(struct msghdr), sizeof(struct iovec), e, sizeof(struct epoll_event), f, g, sizeof(sigset_t)))
 KERNEL(int, bind, (int a, const struct sockaddr* b, socklen_t c), (a, b, c))
 KERNEL(int, connect, (int a, const struct sockaddr* b, socklen_t c), (a, b, c))
 KERNEL(int, listen, (int a, int b), (a, b))

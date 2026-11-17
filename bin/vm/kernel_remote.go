@@ -375,6 +375,71 @@ func (p *Process) libcServedpair(what, sv uint32) uint32 {
 	return 0
 }
 
+// servedturn is a server's turn (lib/c's sys/served.h): the answer to the
+// request in hand, then the next request, in one call. With reply a
+// descriptor, the guest's msghdr at answer goes there as sendmsg sends
+// it, quiet and at once, and the descriptor closes, answered or not: an
+// asker that is gone is its own loss. Then the call waits as epoll_pwait
+// does, timeout milliseconds and with mask, for a member of the set epfd
+// that has a packet or has ended, and receives it into the msghdr at
+// request as recvmsg does, its descriptors close-on-exec; the member's
+// epoll_event goes to event. It is the packet's length, 0 for an end's;
+// ETIMEDOUT past the timeout, EINTR for a signal taken, and EAGAIN, with
+// the event, for a member ready for something that is no reading.
+func (p *Process) libcServedturn(epfd, reply, answer, request, event, timeout, mask uint32) uint32 {
+	return p.result(p.withMask(mask, func() (int, error) {
+		return p.servedTurn(epfd, reply, answer, request, event, int(int32(timeout)))
+	}))
+}
+
+func (p *Process) servedTurn(epfd, reply, answer, request, event uint32, timeout int) (int, error) {
+	ep, err := p.epollAt(epfd)
+
+	if err != nil {
+		return 0, err
+	}
+
+	if int32(reply) >= 0 {
+		obj, err := p.fd(reply)
+
+		if err != nil {
+			return 0, err
+		}
+
+		if s := obj.asSocket(); s != nil && answer != 0 {
+			s.sendmsg(p, answer, msgNosignal|msgDontwait)
+		}
+
+		p.closeFd(int(reply))
+	}
+
+	end := deadline(timeout)
+	out := p.span(event, epollEventSize)
+
+	for {
+		m, err := ep.one(p, out, end)
+
+		if err != nil {
+			return 0, err
+		}
+
+		if m == nil {
+			return 0, syscall.ETIMEDOUT
+		}
+
+		s := m.key.obj.asSocket()
+
+		if s == nil || int16(binary.LittleEndian.Uint32(out))&(pollIn|pollRdnorm|pollHup|pollErr) == 0 {
+			return 0, syscall.EAGAIN
+		}
+
+		// A member ready a moment ago with nothing there now waits again.
+		if n, err := s.recvmsg(p, request, msgDontwait|msgCmsgCloexec); err != syscall.EAGAIN {
+			return n, err
+		}
+	}
+}
+
 // served is the open file a kind of struct served makes of a pair's
 // second end for the process that serves it, as the open flags say: a
 // file, a terminal's, or a handle of id, of a directory or of what O_PATH
