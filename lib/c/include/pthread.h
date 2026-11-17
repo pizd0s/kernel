@@ -25,11 +25,11 @@ typedef struct {
 } pthread_mutex_t;
 
 typedef struct {
-    int __unused;
+    clockid_t __clock;
 } pthread_condattr_t;
 
 typedef struct {
-    int __unused;
+    clockid_t __clock;
 } pthread_cond_t;
 
 typedef struct {
@@ -55,7 +55,7 @@ typedef struct {
 #define PTHREAD_CREATE_DETACHED 1
 
 #define PTHREAD_MUTEX_INITIALIZER {PTHREAD_MUTEX_NORMAL, 0}
-#define PTHREAD_COND_INITIALIZER {0}
+#define PTHREAD_COND_INITIALIZER {CLOCK_REALTIME}
 #define PTHREAD_RWLOCK_INITIALIZER {0, 0}
 #define PTHREAD_ONCE_INIT 0
 
@@ -64,6 +64,7 @@ typedef struct {
 int pthread_create(pthread_t* __restrict, const pthread_attr_t* __restrict, void* (*)(void*), void* __restrict);
 int pthread_join(pthread_t, void**);
 int pthread_detach(pthread_t);
+__NORETURN void pthread_exit(void*);
 pthread_t pthread_self(void);
 int pthread_equal(pthread_t, pthread_t);
 int pthread_once(pthread_once_t*, void (*)(void));
@@ -94,6 +95,8 @@ int pthread_mutex_unlock(pthread_mutex_t*);
 
 int pthread_condattr_init(pthread_condattr_t*);
 int pthread_condattr_destroy(pthread_condattr_t*);
+int pthread_condattr_setclock(pthread_condattr_t*, clockid_t);
+int pthread_condattr_getclock(const pthread_condattr_t* __restrict, clockid_t* __restrict);
 int pthread_cond_init(pthread_cond_t* __restrict, const pthread_condattr_t* __restrict);
 int pthread_cond_destroy(pthread_cond_t*);
 int pthread_cond_signal(pthread_cond_t*);

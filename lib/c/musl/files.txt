@@ -129,6 +129,8 @@ multibyte/wcsrtombs.c
 multibyte/wcstombs.c
 multibyte/wctob.c
 multibyte/wctomb.c
+locale/iconv.c
+locale/iconv_close.c
 fenv/fenv.c
 fenv/fegetexceptflag.c
 fenv/feholdexcept.c

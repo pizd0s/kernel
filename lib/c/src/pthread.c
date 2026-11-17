@@ -18,10 +18,14 @@ static struct {
     const void* value;
 } keys[PTHREAD_KEYS_MAX];
 
-// sleepUntil sleeps until the CLOCK_REALTIME time at.
-static void sleepUntil(const struct timespec* at) {
+// sleepUntil sleeps until the time at of a clock.
+static void sleepUntil(clockid_t clock, const struct timespec* at) {
     struct timespec now;
-    clock_gettime(CLOCK_REALTIME, &now);
+
+    if (clock_gettime(clock, &now) != 0) {
+        return;
+    }
+
     struct timespec left = {at->tv_sec - now.tv_sec, at->tv_nsec - now.tv_nsec};
 
     if (left.tv_nsec < 0) {
@@ -44,6 +48,11 @@ int pthread_join(pthread_t thread, void** result) {
 
 int pthread_detach(pthread_t thread) {
     return thread == self ? 0 : ESRCH;
+}
+
+// The last thread's exit is the process's, with status 0.
+void pthread_exit(void* result) {
+    exit(0);
 }
 
 pthread_t pthread_self(void) {
@@ -196,7 +205,7 @@ int pthread_mutex_timedlock(pthread_mutex_t* restrict mutex, const struct timesp
         return 0;
     }
 
-    sleepUntil(at);
+    sleepUntil(CLOCK_REALTIME, at);
 
     return ETIMEDOUT;
 }
@@ -212,6 +221,8 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex) {
 }
 
 int pthread_condattr_init(pthread_condattr_t* attr) {
+    attr->__clock = CLOCK_REALTIME;
+
     return 0;
 }
 
@@ -219,7 +230,27 @@ int pthread_condattr_destroy(pthread_condattr_t* attr) {
     return 0;
 }
 
+// The clock is the one a timed wait's deadline is a time of: any but a
+// CPU-time clock, as musl takes them.
+int pthread_condattr_setclock(pthread_condattr_t* attr, clockid_t clock) {
+    if (clock < 0 || clock == CLOCK_PROCESS_CPUTIME_ID || clock == CLOCK_THREAD_CPUTIME_ID) {
+        return EINVAL;
+    }
+
+    attr->__clock = clock;
+
+    return 0;
+}
+
+int pthread_condattr_getclock(const pthread_condattr_t* restrict attr, clockid_t* restrict clock) {
+    *clock = attr->__clock;
+
+    return 0;
+}
+
 int pthread_cond_init(pthread_cond_t* restrict cond, const pthread_condattr_t* restrict attr) {
+    cond->__clock = attr ? attr->__clock : CLOCK_REALTIME;
+
     return 0;
 }
 
@@ -244,7 +275,7 @@ int pthread_cond_wait(pthread_cond_t* restrict cond, pthread_mutex_t* restrict m
 
 int pthread_cond_timedwait(pthread_cond_t* restrict cond, pthread_mutex_t* restrict mutex, const struct timespec* restrict at) {
     pthread_mutex_unlock(mutex);
-    sleepUntil(at);
+    sleepUntil(cond->__clock, at);
     pthread_mutex_lock(mutex);
 
     return ETIMEDOUT;
