@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The image of the system, read-only: the programs of the system and the
-directories it expects, in a layout of its own, which rootfs has linked
-into it and erofs serves (bin/tools), with nothing to build at start.
+directories it expects, in a layout of its own, which follows rootfs in
+its file and erofs serves (bin/tools), with nothing to build at start.
 
     image.py <rootfs.img> --busybox <busybox> <busybox.links> --python <python3> [--program <name> <path>]...
              [--link <name> <target>]... [--file <path> <host path>]... [--tree <path> <host directory>]...

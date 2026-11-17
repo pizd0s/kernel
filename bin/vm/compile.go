@@ -237,7 +237,8 @@ var wasmHeader = []byte("\x00asm\x01\x00\x00\x00")
 // exeMagic and its length, header included, a 32-bit little-endian number;
 // the module compressed by zstd fills the rest of that length. What
 // follows is the program's own, which the kernel never reads: python's
-// standard library, a zip at the end of its file.
+// standard library, a zip at the end of its file, and after the first
+// process's program its disk named image (runModule), a system's.
 var exeMagic = []byte("PZD1")
 
 const exeHeader = 8

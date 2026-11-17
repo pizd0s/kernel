@@ -120,7 +120,8 @@ func compileCommand(args []string) {
 // the others have theirs from, rootfs, or needs none. argv0 is by default
 // the module's path. --asan compiles the programs with the checks of the
 // kernel's address sanitizer (kernel_asan.go). Each --disk gives a program
-// of the kernel a file of the host as a disk (runKernel). --user gives the
+// of the kernel a file of the host as a disk (runKernel); what follows the
+// program in its own file is its disk named image (runModule). --user gives the
 // first process its user and group ids, the group the user's without one:
 // it is root without it.
 func runCommand(args []string) int {
@@ -152,7 +153,7 @@ func runCommand(args []string) int {
 				usage()
 			}
 
-			disks = append(disks, disk{name, path})
+			disks = append(disks, disk{name: name, path: path})
 			args = args[2:]
 		default:
 			usage()

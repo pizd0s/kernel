@@ -3,17 +3,24 @@
 package main
 
 import (
+	"slices"
 	"syscall"
 )
+
+// imageDisk is the name of the disk a system is on: what follows a
+// program of the kernel in its file, where --disk gives no other.
+const imageDisk = "image"
 
 // runModule compiles a module and runs it as the first process, and
 // returns the exit code of vm: a program of the kernel, from its
 // executable (PZD1), or a WASI command, from an executable or a module,
 // which WASI's personality of the kernel runs (kernel_wasi.go). A module
 // is all vm runs: no object of vm's. --asan checks a program of the
-// kernel's heap, which a WASI command has none of.
+// kernel's heap, which a WASI command has none of. What follows a program
+// of the kernel in its file, the image of a system after rootfs, is its
+// first disk, named image, unless --disk gives one of that name.
 func runModule(path string, argv []string, asan bool, disks []disk, user cred) int {
-	data, exe, err := hostProgram(path)
+	data, exe, tail, err := hostProgram(path)
 
 	if err != nil {
 		throwFmt("%s: %v", path, err)
@@ -46,16 +53,24 @@ func runModule(path string, argv []string, asan bool, disks []disk, user cred) i
 		throwFmt("--asan runs programs of the kernel")
 	}
 
+	given := slices.ContainsFunc(disks, func(d disk) bool { return d.name == imageDisk })
+
+	if kernel && len(tail) > 0 && !given {
+		disks = append([]disk{{name: imageDisk, mem: tail}}, disks...)
+	}
+
 	return runKernel(path, argv, options, data, obj, disks, user)
 }
 
 // hostProgram reads the program vm runs, a file of the host, as exec reads
-// one (readProgram): fstat and pread are all vm's calls on it.
-func hostProgram(path string) ([]byte, bool, error) {
+// one (readProgram): fstat and pread are all vm's calls on it, and mmap
+// of what follows an executable in it, tail: the file's own pages mapped
+// to read, never copied, the file's while it is as long.
+func hostProgram(path string) (data []byte, exe bool, tail []byte, err error) {
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
 
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
 
 	defer syscall.Close(fd)
@@ -63,10 +78,10 @@ func hostProgram(path string) ([]byte, bool, error) {
 	var st syscall.Stat_t
 
 	if err := syscall.Fstat(fd, &st); err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
 
-	return readProgram(st.Size, func(b []byte, off int64) error {
+	data, exe, err = readProgram(st.Size, func(b []byte, off int64) error {
 		for at := 0; at < len(b); {
 			n, err := syscall.Pread(fd, b[at:], off+int64(at))
 
@@ -87,4 +102,18 @@ func hostProgram(path string) ([]byte, bool, error) {
 
 		return nil
 	}, true)
+
+	if err != nil || !exe || st.Size == int64(len(data)) {
+		return data, exe, nil, err
+	}
+
+	// A mapping begins at a page of the file.
+	from := int64(len(data)) &^ int64(syscall.Getpagesize()-1)
+	pages, err := syscall.Mmap(fd, from, int(st.Size-from), syscall.PROT_READ, syscall.MAP_PRIVATE)
+
+	if err != nil {
+		return nil, false, nil, err
+	}
+
+	return data, exe, pages[int64(len(data))-from:], nil
 }

@@ -237,9 +237,11 @@ func importsKernel(obj *ElfObject) bool {
 
 // A disk is a file of the host the first process gets as a descriptor
 // (diskFile): read and written as it is, its name the first process's to
-// give.
+// give. A disk of mem is no file's: the bytes that follow the program in
+// its file (hostProgram), a memfd of them, read only.
 type disk struct {
 	name, path string
+	mem        []byte
 }
 
 // runKernel runs a program of the kernel as the first process, from the
@@ -275,6 +277,14 @@ func runKernel(path string, argv []string, options CompileOptions, data []byte, 
 		names := make([]string, len(disks))
 
 		for i, d := range disks {
+			names[i] = d.name
+
+			if d.mem != nil {
+				p.files.put(max(p.files.size(), 3), newMemfd(nil, d.mem, syscall.O_RDONLY), false)
+
+				continue
+			}
+
 			fd, err := syscall.Open(d.path, syscall.O_RDWR|syscall.O_CLOEXEC, 0)
 
 			if err != nil {
@@ -282,7 +292,6 @@ func runKernel(path string, argv []string, options CompileOptions, data []byte, 
 			}
 
 			p.files.put(max(p.files.size(), 3), newDiskFile(fd), false)
-			names[i] = d.name
 		}
 
 		env = append(env, "DISKS="+strings.Join(names, " "))

@@ -1,5 +1,5 @@
 """Programs run in the system, a batch to a boot: rootfs boots once, from
-the image linked into it, and runs each program of a batch in turn, in a
+the image after it in its file, and runs each program of a batch in turn, in a
 directory of its own under /tmp, its standard input given; its standard
 output and error and its exit status come back.
 

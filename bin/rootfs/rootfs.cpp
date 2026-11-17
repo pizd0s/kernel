@@ -5,14 +5,14 @@
 // it (lib/protocol/protocol.h is the protocol, the VFS's calls on handles,
 // a file system's calls by node, an open file's). Every file system is
 // another process's, mounted on the VFS's tree, which rootfs asks by node:
-// the image linked into it at the root, which erofs serves (bin/tools),
+// the image at the root, which erofs serves (bin/tools),
 // /tmp and /dev, which it starts itself (tmpfs and devfs), and those a
 // MOUNT names. A walk waits for the file systems' answers, as a coroutine,
 // while the loop goes on with other calls, and rootfs keeps what they
 // answer, a cache of names as Linux's dcache, for the walks after.
 //
-// It starts erofs first, from the image itself: a memfd of the image, a
-// memfd of erofs's program in it, which it executes (fexecve), and the
+// It starts erofs first, from the image itself: the image's descriptor,
+// a memfd of erofs's program in it, which it executes (fexecve), and the
 // channel of the root, with no root of rootfs's, as erofs walks no path.
 // It makes itself the root of everything else with what POSIX has: one
 // seqpacket pair, chroot to one end in each process it starts. It starts
@@ -42,10 +42,12 @@
 // end they close once they are up, and hand on to the services they
 // start: when the last of them has closed it, the system is up.
 //
-// The image is bin/rootfs/image.py's layout, linked in as data
-// (bin/rootfs/make.py): its header says where erofs's program is among
-// its files, and rootfs reads nothing else of it. The memfds keep rootfs's
-// memory of it while erofs has them.
+// The image is bin/rootfs/image.py's layout, and a disk to rootfs, the
+// one vm gives it named image: what follows rootfs in its own file, a
+// system of one file, which vm gives as a memfd of the file's pages, or
+// the disk vm was told to give by that name. Its header says where
+// erofs's program is among its files, and rootfs reads nothing else of
+// it.
 //
 // Memory. A request is received into one buffer, packet, and a call that
 // never waits is answered before the next: its names are read where they
@@ -147,11 +149,6 @@ void std::suspend_never::await_suspend(coroutine_handle<void>) const noexcept {
 
 void std::suspend_never::await_resume() const noexcept {
 }
-
-// The image (bin/rootfs/image.py), linked in as data (bin/rootfs/make.py),
-// which erofs serves.
-extern "C" const u8 rootfs_image[];
-extern "C" const u32 rootfs_image_size;
 
 constexpr usize maxPacket = 65536;
 
@@ -3280,45 +3277,36 @@ static void serverOf(const u32* header, u32 imageSize, u32& offset, u32& size) {
     size = header[10];
 }
 
-// The image erofs serves, a descriptor of it, and a memfd of erofs's
-// program in it: the disk vm gave us named image, when it gave one, its
-// program read into memory that stays, as a memfd is of the memory
-// itself, else the image linked into us.
-static void imageOf(int disk, int& served, int& program) {
+// A memfd of erofs's program in the image, disk, the disk vm gave us
+// named image: the program read into memory that stays, as a memfd is of
+// the memory itself.
+static int serverIn(int disk) {
+    if (disk < 0) {
+        fatal("rootfs: no image: vm gave no disk named image, and nothing follows rootfs in its file");
+    }
     u32 header[11];
     u32 offset;
     u32 size;
-    if (disk >= 0) {
-        struct stat st;
-        if (fstat(disk, &st) != 0 || pread(disk, header, sizeof header, 0) != ssize_t(sizeof header)) {
-            fatal("rootfs: the image disk reads not: errno %d", errno);
-        }
-        serverOf(header, u32(st.st_size), offset, size);
-        u8* bytes = static_cast<u8*>(allocate(size));
-        if (pread(disk, bytes, size, off_t(offset)) != ssize_t(size)) {
-            fatal("rootfs: the image disk reads not: errno %d", errno);
-        }
-        served = disk;
-        program = memfd_create(bytes, size, O_RDONLY | O_CLOEXEC);
-    } else {
-        if (rootfs_image_size < sizeof header) {
-            fatal("rootfs: no image");
-        }
-        memcpy(header, rootfs_image, sizeof header);
-        serverOf(header, rootfs_image_size, offset, size);
-        auto* bytes = const_cast<u8*>(rootfs_image);
-        served = memfd_create(bytes, rootfs_image_size, O_RDONLY | O_CLOEXEC);
-        program = memfd_create(bytes + offset, size, O_RDONLY | O_CLOEXEC);
+    struct stat st;
+    if (fstat(disk, &st) != 0 || pread(disk, header, sizeof header, 0) != ssize_t(sizeof header)) {
+        fatal("rootfs: the image disk reads not: errno %d", errno);
     }
-    if (served < 0 || program < 0) {
+    serverOf(header, u32(st.st_size), offset, size);
+    u8* bytes = static_cast<u8*>(allocate(size));
+    if (pread(disk, bytes, size, off_t(offset)) != ssize_t(size)) {
+        fatal("rootfs: the image disk reads not: errno %d", errno);
+    }
+    const int program = memfd_create(bytes, size, O_RDONLY | O_CLOEXEC);
+    if (program < 0) {
         fatal("rootfs: memfd_create: errno %d", errno);
     }
+    return program;
 }
 
-// Starts the system. erofs serves the image (imageOf), its descriptor 3 a
-// memfd of it or the disk named image, its 4 the channel of the root, its
-// program a memfd of its bytes there; it has no root and walks no path. erofs tells the root's stat,
-// then where /tmp and /dev are. The file systems and the services of
+// Starts the system. erofs serves the image, its descriptor 3 the disk
+// named image, its 4 the channel of the root, its program a memfd of its
+// bytes there (serverIn); it has no root and walks no path. erofs tells
+// the root's stat, then where /tmp and /dev are. The file systems and the services of
 // the system start next, the far end of a pair of ours their descriptor
 // 3: they close it once they are up, after the services they start
 // have it, and when the last one has, the shell starts (booted).
@@ -3371,9 +3359,8 @@ static Task boot() {
         ++count;
     }
     argv[args] = nullptr;
-    int served[] = {-1, image[1]};
-    int program = -1;
-    imageOf(imageDisk, served[0], program);
+    const int served[] = {imageDisk, image[1]};
+    const int program = serverIn(imageDisk);
     char erofsName[] = "erofs";
     char* const erofsArgv[] = {erofsName, three, four, nullptr};
     spawn(erofsName, erofsArgv, environment, -1, served, 2, program);

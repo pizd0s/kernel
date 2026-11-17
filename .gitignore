@@ -75,7 +75,6 @@ __pycache__/
 /cxx_check_exe
 /rootfs_base
 /rootfs_base_image
-/rootfs_base_module
 /tests_image
 /clang_image
 /chaos_check_exe

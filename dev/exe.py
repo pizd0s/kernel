@@ -4,7 +4,8 @@ the length of the executable, header included, a 32-bit little-endian
 number; the module compressed by zstd, one frame with its size and a
 checksum; and after that length what is the program's own, which the
 kernel never reads: python's standard library, a zip zipimport finds from
-the end of the file.
+the end of the file, and the image of a system after rootfs, which vm
+gives rootfs as a disk.
 
     exe.py <module.wasm> <executable> [--tail FILE] [--level N]
 """

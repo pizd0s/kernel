@@ -212,12 +212,12 @@ libstr = command(
 # its module compressed by zstd, and the tail of the program's own; the
 # kernel runs nothing else. The module, the .wasm, stays what the compilers
 # and the ABI checks read.
-def executable(name, program, output, tail=None, level=None):
+def executable(name, program, output, tail=None, level=None, deps=()):
     return command(
         name=name,
         inputs=["$(S)/dev/exe.py"],
         outputs=[output],
-        deps=[program],
+        deps=[program, *deps],
         cmd=["python3", "$(S)/dev/exe.py", program.outputs[0], output, *(["--tail", tail] if tail else []),
              *(["--level", str(level)] if level else [])],
         descr="PK",
@@ -567,8 +567,9 @@ fuse2fs = command(
 )
 fuse2fs_exe = executable("fuse2fs_exe", fuse2fs, "$(B)/bin/fuse2fs/fuse2fs")
 
-# rootfs, the first process and the VFS, has its image linked into it: a
-# system of one executable (bin/rootfs). erofs of the tools serves the
+# rootfs, the first process and the VFS, has its image after it in its
+# file: a system of one executable (bin/rootfs), which vm gives the image
+# of as a disk. erofs of the tools serves the
 # image at the root, with /dev and /tmp of its own, to the shell rootfs
 # starts, and the kernel compiles each module as it is executed. The base
 # system's image has busybox's executable with its links, the tools with
@@ -577,12 +578,22 @@ BASE = [busybox, busybox_exe, tools, fuse2fs_exe]
 BASE_IMAGE = ["--busybox", busybox_exe.outputs[0], busybox.outputs[1],
               "--program", "tools", tools.outputs[0], *(arg for tool in TOOLS for arg in ("--link", tool, "tools")),
               "--program", "fuse2fs", fuse2fs_exe.outputs[0], "--server", "tools"]
-ROOTFS_INPUTS = ["$(S)/bin/rootfs/rootfs.cpp", "$(S)/lib/protocol/protocol.cpp", "$(S)/lib/protocol/protocol.h", "$(S)/bin/rootfs/make.py",
-                 "$(S)/dev/wasm.py", *LIBC_HEADERS]
+rootfs_module = command(
+    name="rootfs_module",
+    inputs=["$(S)/bin/rootfs/rootfs.cpp", "$(S)/lib/protocol/protocol.cpp", "$(S)/lib/protocol/protocol.h", "$(S)/bin/rootfs/make.py",
+            "$(S)/dev/wasm.py", *LIBC_HEADERS],
+    outputs=["$(B)/bin/rootfs/rootfs.wasm"],
+    deps=[libc],
+    cmd=["python3", "$(S)/bin/rootfs/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], "$(B)/bin/rootfs/rootfs.wasm",
+         "$(S)/bin/rootfs/rootfs.cpp", "$(S)/lib/protocol/protocol.cpp"],
+    descr="CC",
+    color="cyan",
+)
 
 
 def system(name, nodes, arguments, directory):
-    """The image of a system and the rootfs of it."""
+    """The image of a system and the rootfs of it: rootfs's executable with
+    the image after it."""
     image = command(
         name=name + "_image",
         inputs=["$(S)/bin/rootfs/image.py"],
@@ -592,17 +603,7 @@ def system(name, nodes, arguments, directory):
         descr="IM",
         color="cyan",
     )
-    module = command(
-        name=name + "_module",
-        inputs=ROOTFS_INPUTS,
-        outputs=[f"$(B)/{directory}/rootfs.wasm"],
-        deps=[libc, image],
-        cmd=["python3", "$(S)/bin/rootfs/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], image.outputs[0],
-             f"$(B)/{directory}/rootfs.wasm", "$(S)/bin/rootfs/rootfs.cpp", "$(S)/lib/protocol/protocol.cpp"],
-        descr="CC",
-        color="cyan",
-    )
-    return image, executable(name, module, f"$(B)/{directory}/rootfs")
+    return image, executable(name, rootfs_module, f"$(B)/{directory}/rootfs", tail=image.outputs[0], deps=[image])
 
 
 base_image, rootfs_base = system("rootfs_base", BASE, BASE_IMAGE, "bin/rootfs/base")

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Build rootfs for the kernel: clang compiles rootfs.cpp and the protocol's
 sources for wasm32 against lib/c's headers, with no C++ library and the
-source root on the include path, the image (bin/rootfs/image.py) is linked
-in as data, aligned for its tables, and wasm-ld links them with libc.a.
+source root on the include path, and wasm-ld links them with libc.a.
 
-    make.py <clang> <wasm-ld> <libc-include> <libc.a> <rootfs.img> <rootfs.wasm> <source.cpp>...
+    make.py <clang> <wasm-ld> <libc-include> <libc.a> <rootfs.wasm> <source.cpp>...
 
-The image is the symbols rootfs_image, its bytes, and rootfs_image_size,
-which rootfs.cpp declares.
+The module is every system's: a system is its executable with the
+system's image (bin/rootfs/image.py) after it, in one file.
 """
 import subprocess
 import sys
@@ -24,33 +23,17 @@ CXXFLAGS = ["-O2", "-std=c++23", "-fno-exceptions", "-fno-rtti", "-nostdinc++", 
 LINK = ["--stack-first", "-z", "stack-size=1049600", "--max-memory=4294967296", "--export=__heap_base",
         "--export=__stack_pointer", "--gc-sections"]
 
-IMAGE_S = """\
-\t.section .rodata.rootfs_image,"",@
-\t.globl rootfs_image
-\t.p2align 4
-rootfs_image:
-\t.incbin "{path}"
-\t.size rootfs_image, {size}
-\t.globl rootfs_image_size
-\t.p2align 2
-rootfs_image_size:
-\t.int32 {size}
-\t.size rootfs_image_size, 4
-"""
-
 
 def main():
-    cc, ld, include, libc, image, output = sys.argv[1:7]
-    sources = [Path(source) for source in sys.argv[7:]]
-    image, output = Path(image).resolve(), Path(output)
+    cc, ld, include, libc, output = sys.argv[1:6]
+    sources = [Path(source) for source in sys.argv[6:]]
+    output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(dir=output.parent, prefix="rootfs-") as work:
         work = Path(work)
-        (work / "image.s").write_text(IMAGE_S.format(path=image, size=image.stat().st_size))
         flags = [*CXXFLAGS, "-I", str(ROOT), "-isystem", str(Path(include).resolve())]
         units = [(source, work / f"{i}-{source.stem}.o", flags) for i, source in enumerate(sources)]
-        units.append((work / "image.s", work / "image.o", []))
         wasm.compile_all(cc, units)
         subprocess.run([ld, *LINK, "-o", str(output), *(str(o) for _, o, _ in units), libc], check=True)
 

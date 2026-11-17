@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """`vm run -- rootfs`: a system from one executable and nothing of the
-host's file system. rootfs has the image linked into it, which erofs
-serves at the root, the executables of busybox and python, whose modules
+host's file system. The image follows rootfs in its file, and vm gives
+rootfs what follows as its disk named image, as it gives a file of the
+host by --disk: the executable alone starts no system, and starts this
+one with its image for the disk. erofs serves the image at the root, the
+executables of busybox and python, whose modules
 the kernel compiles as they are executed, a /dev and a /tmp, and starts
 busybox's shell on the terminal; the shell's status is vm's. The shell's
 HOME is /tmp, and its TERM the host's name of the console's type, which
@@ -19,6 +22,7 @@ is not root gets no more than the modes give.
     test_rootfs.py <vm> <rootfs>
 """
 import os
+import struct
 import subprocess
 import sys
 import tempfile
@@ -237,6 +241,20 @@ def main():
         result = subprocess.run([vm, "run", "--", rootfs], input=script, capture_output=True, cwd=empty, env=dict(env, TERM="ansis"),
                                 timeout=120)
         assert (result.returncode, result.stdout, result.stderr) == (0, b"ansis\n../c/cons25\n 1a 01\n", b""), result
+    # The file is rootfs's executable, to the length its header tells, and
+    # the image: the two apart are the program and a disk.
+    with tempfile.TemporaryDirectory(prefix="pizdos-rootfs-") as work:
+        whole = Path(rootfs).read_bytes()
+        (length,) = struct.unpack_from("<I", whole, 4)
+        assert whole[:4] == b"PZD1" and whole[length:length + 4] == b"PZIM", "rootfs's executable and the image after it"
+        program, image = Path(work) / "rootfs", Path(work) / "image"
+        program.write_bytes(whole[:length])
+        image.write_bytes(whole[length:])
+        result = subprocess.run([vm, "run", "--", program], input=b"cat /etc/motd\n", capture_output=True, env=env, timeout=120)
+        assert result.returncode != 0 and b"rootfs: no image" in result.stderr and result.stdout == b"", result
+        result = subprocess.run([vm, "run", "--disk", f"image={image}", "--", program], input=b"cat /etc/motd\n", capture_output=True,
+                                env=env, timeout=120)
+        assert (result.returncode, result.stdout, result.stderr) == (0, b"pizdos\n", b""), result
     print("rootfs: busybox's shell runs from the image erofs serves, without the host's files")
 
 
