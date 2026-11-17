@@ -175,10 +175,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"strtok_r":               libcStrtok_r,
 		"strsep":                 libcStrsep,
 		"strverscmp":             libcStrverscmp,
-		"isspace":                libcIsspace,
-		"isdigit":                libcIsdigit,
-		"tolower":                libcTolower,
-		"toupper":                libcToupper,
 		"abs":                    libcAbs,
 		"strerror":               libcStrerror,
 		"strsignal":              libcStrsignal,
@@ -322,24 +318,12 @@ func (k *Kernel) functionTable() map[string]any {
 		"setlocale":              libcSetlocale,
 		"localeconv":             libcLocaleconv,
 		"nl_langinfo":            libcNl_langinfo,
-		"isascii":                libcIsascii,
-		"toascii":                libcToascii,
 		"towlower":               libcTowlower,
 		"towupper":               libcTowupper,
 		"wctype":                 libcWctype,
 		"iswctype":               libcIswctype,
 		"wctrans":                libcWctrans,
 		"towctrans":              libcTowctrans,
-		"isalnum":                libcIsalnum,
-		"isalpha":                libcIsalpha,
-		"isblank":                libcIsblank,
-		"iscntrl":                libcIscntrl,
-		"isgraph":                libcIsgraph,
-		"islower":                libcIslower,
-		"isprint":                libcIsprint,
-		"ispunct":                libcIspunct,
-		"isupper":                libcIsupper,
-		"isxdigit":               libcIsxdigit,
 		"iswalnum":               libcIswalnum,
 		"iswalpha":               libcIswalpha,
 		"iswblank":               libcIswblank,
@@ -1291,22 +1275,6 @@ func libcStrverscmp(ctx uintptr, a, b uint32) uint32 {
 	return proc(ctx).libcStrverscmp(a, b)
 }
 
-func libcIsspace(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsspace(c)
-}
-
-func libcIsdigit(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsdigit(c)
-}
-
-func libcTolower(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcTolower(c)
-}
-
-func libcToupper(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcToupper(c)
-}
-
 func libcAbs(ctx uintptr, n uint32) uint32 {
 	return proc(ctx).libcAbs(n)
 }
@@ -1993,14 +1961,6 @@ func libcNl_langinfo(ctx uintptr, item uint32) uint32 {
 	return proc(ctx).libcNl_langinfo(item)
 }
 
-func libcIsascii(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsascii(c)
-}
-
-func libcToascii(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcToascii(c)
-}
-
 func libcTowlower(ctx uintptr, c uint32) uint32 {
 	return proc(ctx).libcTowlower(c)
 }
@@ -2023,46 +1983,6 @@ func libcWctrans(ctx uintptr, name uint32) uint32 {
 
 func libcTowctrans(ctx uintptr, c, trans uint32) uint32 {
 	return proc(ctx).libcTowctrans(c, trans)
-}
-
-func libcIsalnum(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsalnum(c)
-}
-
-func libcIsalpha(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsalpha(c)
-}
-
-func libcIsblank(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsblank(c)
-}
-
-func libcIscntrl(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIscntrl(c)
-}
-
-func libcIsgraph(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsgraph(c)
-}
-
-func libcIslower(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIslower(c)
-}
-
-func libcIsprint(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsprint(c)
-}
-
-func libcIspunct(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIspunct(c)
-}
-
-func libcIsupper(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsupper(c)
-}
-
-func libcIsxdigit(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsxdigit(c)
 }
 
 func libcIswalnum(ctx uintptr, c uint32) uint32 {

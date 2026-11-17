@@ -45,8 +45,13 @@ int main() {
                            c >= 'a' && c <= 'z', c >= ' ' && c <= '~', graph && !alpha && !digit,
                            c == ' ' || c >= '\t' && c <= '\r', c >= 'A' && c <= 'Z',
                            digit || c >= 'A' && c <= 'F' || c >= 'a' && c <= 'f'};
+        // A call of one is the header's definition, inlined; a pointer
+        // to one is lib/c's function.
+        bool called[] = {bool(isalnum(c)), bool(isalpha(c)), bool(isblank(c)), bool(iscntrl(c)), bool(isdigit(c)), bool(isgraph(c)),
+                         bool(islower(c)), bool(isprint(c)), bool(ispunct(c)), bool(isspace(c)), bool(isupper(c)), bool(isxdigit(c))};
         for (unsigned i = 0; i < 12; ++i) {
             const Class& cls = classes[i];
+            assert(called[i] == expected[i]);
             assert(bool(cls.narrow(c)) == expected[i]);
             assert(bool(cls.narrowLocale(c, locale)) == expected[i]);
             if (c >= 0 && c < 128) {
@@ -61,6 +66,18 @@ int main() {
         assert(tolower(c) == (c >= 'A' && c <= 'Z' ? c + 32 : c));
         assert(toupper(c) == (c >= 'a' && c <= 'z' ? c - 32 : c));
         assert(tolower_l(c, locale) == tolower(c) && toupper_l(c, locale) == toupper(c));
+        int (*cases[])(int) = {tolower, toupper, toascii, isascii};
+        assert(cases[0](c) == tolower(c) && cases[1](c) == toupper(c) && cases[2](c) == toascii(c) && cases[3](c) == isascii(c));
+    }
+    // Any int is a character to them: one past a byte is in no class and
+    // has no case.
+    const int beyond[] = {-2, 256, 'A' + 256, '0' - 256, INT_MAX, INT_MIN};
+    for (int c : beyond) {
+        assert(!isalnum(c) && !isalpha(c) && !isblank(c) && !iscntrl(c) && !isdigit(c) && !isgraph(c) && !islower(c) && !isprint(c));
+        assert(!ispunct(c) && !isspace(c) && !isupper(c) && !isxdigit(c) && !isascii(c) && tolower(c) == c && toupper(c) == c);
+        for (const Class& cls : classes) {
+            assert(!cls.narrow(c));
+        }
     }
     struct WideCase {
         wint_t value;

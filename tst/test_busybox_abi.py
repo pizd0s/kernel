@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """busybox.wasm talks to nothing but the kernel and exposes the entry points the kernel calls.
+The classes of characters are none of the kernel's: ctype.h's functions are lib/c's own, inlined where they are called.
 
     test_busybox_abi.py <busybox.wasm> <busybox.links>
 """
@@ -10,6 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dev"))
 
 import wasm_info  # noqa: E402
 
+CTYPE = {"isalnum", "isalpha", "isascii", "isblank", "iscntrl", "isdigit", "isgraph", "islower", "isprint", "ispunct", "isspace", "isupper",
+         "isxdigit", "tolower", "toupper", "toascii"}
 EXPORTS = {
     ("_start", "func"),
     ("__call_signal_handler", "func"),
@@ -25,6 +28,8 @@ def main():
     foreign = [entry for entry in imports if entry[0] != "kernel" or entry[2] != "func"]
     assert not foreign, f"imports outside the kernel's functions: {foreign}"
     assert ("kernel", "__kernel_start", "func") in imports, "the crt does not start through the kernel"
+    asked = sorted(CTYPE & {entry[1] for entry in imports})
+    assert not asked, f"ctype.h's functions asked of the kernel: {asked}"
     missing = EXPORTS - set(exports)
     assert not missing, f"missing exports: {sorted(missing)}"
     links = Path(sys.argv[2]).read_text().split()

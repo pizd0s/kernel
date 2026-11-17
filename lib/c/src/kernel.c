@@ -117,24 +117,6 @@ KERNEL(in_addr_t, inet_netof, (struct in_addr a), (a))
 /* assert.h */
 KERNEL_NORETURN(__assert_fail, (const char* a, const char* b, int c, const char* d), (a, b, c, d))
 
-/* ctype.h */
-KERNEL(int, isalnum, (int a), (a))
-KERNEL(int, isalpha, (int a), (a))
-KERNEL(int, isascii, (int a), (a))
-KERNEL(int, isblank, (int a), (a))
-KERNEL(int, iscntrl, (int a), (a))
-KERNEL(int, isdigit, (int a), (a))
-KERNEL(int, isgraph, (int a), (a))
-KERNEL(int, islower, (int a), (a))
-KERNEL(int, isprint, (int a), (a))
-KERNEL(int, ispunct, (int a), (a))
-KERNEL(int, isspace, (int a), (a))
-KERNEL(int, isupper, (int a), (a))
-KERNEL(int, isxdigit, (int a), (a))
-KERNEL(int, tolower, (int a), (a))
-KERNEL(int, toupper, (int a), (a))
-KERNEL(int, toascii, (int a), (a))
-
 /* dirent.h */
 KERNEL(DIR*, opendir, (const char* a), (a))
 KERNEL(DIR*, fdopendir, (int a), (a))

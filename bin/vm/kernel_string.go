@@ -317,39 +317,6 @@ func (p *Process) libcStrverscmp(a, b uint32) uint32 {
 	return uint32(int32(strverscmp(p.cstr(a), p.cstr(b))))
 }
 
-func (p *Process) libcIsspace(c uint32) uint32 {
-	switch c {
-	case ' ', '\t', '\n', '\v', '\f', '\r':
-		return 1
-	}
-
-	return 0
-}
-
-func (p *Process) libcIsdigit(c uint32) uint32 {
-	if c >= '0' && c <= '9' {
-		return 1
-	}
-
-	return 0
-}
-
-func (p *Process) libcTolower(c uint32) uint32 {
-	if c >= 'A' && c <= 'Z' {
-		return c + ('a' - 'A')
-	}
-
-	return c
-}
-
-func (p *Process) libcToupper(c uint32) uint32 {
-	if c >= 'a' && c <= 'z' {
-		return c - ('a' - 'A')
-	}
-
-	return c
-}
-
 func (p *Process) libcAbs(n uint32) uint32 {
 	if int32(n) < 0 {
 		return uint32(-int32(n))
