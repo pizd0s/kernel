@@ -587,13 +587,19 @@ func (n *remoteNode) setFlags(fl int) error {
 // their handlers.
 func request(p *Process, to *pairEnd, op, arg uint32, body []byte, files []Object) error {
 	data := make([]byte, remoteHeader+len(body))
+	p.head(data, op, arg)
+	copy(data[remoteHeader:], body)
+
+	return to.kernelSend(p, data, files)
+}
+
+// head writes a request's header, the process the kernel calls for its
+// user and group.
+func (p *Process) head(data []byte, op, arg uint32) {
 	binary.LittleEndian.PutUint32(data, op)
 	binary.LittleEndian.PutUint32(data[4:], arg)
 	binary.LittleEndian.PutUint32(data[8:], p.cred.euid())
 	binary.LittleEndian.PutUint32(data[12:], p.cred.egid())
-	copy(data[remoteHeader:], body)
-
-	return to.kernelSend(p, data, files)
 }
 
 // replyOf makes of the packet a reply came in the reply itself, its body
@@ -634,7 +640,7 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 
 	r := newReply(p)
 	defer r.leave()
-	err = request(p, n.end, op, arg, body, append(files, r))
+	err = request(p, n.end, op, arg, body, r.with(files))
 	r.unref()
 
 	if err == syscall.EPIPE {
@@ -669,9 +675,19 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 // open file's endpoint, and a CONNECT's, the listener, which the packet
 // keeps; the files of any other reply, or the rest of theirs, go here.
 func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []Object) (packet, error) {
+	data := make([]byte, remoteHeader+len(body))
+	p.head(data, op, arg)
+	copy(data[remoteHeader:], body)
+
+	return n.asked(p, op, data, files)
+}
+
+// asked is call with the request made already, its header and its body
+// in data, which the packet keeps.
+func (n *remoteNode) asked(p *Process, op uint32, data []byte, files []Object) (packet, error) {
 	r := newReply(p)
 	defer r.leave()
-	err := request(p, n.end, op, arg, body, append(files, r))
+	err := n.end.kernelSend(p, data, r.with(files))
 	r.unref()
 
 	if err == syscall.EPIPE {
@@ -714,8 +730,9 @@ func decodeStat(b []byte, st *syscall.Stat_t) error {
 	}
 
 	le := binary.LittleEndian
-	*st = syscall.Stat_t{Ino: le.Uint64(b), Size: int64(le.Uint64(b[8:])), Mode: le.Uint32(b[24:]), Nlink: uint64(le.Uint32(b[28:])),
-		Uid: le.Uint32(b[32:]), Gid: le.Uint32(b[36:]), Blksize: 4096}
+	*st = syscall.Stat_t{}
+	st.Ino, st.Size, st.Mode, st.Nlink = le.Uint64(b), int64(le.Uint64(b[8:])), le.Uint32(b[24:]), uint64(le.Uint32(b[28:]))
+	st.Uid, st.Gid, st.Blksize = le.Uint32(b[32:]), le.Uint32(b[36:]), 4096
 	st.Blocks = (st.Size + 511) / 512
 	st.Mtim = syscall.NsecToTimespec(int64(le.Uint64(b[16:])))
 	st.Atim = syscall.NsecToTimespec(int64(le.Uint64(b[40:])))

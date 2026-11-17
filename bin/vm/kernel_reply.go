@@ -42,6 +42,11 @@ type replyEnd struct {
 	watchers subscribers
 	nonblock atomic.Bool
 	ino      atomic.Uint64
+	// self is the endpoint as the files of a request that brings no
+	// other, and small where a short answer's bytes are kept: neither is
+	// allocated then.
+	self  [1]Object
+	small [96]byte
 }
 
 const (
@@ -61,8 +66,19 @@ func newReply(p *Process) *replyEnd {
 	r := &replyEnd{to: p}
 	r.refs.Store(1)
 	r.note.kind = eventChanged
+	r.self[0] = r
 
 	return r
+}
+
+// with is the files of a request with the endpoint last, as a request
+// brings it.
+func (r *replyEnd) with(files []Object) []Object {
+	if len(files) == 0 {
+		return r.self[:]
+	}
+
+	return append(files, r)
 }
 
 func (r *replyEnd) ref() {
@@ -380,7 +396,7 @@ func (r *replyEnd) sendmsg(p *Process, at, flags uint32) (int, error) {
 		return 0, err
 	}
 
-	data, err := p.gather(binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]), packetMax)
+	data, err := p.gatherIn(r.small[:], binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]), packetMax)
 
 	if err != nil {
 		return 0, err
@@ -404,7 +420,8 @@ func (r *replyEnd) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, er
 // recvmsg reads what the waiter said into the guest's msghdr: no files
 // come with it, and no address.
 func (r *replyEnd) recvmsg(p *Process, at, flags uint32) (int, error) {
-	spans, err := p.ioSpans(p.u32(at+8), p.u32(at+12))
+	var few [4][]byte
+	spans, err := p.ioSpansIn(few[:0], p.u32(at+8), p.u32(at+12))
 
 	if err != nil {
 		return 0, err

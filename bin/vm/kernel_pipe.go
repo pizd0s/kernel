@@ -438,7 +438,7 @@ func (e *pipeEnd) write(p *Process, b []byte, mode ioMode) (int, error) {
 		// Under the pipe's lock, as take is, so the bytes FIONREAD counts
 		// are those queued.
 		pp.mu.Lock()
-		full, err := pp.ch.put(pk)
+		full, err := pp.ch.put(&pk)
 		finished, sent := err != nil, err == nil && !full
 
 		if sent {

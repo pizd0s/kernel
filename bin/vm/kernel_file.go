@@ -16,12 +16,21 @@ import (
 // ioSpans reads a guest iovec array as spans of memory, which stays where
 // it is during the call.
 func (p *Process) ioSpans(iovs uint32, count uint32) ([][]byte, error) {
+	return p.ioSpansIn(nil, iovs, count)
+}
+
+// ioSpansIn is ioSpans into out, when they fit there: a caller with room
+// of its own for a few allocates none.
+func (p *Process) ioSpansIn(out [][]byte, iovs uint32, count uint32) ([][]byte, error) {
 	if count > 1024 {
 		return nil, syscall.EINVAL
 	}
 
 	table := p.span(iovs, 8*count)
-	out := make([][]byte, 0, count)
+
+	if int(count) > cap(out) {
+		out = make([][]byte, 0, count)
+	}
 
 	for i := range count {
 		base, n := binary.LittleEndian.Uint32(table[8*i:]), binary.LittleEndian.Uint32(table[8*i+4:])
@@ -39,6 +48,11 @@ func (p *Process) ioSpans(iovs uint32, count uint32) ([][]byte, error) {
 // length, made once: the spans are checked first, then EMSGSIZE past max
 // bytes, before any is copied.
 func (p *Process) gather(iovs, count uint32, max int) ([]byte, error) {
+	return p.gatherIn(nil, iovs, count, max)
+}
+
+// gatherIn is gather into small, when the bytes fit there.
+func (p *Process) gatherIn(small []byte, iovs, count uint32, max int) ([]byte, error) {
 	if count > 1024 {
 		return nil, syscall.EINVAL
 	}
@@ -54,7 +68,14 @@ func (p *Process) gather(iovs, count uint32, max int) ([]byte, error) {
 		return nil, syscall.EMSGSIZE
 	}
 
-	data := make([]byte, total)
+	data := small
+
+	if total <= len(small) {
+		data = small[:total]
+	} else {
+		data = make([]byte, total)
+	}
+
 	at := 0
 
 	for i := range count {

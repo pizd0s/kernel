@@ -619,7 +619,8 @@ func (l *unixListener) push(e *pairEnd) (queued, refused bool) {
 		return false, true
 	}
 
-	full, err := l.conns.put(packet{files: []Object{e}})
+	pk := packet{files: []Object{e}}
+	full, err := l.conns.put(&pk)
 
 	if err != nil {
 		return false, true

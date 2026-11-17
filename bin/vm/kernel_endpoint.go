@@ -428,7 +428,8 @@ func (e *pairEnd) kernelSend(p *Process, data []byte, files []Object) error {
 		f.ref()
 	}
 
-	err := e.kernelPut(p, packet{data: data, files: files})
+	pk := packet{data: data, files: files}
+	err := e.kernelPut(p, &pk)
 
 	if err != nil {
 		dropFiles(files)
@@ -437,7 +438,18 @@ func (e *pairEnd) kernelSend(p *Process, data []byte, files []Object) error {
 	return err
 }
 
-func (e *pairEnd) kernelPut(p *Process, pk packet) error {
+func (e *pairEnd) kernelPut(p *Process, pk *packet) error {
+	// Room at once, as there mostly is: no wait is made for it.
+	if !e.noWrite.Load() {
+		if full, err := e.to.put(pk); err != nil || !full {
+			return err
+		}
+
+		if e.nonblock.Load() {
+			return syscall.EAGAIN
+		}
+	}
+
 	var sub *subscription
 
 	defer func() {
@@ -489,7 +501,7 @@ func (e *pairEnd) queueAs(p *Process, pk packet, nonblock bool, timeout *atomic.
 			return syscall.EPIPE
 		}
 
-		full, err := e.to.put(pk)
+		full, err := e.to.put(&pk)
 
 		if err == syscall.EPIPE && e.shared.kind == sockDgram {
 			return syscall.ECONNREFUSED
@@ -1114,7 +1126,8 @@ func (e *pairEnd) sendmsg(p *Process, at, flags uint32) (int, error) {
 // the files into its control buffer, the flags into msg_flags, the
 // sender's address into msg_name.
 func (e *pairEnd) recvmsg(p *Process, at, flags uint32) (int, error) {
-	spans, err := p.ioSpans(p.u32(at+8), p.u32(at+12))
+	var few [4][]byte
+	spans, err := p.ioSpansIn(few[:0], p.u32(at+8), p.u32(at+12))
 
 	if err != nil {
 		return 0, err

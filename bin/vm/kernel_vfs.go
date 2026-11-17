@@ -55,10 +55,12 @@ func (p *Process) rootID(id uint64) uint64 {
 // vfs is a call of the VFS's on the handle id, the node's: the root's id,
 // then the body, the files with it; the reply's packet.
 func (n *remoteNode) vfs(p *Process, id uint64, op, arg uint32, body []byte, files ...Object) (packet, error) {
-	b := make([]byte, 8, 8+len(body))
-	binary.LittleEndian.PutUint64(b, p.rootID(id))
+	data := make([]byte, remoteHeader+8+len(body))
+	p.head(data, op, arg)
+	binary.LittleEndian.PutUint64(data[remoteHeader:], p.rootID(id))
+	copy(data[remoteHeader+8:], body)
 
-	return n.call(p, op, arg, append(b, body...), files)
+	return n.asked(p, op, data, files)
 }
 
 func flagOf(follow bool) uint32 {

@@ -370,7 +370,7 @@ func (m *mover) put(pp *pipe, b []byte) bool {
 	for {
 		pp.mu.Lock()
 		ch := pp.ch
-		full, err := ch.put(pk)
+		full, err := ch.put(&pk)
 
 		if err == nil && !full {
 			pp.bytes.Add(int64(len(b)))

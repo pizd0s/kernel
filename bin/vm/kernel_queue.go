@@ -181,6 +181,10 @@ type eventQueue struct {
 	mu          sync.Mutex
 	first, last *event
 	bell        chan struct{}
+	// count is how many events are queued, for a next to find none
+	// without the lock: a post rings the bell after, so one missed so is
+	// found on the ring.
+	count atomic.Int32
 }
 
 // ownEvents are the events of a process's own: a signal came, it stopped
@@ -205,6 +209,7 @@ func (p *Process) post(e *event) {
 		}
 
 		q.last = e
+		q.count.Add(1)
 	}
 
 	q.mu.Unlock()
@@ -230,10 +235,15 @@ func (q *eventQueue) unlink(e *event) {
 	}
 
 	e.queued, e.prev, e.next = false, nil, nil
+	q.count.Add(-1)
 }
 
 // next takes the oldest event out of the queue, nil when it is empty.
 func (q *eventQueue) next() *event {
+	if q.count.Load() == 0 {
+		return nil
+	}
+
 	q.mu.Lock()
 	e := q.first
 
@@ -411,9 +421,9 @@ func (c *msgChannel) gone() bool {
 	return c.finished.Load()
 }
 
-// put queues a message: EPIPE when the reader is gone, full when there is
-// no room, else it wakes the readers.
-func (c *msgChannel) put(pk packet) (full bool, err error) {
+// put queues a message, a copy of pk: EPIPE when the reader is gone, full
+// when there is no room, else it wakes the readers.
+func (c *msgChannel) put(pk *packet) (full bool, err error) {
 	c.mu.Lock()
 
 	if c.finished.Load() {
@@ -428,7 +438,7 @@ func (c *msgChannel) put(pk packet) (full bool, err error) {
 		}
 
 		clear(c.messages)
-		c.messages, c.head = append(c.messages[:0], pk), 0
+		c.messages, c.head = append(c.messages[:0], *pk), 0
 		c.held.Store(1)
 		c.mu.Unlock()
 		c.nudge()
@@ -442,7 +452,7 @@ func (c *msgChannel) put(pk packet) (full bool, err error) {
 		return true, nil
 	}
 
-	c.messages = append(c.messages, pk)
+	c.messages = append(c.messages, *pk)
 	c.held.Add(1)
 	c.mu.Unlock()
 	c.nudge()
