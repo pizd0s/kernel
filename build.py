@@ -648,16 +648,14 @@ mc = command(
 )
 mc_exe = executable("mc_exe", mc, "$(B)/bin/mc/mc")
 
-# The terminfo database, /usr/share/terminfo: the terminals a program of
-# the system may find itself on, the console's own, vt100, first.
-TERMINALS = ["vt100", "vt102", "vt220", "ansi", "dumb", "linux", "xterm", "xterm-256color", "screen", "screen-256color", "tmux",
-             "tmux-256color", "rxvt-256color", "st-256color", "konsole-256color", "alacritty", "foot", "kitty"]
+# The terminfo database, /usr/share/terminfo: every terminal ncurses
+# describes, as the console's type is the host's to name (TERM).
 terminfo = command(
     name="terminfo",
     inputs=["$(S)/dev/terminfo.py", "$(S)/dev/wasm.py"],
     outputs=["$(B)/share/terminfo.tar"],
     deps=[ncurses_tarball],
-    cmd=["python3", "$(S)/dev/terminfo.py", ncurses_tarball.outputs[0], "$(B)/share/terminfo.tar", *TERMINALS],
+    cmd=["python3", "$(S)/dev/terminfo.py", ncurses_tarball.outputs[0], "$(B)/share/terminfo.tar"],
     descr="TI",
     color="cyan",
 )
@@ -1059,6 +1057,7 @@ APPLICATION_TESTED = {
     "doom": [vm, rootfs, tests_image],
     "mc": [vm, rootfs, tests_image],
     "python": [vm, rootfs, tests_image],
+    "terminfo": [ncurses_tarball, terminfo],
 }
 TESTED = {**E2E_TESTED, **APPLICATION_TESTED}
 tests = []
