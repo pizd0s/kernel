@@ -121,11 +121,8 @@ type Process struct {
 	zone       zoneCache
 	envStrings map[uint32]bool
 	mappings   map[uint32]mapping
-	// timers are the interval timers (kernel_time.go), the process's own;
-	// timersDue counts the events of theirs that are on their way to the
-	// process, for it to take them where its code is interrupted.
-	timers    [3]itimer
-	timersDue atomic.Int32
+	// timers are the interval timers (kernel_time.go), the process's own.
+	timers [3]itimer
 	// jumps are the setjmps of the image by their jmp_buf, stackAt where
 	// the instance keeps __stack_pointer.
 	jumps   map[uint32]*jump
@@ -446,10 +443,11 @@ func (p *Process) runImage(img *execImage, i *Instance, enter func()) (next *exe
 		i.release()
 	}()
 
-	// A signal can arrive before this image has an interrupt token.
+	// A signal can arrive, and a timer fire, before this image has an
+	// interrupt token.
 	p.raiseInterrupt()
 
-	if p.sig.deliverable() != 0 {
+	if p.interruptDue() {
 		p.chase()
 	}
 

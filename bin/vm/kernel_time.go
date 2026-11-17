@@ -139,20 +139,14 @@ func (p *Process) setTimer(which int, value, interval time.Duration) (time.Durat
 
 // armTimer has a timer fire at end: Go puts an event of the timer's epoch
 // now in the process's queue then, and has the process take it though it
-// runs its own code (nudge). timersDue counts such events on their way.
+// runs its own code (nudge).
 func (p *Process) armTimer(which int, end time.Time) {
 	t := &p.timers[which]
 	t.end = end
 	epoch := t.epoch
-	e := &event{kind: eventTimer}
-
-	e.run = func(p *Process) {
-		p.timersDue.Add(-1)
-		p.timerDue(which, epoch)
-	}
+	e := &event{kind: eventTimer, run: func(p *Process) { p.timerDue(which, epoch) }}
 
 	t.timer = time.AfterFunc(time.Until(end), func() {
-		p.timersDue.Add(1)
 		p.post(e)
 		p.nudge()
 	})

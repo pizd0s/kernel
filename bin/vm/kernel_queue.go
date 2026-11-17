@@ -24,7 +24,10 @@ import (
 // out of the queue, so none outlives what it is of. An event names what
 // changed, and the predicate asks what it is now. An object that poll
 // finds not ready for events wakes the subscriptions for them as it may
-// become ready.
+// become ready. Between its waits the process takes the events too, where
+// its own code is interrupted (interrupt, kernel_signal.go): all that are
+// there, with their callbacks and no predicate, so one a wait would have
+// had is gone before it; the wait asks first, and loses nothing.
 //
 // A subscription is its subscriber's, and so are its hooks, by which an
 // object keeps it in its lists: subscribing and taking back hook and
@@ -247,29 +250,6 @@ func (q *eventQueue) next() *event {
 
 	q.mu.Lock()
 	e := q.first
-
-	if e != nil {
-		q.unlink(e)
-	}
-
-	q.mu.Unlock()
-
-	return e
-}
-
-// nextOf takes the oldest event of a kind out of the queue, nil when
-// there is none.
-func (q *eventQueue) nextOf(kind eventKind) *event {
-	if q.count.Load() == 0 {
-		return nil
-	}
-
-	q.mu.Lock()
-	e := q.first
-
-	for e != nil && e.kind != kind {
-		e = e.next
-	}
 
 	if e != nil {
 		q.unlink(e)
