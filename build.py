@@ -37,7 +37,7 @@ BUSYBOX = "1.36.1"
 E2FSPROGS = "1.47.4"
 DOOMGENERIC = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
 PYTHON = "3.14.10"
-STR = "1318a0f603c8d23839f02840cc1d9129c82f0839"
+STR = "e96fca3f07464a01a4a0f52deb0f6e69be293bd3"
 LLVM = "23.1.5"
 MC = "4.8.33"
 GLIB = "2.90.1"
@@ -96,7 +96,7 @@ python_tarball = fetch(
 str_tarball = fetch(
     "str_tarball",
     f"https://github.com/pg83/str/archive/{STR}.tar.gz",
-    "750a476204f93a453825afe23143e44c6f54bfda944cbd55fd22b6c0f1c7ee6b",
+    "0ecc2afb9b111cf0890c0482c81bdbfdb30d1b83cb3f9ea738c82b64b3f2bbec",
     f"$(B)/ext/str-{STR}.tar.gz",
 )
 
