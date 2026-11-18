@@ -1524,43 +1524,26 @@ Answer Ask::await_resume() const noexcept {
 
 // ---- opens and calls handed on ---------------------------------------------------
 
-// A new handle at a place: a pair whose second end is made the handle
-// (SO_SERVED), a directory's or of what O_PATH opened that is no
-// directory, its id the next; our end is the handle's endpoint, the
-// other end, the kernel's, -1 when there is no pair. The place's dev and
-// ino go with it, its file system's, which the kernel keeps a directory's
-// locks by: none of a place whose file system has not said its stat yet.
-static int makeHandle(const Place& at, int flags, int& theirs) {
+// A handle's open, answered on fd: a new handle at the place, a pair
+// whose first end is the handle's endpoint and whose second goes with the
+// OK to who asked, a directory's or of what O_PATH opened that is no
+// directory, its id the next. The place's dev and ino go with it, its
+// file system's, which the kernel keeps a directory's locks by: none of a
+// place whose file system has not said its stat yet.
+static void openHandle(int fd, const Place& at, int flags) {
     const bool opath = (flags & O_PATH) != 0;
-    const u64 id = ++handleIds;
     const u64 ino = at.st.dev != 0 ? at.st.ino : 0;
-    const served what{u32(isDir(at) ? SERVED_DIR : SERVED_PATH), u32(flags) & (O_ACCMODE | O_APPEND | O_NONBLOCK | O_PATH), at.st.dev, ino, id};
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
-        return -1;
-    }
-    if (setsockopt(pair[1], SOL_SOCKET, SO_SERVED, &what, sizeof what) != 0) {
-        const int e = errno;
-        close(pair[0]);
-        close(pair[1]);
-        errno = e;
-        return -1;
-    }
-    listenHandle(pair[0], at, opath, id);
-    theirs = pair[1];
-    return 0;
-}
-
-// A handle's open, answered on fd: a new handle, the second end of whose
-// pair goes with the OK to who asked.
-static void openHandle(int fd, const Place& at, int flags) {
-    int theirs;
-    if (makeHandle(at, flags, theirs) != 0) {
         error(fd, errno);
         return;
     }
-    reply(fd, opOk, 0, nullptr, 0, &theirs, 1);
-    close(theirs);
+    const u64 id = ++handleIds;
+    const Opened what{u32(isDir(at) ? openedDir : openedPath), u32(flags) & (O_ACCMODE | O_APPEND | O_NONBLOCK | O_PATH), at.st.dev, ino, id};
+    listenHandle(pair[0], at, opath, id);
+    const iovec said = part(&what, sizeof what);
+    reply(fd, opOk, 0, &said, 1, &pair[1], 1);
+    close(pair[1]);
 }
 
 // A call handed on to a file system, with the connection it came on,
@@ -3422,9 +3405,15 @@ static Task boot() {
         }
         rootMount->fs->cached = !nocacheIn(a);
     }
-    if (makeHandle(rootOf(rootMount), O_RDONLY, rootEnd) != 0) {
-        fatal("rootfs: a handle of the root: errno %d", errno);
+    // The root of the processes rootfs starts: a pair, whose first end is
+    // the handle of id 0, at the root, and whose second each of them makes
+    // its working directory and its root (spawn).
+    int root[2];
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, root) != 0) {
+        fatal("rootfs: a pair for the root: errno %d", errno);
     }
+    listenHandle(root[0], rootOf(rootMount), false, 0);
+    rootEnd = root[1];
 
     const struct {
         const char* name;

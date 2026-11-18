@@ -16,10 +16,14 @@
 //   file system's or a device's (bin/tools); a handle takes them too.
 //
 // An open file is a pair the server makes as it opens, a seqpacket
-// socketpair: it keeps the first end, the open file's endpoint, and makes
-// the second the open file it describes with SO_SERVED (lib/c's
-// sys/socket.h), a file, a terminal's, a handle of a directory or of what
-// O_PATH opened, which the OPEN's OK brings to who asked, fds[0].
+// socketpair: it keeps the first end, the open file's endpoint, and the
+// OPEN's OK brings the second to who asked, fds[0], with what it is, an
+// Opened: a file, a terminal's, a handle of a directory or of what O_PATH
+// opened. The kernel makes it that open file for its process. An OK with
+// no Opened brings the end as it is, a socket to its opener. And an end of
+// a pair a process makes its working directory (fchdir) is a directory to
+// the kernel, the handle of id 0: the root of the server behind it, which
+// rootfs makes the root of the processes it starts so.
 //
 // A call on an open file goes on a connection to it, which who calls
 // asks for on the open file's endpoint: CONNECT, a question, answered
@@ -55,13 +59,15 @@
 //   opened; the root, the working directory and the directory descriptors
 //   of a process are handles. A path walks from the handle, or from the
 //   root when it is absolute: root is the id of the process's root, which
-//   rootfs gave the handle as it made it (struct served's id). A call
+//   rootfs gave the handle as it made it (its Opened's id), 0 for the
+//   root rootfs gives the processes it starts. A call
 //   follows a last link as Linux's does, and checks what Linux checks
 //   before the file system.
 //     OPEN      arg flags   root u64, mode u32, path
-//                                         OK, fds[0] the open file or the
-//                                         handle; a FIFO's OK is its stat
-//                                         alone: the kernel makes its pipe
+//                                         OK Opened, fds[0] the open file
+//                                         or the handle; a FIFO's OK is its
+//                                         stat alone: the kernel makes its
+//                                         pipe
 //     STAT      arg follow  root u64, path    OK stat
 //     READLINK              root u64, path    OK target
 //     MKDIR     arg mode    root u64, path
@@ -159,7 +165,7 @@
 //     CONNECT                             OK, fds[0] the asking end of a
 //                                         call pair, a connection
 //   and from the server, on its end of an open file it made telling
-//   (SERVED_TELLS), the file's readiness, which select, poll and epoll
+//   (openedTells), the file's readiness, which select, poll and epoll
 //   find: until the first, nothing is ready; the last counts.
 //     READY     arg events  foreground u32, flags u32
 //                                         events: POLLIN, POLLPRI, POLLOUT,
@@ -172,7 +178,7 @@
 //                                         after the OK, and before the
 //                                         answer to a call that changed them
 //
-//   A terminal's, on a terminal's open file (SERVED_TERMINAL): the server
+//   A terminal's, on a terminal's open file (openedTerminal): the server
 //   keeps all of the terminal, its settings and its discipline
 //   (bin/tools/pty.cpp). termios is lib/c's struct termios, winsize its
 //   struct winsize; a master's are its slave's, as Linux's are.
@@ -238,6 +244,20 @@
 //   rootfs's: the system is noatime.
 //
 //   replies: OK, ERR with arg the errno
+//   opened { kind u32, flags u32, dev u64, ino u64, id u64 }   kind:
+//          openedFile, an open file; openedTerminal, a terminal's, which
+//          takes a terminal's calls too; openedDir, a handle of a directory
+//          of the VFS's, which calls with a path go to; openedPath, a handle
+//          of what O_PATH opened that is no directory; with openedTells the
+//          server tells its readiness (READY). flags are the open's:
+//          O_ACCMODE, O_APPEND and O_NONBLOCK, and O_PATH of a directory's
+//          handle, which takes no locks then. dev and ino are the file's or
+//          the directory's, as its stat has them, or a terminal's device's:
+//          they name it to the kernel, which keeps the locks of flock and
+//          fcntl by them, so the open files given one dev and ino are one
+//          file to lock, and a file of ino 0 has no locks; two opens of a
+//          terminal are one terminal by them. id is a handle's, which calls
+//          with a path name the root by
 //   io { off u64, woff u32, flags u32 }   flags: ioAppend, a WRITE at the
 //          end the file has, O_APPEND's; ioNonblock, answered at once, EAGAIN
 //          where it would wait, O_NONBLOCK's
@@ -359,6 +379,21 @@ struct Header {
     uint32_t gid;
 };
 
+// What the end an OPEN's OK brings is: the OK's body.
+struct Opened {
+    uint32_t kind;
+    uint32_t flags;
+    uint64_t dev;
+    uint64_t ino;
+    uint64_t id;
+};
+
+constexpr uint32_t openedFile = 1;
+constexpr uint32_t openedTerminal = 2;
+constexpr uint32_t openedDir = 3;
+constexpr uint32_t openedPath = 4;
+constexpr uint32_t openedTells = 16;
+
 // A READ's and a WRITE's body.
 struct Io {
     uint64_t off;
@@ -391,6 +426,7 @@ struct [[gnu::packed]] Statfs {
 };
 
 static_assert(sizeof(Header) == 16);
+static_assert(sizeof(Opened) == 32);
 static_assert(sizeof(Stat) == 64 && offsetof(Stat, atime) == 40);
 static_assert(sizeof(Statfs) == 52);
 

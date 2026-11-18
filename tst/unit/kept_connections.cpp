@@ -9,7 +9,8 @@
 // makes while a call of the process waits at the server goes on a
 // connection of its own, the kept one being in that call, which hears
 // its CANCEL; and a connection the server let go of is made again. The
-// test serves a file itself and counts what comes.
+// test serves a file itself, of a device of its own, and counts what
+// comes.
 
 #include <assert.h>
 #include <errno.h>
@@ -25,13 +26,22 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-// The protocol's (lib/protocol/protocol.h): a packet's header, the calls
-// the test serves, and the stat an FSTAT's OK is.
+// The protocol's (lib/protocol/protocol.h): a packet's header, what an
+// OPEN's OK says of the open file it brings, and the stat a REGISTER's
+// and an FSTAT's OK is.
 struct Header {
     uint32_t op;
     uint32_t arg;
     uint32_t uid;
     uint32_t gid;
+};
+
+struct Opened {
+    uint32_t kind;
+    uint32_t flags;
+    uint64_t dev;
+    uint64_t ino;
+    uint64_t id;
 };
 
 struct Stat {
@@ -47,20 +57,10 @@ struct Stat {
     uint64_t ctime;
 };
 
-constexpr uint32_t opRead = 64;
-constexpr uint32_t opFstat = 67;
-constexpr uint32_t opCancel = 74;
-constexpr uint32_t opConnect = 76;
+constexpr uint32_t opOpen = 96;
+constexpr uint32_t opRegister = 97;
 constexpr uint32_t opOk = 128;
-constexpr uint32_t opErr = 129;
-
-// What the server counted.
-struct Counts {
-    int connections;
-    int fstats;
-    int reads;
-    int cancels;
-};
+constexpr uint32_t openedFile = 1;
 
 // A packet with one descriptor, or none.
 static void sendWith(int to, const void* data, size_t size, int fd) {
@@ -80,6 +80,130 @@ static void sendWith(int to, const void* data, size_t size, int fd) {
     }
     assert(sendmsg(to, &m, MSG_NOSIGNAL) == ssize_t(size));
 }
+
+// A packet into data, of at most size bytes: its length, and the last of
+// its descriptors, -1 for none; the others are closed.
+static ssize_t receiveWith(int from, void* data, size_t size, int& fd) {
+    alignas(cmsghdr) char control[CMSG_SPACE(4 * sizeof(int))];
+    iovec iov{data, size};
+    msghdr m{};
+    m.msg_iov = &iov;
+    m.msg_iovlen = 1;
+    m.msg_control = control;
+    m.msg_controllen = sizeof control;
+    const ssize_t n = recvmsg(from, &m, 0);
+    fd = -1;
+    for (cmsghdr* c = n >= 0 ? CMSG_FIRSTHDR(&m) : nullptr; c; c = CMSG_NXTHDR(&m, c)) {
+        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) {
+            continue;
+        }
+        for (size_t at = 0; at + sizeof(int) <= c->cmsg_len - CMSG_LEN(0); at += sizeof(int)) {
+            if (fd >= 0) {
+                close(fd);
+            }
+            memcpy(&fd, CMSG_DATA(c) + at, sizeof(int));
+        }
+    }
+    return n;
+}
+
+// A device of ours in /dev, registered at /dev/init: its path, and our
+// end of the pair devfs hands its opens on to.
+static char devicePath[64];
+
+static int device(const char* name) {
+    char registered[48];
+    snprintf(registered, sizeof registered, "%s_%d", name, int(getpid()));
+    snprintf(devicePath, sizeof devicePath, "/dev/%s", registered);
+    const int registry = open("/dev/init", O_RDWR | O_CLOEXEC);
+    int pair[2];
+    assert(registry >= 0 && socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) == 0);
+
+    struct {
+        Header h;
+        char name[48];
+    } request{{opRegister, S_IFCHR | 0666, uint32_t(geteuid()), uint32_t(getegid())}, {}};
+
+    memcpy(request.name, registered, strlen(registered));
+    sendWith(registry, &request, sizeof(Header) + strlen(registered), pair[1]);
+
+    struct {
+        Header h;
+        Stat st;
+    } answer;
+
+    assert(recv(registry, &answer, sizeof answer, 0) == ssize_t(sizeof answer) && answer.h.op == opOk);
+    close(pair[1]);
+    close(registry);
+    return pair[0];
+}
+
+// An open file of the device, as its OPEN's OK says it is: a child opens
+// the device and sends us what it got, and we answer its OPEN, which
+// came on the device's channel with where to answer it, with the second
+// end of a pair of ours and what. The open file, and in end our end of
+// the pair, the open file's endpoint; or -1 and the errno of the open.
+static int opened(int channel, Opened what, int& end) {
+    int carrier[2];
+    assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, carrier) == 0);
+    fflush(stdout);
+    const pid_t opener = fork();
+    assert(opener >= 0);
+    if (opener == 0) {
+        const int fd = open(devicePath, O_RDWR);
+        if (fd < 0) {
+            _exit(errno);
+        }
+        sendWith(carrier[1], "f", 1, fd);
+        _exit(0);
+    }
+    Header h;
+    unsigned char request[64];
+    int reply;
+    assert(receiveWith(channel, request, sizeof request, reply) >= ssize_t(sizeof h) && reply >= 0);
+    memcpy(&h, request, sizeof h);
+    assert(h.op == opOpen);
+    int pair[2];
+    assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) == 0);
+
+    struct {
+        Header h;
+        Opened what;
+    } ok{{opOk, 0, 0, 0}, what};
+
+    sendWith(reply, &ok, sizeof ok, pair[1]);
+    close(pair[1]);
+    close(reply);
+    end = pair[0];
+    int status;
+    assert(waitpid(opener, &status, 0) == opener && WIFEXITED(status));
+    int fd = -1;
+    if (WEXITSTATUS(status) == 0) {
+        char byte;
+        assert(receiveWith(carrier[0], &byte, 1, fd) == 1 && fd >= 0);
+    } else {
+        errno = WEXITSTATUS(status);
+        close(end);
+        end = -1;
+    }
+    close(carrier[0]);
+    close(carrier[1]);
+    return fd;
+}
+
+constexpr uint32_t opRead = 64;
+constexpr uint32_t opFstat = 67;
+constexpr uint32_t opCancel = 74;
+constexpr uint32_t opConnect = 76;
+constexpr uint32_t opErr = 129;
+
+// What the server counted.
+struct Counts {
+    int connections;
+    int fstats;
+    int reads;
+    int cancels;
+};
 
 // A request of a connection: its header, and the descriptor it brought,
 // a READ's memfd, closed, as the test reads nothing into it. False at
@@ -200,11 +324,9 @@ static void handler(int) {
 
 int main() {
     alarm(60);
-    const struct served what{SERVED_FILE, O_RDWR, 0, 0, 0};
     int sv[2];
-    assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sv) == 0);
-    assert(setsockopt(sv[1], SOL_SOCKET, SO_SERVED, &what, sizeof what) == 0);
-    assert(pipe(control) == 0 && pipe(report) == 0);
+    sv[1] = opened(device("kept_connections"), {openedFile, O_RDWR, 0, 0, 0}, sv[0]);
+    assert(sv[1] >= 0 && pipe(control) == 0 && pipe(report) == 0);
     fflush(stdout);
     const pid_t server = fork();
     assert(server >= 0);

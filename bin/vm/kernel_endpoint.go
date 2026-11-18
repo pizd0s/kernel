@@ -109,6 +109,9 @@ type pairEnd struct {
 	peeked atomic.Bool
 	// options are the socket's options of the socket level.
 	options sockOptions
+	// dir is the end as a directory, once a process made it its working
+	// directory (directory, kernel_remote.go), with mu.
+	dir *remoteDir
 }
 
 // sockOptions are the options of the socket level a socket of the

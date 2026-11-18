@@ -95,12 +95,12 @@ bool Request::at(size_t offset, T& out) const {
     return copy(offset, &out, sizeof out);
 }
 
-// Answers an OPEN with a new open file: a pair whose second end is made
-// the open file what describes (SO_SERVED), the OPEN's flags its, and
-// goes with the OK to who asked; the first, watched in epoll with of, to
-// read and write as the flags let it, is the open file's endpoint, which
-// who asks connects on. That endpoint, or none, the error answered.
-Endpoint* answerOpen(int epoll, const Request& r, served what, void* of);
+// Answers an OPEN with a new open file: a pair whose second end goes
+// with the OK to who asked, the open file what says it is, the OPEN's
+// flags its; the first, watched in epoll with of, to read and write as
+// the flags let it, is the open file's endpoint, which who asks connects
+// on. That endpoint, or none, the error answered.
+Endpoint* answerOpen(int epoll, const Request& r, Opened what, void* of);
 
 // Keeps a request to answer it later, of saying what waits: the endpoint
 // to answer it on, whose descriptor stays open, and which hears of it

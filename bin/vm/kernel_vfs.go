@@ -71,9 +71,9 @@ func flagOf(follow bool) uint32 {
 	return atSymlinkNofollow
 }
 
-// openPath opens what a path names, as open(2) does: the open file its
-// server made of a served pair, which the OK brings and the kernel takes
-// as it is, or a FIFO's pipe, the kernel's; /dev/tty is the caller's
+// openPath opens what a path names, as open(2) does: the open file the
+// OK brings, an end of a pair its server made and what the OK says it is
+// (opened), or a FIFO's pipe, the kernel's; /dev/tty is the caller's
 // controlling terminal (kernel_terminal.go).
 func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (Object, error) {
 	if p.chaosFail("openat") {
@@ -106,7 +106,11 @@ func (d *remoteDir) openPath(p *Process, path string, flags int, mode uint32) (O
 		return p.openFifo(&st, flags)
 	}
 
-	f := pk.files[0]
+	f, err := p.opened(&pk)
+
+	if err != nil {
+		return nil, err
+	}
 
 	if flags&syscall.O_DIRECTORY != 0 && f.asDir() == nil {
 		f.unref()

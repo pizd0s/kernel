@@ -144,11 +144,9 @@ func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 const (
 	sockTypeMask = 0xf
 	sockRaw      = 3
-	// SOCK_CALL, a call pair's (kernel_call.go), and SO_SERVED, which makes
-	// an end of a pair the open file a server describes (kernel_remote.go):
-	// lib/c's own, of sys/socket.h.
+	// SOCK_CALL, a call pair's (kernel_call.go): lib/c's own, of
+	// sys/socket.h.
 	sockCall = 7
-	soServed = 200
 )
 
 func (p *Process) libcBind(fd, addr, n uint32) uint32 {
@@ -263,10 +261,6 @@ func (p *Process) callPair(kind, at uint32) error {
 }
 
 func (p *Process) libcSetsockopt(fd, level, name, at, n uint32) uint32 {
-	if level == solSocket && name == soServed {
-		return p.result(0, p.serve(fd, at, n))
-	}
-
 	s, err := p.socketAt(fd)
 
 	if err == nil {

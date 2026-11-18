@@ -12,7 +12,7 @@ import (
 )
 
 // A terminal is a service's open file (kernel_remote.go) born of a served
-// pair of SERVED_TERMINAL: an end of a pseudoterminal of
+// pair an OPEN's OK said a terminal's (openedTerminal): an end of a pseudoterminal of
 // bin/tools/pty.cpp, the system's only terminals. The kernel keeps nothing
 // of one: its settings, its window, its foreground group and its
 // discipline are its server's. The kernel's calls see it as the Terminal
@@ -485,13 +485,23 @@ func (t *remoteTerminal) reopen(p *Process, flags int) (Terminal, error) {
 		return nil, err
 	}
 
-	if len(pk.files) == 1 {
-		if r := pk.files[0].asTerminal(); r != nil {
-			return r, nil
-		}
+	if len(pk.files) != 1 {
+		dropFiles(pk.files)
+
+		return nil, syscall.EIO
 	}
 
-	dropFiles(pk.files)
+	f, err := p.opened(&pk)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if r := f.asTerminal(); r != nil {
+		return r, nil
+	}
+
+	f.unref()
 
 	return nil, syscall.EIO
 }

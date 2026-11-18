@@ -3,7 +3,7 @@
 // terminal: the open is its master, and its slave is /dev/pts/N, a device
 // the service registers as the terminal comes, the opener's and 0600, as
 // Linux's devpts makes it, and lets go when the master goes. The open
-// files of both ends are a terminal's (SERVED_TERMINAL), of the device of
+// files of both ends are a terminal's (openedTerminal), of the device of
 // their end, and tell their readiness; an OPEN on a slave's is another
 // open of the slave, /dev/tty's.
 // The service keeps all of a terminal: its settings, which the master's
@@ -1189,7 +1189,7 @@ static void opened(Terminal& t, bool master, Request& r) {
     for (Open& o : opens) {
         if (!o.terminal) {
             const Stat& st = master ? device.st : t.slave.st;
-            const Endpoint* e = answerOpen(epoll, r, {SERVED_TERMINAL | SERVED_TELLS, 0, st.dev, st.ino, 0}, &o);
+            const Endpoint* e = answerOpen(epoll, r, {openedTerminal | openedTells, 0, st.dev, st.ino, 0}, &o);
             if (!e) {
                 return;
             }

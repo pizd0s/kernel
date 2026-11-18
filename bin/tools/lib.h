@@ -215,11 +215,11 @@ namespace tools {
     Endpoint* listen(int fd, Role role, void* node, bool reads, bool writes);
 
     // Answers an open on fd, of flags, with a new open file of node: a
-    // pair whose second end is made the open file (SO_SERVED), a
-    // SERVED_FILE of the file's dev and ino, which the kernel keeps its
-    // locks by, and goes with the OK to who asked; the first, an endpoint
-    // of the loop's, to read, to write or both, is the open file's, which
-    // who asks connects on. That endpoint, or none, the error answered.
+    // pair whose second end goes with the OK to who asked, an openedFile
+    // of the file's dev and ino, which the kernel keeps its locks by; the
+    // first, an endpoint of the loop's, to read, to write or both, is the
+    // open file's, which who asks connects on. That endpoint, or none, the
+    // error answered.
     Endpoint* openFile(int fd, u32 flags, void* node, u64 dev, u64 ino, bool reads, bool writes);
 
     // Serves the endpoints until the last of them closes: rootfs's channel,

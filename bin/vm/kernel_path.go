@@ -478,7 +478,9 @@ func (p *Process) libcChdir(path uint32) uint32 {
 }
 
 // fchdir makes a directory descriptor's directory the working directory:
-// a Dir's, which chroot(".") may then take; anything else is ENOTDIR.
+// a Dir's, which chroot(".") may then take, or an end of a seqpacket pair,
+// which is the root of the server behind it (directory, kernel_remote.go);
+// anything else is ENOTDIR.
 func (p *Process) libcFchdir(fd uint32) uint32 {
 	obj, err := p.fd(fd)
 
@@ -487,6 +489,12 @@ func (p *Process) libcFchdir(fd uint32) uint32 {
 	}
 
 	d := obj.asDir()
+
+	if e := obj.asPair(); d == nil && e != nil && e.shared.kind == sockSeqpacket {
+		made := e.directory(p)
+		defer made.unref()
+		d = made
+	}
 
 	if d == nil {
 		return p.result(0, syscall.ENOTDIR)

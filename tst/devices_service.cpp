@@ -172,14 +172,14 @@ static void readText(const Endpoint& e, const Request& r) {
 static void handle(Endpoint& e, Request& r) {
     if (e.channel) {
         if (!mailbox) {
-            answerOpen(epoll, r, {SERVED_FILE, 0, 0, 0, 0}, e.of);
+            answerOpen(epoll, r, {openedFile, 0, 0, 0, 0}, e.of);
             return;
         }
         if (openCount == sizeof opens / sizeof opens[0]) {
             fail(r.reply(), ENFILE);
             return;
         }
-        if (const Endpoint* opened = answerOpen(epoll, r, {SERVED_FILE | SERVED_TELLS, 0, 0, 0, 0}, e.of)) {
+        if (const Endpoint* opened = answerOpen(epoll, r, {openedFile | openedTells, 0, 0, 0, 0}, e.of)) {
             opens[openCount++] = opened->fd;
             tellAll();
         }

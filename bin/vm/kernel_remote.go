@@ -14,12 +14,13 @@ import (
 // A server's files: the kernel speaks the protocol of
 // lib/protocol/protocol.h here for the POSIX calls of a process, as the
 // libc of the process would. An open file is the second end of a pair its
-// server made, a seqpacket socketpair's, which the server made the open
-// file it describes with SO_SERVED (lib/c's sys/socket.h): a file, a
-// terminal's (kernel_terminal.go), a handle of a directory of rootfs's,
-// which the calls with a path go to whole (kernel_vfs.go), or one of what
-// O_PATH opened that is no directory; the server holds the first end, its
-// endpoint of the open file.
+// server made, a seqpacket socketpair's, which an OPEN's OK brings with
+// what it is (opened): a file, a terminal's (kernel_terminal.go), a
+// handle of a directory of rootfs's, which the calls with a path go to
+// whole (kernel_vfs.go), or one of what O_PATH opened that is no
+// directory; the server holds the first end, its endpoint of the open
+// file. And an end of a pair a process makes its working directory is a
+// directory, the root of the server behind it (directory).
 //
 // A call on an open file goes on a connection to it. The kernel connects
 // for the process: CONNECT on the open file's endpoint, a question, which
@@ -41,7 +42,10 @@ import (
 //	its modes say, gid their group (permits). A reply's are zero.
 //
 //	An open's OK brings the open file, the second end of a pair the server
-//	made, whose first end it keeps. A READ or a WRITE brings a memfd of the
+//	made, whose first end it keeps, and its body says what it is:
+//	  opened { kind u32, flags u32, dev u64, ino u64, id u64 }
+//	With no body the end is the opener's as it is, a socket. A READ or a
+//	WRITE brings a memfd of the
 //	memory the process reads into or writes from (kernel_memfd.go): the
 //	server writes the bytes there or reads them from there itself, from
 //	the memfd's byte woff on, one copy, as many as asked, and closes it as
@@ -66,7 +70,7 @@ import (
 //	                      end of a call pair, a connection
 //	  READY     arg events                 from the server, on its end of an
 //	                                       open file it made telling
-//	                                       (servedTells): what poll finds
+//	                                       (openedTells): what poll finds
 //	                                       of it now, the last counts
 //	replies: OK, ERR with arg the errno
 //	io { off u64, woff u32, flags u32 }   flags: ioAppend, a WRITE at the
@@ -101,15 +105,16 @@ const (
 	rConnect
 )
 
-// The kinds of struct served (lib/c's sys/socket.h), what SO_SERVED makes
-// the end of a server's pair, and its server's telling of its readiness.
-// READY's flags: the terminal's TOSTOP.
+// The kinds of an opened (lib/protocol/protocol.h), what an OPEN's OK says
+// the end it brings is, and its server's telling of its readiness; the
+// size of one. READY's flags: the terminal's TOSTOP.
 const (
-	servedFile     = 1
-	servedTerminal = 2
-	servedDir      = 3
-	servedPath     = 4
-	servedTells    = 16
+	openedFile     = 1
+	openedTerminal = 2
+	openedDir      = 3
+	openedPath     = 4
+	openedTells    = 16
+	sizeofOpened   = 32
 	readyTostop    = 1
 )
 
@@ -363,50 +368,81 @@ func (h *remotePath) chown(p *Process, uid, gid int) error           { return h.
 func (h *remotePath) utimes(p *Process, ts []syscall.Timespec) error { return h.node.utimes(p, ts) }
 func (h *remotePath) statfs(p *Process, st *syscall.Statfs_t) error  { return h.node.statfs(p, st) }
 
-// serve is setsockopt's SO_SERVED (lib/c's sys/socket.h): the end of a
-// seqpacket pair the descriptor refers to, and nothing else does, becomes
-// the open file the struct served at at describes, whose calls the kernel
-// makes requests of on connections to the pair's other end, the server's
-// endpoint of it; that is what the descriptor refers to from now on, and
-// what goes to who asked as an OPEN's OK brings it.
-func (p *Process) serve(fd, at, n uint32) error {
-	if n != sizeofServed {
-		return syscall.EINVAL
+// opened is the open file an OPEN's OK brings, the first of its files:
+// the end of a pair its server made, which the OK's body, an opened,
+// says what it is, a reference to it the caller's. With no body the end
+// is the opener's as it is, a plain socket (/dev/init's). The end is the
+// open file's from then on: the kernel makes requests of the open file's
+// calls on connections to the pair's other end, the server's endpoint of
+// it. What a server says wrongly of it is EIO.
+func (p *Process) opened(pk *packet) (Object, error) {
+	f := pk.files[0]
+
+	if len(pk.data) == 0 {
+		return f, nil
 	}
 
-	d, ok := p.files.at(int(fd))
+	end := f.asPair()
 
-	if !ok {
-		return syscall.EBADF
+	if len(pk.data) != sizeofOpened || end == nil || end.shared.kind != sockSeqpacket {
+		f.unref()
+
+		return nil, syscall.EIO
 	}
 
-	end := d.obj.asPair()
-
-	if end == nil {
-		return syscall.ENOTSOCK
-	}
-
-	if end.shared.kind != sockSeqpacket || end.refs.Load() != 1 {
-		return syscall.EINVAL
-	}
-
-	f, err := served(p, p.u32(at), int(p.u32(at+4)), p.u64(at+8), p.u64(at+16), p.u64(at+24), end)
+	b := pk.data
+	obj, err := served(p, binary.LittleEndian.Uint32(b), int(binary.LittleEndian.Uint32(b[4:])), binary.LittleEndian.Uint64(b[8:]),
+		binary.LittleEndian.Uint64(b[16:]), binary.LittleEndian.Uint64(b[24:]), end)
 
 	if err != nil {
-		return err
+		f.unref()
+
+		return nil, syscall.EIO
 	}
 
-	// The descriptor's reference to the end is the open file's now.
-	p.files.take(int(fd))
-	p.files.put(int(fd), f, d.cloexec)
-
-	return nil
+	return obj, nil
 }
 
-// served is the open file a kind of struct served makes of a pair's end
-// for the process that serves it, as the open flags say: a
+// directory is the end of a seqpacket pair as a directory, what a process
+// that makes it its working directory has: a handle of id 0, the root of
+// the server behind the pair, which the calls with a path go to as to
+// any handle (rootfs makes its children's root so). One for the end while
+// any holds it, with a reference for the caller.
+func (e *pairEnd) directory(p *Process) *remoteDir {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if d := e.dir; d != nil && d.node.revive() {
+		return d
+	}
+
+	e.ref()
+	f, _ := served(p, openedDir, syscall.O_RDONLY, 0, 0, 0, e)
+	e.dir = f.asVFS()
+
+	return e.dir
+}
+
+// revive takes a reference to a node that still has one: false for one
+// whose last went.
+func (n *remoteNode) revive() bool {
+	for {
+		r := n.refs.Load()
+
+		if r == 0 {
+			return false
+		}
+
+		if n.refs.CompareAndSwap(r, r+1) {
+			return true
+		}
+	}
+}
+
+// served is the open file an opened makes of a pair's end for a process,
+// as the open flags say: a
 // file, a terminal's, or a handle of id, of a directory or of what O_PATH
-// opened; with servedTells its server's READY is its readiness. The dev
+// opened; with openedTells its server's READY is its readiness. The dev
 // and ino it gives name it (fileKey): a file and a directory have their
 // locks by the name, unless the ino is none, and a terminal is one
 // terminal by it.
@@ -414,29 +450,29 @@ func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *pairEn
 	var n *remoteNode
 	var f Object
 
-	switch kind &^ servedTells {
-	case servedFile:
+	switch kind &^ openedTells {
+	case openedFile:
 		r := &remoteFile{}
 		n, f = &r.node, r
 
-	case servedTerminal:
+	case openedTerminal:
 		t := &remoteTerminal{key: fileKey{dev, ino}}
 		n, f = &t.node, t
-	case servedDir:
+	case openedDir:
 		d := &remoteDir{id: id, opath: flags&oPath != 0}
 		n, f = &d.node, d
-	case servedPath:
+	case openedPath:
 		h := &remotePath{id: id}
 		n, f = &h.node, h
 	default:
 		return nil, syscall.EINVAL
 	}
 
-	if what := kind &^ servedTells; ino != 0 && (what == servedFile || what == servedDir) {
+	if what := kind &^ openedTells; ino != 0 && (what == openedFile || what == openedDir) {
 		n.locks, n.file = &p.k.locks, fileKey{dev, ino}
 	}
 
-	n.end, n.accmode, n.tells = end, flags&syscall.O_ACCMODE, kind&servedTells != 0
+	n.end, n.accmode, n.tells = end, flags&syscall.O_ACCMODE, kind&openedTells != 0
 	n.refs.Store(1)
 	n.append.Store(flags&syscall.O_APPEND != 0)
 	n.nonblock.Store(flags&syscall.O_NONBLOCK != 0)
