@@ -45,8 +45,8 @@ int main() {
                            c >= 'a' && c <= 'z', c >= ' ' && c <= '~', graph && !alpha && !digit,
                            c == ' ' || c >= '\t' && c <= '\r', c >= 'A' && c <= 'Z',
                            digit || c >= 'A' && c <= 'F' || c >= 'a' && c <= 'f'};
-        // A call of one is the header's definition, inlined; a pointer
-        // to one is lib/c's function.
+        // A call of one is the compiler's code or the kernel's function;
+        // a pointer to one is the kernel's.
         bool called[] = {bool(isalnum(c)), bool(isalpha(c)), bool(isblank(c)), bool(iscntrl(c)), bool(isdigit(c)), bool(isgraph(c)),
                          bool(islower(c)), bool(isprint(c)), bool(ispunct(c)), bool(isspace(c)), bool(isupper(c)), bool(isxdigit(c))};
         for (unsigned i = 0; i < 12; ++i) {

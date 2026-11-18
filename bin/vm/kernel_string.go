@@ -58,11 +58,22 @@ func (p *Process) search(at, n uint32, c byte) (uint32, bool) {
 	b := p.bounded(at, n)
 	i := bytes.IndexByte(b, c)
 
-	if i < 0 {
-		if uint32(len(b)) < n {
-			oob()
-		}
+	if i < 0 && uint32(len(b)) < n {
+		oob()
+	}
 
+	// What it read: up to the byte found, or all n.
+	read := uint32(i + 1)
+
+	if i < 0 {
+		read = n
+	}
+
+	if p.inst.memory.shadow != nil {
+		p.asanCheck(at, read)
+	}
+
+	if i < 0 {
 		return 0, false
 	}
 

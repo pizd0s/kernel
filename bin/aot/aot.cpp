@@ -4467,6 +4467,8 @@ namespace {
         // forwards are, by function index, the import a function of the
         // module only calls with its own arguments, or -1 (objCodeForward).
         Slice<i32> forwards{};
+        // allocator is the kernel's malloc among the imports, or -1.
+        i32 allocator = -1;
         // sites are the tail profile's counters the functions made, in the
         // order of their slots.
         Slice<ProfileSite> sites{};
@@ -5147,6 +5149,26 @@ static constexpr Int intrinsicBcopy = 34;
 static constexpr Int intrinsicBzero = 35;
 
 static constexpr Int intrinsicStrpbrk = 36;
+
+static constexpr Int intrinsicStrchr = 37;
+
+static constexpr Int intrinsicStrchrnul = 38;
+
+static constexpr Int intrinsicStrncmp = 39;
+
+static constexpr Int intrinsicStpcpy = 40;
+
+static constexpr Int intrinsicStrncpy = 41;
+
+static constexpr Int intrinsicStpncpy = 42;
+
+static constexpr Int intrinsicStrdup = 43;
+
+static constexpr Int intrinsicStrncat = 44;
+
+static constexpr Int intrinsicStrlcpy = 45;
+
+static constexpr Int intrinsicStrlcat = 46;
 
 static constexpr Int constF32Sign = 0;
 
@@ -6051,6 +6073,8 @@ static void lowererCall(Lowerer* l, i32 v, Int index, Span<const i32> args);
 
 static void lowererGoCall(Lowerer* l, i32 v, Slice<VReg> regs, Slice<ValType> params, Slice<ValType> results, String sym);
 
+static void lowererGoResult(Lowerer* l, GoLoc loc, ValType type, VReg d);
+
 static bool lowererIntrinsic(Lowerer* l, i32 v, Int intrinsic, Span<const i32> args);
 
 static void lowererStrCall(Lowerer* l, String sym, Span<const VReg> args);
@@ -6079,7 +6103,29 @@ static void lowererStrFind(Lowerer* l, i32 v, Span<const i32> args);
 
 static void lowererMemSearch(Lowerer* l, i32 v, Span<const i32> args);
 
-static void lowererStrCopy(Lowerer* l, i32 v, Span<const i32> args, bool append);
+static void lowererStrCopy(Lowerer* l, i32 v, Span<const i32> args, bool append, bool end);
+
+static VReg lowererStrLimit(Lowerer* l, VReg s, VReg n, VReg* seen);
+
+static VReg lowererAdded(Lowerer* l, VReg x, i64 c);
+
+static VReg lowererLeast(Lowerer* l, VReg a, VReg b);
+
+static void lowererStrChar(Lowerer* l, i32 v, Span<const i32> args, bool nul);
+
+static void lowererStrCompareLimited(Lowerer* l, i32 v, Span<const i32> args);
+
+static void lowererStrCopyLimited(Lowerer* l, i32 v, Span<const i32> args, bool end);
+
+static bool lowererStrDuplicate(Lowerer* l, i32 v, Span<const i32> args);
+
+static void lowererStrPut(Lowerer* l, VReg at, VReg s, VReg k);
+
+static void lowererStrAppendLimited(Lowerer* l, i32 v, Span<const i32> args);
+
+static void lowererStrCopySized(Lowerer* l, i32 v, Span<const i32> args);
+
+static void lowererStrAppendSized(Lowerer* l, i32 v, Span<const i32> args);
 
 static VReg lowererBit(Lowerer* l, u8 cc);
 
@@ -15330,28 +15376,31 @@ static void lowererGoCall(Lowerer* l, i32 v, Slice<VReg> regs, Slice<ValType> pa
         }
     }
     for (Int i = 0; i < length(results); ++i) {
-        VReg d = dsts[i];
-        GoLoc loc = g.results[i];
-        if (d == noReg) {
-            continue;
+        if (dsts[i] != noReg) {
+            lowererGoResult(l, g.results[i], results[i], dsts[i]);
         }
-        if (loc.reg == noReg) {
-            MInst ld = inst(isFloat(results[i]) ? mFLoad : mLoad);
-            ld.dst = d;
-            ld.mem = memAt(RSP, loc.off);
-            ld.size = convert<u8>(goSize(results[i]));
-            ld.dsize = ld.size;
-            lowererEmit(l, ld);
-        } else if (results[i] == I32) {
-            MInst mv = inst(mMov);
-            mv.dst = d;
-            mv.src = loc.reg;
-            mv.size = 4;
-            mv.aux = 1;
-            lowererEmit(l, mv);
-        } else {
-            lowererMov(l, d, loc.reg, typeSize(results[i]));
-        }
+    }
+}
+
+// goResult moves a result of the Go call just made, of the type and at
+// the place of its frame given, into d.
+static void lowererGoResult(Lowerer* l, GoLoc loc, ValType type, VReg d) {
+    if (loc.reg == noReg) {
+        MInst ld = inst(isFloat(type) ? mFLoad : mLoad);
+        ld.dst = d;
+        ld.mem = memAt(RSP, loc.off);
+        ld.size = convert<u8>(goSize(type));
+        ld.dsize = ld.size;
+        lowererEmit(l, ld);
+    } else if (type == I32) {
+        MInst mv = inst(mMov);
+        mv.dst = d;
+        mv.src = loc.reg;
+        mv.size = 4;
+        mv.aux = 1;
+        lowererEmit(l, mv);
+    } else {
+        lowererMov(l, d, loc.reg, typeSize(type));
     }
 }
 
@@ -17377,8 +17426,38 @@ static bool lowererIntrinsic(Lowerer* l, i32 v, Int intrinsic, Span<const i32> a
             return true;
         }
         case intrinsicStrcpy:
-        case intrinsicStrcat: {
-            lowererStrCopy(l, v, args, intrinsic == intrinsicStrcat);
+        case intrinsicStrcat:
+        case intrinsicStpcpy: {
+            lowererStrCopy(l, v, args, intrinsic == intrinsicStrcat, intrinsic == intrinsicStpcpy);
+            return true;
+        }
+        case intrinsicStrchr:
+        case intrinsicStrchrnul: {
+            lowererStrChar(l, v, args, intrinsic == intrinsicStrchrnul);
+            return true;
+        }
+        case intrinsicStrncmp: {
+            lowererStrCompareLimited(l, v, args);
+            return true;
+        }
+        case intrinsicStrncpy:
+        case intrinsicStpncpy: {
+            lowererStrCopyLimited(l, v, args, intrinsic == intrinsicStpncpy);
+            return true;
+        }
+        case intrinsicStrdup: {
+            return lowererStrDuplicate(l, v, args);
+        }
+        case intrinsicStrncat: {
+            lowererStrAppendLimited(l, v, args);
+            return true;
+        }
+        case intrinsicStrlcpy: {
+            lowererStrCopySized(l, v, args);
+            return true;
+        }
+        case intrinsicStrlcat: {
+            lowererStrAppendSized(l, v, args);
             return true;
         }
         case intrinsicStrcmp: {
@@ -17740,39 +17819,17 @@ static void lowererMemFind(Lowerer* l, i32 v, Span<const i32> args) {
     lowererGuestPointer(l, v, p);
 }
 
-// strBound compiles strnlen as memFind compiles memchr: lib/str's strnlen
-// looks at up to n bytes or to the memory's end, whichever is nearer, and
-// a string with no NUL short of n bytes at the memory's end traps. The
-// result is the string's length, n for one with no NUL in n bytes.
-static void lowererStrBound(Lowerer* l, i32 v, Span<const i32> args) {
-    VReg s = lowererUse(l, args[0]);
-    VReg n = lowererUse(l, args[1]);
+// strLimit is the length of the string at s within n bytes, by lib/str's
+// strnlen as memFind has memchr: it looks at up to n bytes or to the
+// memory's end, whichever is nearer, and a string with no NUL short of n
+// bytes at the memory's end traps. The length is n for a string with no
+// NUL in n bytes. *seen, where asked for, is what a call that looks at no
+// more than n bytes sees of the string: its bytes with its NUL, or its
+// first n.
+static VReg lowererStrLimit(Lowerer* l, VReg s, VReg n, VReg* seen) {
     VReg m = lowererWithin(l, s, n);
     lowererStrCall(l, symStrnlen, Span<const VReg>({lowererHostAddress(l, s), m}));
     VReg r = lowererStrResult(l);
-    if (l->m->asan) {
-        // The bytes it read: the string and its NUL, or all m of them.
-        VReg read = mFuncNewReg(l->mf, classGPR);
-        lowererMov(l, read, r, 8);
-        MInst nul = inst(mAluImm);
-        nul.dst = read;
-        nul.imm = 1;
-        nul.size = 8;
-        nul.aux = convert<u8>(aluAdd);
-        lowererEmit(l, nul);
-        MInst whole = inst(mCmp);
-        whole.src = r;
-        whole.src2 = m;
-        whole.size = 8;
-        lowererEmit(l, whole);
-        MInst all = inst(mCmov);
-        all.dst = read;
-        all.src = m;
-        all.cc = ccE;
-        all.size = 8;
-        lowererEmit(l, all);
-        lowererAsanRange(l, s, read);
-    }
     // x is n when the NUL was found and m when not: below n it trapped
     VReg x = mFuncNewReg(l->mf, classGPR);
     lowererMov(l, x, n, 8);
@@ -17793,8 +17850,295 @@ static void lowererStrBound(Lowerer* l, i32 v, Span<const i32> args) {
     cut.size = 8;
     lowererEmit(l, cut);
     lowererTrapIf(l, ccB, trapMemoryOOB);
+    if (seen == nullptr && !l->m->asan) {
+        return r;
+    }
+    // The bytes it read: the string and its NUL, or all m of them.
+    VReg read = lowererAdded(l, r, 1);
+    MInst whole = inst(mCmp);
+    whole.src = r;
+    whole.src2 = m;
+    whole.size = 8;
+    lowererEmit(l, whole);
+    MInst all = inst(mCmov);
+    all.dst = read;
+    all.src = m;
+    all.cc = ccE;
+    all.size = 8;
+    lowererEmit(l, all);
+    if (l->m->asan) {
+        lowererAsanRange(l, s, read);
+    }
+    if (seen != nullptr) {
+        *seen = read;
+    }
+    return r;
+}
+
+// added is x + c in 64 bits, in a register of its own.
+static VReg lowererAdded(Lowerer* l, VReg x, i64 c) {
+    VReg t = mFuncNewReg(l->mf, classGPR);
+    lowererMov(l, t, x, 8);
+    MInst add = inst(mAluImm);
+    add.dst = t;
+    add.imm = c;
+    add.size = 8;
+    add.aux = convert<u8>(aluAdd);
+    lowererEmit(l, add);
+    return t;
+}
+
+// least is the lesser of a and b, numbers of 64 bits without a sign, in a
+// register of its own.
+static VReg lowererLeast(Lowerer* l, VReg a, VReg b) {
+    VReg m = mFuncNewReg(l->mf, classGPR);
+    lowererMov(l, m, a, 8);
+    MInst cmp = inst(mCmp);
+    cmp.src = m;
+    cmp.src2 = b;
+    cmp.size = 8;
+    lowererEmit(l, cmp);
+    MInst least = inst(mCmov);
+    least.dst = m;
+    least.src = b;
+    least.cc = ccA;
+    least.size = 8;
+    lowererEmit(l, least);
+    return m;
+}
+
+// strBound compiles strnlen as the kernel's (strLimit).
+static void lowererStrBound(Lowerer* l, i32 v, Span<const i32> args) {
+    VReg r = lowererStrLimit(l, lowererUse(l, args[0]), lowererUse(l, args[1]), nullptr);
     if (v >= 0 && l->uses[v] > 0) {
         lowererMov(l, lowererDef(l, v), r, 4);
+    }
+}
+
+// strChar compiles strchr and, for nul, strchrnul as the kernel's: the
+// string within the memory, by strlen, then lib/str's memchr over it, for
+// strchr with its NUL, which a c of 0 finds. strchr's result is the
+// address found or 0, strchrnul's the address found or the NUL's.
+static void lowererStrChar(Lowerer* l, i32 v, Span<const i32> args, bool nul) {
+    VReg s = lowererUse(l, args[0]);
+    VReg c = lowererUse(l, args[1]);
+    VReg n = lowererStrLength(l, s);
+    VReg size = nul ? n : lowererAdded(l, n, 1);
+    lowererStrCall(l, symMemchr, Span<const VReg>({lowererHostAddress(l, s), c, size}));
+    VReg p = lowererStrResult(l);
+    if (!nul) {
+        lowererGuestPointer(l, v, p);
+        return;
+    }
+    if (v < 0 || l->uses[v] == 0) {
+        return;
+    }
+    VReg end = lowererSum(l, s, n);
+    VReg r = mFuncNewReg(l->mf, classGPR);
+    lowererMov(l, r, p, 8);
+    lowererAluTo(l, r, aluSub, memReg, 8);
+    MInst any = inst(mTest);
+    any.src = p;
+    any.src2 = p;
+    any.size = 8;
+    lowererEmit(l, any);
+    MInst none = inst(mCmov);
+    none.dst = r;
+    none.src = end;
+    none.cc = ccE;
+    none.size = 8;
+    lowererEmit(l, none);
+    lowererMov(l, lowererDef(l, v), r, 4);
+}
+
+// strCompareLimited compiles strncmp as the kernel's: what a call that
+// looks at no more than n bytes sees of each string (strLimit), the two
+// compared as far as the shorter goes by lib/str's memcmp. The result is
+// -1, 0 or 1.
+static void lowererStrCompareLimited(Lowerer* l, i32 v, Span<const i32> args) {
+    VReg a = lowererUse(l, args[0]);
+    VReg b = lowererUse(l, args[1]);
+    VReg n = lowererUse(l, args[2]);
+    VReg x = noReg;
+    VReg y = noReg;
+    lowererStrLimit(l, a, n, &x);
+    lowererStrLimit(l, b, n, &y);
+    VReg m = lowererLeast(l, x, y);
+    lowererStrCall(l, symMemcmp, Span<const VReg>({lowererHostAddress(l, a), lowererHostAddress(l, b), m}));
+    lowererSign(l, v);
+}
+
+// strCopyLimited compiles strncpy and, for end, stpncpy as the kernel's:
+// the string's length within n bytes (strLimit), that many bytes moved to
+// d and the rest of d's n zeroed, d's range checked before. strncpy's
+// result is d, stpncpy's the address after the bytes moved.
+static void lowererStrCopyLimited(Lowerer* l, i32 v, Span<const i32> args, bool end) {
+    VReg d = lowererUse(l, args[0]);
+    VReg s = lowererUse(l, args[1]);
+    VReg n = lowererUse(l, args[2]);
+    VReg r = lowererStrLimit(l, s, n, nullptr);
+    lowererCheckRange(l, d, n, instanceMem(l->lay->memoryEnd), trapMemoryOOB);
+    if (l->m->asan) {
+        lowererAsanRange(l, d, n);
+    }
+    lowererStrCall(l, symMemmove, Span<const VReg>({lowererHostAddress(l, d), lowererHostAddress(l, s), r}));
+    VReg rest = mFuncNewReg(l->mf, classGPR);
+    lowererMov(l, rest, n, 8);
+    lowererAluTo(l, rest, aluSub, r, 8);
+    VReg tail = lowererSum(l, d, r);
+    lowererStrCall(l, symMemset, Span<const VReg>({lowererHostAddress(l, tail), lowererConstReg(l, 0, 4), rest}));
+    if (v >= 0 && l->uses[v] > 0) {
+        lowererMov(l, lowererDef(l, v), end ? tail : d, 4);
+    }
+}
+
+// strDuplicate compiles strdup as the kernel's, where the module imports
+// the kernel's malloc: the string's length by strlen, a block of the heap
+// from malloc, which sets errno when it has none, and the string moved
+// there with its NUL. With no block nothing is moved, and the result is
+// malloc's 0.
+static bool lowererStrDuplicate(Lowerer* l, i32 v, Span<const i32> args) {
+    if (l->oc->allocator < 0) {
+        return false;
+    }
+    VReg s = lowererUse(l, args[0]);
+    VReg size = lowererAdded(l, lowererStrLength(l, s), 1);
+    Slice<ValType> params = sliceOf<ValType>({I32});
+    Slice<ValType> results = sliceOf<ValType>({I32});
+    lowererGoCall(l, -1, sliceOf<VReg>({size}), params, results, l->oc->importSyms[l->oc->allocator]);
+    VReg at = mFuncNewReg(l->mf, classGPR);
+    lowererGoResult(l, goAssign(params, results).results[0], I32, at);
+    VReg none = lowererConstReg(l, 0, 8);
+    MInst got = inst(mTest);
+    got.src = at;
+    got.src2 = at;
+    got.size = 4;
+    lowererEmit(l, got);
+    MInst nothing = inst(mCmov);
+    nothing.dst = size;
+    nothing.src = none;
+    nothing.cc = ccE;
+    nothing.size = 8;
+    lowererEmit(l, nothing);
+    // malloc's block is within the memory; the check holds whatever it gave
+    lowererCheckRange(l, at, size, instanceMem(l->lay->memoryEnd), trapMemoryOOB);
+    lowererStrCall(l, symMemmove, Span<const VReg>({lowererHostAddress(l, at), lowererHostAddress(l, s), size}));
+    if (v >= 0 && l->uses[v] > 0) {
+        lowererMov(l, lowererDef(l, v), at, 4);
+    }
+    return true;
+}
+
+// strPut moves k bytes from s to at and ends them with a NUL, the bytes
+// and the NUL within the memory: the end of strncat, strlcpy and strlcat.
+static void lowererStrPut(Lowerer* l, VReg at, VReg s, VReg k) {
+    lowererCheckEnd(l, at, k, ccAE);
+    if (l->m->asan) {
+        lowererAsanRange(l, at, lowererAdded(l, k, 1));
+    }
+    VReg dst = lowererHostAddress(l, at);
+    lowererStrCall(l, symMemmove, Span<const VReg>({dst, lowererHostAddress(l, s), k}));
+    MInst nul = inst(mStoreImm);
+    nul.mem = memIndexed(dst, k, 0);
+    nul.imm = 0;
+    nul.size = 1;
+    lowererEmit(l, nul);
+}
+
+// strAppendLimited compiles strncat as the kernel's: the string at d
+// within the memory, by strlen, the length of the one at s within n bytes
+// (strLimit), and that many bytes put after d's with a NUL.
+static void lowererStrAppendLimited(Lowerer* l, i32 v, Span<const i32> args) {
+    VReg d = lowererUse(l, args[0]);
+    VReg s = lowererUse(l, args[1]);
+    VReg n = lowererUse(l, args[2]);
+    VReg at = lowererSum(l, d, lowererStrLength(l, d));
+    VReg r = lowererStrLimit(l, s, n, nullptr);
+    lowererStrPut(l, at, s, r);
+    if (v >= 0 && l->uses[v] > 0) {
+        lowererMov(l, lowererDef(l, v), d, 4);
+    }
+}
+
+// strCopySized compiles strlcpy as the kernel's: the string at s within
+// the memory, by strlen, and as much of it as n bytes take with a NUL put
+// at d. An n of 0 writes nothing at d and checks nothing of it: what is
+// put then is no byte and the NUL of the string at s, over itself. The
+// result is the string's length.
+static void lowererStrCopySized(Lowerer* l, i32 v, Span<const i32> args) {
+    VReg d = lowererUse(l, args[0]);
+    VReg s = lowererUse(l, args[1]);
+    VReg n = lowererUse(l, args[2]);
+    VReg length = lowererStrLength(l, s);
+    // n - 1 is the greatest number for an n of 0
+    VReg k = lowererLeast(l, lowererAdded(l, n, -1), length);
+    VReg at = lowererCopy(l, d, 8);
+    VReg own = lowererSum(l, s, length);
+    VReg zero = lowererConstReg(l, 0, 8);
+    MInst any = inst(mTest);
+    any.src = n;
+    any.src2 = n;
+    any.size = 4;
+    lowererEmit(l, any);
+    MInst nothing = inst(mCmov);
+    nothing.dst = k;
+    nothing.src = zero;
+    nothing.cc = ccE;
+    nothing.size = 8;
+    lowererEmit(l, nothing);
+    MInst itself = inst(mCmov);
+    itself.dst = at;
+    itself.src = own;
+    itself.cc = ccE;
+    itself.size = 8;
+    lowererEmit(l, itself);
+    lowererStrPut(l, at, s, k);
+    if (v >= 0 && l->uses[v] > 0) {
+        lowererMov(l, lowererDef(l, v), length, 4);
+    }
+}
+
+// strAppendSized compiles strlcat as the kernel's: the length of the
+// string at d within n bytes (strLimit), the string at s within the
+// memory, by strlen, and as much of it as what is left of the n bytes
+// takes with a NUL put after d's. A d with no NUL in n bytes is left as it
+// is, as strCopySized leaves one of no bytes. The result is the two
+// lengths' sum.
+static void lowererStrAppendSized(Lowerer* l, i32 v, Span<const i32> args) {
+    VReg d = lowererUse(l, args[0]);
+    VReg s = lowererUse(l, args[1]);
+    VReg n = lowererUse(l, args[2]);
+    VReg had = lowererStrLimit(l, d, n, nullptr);
+    VReg length = lowererStrLength(l, s);
+    // n - had - 1 is the greatest number for a d that fills its n bytes
+    VReg room = lowererAdded(l, n, -1);
+    lowererAluTo(l, room, aluSub, had, 8);
+    VReg k = lowererLeast(l, room, length);
+    VReg at = lowererSum(l, d, had);
+    VReg own = lowererSum(l, s, length);
+    VReg zero = lowererConstReg(l, 0, 8);
+    MInst full = inst(mCmp);
+    full.src = had;
+    full.src2 = n;
+    full.size = 8;
+    lowererEmit(l, full);
+    MInst nothing = inst(mCmov);
+    nothing.dst = k;
+    nothing.src = zero;
+    nothing.cc = ccE;
+    nothing.size = 8;
+    lowererEmit(l, nothing);
+    MInst itself = inst(mCmov);
+    itself.dst = at;
+    itself.src = own;
+    itself.cc = ccE;
+    itself.size = 8;
+    lowererEmit(l, itself);
+    lowererStrPut(l, at, s, k);
+    if (v >= 0 && l->uses[v] > 0) {
+        VReg total = lowererCopy(l, had, 4);
+        lowererAluTo(l, total, aluAdd, length, 4);
+        lowererMov(l, lowererDef(l, v), total, 4);
     }
 }
 
@@ -18052,10 +18396,11 @@ static void lowererStrPair(Lowerer* l, i32 v, Span<const i32> args, String sym) 
     }
 }
 
-// strCopy compiles strcpy and strcat as the kernel's: the string at s,
-// its length from strlen, copied with its NUL to d, or for strcat to the
-// NUL of the string at d, the destination's range checked before.
-static void lowererStrCopy(Lowerer* l, i32 v, Span<const i32> args, bool append) {
+// strCopy compiles strcpy, strcat and stpcpy as the kernel's: the string
+// at s, its length from strlen, copied with its NUL to d, or for strcat to
+// the NUL of the string at d, the destination's range checked before. The
+// result is d, or for stpcpy, end, the address of the NUL written.
+static void lowererStrCopy(Lowerer* l, i32 v, Span<const i32> args, bool append, bool end) {
     VReg d = lowererUse(l, args[0]);
     VReg s = lowererUse(l, args[1]);
     VReg at = d;
@@ -18077,7 +18422,7 @@ static void lowererStrCopy(Lowerer* l, i32 v, Span<const i32> args, bool append)
     }
     lowererStrCall(l, symMemmove, Span<const VReg>({lowererHostAddress(l, at), lowererHostAddress(l, s), size}));
     if (v >= 0 && l->uses[v] > 0) {
-        lowererMov(l, lowererDef(l, v), d, 4);
+        lowererMov(l, lowererDef(l, v), end ? lowererSum(l, d, n) : d, 4);
     }
 }
 
@@ -19942,6 +20287,9 @@ static void objCodeImportAdapters(ObjCode* oc) {
         String sym = importSymbol(imp.module, imp.name, t);
         oc->importSyms[imp.index] = sym;
         oc->importIntrinsics[imp.index] = intrinsicOf(imp, t);
+        if (imp.module == String("kernel") && imp.name == String("malloc") && intrinsicTyped(t, String("i>i")) && !m->funcs[imp.index].returnsTwice) {
+            oc->allocator = convert<i32>(imp.index);
+        }
         String name = String("w2o.adapter.") + symbolPart(imp.module) + String(".") + symbolPart(imp.name);
         if (named[imp.index]) {
             oc->importCode[imp.index] = true;
@@ -25047,6 +25395,10 @@ static i32 objCodeForward(Module* m, Int index) {
 // intrinsicOf tells the kernel's functions the code compiles at their
 // direct calls, by module, name and type: a type of i for a 32-bit
 // integer and l for a 64-bit one, the parameters, then > and the result.
+// libc is the ABI and the kernel has every function of it: what the code
+// does at a call is what the kernel's function does, with the same traps
+// and the same checks of the heap, only cheaper, and a pointer to the
+// function is the kernel's (tst/test_compiled_calls.py holds each to it).
 static Int intrinsicOf(Import imp, FuncType* t) {
     if (imp.module != String("kernel")) {
         return intrinsicNone;
@@ -25099,6 +25451,17 @@ static Int intrinsicOf(Import imp, FuncType* t) {
         {String("explicit_bzero"), String("ii>"), intrinsicBzero},
         {String("strpbrk"), String("ii>i"), intrinsicStrpbrk},
         {String("strcoll"), String("ii>i"), intrinsicStrcmp},
+        {String("strchr"), String("ii>i"), intrinsicStrchr},
+        {String("index"), String("ii>i"), intrinsicStrchr},
+        {String("strchrnul"), String("ii>i"), intrinsicStrchrnul},
+        {String("strncmp"), String("iii>i"), intrinsicStrncmp},
+        {String("stpcpy"), String("ii>i"), intrinsicStpcpy},
+        {String("strncpy"), String("iii>i"), intrinsicStrncpy},
+        {String("stpncpy"), String("iii>i"), intrinsicStpncpy},
+        {String("strdup"), String("i>i"), intrinsicStrdup},
+        {String("strncat"), String("iii>i"), intrinsicStrncat},
+        {String("strlcpy"), String("iii>i"), intrinsicStrlcpy},
+        {String("strlcat"), String("iii>i"), intrinsicStrlcat},
     };
     for (const Known& k : known) {
         if (imp.name == k.name && intrinsicTyped(t, k.type)) {

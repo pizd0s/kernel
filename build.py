@@ -998,6 +998,7 @@ E2E_TESTED = {
     "bounded_copy_loops": [vm, aot_native, wazero, rootfs],
     "chaos": [vm, vm_chaos, aot_native, aot_native_chaos, chaos_check, rootfs, tests_image],
     "cli_errors": [vm, aot_native],
+    "compiled_calls": [vm, rootfs, busybox],
     "compiler_modes": [vm, aot_native, rootfs],
     "compiler_rejections": [vm, aot_native, wazero, rootfs],
     "conditional_floats": [vm, aot_native, wazero, rootfs],
