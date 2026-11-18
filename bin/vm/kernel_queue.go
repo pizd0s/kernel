@@ -33,6 +33,21 @@ import (
 // object keeps it in its lists: subscribing and taking back hook and
 // unhook, and allocate nothing.
 
+//
+// A call that blocks on one object subscribes to nothing. It leaves a
+// waiter at the object, a node of the process's with the place for what
+// the call waits for, and sleeps until that is there. Who changes the
+// object takes the first waiter out of the object's list and gives it its
+// answer (wake), all with the object's lock: so the answer is the
+// waiter's own, a packet goes from who sends it to who waits for it, and
+// who is woken has nothing to ask the object. A wait that a signal or its
+// deadline ends takes its waiter back with the same lock; one that is in
+// the list no more was answered, and the answer is the call's. An answer
+// is of one type for a waiter: a packet as it is received (received), or
+// nothing, the turn to look again (turn). Subscriptions are of poll,
+// select and epoll, which ask whether an object is ready, and of a
+// receive that only looks, MSG_PEEK's.
+
 // A waker is what an object wakes as it changes: by the hook of the
 // subscription, which says by which of its lists.
 type waker interface {
@@ -152,10 +167,134 @@ func (s *subscribers) takeOver(from *subscribers) {
 	from.mu.Unlock()
 }
 
+// received is what a receive waits for: a packet, or the end of the data.
+type received struct {
+	pk  packet
+	eof bool
+}
+
+// turn is the answer of a waiter that waits for nothing but a change: its
+// turn to look at the object again.
+type turn struct{}
+
+// A waiter is a blocking call's place at an object: answer what the call
+// waits for, there once done is set, to the process it wakes then, by its
+// event. It is in a list of the object's (waiters), in the one it is in,
+// or the object keeps it otherwise, all under the object's lock; spare is
+// the next of its process's spare ones.
+type waiter[T any] struct {
+	prev, next *waiter[T]
+	in         *waiters[T]
+	done       atomic.Bool
+	answer     T
+	to         *Process
+	event      event
+	spare      *waiter[T]
+}
+
+// wake gives a waiter the object keeps no more its answer and wakes its
+// process, with the object's lock.
+func (w *waiter[T]) wake(v T) {
+	w.answer = v
+	w.done.Store(true)
+	w.to.post(&w.event)
+}
+
+// waiters are the waiters of an object for one thing, the oldest first,
+// under the object's lock.
+type waiters[T any] struct {
+	first, last *waiter[T]
+}
+
+// push puts a waiter that is in no list at the end of the list.
+func (l *waiters[T]) push(w *waiter[T]) {
+	w.in, w.prev, w.next = l, l.last, nil
+
+	if l.last != nil {
+		l.last.next = w
+	} else {
+		l.first = w
+	}
+
+	l.last = w
+}
+
+// remove takes a waiter out of the list: false when it is not there, as
+// one that was answered.
+func (l *waiters[T]) remove(w *waiter[T]) bool {
+	if w.in != l {
+		return false
+	}
+
+	if w.prev != nil {
+		w.prev.next = w.next
+	} else {
+		l.first = w.next
+	}
+
+	if w.next != nil {
+		w.next.prev = w.prev
+	} else {
+		l.last = w.prev
+	}
+
+	w.in, w.prev, w.next = nil, nil, nil
+
+	return true
+}
+
+// pop takes the oldest waiter out of the list, nil for none.
+func (l *waiters[T]) pop() *waiter[T] {
+	w := l.first
+
+	if w != nil {
+		l.remove(w)
+	}
+
+	return w
+}
+
+// wake gives every waiter of the list the answer, and the list is empty.
+func (l *waiters[T]) wake(v T) {
+	for w := l.pop(); w != nil; w = l.pop() {
+		w.wake(v)
+	}
+}
+
+// spareWaiters are the waiters of a process's for one kind of answer that
+// no call of its has.
+type spareWaiters[T any] struct {
+	first *waiter[T]
+}
+
+// get is a waiter of p's with no answer: a spare one, or a new one.
+func (s *spareWaiters[T]) get(p *Process) *waiter[T] {
+	w := s.first
+
+	if w == nil {
+		w = &waiter[T]{to: p}
+		w.event.kind = eventAnswered
+	} else {
+		s.first, w.spare = w.spare, nil
+	}
+
+	w.done.Store(false)
+
+	return w
+}
+
+// put gives back a waiter no object keeps: its answer goes.
+func (s *spareWaiters[T]) put(w *waiter[T]) {
+	var none T
+	w.answer = none
+	w.spare, s.first = s.first, w
+}
+
 // The kinds of events: an object the process subscribed to changed, id
 // the subscription's; a signal came; the process stopped no more; a child
 // changed; a module the process waits for compiled; a wait's deadline
-// passed; a timer of the process's fired (kernel_time.go).
+// passed; a timer of the process's fired (kernel_time.go); a waiter of
+// the process's has its answer.
 type eventKind uint8
 
 const (
@@ -166,6 +305,7 @@ const (
 	eventCompiled
 	eventDeadline
 	eventTimer
+	eventAnswered
 )
 
 // An event is a node of a process's queue: its kind and id, a callback
@@ -351,6 +491,22 @@ func (p *Process) wait(end time.Time, done func(e *event) (bool, error)) (timedO
 			return false, err
 		}
 	}
+}
+
+// await waits until a waiter of the process's has its answer, done, or the
+// deadline, end, zero for none: timedOut then. A signal the call took
+// interrupts it, in this wait or in one before it: then the error is
+// EINTR, unless its handlers all asked to restart calls and restart is
+// set. The waiter is at its object still after either, for the caller to
+// take back.
+func (p *Process) await(done *atomic.Bool, end time.Time, restart bool) (timedOut bool, err error) {
+	return p.wait(end, func(*event) (bool, error) {
+		if done.Load() {
+			return true, nil
+		}
+
+		return p.interrupts(restart), syscall.EINTR
+	})
 }
 
 // msgChannel is a channel of messages: the oldest first, at most limit of

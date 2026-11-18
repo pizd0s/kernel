@@ -881,24 +881,24 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 	p.head(data, op, arg)
 	copy(data[remoteHeader:], body)
 
-	if err := c.ask(p, data, files); err != nil {
+	w := p.receives.get(p)
+	defer c.leave(p, w)
+
+	if err := c.ask(w, data, files); err != nil {
 		return packet{}, false, syscall.EIO // the server is gone
 	}
 
 	outer, was := p.ask(c)
 	defer p.unask(outer, was)
 
-	_, err = p.wait(time.Time{}, func(*event) (bool, error) {
-		if !c.answered() {
-			return false, nil
-		}
-
-		err = replyOf(&pk, c.take(&pk))
-		dropFiles(pk.files)
-		pk.files = nil
-
-		return true, err
+	p.wait(time.Time{}, func(*event) (bool, error) {
+		return w.done.Load(), nil
 	})
+
+	pk = w.answer.pk
+	err = replyOf(&pk, w.answer.eof)
+	dropFiles(pk.files)
+	pk.files = nil
 
 	return pk, p.cancelled && !p.interrupts(true), err
 }
@@ -927,16 +927,25 @@ func (n *remoteNode) asked(p *Process, op uint32, data []byte, files []Object) (
 
 	defer n.keep(p, c)
 
-	if err := c.ask(p, data, files); err != nil {
+	// The answer is given to the waiter as the server sends it: the
+	// process takes its signals as it waits, and waits on.
+	w := p.receives.get(p)
+	defer c.leave(p, w)
+
+	if err := c.ask(w, data, files); err != nil {
 		return packet{}, syscall.EIO // the server is gone
 	}
 
 	outer, was := p.ask(c)
 	defer p.unask(outer, was)
 
-	var pk packet
+	p.wait(time.Time{}, func(*event) (bool, error) {
+		return w.done.Load(), nil
+	})
 
-	if err := replyOf(&pk, c.wait(p, &pk)); err != nil {
+	pk := w.answer.pk
+
+	if err := replyOf(&pk, w.answer.eof); err != nil {
 		return packet{}, err
 	}
 

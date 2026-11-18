@@ -148,10 +148,13 @@ type Process struct {
 	chasing atomic.Bool
 	// events is the queue the process sleeps on (kernel_queue.go):
 	// whatever may change for a wait of its puts an event there; own are
-	// its events of its own, spare its subscriptions spare.
-	events eventQueue
-	own    ownEvents
-	spare  *subscription
+	// its events of its own, spare its subscriptions spare, receives and
+	// turns its spare waiters, for a packet and for a turn.
+	events   eventQueue
+	own      ownEvents
+	spare    *subscription
+	receives spareWaiters[received]
+	turns    spareWaiters[turn]
 	// unwound says the process's image ended, by its exit or an exec, and
 	// no handler of its runs until its next image starts.
 	unwound bool
