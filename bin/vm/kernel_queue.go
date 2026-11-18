@@ -18,7 +18,9 @@ import (
 // while it waits there stays as it is. Every wait is one function, wait:
 // it takes the events in order, runs each one's callback, and asks the
 // predicate the wait gives whether it is over on that event or goes on;
-// with the queue empty the process sleeps on the queue's bell. A wait
+// with the queue empty the process sleeps on the queue's bell, and a ring
+// that brings no event, an answer to a waiter of the process's, asks the
+// predicate too. A wait
 // subscribes to what it waits for before it first looks, so a change
 // after the look is an event; taking a subscription back takes its event
 // out of the queue, so none outlives what it is of. An event names what
@@ -40,7 +42,9 @@ import (
 // object takes the first waiter out of the object's list and gives it its
 // answer (wake), all with the object's lock: so the answer is the
 // waiter's own, a packet goes from who sends it to who waits for it, and
-// who is woken has nothing to ask the object. A wait that a signal or its
+// who is woken has nothing to ask the object. The answer is a flag of the
+// waiter's and a ring of the process's bell: no event is put for it, as
+// the wait that sleeps asks its waiter. A wait that a signal or its
 // deadline ends takes its waiter back with the same lock; one that is in
 // the list no more was answered, and the answer is the call's. An answer
 // is of one type for a waiter: a packet as it is received (received), or
@@ -178,26 +182,26 @@ type received struct {
 type turn struct{}
 
 // A waiter is a blocking call's place at an object: answer what the call
-// waits for, there once done is set, to the process it wakes then, by its
-// event. It is in a list of the object's (waiters), in the one it is in,
-// or the object keeps it otherwise, all under the object's lock; spare is
-// the next of its process's spare ones.
+// waits for, there once done is set, to the process it wakes then. It is
+// in a list of the object's (waiters), in the one it is in, or the object
+// keeps it otherwise, all under the object's lock; spare is the next of
+// its process's spare ones.
 type waiter[T any] struct {
 	prev, next *waiter[T]
 	in         *waiters[T]
 	done       atomic.Bool
 	answer     T
 	to         *Process
-	event      event
 	spare      *waiter[T]
 }
 
 // wake gives a waiter the object keeps no more its answer and wakes its
-// process, with the object's lock.
+// process, with the object's lock: the bell alone, as the wait asks the
+// waiter.
 func (w *waiter[T]) wake(v T) {
 	w.answer = v
 	w.done.Store(true)
-	w.to.post(&w.event)
+	w.to.ring()
 }
 
 // waiters are the waiters of an object for one thing, the oldest first,
@@ -273,7 +277,6 @@ func (s *spareWaiters[T]) get(p *Process) *waiter[T] {
 
 	if w == nil {
 		w = &waiter[T]{to: p}
-		w.event.kind = eventAnswered
 	} else {
 		s.first, w.spare = w.spare, nil
 	}
@@ -293,8 +296,7 @@ func (s *spareWaiters[T]) put(w *waiter[T]) {
 // The kinds of events: an object the process subscribed to changed, id
 // the subscription's; a signal came; the process stopped no more; a child
 // changed; a module the process waits for compiled; a wait's deadline
-// passed; a timer of the process's fired (kernel_time.go); a waiter of
-// the process's has its answer.
+// passed; a timer of the process's fired (kernel_time.go).
 type eventKind uint8
 
 const (
@@ -305,7 +307,6 @@ const (
 	eventCompiled
 	eventDeadline
 	eventTimer
-	eventAnswered
 )
 
 // An event is a node of a process's queue: its kind and id, a callback
@@ -357,9 +358,14 @@ func (p *Process) post(e *event) {
 	}
 
 	q.mu.Unlock()
+	p.ring()
+}
 
+// ring rings the process's bell: a wait of its that sleeps looks at the
+// queue, and with nothing there asks its predicate. It never blocks.
+func (p *Process) ring() {
 	select {
-	case q.bell <- struct{}{}:
+	case p.events.bell <- struct{}{}:
 	default:
 	}
 }
@@ -443,7 +449,9 @@ func (p *Process) release(s *subscription) {
 // wait is every wait of the process. done says whether the wait is over,
 // and with what error: first on no event, nil, then on each event of the
 // queue, the oldest first, after its callback ran. With the queue empty
-// the process sleeps on its bell. A deadline, end, zero for none, is an
+// the process sleeps on its bell, and asks done on no event again when
+// the bell rang and brought none: a waiter of its was answered, or was
+// before the wait. A deadline, end, zero for none, is an
 // event of the wait's, which a timer puts in the queue: on it the wait
 // ends, timedOut. Another's, an earlier wait's or one a wait in a signal
 // handler of this one's took, it passes over; so the wait looks at the
@@ -465,16 +473,27 @@ func (p *Process) wait(end time.Time, done func(e *event) (bool, error)) (timedO
 		}()
 	}
 
+	rung := false
+
 	for {
 		e := p.events.next()
 
 		switch {
 		case e == nil:
+			if rung {
+				rung = false
+
+				if over, err := done(nil); over {
+					return false, err
+				}
+			}
+
 			if deadline != nil && !time.Now().Before(end) {
 				return true, nil
 			}
 
 			<-p.events.bell
+			rung = true
 
 			continue
 		case e.kind == eventDeadline:
