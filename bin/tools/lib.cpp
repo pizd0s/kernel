@@ -393,12 +393,15 @@ static void handle(Endpoint* ep, FsCall fsCall, FileCall fileCall, Closing closi
     }
     if (ep->role == Role::Connection) {
         // A request of the open file's, answered on the connection, which
-        // is the last of its descriptors to the call.
+        // is the last of its descriptors to the call. The CANCEL of one is
+        // nothing to a file system, which keeps none to wait.
         const usize brought = packetFdCount;
         if (brought < maxFds) {
             packetFds[packetFdCount++] = ep->fd;
         }
-        fileCall(ep->file, h, body, ep->fd);
+        if (h.op != opCancel) {
+            fileCall(ep->file, h, body, ep->fd);
+        }
         for (usize i = 0; i < brought; ++i) {
             if (packetFds[i] >= 0) {
                 close(packetFds[i]);

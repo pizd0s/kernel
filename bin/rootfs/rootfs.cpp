@@ -3032,13 +3032,15 @@ static void handle(Endpoint* ep, ssize_t n) {
     }
     Header h;
     memcpy(&h, packet, sizeof h);
+    // What comes on a connection besides a call is the CANCEL of the one
+    // in hand, which rootfs, keeping none to wait, has nothing to do for.
     if (ep->role == Role::Handle) {
         // Who asks connects; nothing else comes on a handle's own
         // endpoint.
         if (h.op == opConnect) {
             connect(ep);
         }
-    } else if (ep->handle && h.op != opOk && h.op != opErr) {
+    } else if (ep->handle && h.op != opOk && h.op != opErr && h.op != opCancel) {
         // A call of the handle's, answered on the connection: the call's
         // until it is done, at once or when what it waits for came. The
         // connection is the last of the request's descriptors to the call.

@@ -34,10 +34,15 @@
 // EIO, and so is one a call was handed on to and that let go of it
 // unanswered.
 //
-// A READ or a WRITE, which waits as long as its file says, may hear
-// CANCEL on its connection from who asked, whose caller gave up for a
-// signal: the server answers it at once, with the count so far or ERR
-// EINTR. A server that never waits need not listen.
+// A request may be followed on its connection by CANCEL from who asked,
+// whose caller took a signal: a packet as a request is, with no answer of
+// its own. A server that keeps the request, a READ or a WRITE that waits
+// as long as its file says, answers the request at once then, with the
+// count so far or ERR EINTR; one that does not keep it drops the CANCEL.
+// The CANCEL of a request handed on comes to who it was handed to. Who
+// asks keeps its connection for its next calls: a server sees one
+// connection of a process to an open file, and another only for a call
+// made while the first has one in hand.
 //
 // A packet is a Header and a body; descriptors ride with it (SCM_RIGHTS).
 //

@@ -295,8 +295,11 @@ static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepte
     } else if (e->channel && r.h.op != opOpen) {
         fail(r.reply(), EINVAL);
     } else if (e->file && !e->kept) {
-        r.connection = e;
-        handle(*e->file, r);
+        // The CANCEL of a request nobody kept has nothing to end.
+        if (r.h.op != opCancel) {
+            r.connection = e;
+            handle(*e->file, r);
+        }
     } else {
         handle(*e, r);
     }

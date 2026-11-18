@@ -160,6 +160,11 @@ type Process struct {
 	// it, as the process took a signal (takeSignals).
 	asking    *callEnd
 	cancelled bool
+	// kept are the connections to servers' open files the process keeps
+	// for its next calls on them, the last used first (kernel_remote.go);
+	// it keeps none once it ended, disconnected.
+	kept         [keptConnections]keptConnection
+	disconnected bool
 	// interruption is what the signals the process took in its waits said
 	// since its call began: none taken, some, or one whose handler did not
 	// ask to restart calls. A wait of the call that a signal ends asks it
@@ -490,6 +495,7 @@ func (p *Process) terminate(status int) {
 		p.closeFd(fd)
 	}
 
+	p.disconnect()
 	p.root.unref()
 	p.cwd.unref()
 	p.sig.mu.Lock()

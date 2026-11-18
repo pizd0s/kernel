@@ -376,10 +376,21 @@ func (e *callEnd) reply(gather func(small []byte) ([]byte, error), files []Objec
 	return len(data), nil
 }
 
-// has tells whether the serving end has the call in hand to answer or to
-// hear of: the pair's own any, one sent on the call it is.
+// has tells whether the serving end has the call in hand to answer: the
+// pair's own any, one sent on the call it is.
 func (e *callEnd) has() bool {
 	return !e.passed || e.seq == e.c.seq
+}
+
+// hears tells whether the call's CANCEL is the serving end's to receive,
+// with the lock: who has the call, the end it was sent on with, or the
+// pair's own while it is sent on with none.
+func (e *callEnd) hears() bool {
+	if e.passed {
+		return e.seq == e.c.seq
+	}
+
+	return e.c.handed == 0
 }
 
 // hear is what a serving end receives without waiting: the call, once; a
@@ -402,7 +413,7 @@ func (e *callEnd) hear(peek bool) (pk packet, eof, ok bool) {
 		return pk, false, true
 	}
 
-	if c.said.Load()&callCancel != 0 && c.phase.Load() == callReceived && e.has() {
+	if c.said.Load()&callCancel != 0 && c.phase.Load() == callReceived && e.hears() {
 		data := make([]byte, remoteHeader)
 		binary.LittleEndian.PutUint32(data, rCancel)
 		binary.LittleEndian.PutUint32(data[8:], c.uid)

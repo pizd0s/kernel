@@ -136,7 +136,8 @@ using Expire = int (*)();
 // with the open file's endpoint, and is answered on the connection, which
 // closes when who asked lets go of it, and with its open file.
 //
-// A READ or a WRITE that waits is kept until handle answers it (keep).
+// A READ or a WRITE that waits is kept until handle answers it (keep);
+// the CANCEL of a request that is not kept is dropped.
 void serve(int epoll, Handle handle, Gone gone = nullptr, Accepted accepted = nullptr, Expire expire = nullptr);
 
 // Ends serve once the events it has are handled.

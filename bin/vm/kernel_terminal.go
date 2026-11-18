@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"slices"
 	"strconv"
@@ -413,7 +414,9 @@ func (t *remoteTerminal) getattr(p *Process) ([]byte, error) {
 		err = syscall.EIO
 	}
 
-	return pk.data, err
+	// The answer's bytes are its connection's: the caller's own outlive
+	// the next call.
+	return bytes.Clone(pk.data), err
 }
 
 func (t *remoteTerminal) setattr(p *Process, when uint32, termios []byte) error {
@@ -443,7 +446,7 @@ func (t *remoteTerminal) window(p *Process) ([]byte, error) {
 		err = syscall.EIO
 	}
 
-	return pk.data, err
+	return bytes.Clone(pk.data), err
 }
 
 func (t *remoteTerminal) setWindow(p *Process, size []byte) error {

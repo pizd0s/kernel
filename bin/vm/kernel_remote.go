@@ -27,7 +27,10 @@ import (
 // the asking end of a call pair it made (kernel_call.go), whose serving
 // end it keeps. The request is the call sent on the connection, and the
 // reply its answer, the server's own or that of one it handed the
-// request on to, serving end and all.
+// request on to, serving end and all. The process keeps the connection
+// for its next call on the open file (connected): a call is a connection
+// made only when it has none to it, or the one it has is in a call, a
+// handler's call inside a call it interrupted.
 //
 // A packet is a header and a body; files ride with it.
 //
@@ -737,6 +740,83 @@ func replyOf(pk *packet, eof bool) error {
 	return nil
 }
 
+// The connections a process keeps: as many as its calls go round among.
+const keptConnections = 8
+
+// A keptConnection is a connection of a process's to an open file, node
+// its.
+type keptConnection struct {
+	node *remoteNode
+	c    *callEnd
+}
+
+// connected is a connection of p's to the open file for a call: the one
+// the process kept, which is the call's alone until it gives it back, or
+// a new one.
+func (n *remoteNode) connected(p *Process) (*callEnd, error) {
+	for i := range p.kept {
+		if k := &p.kept[i]; k.node == n {
+			c := k.c
+			copy(p.kept[i:], p.kept[i+1:])
+			p.kept[keptConnections-1] = keptConnection{}
+
+			if c.idle() {
+				return c, nil
+			}
+
+			// The server let go of it.
+			c.unref()
+
+			break
+		}
+	}
+
+	return n.connect(p)
+}
+
+// keep gives the connection of a call that is done back to the process,
+// for its next call on the open file, when it takes one: a call left
+// unanswered, or a server gone, leaves none to keep. The connection the
+// process used longest ago goes for it, and another kept to the same open
+// file meanwhile, a handler's.
+func (n *remoteNode) keep(p *Process, c *callEnd) {
+	if !c.idle() || p.disconnected {
+		c.unref()
+
+		return
+	}
+
+	last := keptConnections - 1
+
+	for i := range p.kept {
+		if p.kept[i].node == n {
+			last = i
+
+			break
+		}
+	}
+
+	if old := p.kept[last].c; old != nil {
+		old.unref()
+	}
+
+	copy(p.kept[1:last+1], p.kept[:last])
+	p.kept[0] = keptConnection{n, c}
+}
+
+// disconnect lets go of the connections the process keeps, as it ends.
+func (p *Process) disconnect() {
+	p.disconnected = true
+
+	for i := range p.kept {
+		if c := p.kept[i].c; c != nil {
+			c.unref()
+		}
+
+		p.kept[i] = keptConnection{}
+	}
+}
+
 // waiting is a READ or a WRITE, which may wait at its server as long as
 // the file says. A signal the process takes meanwhile sends CANCEL for
 // it (takeSignals), and the server's word comes after all the same: the
@@ -749,13 +829,13 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 		return packet{}, false, syscall.EINTR
 	}
 
-	c, err := n.connect(p)
+	c, err := n.connected(p)
 
 	if err != nil {
 		return packet{}, false, err
 	}
 
-	defer c.unref()
+	defer n.keep(p, c)
 
 	if p.interrupts(true) {
 		return packet{}, false, syscall.EINTR
@@ -803,13 +883,13 @@ func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []Objec
 // asked is call with the request made already, its header and its body
 // in data, which the packet keeps.
 func (n *remoteNode) asked(p *Process, op uint32, data []byte, files []Object) (packet, error) {
-	c, err := n.connect(p)
+	c, err := n.connected(p)
 
 	if err != nil {
 		return packet{}, err
 	}
 
-	defer c.unref()
+	defer n.keep(p, c)
 
 	if err := c.ask(p, data, files); err != nil {
 		return packet{}, syscall.EIO // the server is gone
