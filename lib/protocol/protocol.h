@@ -48,6 +48,16 @@
 // connection of a process to an open file, and another only for a call
 // made while the first has one in hand.
 //
+// A server watches a connection for its edges, EPOLLET: a call, its
+// CANCEL and its asker's going are each told once, so a wait never asks
+// again a connection whose call it gave out. The server receives on it
+// without waiting, and an edge with nothing to receive is passed over.
+// The asker's going is never missed: a call nobody received yet goes
+// with its asker, and the receive finds the end; after the receive the
+// going is an edge of its own. A CANCEL that came with its call, before
+// a wait told of either, is one edge with it: a server that keeps a
+// request receives once more as it keeps it, without waiting.
+//
 // A packet is a Header and a body; descriptors ride with it (SCM_RIGHTS).
 //
 //   Header { op u32, arg u32, uid u32, gid u32 }

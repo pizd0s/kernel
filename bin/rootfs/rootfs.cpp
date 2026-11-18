@@ -679,8 +679,11 @@ static Endpoint* listen(int fd, Role role) {
     }
     live = ep;
     ++endpointCount;
+    // A connection is watched for its edges (protocol.h): a turn receives
+    // without waiting, and rootfs keeps no request, so it has nothing to
+    // receive with one.
     epoll_event ev{};
-    ev.events = EPOLLIN;
+    ev.events = role == Role::Connection ? EPOLLIN | EPOLLET : EPOLLIN;
     ev.data.ptr = ep;
     if (epoll_ctl(watcher, EPOLL_CTL_ADD, fd, &ev) != 0) {
         fatal("rootfs: epoll_ctl: errno %d", errno);

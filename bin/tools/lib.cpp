@@ -222,9 +222,13 @@ void tools::Assembly::add(const void* data, usize n) {
 }
 
 // One packet into packet, its descriptors into packetFds: the length
-// of its body, after the header, or -1 at the end of the endpoint.
-static i64 receive(int fd, Header& h) {
-    const ssize_t n = receivePacket(fd, packet, sizeof packet, packetFds, packetFdCount);
+// of its body, after the header, or -1 at the end of the endpoint; with
+// MSG_DONTWAIT in flags, -2 when there is none now.
+static i64 receive(int fd, Header& h, int flags) {
+    const ssize_t n = receivePacket(fd, packet, sizeof packet, packetFds, packetFdCount, flags);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        return -2;
+    }
     if (n <= 0) {
         return -1;
     }
@@ -275,8 +279,11 @@ Endpoint* tools::listen(int fd, Role role, void* node, bool reads, bool writes) 
     }
     live = ep;
     ++endpointCount;
+    // A connection is watched for its edges, and received on without
+    // waiting (protocol.h): a file system keeps no request, so it has
+    // nothing to receive with one.
     epoll_event ev{};
-    ev.events = EPOLLIN;
+    ev.events = role == Role::Connection ? EPOLLIN | EPOLLET : EPOLLIN;
     ev.data.ptr = ep;
     if (epoll_ctl(watcher, EPOLL_CTL_ADD, fd, &ev) != 0) {
         fatal("%s: epoll_ctl: errno %d", program_invocation_short_name, errno);
@@ -368,7 +375,10 @@ static void handle(Endpoint* ep, FsCall fsCall, FileCall fileCall, Closing closi
         return;
     }
     Header h;
-    const i64 n = receive(ep->fd, h);
+    const i64 n = receive(ep->fd, h, ep->role == Role::Connection ? MSG_DONTWAIT : 0);
+    if (n == -2) {
+        return; // an edge with nothing to receive
+    }
     if (n < 0) {
         closed(ep, closing);
         return;

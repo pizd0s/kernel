@@ -107,20 +107,26 @@ int readyDescriptor(int argc, char** argv, int& first) {
     return -1;
 }
 
-Endpoint* watch(int epoll, Endpoint e) {
+// Watches an endpoint for events: its level, or a connection's edges
+// (protocol.h).
+static Endpoint* watchFor(int epoll, Endpoint e, uint32_t events) {
     auto* at = static_cast<Endpoint*>(malloc(sizeof(Endpoint)));
     if (!at) {
         fatal("service: out of memory");
     }
     *at = e;
     epoll_event ev{};
-    ev.events = EPOLLIN;
+    ev.events = events;
     ev.data.ptr = at;
     if (epoll_ctl(epoll, EPOLL_CTL_ADD, e.fd, &ev) != 0) {
         fatal("service: epoll_ctl: errno %d", errno);
     }
     ++watched;
     return at;
+}
+
+Endpoint* watch(int epoll, Endpoint e) {
+    return watchFor(epoll, e, EPOLLIN);
 }
 
 static void releaseAll() {
@@ -168,7 +174,7 @@ static void connect(int epoll, Endpoint* e) {
         fail(e->fd, errno);
         return;
     }
-    Endpoint* c = watch(epoll, {pair[0], false, e->reads, e->writes, e->of});
+    Endpoint* c = watchFor(epoll, {pair[0], false, e->reads, e->writes, e->of}, EPOLLIN | EPOLLET);
     c->file = e;
     c->after = e->first;
     e->first = c;
@@ -228,11 +234,12 @@ void stopServing() {
 }
 
 // Serves one event of the loop's: a connection to accept, a request to
-// handle, or the end of an endpoint.
-static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepted accepted) {
+// handle, or the end of an endpoint. true for a connection whose request
+// was kept: what came with the request, its CANCEL, is received next.
+static bool serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepted accepted) {
     alignas(Header) static unsigned char packet[65536];
     if (e->fd < 0) {
-        return; // let go of during this batch
+        return false; // let go of during this batch
     }
     if (e->listens) {
         const int connection = accept4(e->fd, nullptr, nullptr, SOCK_CLOEXEC);
@@ -241,10 +248,14 @@ static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepte
         } else if (connection >= 0) {
             close(connection);
         }
-        return;
+        return false;
     }
     Request r{};
-    const ssize_t got = receivePacket(e->fd, packet, sizeof packet, r.fds, r.count);
+    const bool kept = e->kept;
+    const ssize_t got = receivePacket(e->fd, packet, sizeof packet, r.fds, r.count, e->file ? MSG_DONTWAIT : 0);
+    if (got < 0 && e->file && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        return false; // an edge with nothing to receive
+    }
     if (got <= 0) {
         if (e->file) {
             // A connection whose asker let go of it, a request kept on it
@@ -253,7 +264,7 @@ static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepte
                 gone(*e);
             }
             disconnect(epoll, e);
-            return;
+            return false;
         }
         // An open file closed: what is kept of it on its connections
         // first.
@@ -266,13 +277,13 @@ static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepte
             gone(*e);
         }
         unwatch(epoll, e);
-        return;
+        return false;
     }
     if (size_t(got) < sizeof(Header) || (r.count == 0 && e->channel)) {
         for (size_t k = 0; k < r.count; ++k) {
             close(r.fds[k]);
         }
-        return;
+        return false;
     }
     memcpy(&r.h, packet, sizeof r.h);
     r.body = packet + sizeof(Header);
@@ -301,6 +312,7 @@ static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepte
             close(r.fds[k]);
         }
     }
+    return e->file && e->fd >= 0 && e->kept && !kept;
 }
 
 void serve(int epoll, Handle handle, Gone gone, Accepted accepted, Expire expire) {
@@ -318,7 +330,8 @@ void serve(int epoll, Handle handle, Gone gone, Accepted accepted, Expire expire
             for (int i = 0; i < n; ++i) {
                 const bool hangup = (events[i].events & (EPOLLHUP | EPOLLERR)) != 0;
                 if (hangup == (pass == 0)) {
-                    serveEvent(epoll, static_cast<Endpoint*>(events[i].data.ptr), handle, gone, accepted);
+                    while (serveEvent(epoll, static_cast<Endpoint*>(events[i].data.ptr), handle, gone, accepted)) {
+                    }
                 }
             }
         }

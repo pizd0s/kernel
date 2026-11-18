@@ -137,7 +137,10 @@ using Expire = int (*)();
 // closes when who asked lets go of it, and with its open file.
 //
 // A READ or a WRITE that waits is kept until handle answers it (keep);
-// the CANCEL of a request that is not kept is dropped.
+// the CANCEL of a request that is not kept is dropped. A connection is
+// watched for its edges (protocol.h): the loop receives on it without
+// waiting, and once more after a request that was kept, for a CANCEL
+// that came with it.
 void serve(int epoll, Handle handle, Gone gone = nullptr, Accepted accepted = nullptr, Expire expire = nullptr);
 
 // Ends serve once the events it has are handled.
