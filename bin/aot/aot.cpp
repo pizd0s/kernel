@@ -4464,6 +4464,9 @@ namespace {
         Slice<String> importSyms{};
         Slice<Int> importIntrinsics{};
         Slice<bool> importCode{};
+        // forwards are, by function index, the import a function of the
+        // module only calls with its own arguments, or -1 (objCodeForward).
+        Slice<i32> forwards{};
         // sites are the tail profile's counters the functions made, in the
         // order of their slots.
         Slice<ProfileSite> sites{};
@@ -5100,6 +5103,50 @@ static constexpr Int intrinsicStrnlen = 12;
 static constexpr Int intrinsicStrstr = 13;
 
 static constexpr Int intrinsicMemmem = 14;
+
+static constexpr Int intrinsicIsalnum = 15;
+
+static constexpr Int intrinsicIsalpha = 16;
+
+static constexpr Int intrinsicIsascii = 17;
+
+static constexpr Int intrinsicIsblank = 18;
+
+static constexpr Int intrinsicIscntrl = 19;
+
+static constexpr Int intrinsicIsdigit = 20;
+
+static constexpr Int intrinsicIsgraph = 21;
+
+static constexpr Int intrinsicIslower = 22;
+
+static constexpr Int intrinsicIsprint = 23;
+
+static constexpr Int intrinsicIspunct = 24;
+
+static constexpr Int intrinsicIsspace = 25;
+
+static constexpr Int intrinsicIsupper = 26;
+
+static constexpr Int intrinsicIsxdigit = 27;
+
+static constexpr Int intrinsicTolower = 28;
+
+static constexpr Int intrinsicToupper = 29;
+
+static constexpr Int intrinsicToascii = 30;
+
+static constexpr Int intrinsicAbs = 31;
+
+static constexpr Int intrinsicLlabs = 32;
+
+static constexpr Int intrinsicMempcpy = 33;
+
+static constexpr Int intrinsicBcopy = 34;
+
+static constexpr Int intrinsicBzero = 35;
+
+static constexpr Int intrinsicStrpbrk = 36;
 
 static constexpr Int constF32Sign = 0;
 
@@ -6034,6 +6081,22 @@ static void lowererMemSearch(Lowerer* l, i32 v, Span<const i32> args);
 
 static void lowererStrCopy(Lowerer* l, i32 v, Span<const i32> args, bool append);
 
+static VReg lowererBit(Lowerer* l, u8 cc);
+
+static VReg lowererInRange(Lowerer* l, VReg x, i64 low, i64 count);
+
+static VReg lowererIsValue(Lowerer* l, VReg x, i64 value);
+
+static VReg lowererLetter(Lowerer* l, VReg x, i64 count);
+
+static void lowererCharacter(Lowerer* l, i32 v, Int intrinsic, VReg x);
+
+static void lowererMagnitude(Lowerer* l, i32 v, VReg x, u8 size);
+
+static void lowererMemZero(Lowerer* l, Span<const i32> args);
+
+static void lowererStrBreak(Lowerer* l, i32 v, Span<const i32> args);
+
 static void lowererSign(Lowerer* l, i32 v);
 
 static void lowererStrPair(Lowerer* l, i32 v, Span<const i32> args, String sym);
@@ -6530,6 +6593,8 @@ static Slice<VReg> resultRegs(Slice<ValType> results);
 static bool returnsTwice(String name);
 
 static Int intrinsicOf(Import imp, FuncType* t);
+
+static i32 objCodeForward(Module* m, Int index);
 
 static bool intrinsicTyped(FuncType* t, String text);
 
@@ -15167,8 +15232,15 @@ static void lowererAlu(Lowerer* l, i32 v, Op op, i32 a, i32 b, u8 size) {
 // one that returns twice through its adapter, which writes the jump
 // frame.
 static void lowererCall(Lowerer* l, i32 v, Int index, Span<const i32> args) {
+    // A function that only calls an import is that import to who calls
+    // it (objCodeForward). In such a function itself the import is
+    // called, the kernel's: a pointer to the function reaches that.
+    if (l->oc->forwards[index] >= 0) {
+        index = l->oc->forwards[index];
+    }
+    const bool compiles = l->oc->forwards[l->f->index] < 0;
     FuncType* t = moduleFuncType(l->m, convert<u32>(index));
-    if (index < l->m->importedFuncs && l->oc->importIntrinsics[index] != intrinsicNone && lowererIntrinsic(l, v, l->oc->importIntrinsics[index], args)) {
+    if (index < l->m->importedFuncs && compiles && l->oc->importIntrinsics[index] != intrinsicNone && lowererIntrinsic(l, v, l->oc->importIntrinsics[index], args)) {
         return;
     }
     if (index < l->m->importedFuncs && !l->m->funcs[index].returnsTwice) {
@@ -17333,6 +17405,56 @@ static bool lowererIntrinsic(Lowerer* l, i32 v, Int intrinsic, Span<const i32> a
             lowererMemSearch(l, v, args);
             return true;
         }
+        case intrinsicIsalnum:
+        case intrinsicIsalpha:
+        case intrinsicIsascii:
+        case intrinsicIsblank:
+        case intrinsicIscntrl:
+        case intrinsicIsdigit:
+        case intrinsicIsgraph:
+        case intrinsicIslower:
+        case intrinsicIsprint:
+        case intrinsicIspunct:
+        case intrinsicIsspace:
+        case intrinsicIsupper:
+        case intrinsicIsxdigit:
+        case intrinsicTolower:
+        case intrinsicToupper:
+        case intrinsicToascii: {
+            if (v >= 0 && l->uses[v] > 0) {
+                lowererCharacter(l, v, intrinsic, lowererUse(l, args[0]));
+            }
+            return true;
+        }
+        case intrinsicAbs:
+        case intrinsicLlabs: {
+            if (v >= 0 && l->uses[v] > 0) {
+                lowererMagnitude(l, v, lowererUse(l, args[0]), intrinsic == intrinsicAbs ? 4 : 8);
+            }
+            return true;
+        }
+        case intrinsicMempcpy: {
+            lowererMemCopy(l, args, symMemcpy);
+            if (v >= 0 && l->uses[v] > 0) {
+                VReg end = lowererCopy(l, lowererUse(l, args[0]), 4);
+                lowererAluTo(l, end, aluAdd, lowererUse(l, args[2]), 4);
+                lowererMov(l, lowererDef(l, v), end, 4);
+            }
+            return true;
+        }
+        case intrinsicBcopy: {
+            // bcopy's source comes first
+            lowererMemCopy(l, Span<const i32>({args[1], args[0], args[2]}), symMemmove);
+            return true;
+        }
+        case intrinsicBzero: {
+            lowererMemZero(l, args);
+            return true;
+        }
+        case intrinsicStrpbrk: {
+            lowererStrBreak(l, v, args);
+            return true;
+        }
         case intrinsicMemcpy:
         case intrinsicMemmove:
         case intrinsicMemset: {
@@ -17704,6 +17826,214 @@ static void lowererMemSearch(Lowerer* l, i32 v, Span<const i32> args) {
     }
     lowererStrCall(l, symMemmem, Span<const VReg>({lowererHostAddress(l, h), hl, lowererHostAddress(l, n), nl}));
     lowererGuestPointer(l, v, lowererStrResult(l));
+}
+
+// bit is 1 where the flags just set are cc and 0 where they are not, in a
+// register of its own.
+static VReg lowererBit(Lowerer* l, u8 cc) {
+    VReg r = mFuncNewReg(l->mf, classGPR);
+    MInst set = inst(mSetcc);
+    set.dst = r;
+    set.cc = cc;
+    lowererEmit(l, set);
+    return r;
+}
+
+// inRange is the bit of low <= x < low + count, x a 32-bit number
+// without a sign: one comparison of x - low.
+static VReg lowererInRange(Lowerer* l, VReg x, i64 low, i64 count) {
+    VReg t = lowererCopy(l, x, 4);
+    if (low != 0) {
+        MInst sub = inst(mAluImm);
+        sub.dst = t;
+        sub.imm = low;
+        sub.size = 4;
+        sub.aux = convert<u8>(aluSub);
+        lowererEmit(l, sub);
+    }
+    MInst cmp = inst(mCmpImm);
+    cmp.src = t;
+    cmp.imm = count;
+    cmp.size = 4;
+    lowererEmit(l, cmp);
+    return lowererBit(l, ccB);
+}
+
+// isValue is the bit of x == value.
+static VReg lowererIsValue(Lowerer* l, VReg x, i64 value) {
+    MInst cmp = inst(mCmpImm);
+    cmp.src = x;
+    cmp.imm = value;
+    cmp.size = 4;
+    lowererEmit(l, cmp);
+    return lowererBit(l, ccE);
+}
+
+// letter is the bit of x one of the first count letters, of either case:
+// the two cases differ by the bit of 32 alone.
+static VReg lowererLetter(Lowerer* l, VReg x, i64 count) {
+    VReg t = lowererCopy(l, x, 4);
+    MInst fold = inst(mAluImm);
+    fold.dst = t;
+    fold.imm = 32;
+    fold.size = 4;
+    fold.aux = convert<u8>(aluOr);
+    lowererEmit(l, fold);
+    return lowererInRange(l, t, 'a', count);
+}
+
+// character compiles a function of ctype.h as the kernel's is: the
+// classes are of the C locale, ASCII alone in any, x any int; a class's
+// result is 1 or 0.
+static void lowererCharacter(Lowerer* l, i32 v, Int intrinsic, VReg x) {
+    VReg r = noReg;
+    switch (intrinsic) {
+        case intrinsicIsdigit: {
+            r = lowererInRange(l, x, '0', 10);
+            break;
+        }
+        case intrinsicIslower: {
+            r = lowererInRange(l, x, 'a', 26);
+            break;
+        }
+        case intrinsicIsupper: {
+            r = lowererInRange(l, x, 'A', 26);
+            break;
+        }
+        case intrinsicIsalpha: {
+            r = lowererLetter(l, x, 26);
+            break;
+        }
+        case intrinsicIsalnum: {
+            r = lowererLetter(l, x, 26);
+            lowererAluTo(l, r, aluOr, lowererInRange(l, x, '0', 10), 4);
+            break;
+        }
+        case intrinsicIsxdigit: {
+            r = lowererLetter(l, x, 6);
+            lowererAluTo(l, r, aluOr, lowererInRange(l, x, '0', 10), 4);
+            break;
+        }
+        case intrinsicIsascii: {
+            r = lowererInRange(l, x, 0, 128);
+            break;
+        }
+        case intrinsicIsblank: {
+            r = lowererIsValue(l, x, ' ');
+            lowererAluTo(l, r, aluOr, lowererIsValue(l, x, '\t'), 4);
+            break;
+        }
+        case intrinsicIscntrl: {
+            r = lowererInRange(l, x, 0, 32);
+            lowererAluTo(l, r, aluOr, lowererIsValue(l, x, 127), 4);
+            break;
+        }
+        case intrinsicIsgraph: {
+            r = lowererInRange(l, x, 0x21, 0x5e);
+            break;
+        }
+        case intrinsicIsprint: {
+            r = lowererInRange(l, x, 0x20, 0x5f);
+            break;
+        }
+        case intrinsicIspunct: {
+            // what is drawn and is no letter and no digit
+            VReg plain = lowererLetter(l, x, 26);
+            lowererAluTo(l, plain, aluOr, lowererInRange(l, x, '0', 10), 4);
+            MInst flip = inst(mAluImm);
+            flip.dst = plain;
+            flip.imm = 1;
+            flip.size = 4;
+            flip.aux = convert<u8>(aluXor);
+            lowererEmit(l, flip);
+            r = lowererInRange(l, x, 0x21, 0x5e);
+            lowererAluTo(l, r, aluAnd, plain, 4);
+            break;
+        }
+        case intrinsicIsspace: {
+            r = lowererInRange(l, x, '\t', 5);
+            lowererAluTo(l, r, aluOr, lowererIsValue(l, x, ' '), 4);
+            break;
+        }
+        case intrinsicToascii: {
+            r = lowererCopy(l, x, 4);
+            MInst low = inst(mAluImm);
+            low.dst = r;
+            low.imm = 0x7f;
+            low.size = 4;
+            low.aux = convert<u8>(aluAnd);
+            lowererEmit(l, low);
+            break;
+        }
+        default: {
+            // tolower and toupper: a letter of the other case is 32 away
+            VReg moved = lowererInRange(l, x, intrinsic == intrinsicTolower ? 'A' : 'a', 26);
+            lowererShift(l, moved, shiftShl, 5, 4);
+            r = lowererCopy(l, x, 4);
+            lowererAluTo(l, r, intrinsic == intrinsicTolower ? aluAdd : aluSub, moved, 4);
+            break;
+        }
+    }
+    lowererMov(l, lowererDef(l, v), r, 4);
+}
+
+// magnitude compiles abs, labs and llabs as the kernel's: the least
+// number's is itself.
+static void lowererMagnitude(Lowerer* l, i32 v, VReg x, u8 size) {
+    VReg sign = lowererCopy(l, x, size);
+    lowererShift(l, sign, shiftSar, size * 8 - 1, size);
+    VReg r = lowererCopy(l, x, size);
+    lowererAluTo(l, r, aluXor, sign, size);
+    lowererAluTo(l, r, aluSub, sign, size);
+    lowererMov(l, lowererDef(l, v), r, size);
+}
+
+// memZero compiles bzero and explicit_bzero as memFill compiles memset
+// of a zero: the range within the memory, then lib/str's memset.
+static void lowererMemZero(Lowerer* l, Span<const i32> args) {
+    VReg d = lowererUse(l, args[0]);
+    VReg n = lowererUse(l, args[1]);
+    lowererCheckRange(l, d, n, instanceMem(l->lay->memoryEnd), trapMemoryOOB);
+    if (l->m->asan) {
+        lowererAsanRange(l, d, n);
+    }
+    lowererStrCall(l, symMemset, Span<const VReg>({lowererHostAddress(l, d), lowererConstReg(l, 0, 4), n}));
+}
+
+// strBreak compiles strpbrk: strcspn as strPair compiles it, then the
+// byte it stopped at, which is the string's NUL where none of the set is
+// in it. The result is that byte's address, or 0 for the NUL.
+static void lowererStrBreak(Lowerer* l, i32 v, Span<const i32> args) {
+    VReg s = lowererUse(l, args[0]);
+    VReg set = lowererUse(l, args[1]);
+    lowererStrLength(l, s);
+    lowererStrLength(l, set);
+    lowererStrCall(l, symStrcspn, Span<const VReg>({lowererHostAddress(l, s), lowererHostAddress(l, set)}));
+    if (v < 0 || l->uses[v] == 0) {
+        return;
+    }
+    VReg at = lowererSum(l, s, lowererStrResult(l));
+    VReg byte = mFuncNewReg(l->mf, classGPR);
+    MInst ld = inst(mLoad);
+    ld.dst = byte;
+    ld.mem = memIndexed(memReg, at, 0);
+    ld.size = 1;
+    ld.dsize = 8;
+    lowererEmit(l, ld);
+    // the zero before the test: making it changes the flags
+    VReg null = lowererConstReg(l, 0, 4);
+    MInst any = inst(mTest);
+    any.src = byte;
+    any.src2 = byte;
+    any.size = 4;
+    lowererEmit(l, any);
+    MInst none = inst(mCmov);
+    none.dst = at;
+    none.src = null;
+    none.cc = ccE;
+    none.size = 4;
+    lowererEmit(l, none);
+    lowererMov(l, lowererDef(l, v), at, 4);
 }
 
 // strPair compiles strcmp, strspn and strcspn as the kernel's: both
@@ -24663,6 +24993,57 @@ static Slice<VReg> resultRegs(Slice<ValType> results) {
     return regs;
 }
 
+// forward is the import a function of the module only calls, or -1: its
+// code no local of its own, each of its parameters in their order, the
+// call of an import of its own type and the end. lib/c's functions over
+// the kernel's are such (lib/c/src/kernel.c), and a direct call of one
+// is a call of the kernel's: of the import as Go calls it, without the
+// function between, or of what the code compiles for it (intrinsicOf).
+// An import that returns twice is called by none.
+static i32 objCodeForward(Module* m, Int index) {
+    Func* fn = &m->funcs[index];
+    if (fn->imported) {
+        return -1;
+    }
+    FuncType* t = &m->types[fn->typ];
+    Slice<u8> body = fn->body;
+    const Int count = length(t->params);
+    // a parameter's index in one byte
+    if (count > 127 || length(body) < 2 * count + 4 || body[0] != 0) {
+        return -1;
+    }
+    Int at = 1;
+    for (Int i = 0; i < count; ++i, at += 2) {
+        if (body[at] != 0x20 || body[at + 1] != i) {
+            return -1;
+        }
+    }
+    if (body[at] != 0x10) {
+        return -1;
+    }
+    Reader r = Reader{subslice(body, at + 1, length(body)), {}};
+    const u32 target = readerU32(&r);
+    if (r.pos + 1 != length(r.data) || r.data[r.pos] != 0x0b || convert<i64>(target) >= m->importedFuncs) {
+        return -1;
+    }
+    Func* callee = &m->funcs[target];
+    FuncType* ct = &m->types[callee->typ];
+    if (callee->returnsTwice || length(ct->params) != count || length(ct->results) != length(t->results)) {
+        return -1;
+    }
+    for (Int i = 0; i < count; ++i) {
+        if (ct->params[i] != t->params[i]) {
+            return -1;
+        }
+    }
+    for (Int i = 0; i < length(t->results); ++i) {
+        if (ct->results[i] != t->results[i]) {
+            return -1;
+        }
+    }
+    return convert<i32>(target);
+}
+
 // intrinsicOf tells the kernel's functions the code compiles at their
 // direct calls, by module, name and type: a type of i for a 32-bit
 // integer and l for a 64-bit one, the parameters, then > and the result.
@@ -24692,6 +25073,32 @@ static Int intrinsicOf(Import imp, FuncType* t) {
         {String("strnlen"), String("ii>i"), intrinsicStrnlen},
         {String("strstr"), String("ii>i"), intrinsicStrstr},
         {String("memmem"), String("iiii>i"), intrinsicMemmem},
+        {String("isalnum"), String("i>i"), intrinsicIsalnum},
+        {String("isalpha"), String("i>i"), intrinsicIsalpha},
+        {String("isascii"), String("i>i"), intrinsicIsascii},
+        {String("isblank"), String("i>i"), intrinsicIsblank},
+        {String("iscntrl"), String("i>i"), intrinsicIscntrl},
+        {String("isdigit"), String("i>i"), intrinsicIsdigit},
+        {String("isgraph"), String("i>i"), intrinsicIsgraph},
+        {String("islower"), String("i>i"), intrinsicIslower},
+        {String("isprint"), String("i>i"), intrinsicIsprint},
+        {String("ispunct"), String("i>i"), intrinsicIspunct},
+        {String("isspace"), String("i>i"), intrinsicIsspace},
+        {String("isupper"), String("i>i"), intrinsicIsupper},
+        {String("isxdigit"), String("i>i"), intrinsicIsxdigit},
+        {String("tolower"), String("i>i"), intrinsicTolower},
+        {String("toupper"), String("i>i"), intrinsicToupper},
+        {String("toascii"), String("i>i"), intrinsicToascii},
+        {String("abs"), String("i>i"), intrinsicAbs},
+        {String("labs"), String("i>i"), intrinsicAbs},
+        {String("llabs"), String("l>l"), intrinsicLlabs},
+        {String("mempcpy"), String("iii>i"), intrinsicMempcpy},
+        {String("bcmp"), String("iii>i"), intrinsicMemcmp},
+        {String("bcopy"), String("iii>"), intrinsicBcopy},
+        {String("bzero"), String("ii>"), intrinsicBzero},
+        {String("explicit_bzero"), String("ii>"), intrinsicBzero},
+        {String("strpbrk"), String("ii>i"), intrinsicStrpbrk},
+        {String("strcoll"), String("ii>i"), intrinsicStrcmp},
     };
     for (const Known& k : known) {
         if (imp.name == k.name && intrinsicTyped(t, k.type)) {
@@ -26022,6 +26429,10 @@ static void compileWithOptions(CompileOptions options) {
     code->importSyms = makeSlice<String>(module->importedFuncs);
     code->importIntrinsics = makeSlice<Int>(module->importedFuncs);
     code->importCode = makeSlice<bool>(module->importedFuncs);
+    code->forwards = makeSlice<i32>(length(module->funcs));
+    for (Int i = 0; i < length(module->funcs); ++i) {
+        code->forwards[i] = objCodeForward(module, i);
+    }
     objCodeAddFixedBlobs(code);
     objCodeImportAdapters(code);
     for (Int i = module->importedFuncs; i < length(module->funcs); ++i) {

@@ -4,9 +4,10 @@
  * Shared vocabulary of every public header. Every function is lib/c's own,
  * defined inside the process (crt, stdio, libm and the rest of lib/c); one
  * the kernel implements calls the kernel's import, declared __KERNEL(name)
- * under the C name __kernel_<name> (src/kernel.c). A header's __INLINE
- * definition is inlined at every call and never emitted: lib/c defines the
- * function itself once, which a pointer to it reaches.
+ * under the C name __kernel_<name> (src/kernel.c), and does nothing else.
+ * A function that returns twice is its header's __INLINE definition, in
+ * the frame of who calls it at every call and never emitted: a frame of
+ * its own would be gone at the second return.
  * The ABI is wasm32 with a 64-bit long double, 64-bit time_t, off_t, ino_t
  * and dev_t; struct layouts below are what the kernel reads and writes.
  */

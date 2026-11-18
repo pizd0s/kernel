@@ -68,7 +68,7 @@ static void growInHandler(int sig) {
 
 #ifdef __wasm__
 // The address of an import makes the code call it through its adapter.
-static void* (*volatile allocate)(size_t) = __kernel_malloc;
+static void* (*volatile allocate)(size_t) = malloc;
 
 __attribute__((noinline)) static uintptr_t growDirectly(int pages) {
     return uintptr_t(__builtin_wasm_memory_grow(0, pages)) << 16;

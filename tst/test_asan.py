@@ -21,10 +21,10 @@ CASES = {
     "after_free": (SEGV, [rf"asan: 1-byte load at {HEX}: in the freed 32-byte block at {HEX}", r"after_free\+0x[0-9a-f]+ +check\.c:60"]),
     "syscall_read": (ABRT, [rf"asan: access of a range at {HEX}: in the freed 16-byte block at {HEX}",
                             r"\(\*Process\)\.span +kernel\.go:\d+", r"libcRead +libc\.go:\d+", r"read\+0x", r"syscall_read\+0x[0-9a-f]+ +check\.c:70"]),
-    # strlen and memcpy are lib/c's inline functions: the fault's line is
-    # theirs, in string.h, under the function that called them.
-    "string": (SEGV, [rf"asan: access of a range at {HEX}: past the end of the 4-byte block at {HEX}", r"string\+0x[0-9a-f]+ +string\.h:\d+"]),
-    "copy": (SEGV, [rf"asan: 8-byte load at {HEX}: in free memory of the heap", r"copy\+0x[0-9a-f]+ +string\.h:\d+"]),
+    # strlen and memcpy are lib/c's functions, which the code compiles
+    # where they are called: the fault's line is the call's.
+    "string": (SEGV, [rf"asan: access of a range at {HEX}: past the end of the 4-byte block at {HEX}", r"string\+0x[0-9a-f]+ +check\.c:77"]),
+    "copy": (SEGV, [rf"asan: 8-byte load at {HEX}: in free memory of the heap", r"copy\+0x[0-9a-f]+ +check\.c:85"]),
     "null": (SEGV, [r"asan: 4-byte store at 0x0: in the first KiB", r"null\+0x[0-9a-f]+ +check\.c:91"]),
     "shrink": (SEGV, [rf"asan: 1-byte store at {HEX}: past the end of the 4-byte block at {HEX}", r"shrink\+0x[0-9a-f]+ +check\.c:98"]),
     "mapped": (SEGV, [rf"asan: 1-byte store at {HEX}: in the freed 8192-byte block at {HEX}", r"mapped\+0x[0-9a-f]+ +check\.c:105"]),

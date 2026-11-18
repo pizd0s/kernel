@@ -53,7 +53,7 @@ static void handleUsr1() {
     assert(sigaction(SIGUSR1, &action, nullptr) == 0);
 }
 
-static void* (*volatile allocate)(size_t) = __kernel_malloc;
+static void* (*volatile allocate)(size_t) = malloc;
 
 __attribute__((noinline)) static void growAndLeave(int depth) {
     if (depth) {

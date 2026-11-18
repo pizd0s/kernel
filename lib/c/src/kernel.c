@@ -1,10 +1,14 @@
 /*
  * Every function lib/c's headers declare that the kernel implements, but
- * those the headers define __INLINE: a call of the kernel's import of the
- * same name, __kernel_<name> here. KERNEL declares the import and defines
- * the function, KERNEL_VOID and KERNEL_NORETURN those returning nothing;
- * a variadic function passes its va_list on, the pointer to its variable
- * arguments that the import took when the function was the import.
+ * those that return twice, which their headers define __INLINE: a call of
+ * the kernel's import of the same name, __kernel_<name> here, and nothing
+ * else. The compiler sees through such a function: where a program calls
+ * it, it calls the kernel's, or does there what the kernel's does; a
+ * pointer to it reaches the kernel's. KERNEL declares the import and
+ * defines the function, KERNEL_VOID and KERNEL_NORETURN those returning
+ * nothing; a variadic function passes its va_list on, the pointer to its
+ * variable arguments that the import took when the function was the
+ * import.
  *
  * A structure the kernel reads or writes comes with its size, which is
  * its version: the import has the size after each pointer to one, and the
@@ -116,6 +120,24 @@ KERNEL(in_addr_t, inet_netof, (struct in_addr a), (a))
 
 /* assert.h */
 KERNEL_NORETURN(__assert_fail, (const char* a, const char* b, int c, const char* d), (a, b, c, d))
+
+/* ctype.h */
+KERNEL(int, isalnum, (int a), (a))
+KERNEL(int, isalpha, (int a), (a))
+KERNEL(int, isascii, (int a), (a))
+KERNEL(int, isblank, (int a), (a))
+KERNEL(int, iscntrl, (int a), (a))
+KERNEL(int, isdigit, (int a), (a))
+KERNEL(int, isgraph, (int a), (a))
+KERNEL(int, islower, (int a), (a))
+KERNEL(int, isprint, (int a), (a))
+KERNEL(int, ispunct, (int a), (a))
+KERNEL(int, isspace, (int a), (a))
+KERNEL(int, isupper, (int a), (a))
+KERNEL(int, isxdigit, (int a), (a))
+KERNEL(int, tolower, (int a), (a))
+KERNEL(int, toupper, (int a), (a))
+KERNEL(int, toascii, (int a), (a))
 
 /* dirent.h */
 KERNEL(DIR*, opendir, (const char* a), (a))
@@ -289,6 +311,13 @@ KERNEL(int, mkstemp, (char* a), (a))
 KERNEL(int, mkostemp, (char* a, int b), (a, b))
 KERNEL(int, mkstemps, (char* a, int b), (a, b))
 KERNEL(char*, mkdtemp, (char* a), (a))
+KERNEL(int, abs, (int a), (a))
+KERNEL(long, labs, (long a), (a))
+KERNEL(long long, llabs, (long long a), (a))
+KERNEL(void*, malloc, (size_t a), (a))
+KERNEL(void*, calloc, (size_t a, size_t b), (a, b))
+KERNEL(void*, realloc, (void* a, size_t b), (a, b))
+KERNEL_VOID(free, (void* a), (a))
 KERNEL(div_t, div, (int a, int b), (a, b))
 KERNEL(ldiv_t, ldiv, (long a, long b), (a, b))
 KERNEL(lldiv_t, lldiv, (long long a, long long b), (a, b))
@@ -308,22 +337,54 @@ KERNEL(int, getloadavg, (double* a, int b), (a, b))
 KERNEL(int, getsubopt, (char** a, char* const* b, char** c), (a, b, c))
 
 /* string.h */
+KERNEL(void*, memcpy, (void* __restrict a, const void* __restrict b, size_t c), (a, b, c))
+KERNEL(void*, memmove, (void* a, const void* b, size_t c), (a, b, c))
+KERNEL(void*, memset, (void* a, int b, size_t c), (a, b, c))
+KERNEL(int, memcmp, (const void* a, const void* b, size_t c), (a, b, c))
+KERNEL(void*, memchr, (const void* a, int b, size_t c), (a, b, c))
+KERNEL(size_t, strlen, (const char* a), (a))
+KERNEL(char*, strcpy, (char* __restrict a, const char* __restrict b), (a, b))
+KERNEL(char*, strcat, (char* __restrict a, const char* __restrict b), (a, b))
+KERNEL(int, strcmp, (const char* a, const char* b), (a, b))
+KERNEL(size_t, strspn, (const char* a, const char* b), (a, b))
+KERNEL(size_t, strcspn, (const char* a, const char* b), (a, b))
 KERNEL(void*, memrchr, (const void* a, int b, size_t c), (a, b, c))
+KERNEL(void*, memmem, (const void* a, size_t b, const void* c, size_t d), (a, b, c, d))
+KERNEL(void*, mempcpy, (void* __restrict a, const void* __restrict b, size_t c), (a, b, c))
 KERNEL(void*, memccpy, (void* __restrict a, const void* __restrict b, int c, size_t d), (a, b, c, d))
 KERNEL(void*, rawmemchr, (const void* a, int b), (a, b))
+KERNEL(size_t, strnlen, (const char* a, size_t b), (a, b))
+KERNEL(char*, strncpy, (char* __restrict a, const char* __restrict b, size_t c), (a, b, c))
+KERNEL(char*, stpcpy, (char* __restrict a, const char* __restrict b), (a, b))
+KERNEL(char*, stpncpy, (char* __restrict a, const char* __restrict b, size_t c), (a, b, c))
+KERNEL(char*, strncat, (char* __restrict a, const char* __restrict b, size_t c), (a, b, c))
+KERNEL(size_t, strlcpy, (char* a, const char* b, size_t c), (a, b, c))
+KERNEL(size_t, strlcat, (char* a, const char* b, size_t c), (a, b, c))
+KERNEL(int, strncmp, (const char* a, const char* b, size_t c), (a, b, c))
+KERNEL(int, strcoll, (const char* a, const char* b), (a, b))
 KERNEL(size_t, strxfrm, (char* __restrict a, const char* __restrict b, size_t c), (a, b, c))
 KERNEL(int, strverscmp, (const char* a, const char* b), (a, b))
+KERNEL(char*, strchr, (const char* a, int b), (a, b))
 KERNEL(char*, strrchr, (const char* a, int b), (a, b))
+KERNEL(char*, strchrnul, (const char* a, int b), (a, b))
+KERNEL(char*, strstr, (const char* a, const char* b), (a, b))
 KERNEL(char*, strcasestr, (const char* a, const char* b), (a, b))
+KERNEL(char*, strpbrk, (const char* a, const char* b), (a, b))
 KERNEL(char*, strtok, (char* __restrict a, const char* __restrict b), (a, b))
 KERNEL(char*, strtok_r, (char* __restrict a, const char* __restrict b, char** __restrict c), (a, b, c))
 KERNEL(char*, strsep, (char** a, const char* b), (a, b))
+KERNEL(char*, strdup, (const char* a), (a))
 KERNEL(char*, strndup, (const char* a, size_t b), (a, b))
 KERNEL(char*, strerror, (int a), (a))
 KERNEL(int, strerror_r, (int a, char* b, size_t c), (a, b, c))
 KERNEL(char*, strsignal, (int a), (a))
+KERNEL_VOID(explicit_bzero, (void* a, size_t b), (a, b))
 
 /* strings.h */
+KERNEL(int, bcmp, (const void* a, const void* b, size_t c), (a, b, c))
+KERNEL_VOID(bcopy, (const void* a, void* b, size_t c), (a, b, c))
+KERNEL_VOID(bzero, (void* a, size_t b), (a, b))
+KERNEL(char*, index, (const char* a, int b), (a, b))
 KERNEL(char*, rindex, (const char* a, int b), (a, b))
 KERNEL(int, ffs, (int a), (a))
 KERNEL(int, ffsl, (long a), (a))

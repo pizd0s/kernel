@@ -100,47 +100,4 @@ int ptsname_r(int, char*, size_t);
 int getloadavg(double*, int);
 int getsubopt(char**, char* const*, char**);
 
-/*
- * lib/c's over the kernel's imports, inline so that a call is the
- * import's call; mem.c defines them for a pointer and a call without
- * this header.
- */
-void* __kernel_malloc(size_t) __KERNEL(malloc);
-void* __kernel_calloc(size_t, size_t) __KERNEL(calloc);
-void* __kernel_realloc(void*, size_t) __KERNEL(realloc);
-void __kernel_free(void*) __KERNEL(free);
-
-__INLINE void* malloc(size_t __a) {
-    return __kernel_malloc(__a);
-}
-
-__INLINE void* calloc(size_t __a, size_t __b) {
-    return __kernel_calloc(__a, __b);
-}
-
-__INLINE void* realloc(void* __a, size_t __b) {
-    return __kernel_realloc(__a, __b);
-}
-
-__INLINE void free(void* __a) {
-    __kernel_free(__a);
-}
-
-/* The kernel's too, which the compiler may compile at a call of one. */
-int __kernel_abs(int) __KERNEL(abs);
-long __kernel_labs(long) __KERNEL(labs);
-long long __kernel_llabs(long long) __KERNEL(llabs);
-
-__INLINE int abs(int __a) {
-    return __kernel_abs(__a);
-}
-
-__INLINE long labs(long __a) {
-    return __kernel_labs(__a);
-}
-
-__INLINE long long llabs(long long __a) {
-    return __kernel_llabs(__a);
-}
-
 __END_DECLS
