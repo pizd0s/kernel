@@ -133,9 +133,9 @@ func (e *callEnd) unref() {
 		c.request, c.answer = packet{}, packet{}
 		c.there.Store(false)
 		c.serving.wake(turn{})
+		c.servers.tell()
 		c.mu.Unlock()
 		dropFiles(files)
-		c.servers.tell()
 	case e.passed:
 		c.mu.Lock()
 		open := e.armed && e.seq == c.seq && c.phase.Load() == callReceived
@@ -146,13 +146,10 @@ func (e *callEnd) unref() {
 
 		if open {
 			c.end()
+			c.askers.tell()
 		}
 
 		c.mu.Unlock()
-
-		if open {
-			c.askers.tell()
-		}
 	default:
 		c.mu.Lock()
 		c.served.Store(false)
@@ -165,8 +162,8 @@ func (e *callEnd) unref() {
 			c.give()
 		}
 
-		c.mu.Unlock()
 		c.askers.tell()
+		c.mu.Unlock()
 	}
 }
 
@@ -310,8 +307,8 @@ func (e *callEnd) ask(w *waiter[received], data []byte, files []Object) error {
 	}
 
 	c.serving.wake(turn{})
-	c.mu.Unlock()
 	c.servers.tell()
+	c.mu.Unlock()
 
 	return nil
 }
@@ -356,8 +353,8 @@ func (e *callEnd) cancel(p *Process) {
 	}
 
 	c.serving.wake(turn{})
-	c.mu.Unlock()
 	c.servers.tell()
+	c.mu.Unlock()
 }
 
 // reply is a serving end's answer to the call it has: the bytes gather
@@ -398,8 +395,8 @@ func (e *callEnd) reply(gather func(small []byte) ([]byte, error), files []Objec
 		c.there.Store(true)
 	}
 
-	c.mu.Unlock()
 	c.askers.tell()
+	c.mu.Unlock()
 
 	return len(data), nil
 }
@@ -528,19 +525,24 @@ func (e *callEnd) poll(events int16) int16 {
 }
 
 func (e *callEnd) subscribe(s *subscription, events int16) {
+	c := e.c
+	c.mu.Lock()
+
 	if e.serves {
-		e.c.servers.add(&s.in)
+		c.servers.add(&s.in)
 	} else {
-		e.c.askers.add(&s.in)
+		c.askers.add(&s.in)
 	}
+
+	c.mu.Unlock()
 }
 
 func (e *callEnd) unsubscribe(s *subscription) {
-	if e.serves {
-		e.c.servers.remove(&s.in)
-	} else {
-		e.c.askers.remove(&s.in)
-	}
+	c := e.c
+	c.mu.Lock()
+	c.servers.remove(&s.in)
+	c.askers.remove(&s.in)
+	c.mu.Unlock()
 }
 
 func (e *callEnd) stat(p *Process, st *syscall.Stat_t) error {

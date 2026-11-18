@@ -502,13 +502,17 @@ func (n *remoteNode) unref() {
 // READY comes; any other is ready whenever asked.
 func (n *remoteNode) subscribe(s *subscription, events int16) {
 	if n.tells {
+		n.mu.Lock()
 		n.watchers.add(&s.in)
+		n.mu.Unlock()
 	}
 }
 
 func (n *remoteNode) unsubscribe(s *subscription) {
 	if n.tells {
+		n.mu.Lock()
 		n.watchers.remove(&s.in)
+		n.mu.Unlock()
 	}
 }
 
@@ -562,7 +566,9 @@ func (n *remoteNode) deliver(pk *packet) {
 			}
 
 			n.ready.Store(int32(events))
+			n.mu.Lock()
 			n.watchers.tell()
+			n.mu.Unlock()
 		}
 	case rOk, rErr:
 		n.mu.Lock()
@@ -610,8 +616,8 @@ func (n *remoteNode) hungUp() {
 		}
 	}
 
-	n.mu.Unlock()
 	n.watchers.tell()
+	n.mu.Unlock()
 }
 
 // connect is a connection of p's to the open file: CONNECT on its

@@ -383,16 +383,16 @@ func (m *mover) put(pp *pipe, b []byte) bool {
 			return err == nil
 		}
 
-		ch.writers.add(&m.sub.out)
+		ch.subscribe(&m.sub.out, true)
 
 		if ch.room() || ch.gone() {
-			ch.writers.remove(&m.sub.out)
+			ch.unsubscribe(&m.sub.out)
 
 			continue
 		}
 
 		<-m.ready
-		ch.writers.remove(&m.sub.out)
+		ch.unsubscribe(&m.sub.out)
 	}
 }
 
@@ -428,13 +428,13 @@ func (m *mover) drain(r *pipeEnd, host int, c *console) {
 		}
 
 		ch := r.pipe.channel()
-		ch.readers.add(&m.sub.in)
+		ch.subscribe(&m.sub.in, false)
 
 		if ch.count() == 0 && !ch.ended.Load() && !c.stop.Load() {
 			<-m.ready
 		}
 
-		ch.readers.remove(&m.sub.in)
+		ch.unsubscribe(&m.sub.in)
 	}
 }
 

@@ -88,18 +88,17 @@ func (s *subscription) init(to waker, id uint64) {
 }
 
 // subscribers are the subscriptions an object wakes for one kind of its
-// changes: a list of their hooks. count is how many there are, for a tell
-// to find none without the lock: who subscribes looks at the object again
-// after, so a change told before its hook was counted is not lost.
+// changes: a list of their hooks, under the object's lock, as all of the
+// object is: who subscribes, who takes a subscription back and who tells
+// holds it. So a tell is in the turn of the lock that made the change,
+// and what it wakes, a process's queue or an epoll set, is locked under
+// the object: neither ever asks an object with its own lock held.
 type subscribers struct {
-	mu    sync.Mutex
 	first *hook
-	count atomic.Int32
 }
 
 // add puts a hook that is in no list in the list.
 func (s *subscribers) add(l *hook) {
-	s.mu.Lock()
 	l.list, l.prev, l.next = s, nil, s.first
 
 	if s.first != nil {
@@ -107,53 +106,37 @@ func (s *subscribers) add(l *hook) {
 	}
 
 	s.first = l
-	s.count.Add(1)
-	s.mu.Unlock()
 }
 
 // remove takes a hook out of the list, when it is there.
 func (s *subscribers) remove(l *hook) {
-	s.mu.Lock()
-
-	if l.list == s {
-		if l.prev != nil {
-			l.prev.next = l.next
-		} else {
-			s.first = l.next
-		}
-
-		if l.next != nil {
-			l.next.prev = l.prev
-		}
-
-		l.list, l.prev, l.next = nil, nil, nil
-		s.count.Add(-1)
+	if l.list != s {
+		return
 	}
 
-	s.mu.Unlock()
+	if l.prev != nil {
+		l.prev.next = l.next
+	} else {
+		s.first = l.next
+	}
+
+	if l.next != nil {
+		l.next.prev = l.prev
+	}
+
+	l.list, l.prev, l.next = nil, nil, nil
 }
 
 // tell wakes every subscription of the list.
 func (s *subscribers) tell() {
-	if s.count.Load() == 0 {
-		return
-	}
-
-	s.mu.Lock()
-
 	for l := s.first; l != nil; l = l.next {
 		l.sub.to.wake(l)
 	}
-
-	s.mu.Unlock()
 }
 
 // takeOver gives the hooks of from to s, a channel's in place of another
-// one's, as the caller keeps both from changing otherwise.
+// one's, with from's object's lock, s's object being no one's yet.
 func (s *subscribers) takeOver(from *subscribers) {
-	from.mu.Lock()
-	s.mu.Lock()
-
 	for l := from.first; l != nil; {
 		next := l.next
 		l.list, l.prev, l.next = s, nil, s.first
@@ -166,9 +149,6 @@ func (s *subscribers) takeOver(from *subscribers) {
 	}
 
 	from.first = nil
-	s.count.Add(from.count.Swap(0))
-	s.mu.Unlock()
-	from.mu.Unlock()
 }
 
 // received is what a receive waits for: a packet, or the end of the data.
@@ -646,15 +626,36 @@ func (c *msgChannel) nudge() {
 	c.mu.Lock()
 	c.taking.wake(received{eof: true})
 	c.looking.wake(turn{})
-	c.mu.Unlock()
 	c.readers.tell()
+	c.mu.Unlock()
 }
 
 func (c *msgChannel) nudgeWriter() {
 	c.mu.Lock()
 	c.putting.wake(turn{})
-	c.mu.Unlock()
 	c.writers.tell()
+	c.mu.Unlock()
+}
+
+// subscribe hooks a subscription to the changes for who reads the
+// channel, or for who writes it; unsubscribe takes a hook out of either.
+func (c *msgChannel) subscribe(l *hook, writes bool) {
+	c.mu.Lock()
+
+	if writes {
+		c.writers.add(l)
+	} else {
+		c.readers.add(l)
+	}
+
+	c.mu.Unlock()
+}
+
+func (c *msgChannel) unsubscribe(l *hook) {
+	c.mu.Lock()
+	c.readers.remove(l)
+	c.writers.remove(l)
+	c.mu.Unlock()
 }
 
 // receive waits for a message, for a receive of p's that found none:
@@ -746,8 +747,8 @@ func (c *msgChannel) put(pk *packet) (full bool, err error) {
 	c.messages = append(c.messages, *pk)
 	c.held.Add(1)
 	c.looking.wake(turn{})
-	c.mu.Unlock()
 	c.readers.tell()
+	c.mu.Unlock()
 
 	return false, nil
 }
@@ -786,13 +787,10 @@ func (c *msgChannel) take() (pk packet, eof, ok, freed bool) {
 
 	if freed {
 		c.putting.wake(turn{})
+		c.writers.tell()
 	}
 
 	c.mu.Unlock()
-
-	if freed {
-		c.writers.tell()
-	}
 
 	return pk, false, true, freed
 }
@@ -803,8 +801,10 @@ func (c *msgChannel) take() (pk packet, eof, ok, freed bool) {
 func (c *msgChannel) renew() *msgChannel {
 	n := newMsgChannel(int(c.limit.Load()))
 	c.retired.Store(true)
+	c.mu.Lock()
 	n.readers.takeOver(&c.readers)
 	n.writers.takeOver(&c.writers)
+	c.mu.Unlock()
 
 	if !c.gone() {
 		n.messages = c.takeAll()

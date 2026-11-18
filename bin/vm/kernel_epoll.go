@@ -186,11 +186,15 @@ func (ep *epoll) poll(events int16) int16 {
 // subscribe is to the changes of the members: a wait for the set, or a
 // set the set is a member of.
 func (ep *epoll) subscribe(s *subscription, events int16) {
+	ep.mu.Lock()
 	ep.subs.add(&s.in)
+	ep.mu.Unlock()
 }
 
 func (ep *epoll) unsubscribe(s *subscription) {
+	ep.mu.Lock()
 	ep.subs.remove(&s.in)
+	ep.mu.Unlock()
 }
 
 // wake marks the member of a subscription, a change of its object, and
@@ -202,8 +206,8 @@ func (ep *epoll) wake(l *hook) {
 		ep.mark(m)
 	}
 
-	ep.mu.Unlock()
 	ep.subs.tell()
+	ep.mu.Unlock()
 }
 
 // mark queues a member for the next wait, with the lock, unless it is

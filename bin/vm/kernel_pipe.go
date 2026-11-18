@@ -259,11 +259,11 @@ func (e *pipeEnd) subscribe(s *subscription, events int16) {
 	defer pp.mu.Unlock()
 
 	if in {
-		pp.ch.readers.add(&s.in)
+		pp.ch.subscribe(&s.in, false)
 	}
 
 	if out {
-		pp.ch.writers.add(&s.out)
+		pp.ch.subscribe(&s.out, true)
 	}
 }
 
@@ -271,8 +271,8 @@ func (e *pipeEnd) unsubscribe(s *subscription) {
 	pp := e.pipe
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
-	pp.ch.readers.remove(&s.in)
-	pp.ch.writers.remove(&s.out)
+	pp.ch.unsubscribe(&s.in)
+	pp.ch.unsubscribe(&s.out)
 }
 
 // stat is a FIFO's: the ends of a pipe share an inode of the kernel's, the

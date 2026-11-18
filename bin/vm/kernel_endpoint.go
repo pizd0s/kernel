@@ -236,17 +236,17 @@ func (e *pairEnd) subscribe(s *subscription, events int16) {
 	in, out := ioSides(events)
 
 	if in {
-		e.from.readers.add(&s.in)
+		e.from.subscribe(&s.in, false)
 	}
 
 	if out {
-		e.to.writers.add(&s.out)
+		e.to.subscribe(&s.out, true)
 	}
 }
 
 func (e *pairEnd) unsubscribe(s *subscription) {
-	e.from.readers.remove(&s.in)
-	e.to.writers.remove(&s.out)
+	e.from.unsubscribe(&s.in)
+	e.to.unsubscribe(&s.out)
 }
 
 // ioSides tells whether events ask for input, for output; both when they
