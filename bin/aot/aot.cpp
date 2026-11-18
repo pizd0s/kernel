@@ -4458,8 +4458,9 @@ namespace {
         Int initFn{};
         i32 dataInitTable = -1;
         // importSyms are the imported functions' symbols by function index,
-        // importIntrinsics the memory functions among them, importCode
-        // those with code, an adapter, that a pointer can reach.
+        // importIntrinsics those of them the code compiles at their direct
+        // calls, importCode those with code, an adapter, that a pointer
+        // can reach.
         Slice<String> importSyms{};
         Slice<Int> importIntrinsics{};
         Slice<bool> importCode{};
@@ -5064,9 +5065,12 @@ static constexpr Int calleeGo = 3;
 
 static constexpr Int calleeStr = 4;
 
-// The imports lib/c's memory and string functions call, __kernel_memcpy
-// and the like, which the code compiles itself: it checks their ranges
-// and calls lib/str's.
+// The kernel's functions of libc the code compiles itself at a direct
+// call of one, memcpy and the like: it does there what the kernel's
+// function does, the ranges and strings checked, by lib/str's functions
+// or a few instructions of its own. The import stays the kernel's
+// function: a call through a pointer to it calls that, and so does a
+// direct call the code has no better way for.
 static constexpr Int intrinsicNone = 0;
 
 static constexpr Int intrinsicMemcpy = 1;
@@ -6000,7 +6004,7 @@ static void lowererCall(Lowerer* l, i32 v, Int index, Span<const i32> args);
 
 static void lowererGoCall(Lowerer* l, i32 v, Slice<VReg> regs, Slice<ValType> params, Slice<ValType> results, String sym);
 
-static void lowererIntrinsic(Lowerer* l, i32 v, Int intrinsic, Span<const i32> args);
+static bool lowererIntrinsic(Lowerer* l, i32 v, Int intrinsic, Span<const i32> args);
 
 static void lowererStrCall(Lowerer* l, String sym, Span<const VReg> args);
 
@@ -6526,6 +6530,8 @@ static Slice<VReg> resultRegs(Slice<ValType> results);
 static bool returnsTwice(String name);
 
 static Int intrinsicOf(Import imp, FuncType* t);
+
+static bool intrinsicTyped(FuncType* t, String text);
 
 template <typename Data>
 static void reverseRange_func(Data data, Int a, Int b);
@@ -15162,8 +15168,7 @@ static void lowererAlu(Lowerer* l, i32 v, Op op, i32 a, i32 b, u8 size) {
 // frame.
 static void lowererCall(Lowerer* l, i32 v, Int index, Span<const i32> args) {
     FuncType* t = moduleFuncType(l->m, convert<u32>(index));
-    if (index < l->m->importedFuncs && l->oc->importIntrinsics[index] != intrinsicNone) {
-        lowererIntrinsic(l, v, l->oc->importIntrinsics[index], args);
+    if (index < l->m->importedFuncs && l->oc->importIntrinsics[index] != intrinsicNone && lowererIntrinsic(l, v, l->oc->importIntrinsics[index], args)) {
         return;
     }
     if (index < l->m->importedFuncs && !l->m->funcs[index].returnsTwice) {
@@ -16671,9 +16676,6 @@ static void lowererLowerValue(Lowerer* l, i32 v) {
         case OpRefFunc: {
             Int fn = convert<i64>(val->aux);
             if (fn < l->m->importedFuncs && !l->oc->importCode[fn]) {
-                if (l->oc->importIntrinsics[fn] != intrinsicNone) {
-                    compilerError(String("unsupported: the address of an import compiled at its calls"));
-                }
                 compilerError(String("ref.func of a function no element, export or global names"));
             }
             MInst in = inst(mLea);
@@ -17282,63 +17284,70 @@ static void lowererMemFill(Lowerer* l, Span<const i32> args) {
     lowererStrCall(l, symMemset, Span<const VReg>({dst, val, n}));
 }
 
-// intrinsic compiles a call of one of lib/c's functions lib/str has:
-// memcpy's, memmove's and memset's result is the destination.
-static void lowererIntrinsic(Lowerer* l, i32 v, Int intrinsic, Span<const i32> args) {
+// intrinsic compiles a direct call of one of the kernel's functions the
+// code has its own way for, and says so: false is a call it leaves the
+// kernel's. memcpy's, memmove's and memset's result is the destination.
+static bool lowererIntrinsic(Lowerer* l, i32 v, Int intrinsic, Span<const i32> args) {
     switch (intrinsic) {
         case intrinsicMemcmp: {
             lowererMemCompare(l, v, args);
-            return;
+            return true;
         }
         case intrinsicMemchr: {
             lowererMemFind(l, v, args);
-            return;
+            return true;
         }
         case intrinsicStrlen: {
             VReg n = lowererStrLength(l, lowererUse(l, args[0]));
             if (v >= 0 && l->uses[v] > 0) {
                 lowererMov(l, lowererDef(l, v), n, 4);
             }
-            return;
+            return true;
         }
         case intrinsicStrcpy:
         case intrinsicStrcat: {
             lowererStrCopy(l, v, args, intrinsic == intrinsicStrcat);
-            return;
+            return true;
         }
         case intrinsicStrcmp: {
             lowererStrPair(l, v, args, symStrcmp);
-            return;
+            return true;
         }
         case intrinsicStrspn: {
             lowererStrPair(l, v, args, symStrspn);
-            return;
+            return true;
         }
         case intrinsicStrcspn: {
             lowererStrPair(l, v, args, symStrcspn);
-            return;
+            return true;
         }
         case intrinsicStrnlen: {
             lowererStrBound(l, v, args);
-            return;
+            return true;
         }
         case intrinsicStrstr: {
             lowererStrFind(l, v, args);
-            return;
+            return true;
         }
         case intrinsicMemmem: {
             lowererMemSearch(l, v, args);
-            return;
+            return true;
+        }
+        case intrinsicMemcpy:
+        case intrinsicMemmove:
+        case intrinsicMemset: {
+            if (intrinsic == intrinsicMemset) {
+                lowererMemFill(l, args);
+            } else {
+                lowererMemCopy(l, args, intrinsic == intrinsicMemcpy ? symMemcpy : symMemmove);
+            }
+            if (v >= 0 && l->uses[v] > 0) {
+                lowererMov(l, lowererDef(l, v), lowererUse(l, args[0]), 4);
+            }
+            return true;
         }
     }
-    if (intrinsic == intrinsicMemset) {
-        lowererMemFill(l, args);
-    } else {
-        lowererMemCopy(l, args, intrinsic == intrinsicMemcpy ? symMemcpy : symMemmove);
-    }
-    if (v >= 0 && l->uses[v] > 0) {
-        lowererMov(l, lowererDef(l, v), lowererUse(l, args[0]), 4);
-    }
+    return false;
 }
 
 // strCall calls the function of lib/str sym names with up to four
@@ -19587,8 +19596,9 @@ static Amem objCodeGotMem(ObjCode* oc, String sym) {
 // as their callers keep no token.
 // importAdapters makes the code of the imports a pointer can reach, the
 // functions the module names: an adapter that calls the Go function.
-// The others are only called, so they have none; an import the code
-// compiles at its calls must not be named.
+// The others are only called, so they have none. An import the code
+// compiles at its direct calls is the kernel's function to a pointer as
+// any other is.
 static void objCodeImportAdapters(ObjCode* oc) {
     Module* m = oc->m;
     Slice<bool> named = objCodeNamedFunctions(oc);
@@ -19602,12 +19612,6 @@ static void objCodeImportAdapters(ObjCode* oc) {
         String sym = importSymbol(imp.module, imp.name, t);
         oc->importSyms[imp.index] = sym;
         oc->importIntrinsics[imp.index] = intrinsicOf(imp, t);
-        if (oc->importIntrinsics[imp.index] != intrinsicNone) {
-            if (named[imp.index]) {
-                compilerError(String("unsupported: the address of an import compiled at its calls"));
-            }
-            continue;
-        }
         String name = String("w2o.adapter.") + symbolPart(imp.module) + String(".") + symbolPart(imp.name);
         if (named[imp.index]) {
             oc->importCode[imp.index] = true;
@@ -24659,31 +24663,62 @@ static Slice<VReg> resultRegs(Slice<ValType> results) {
     return regs;
 }
 
-// intrinsicOf tells the imports lib/c's memory and string functions call,
-// __kernel_memcpy and the like (string.h), by module, name and type.
+// intrinsicOf tells the kernel's functions the code compiles at their
+// direct calls, by module, name and type: a type of i for a 32-bit
+// integer and l for a 64-bit one, the parameters, then > and the result.
 static Int intrinsicOf(Import imp, FuncType* t) {
-    if (imp.module != String("kernel") || length(t->results) != 1 || t->results[0] != I32) {
+    if (imp.module != String("kernel")) {
         return intrinsicNone;
-    }
-    for (Int i = 0; i < length(t->params); ++i) {
-        if (t->params[i] != I32) {
-            return intrinsicNone;
-        }
     }
 
     struct Known {
         String name;
-        Int params;
+        String type;
         Int intrinsic;
     };
 
-    const Known known[] = {{String("__kernel_memcpy"), 3, intrinsicMemcpy}, {String("__kernel_memmove"), 3, intrinsicMemmove}, {String("__kernel_memset"), 3, intrinsicMemset}, {String("__kernel_memcmp"), 3, intrinsicMemcmp}, {String("__kernel_memchr"), 3, intrinsicMemchr}, {String("__kernel_strlen"), 1, intrinsicStrlen}, {String("__kernel_strcpy"), 2, intrinsicStrcpy}, {String("__kernel_strcat"), 2, intrinsicStrcat}, {String("__kernel_strcmp"), 2, intrinsicStrcmp}, {String("__kernel_strspn"), 2, intrinsicStrspn}, {String("__kernel_strcspn"), 2, intrinsicStrcspn}, {String("__kernel_strnlen"), 2, intrinsicStrnlen}, {String("__kernel_strstr"), 2, intrinsicStrstr}, {String("__kernel_memmem"), 4, intrinsicMemmem}};
+    const Known known[] = {
+        {String("memcpy"), String("iii>i"), intrinsicMemcpy},
+        {String("memmove"), String("iii>i"), intrinsicMemmove},
+        {String("memset"), String("iii>i"), intrinsicMemset},
+        {String("memcmp"), String("iii>i"), intrinsicMemcmp},
+        {String("memchr"), String("iii>i"), intrinsicMemchr},
+        {String("strlen"), String("i>i"), intrinsicStrlen},
+        {String("strcpy"), String("ii>i"), intrinsicStrcpy},
+        {String("strcat"), String("ii>i"), intrinsicStrcat},
+        {String("strcmp"), String("ii>i"), intrinsicStrcmp},
+        {String("strspn"), String("ii>i"), intrinsicStrspn},
+        {String("strcspn"), String("ii>i"), intrinsicStrcspn},
+        {String("strnlen"), String("ii>i"), intrinsicStrnlen},
+        {String("strstr"), String("ii>i"), intrinsicStrstr},
+        {String("memmem"), String("iiii>i"), intrinsicMemmem},
+    };
     for (const Known& k : known) {
-        if (imp.name == k.name && length(t->params) == k.params) {
+        if (imp.name == k.name && intrinsicTyped(t, k.type)) {
             return k.intrinsic;
         }
     }
     return intrinsicNone;
+}
+
+// intrinsicTyped tells whether a function's type is the one text spells.
+static bool intrinsicTyped(FuncType* t, String text) {
+    Int at = 0;
+    for (Int i = 0; i < length(t->params); ++i, ++at) {
+        if (at >= length(text) || text[at] != (t->params[i] == I32 ? 'i' : t->params[i] == I64 ? 'l' : '?')) {
+            return false;
+        }
+    }
+    if (at >= length(text) || text[at] != '>') {
+        return false;
+    }
+    ++at;
+    for (Int i = 0; i < length(t->results); ++i, ++at) {
+        if (at >= length(text) || text[at] != (t->results[i] == I32 ? 'i' : t->results[i] == I64 ? 'l' : '?')) {
+            return false;
+        }
+    }
+    return at == length(text);
 }
 
 // returnsTwice tells the imports that return twice by their names, as C

@@ -172,6 +172,45 @@ func (k *Kernel) functionTable() map[string]any {
 		"strsep":                 libcStrsep,
 		"strverscmp":             libcStrverscmp,
 		"abs":                    libcAbs,
+		"isalnum":                libcIsalnum,
+		"isalpha":                libcIsalpha,
+		"isascii":                libcIsascii,
+		"isblank":                libcIsblank,
+		"iscntrl":                libcIscntrl,
+		"isdigit":                libcIsdigit,
+		"isgraph":                libcIsgraph,
+		"islower":                libcIslower,
+		"isprint":                libcIsprint,
+		"ispunct":                libcIspunct,
+		"isspace":                libcIsspace,
+		"isupper":                libcIsupper,
+		"isxdigit":               libcIsxdigit,
+		"tolower":                libcTolower,
+		"toupper":                libcToupper,
+		"toascii":                libcToascii,
+		"memmem":                 libcMemmem,
+		"mempcpy":                libcMempcpy,
+		"strnlen":                libcStrnlen,
+		"strncat":                libcStrncat,
+		"strlcpy":                libcStrlcpy,
+		"strlcat":                libcStrlcat,
+		"strstr":                 libcStrstr,
+		"strpbrk":                libcStrpbrk,
+		"explicit_bzero":         libcExplicit_bzero,
+		"bcopy":                  libcBcopy,
+		"bzero":                  libcBzero,
+		"memcpy":                 libcMemcpy,
+		"memmove":                libcMemmove,
+		"memset":                 libcMemset,
+		"memcmp":                 libcMemcmp,
+		"bcmp":                   libcBcmp,
+		"memchr":                 libcMemchr,
+		"strlen":                 libcStrlen,
+		"strcpy":                 libcStrcpy,
+		"strcat":                 libcStrcat,
+		"strcmp":                 libcStrcmp,
+		"strspn":                 libcStrspn,
+		"strcspn":                libcStrcspn,
 		"strerror":               libcStrerror,
 		"strsignal":              libcStrsignal,
 		"dirname":                libcDirname,
@@ -2841,4 +2880,160 @@ func libcEpoll_pwait(ctx uintptr, epfd, at, atSize, max, timeout, mask, maskSize
 	p.sized("epoll_pwait", atSize, sizeofEpollEvent, maskSize, sizeofSigset)
 
 	return p.libcEpoll_pwait(epfd, at, max, timeout, mask)
+}
+
+func libcIsalnum(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcIsalnum(c)
+}
+
+func libcIsalpha(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcIsalpha(c)
+}
+
+func libcIsascii(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcIsascii(c)
+}
+
+func libcIsblank(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcIsblank(c)
+}
+
+func libcIscntrl(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcIscntrl(c)
+}
+
+func libcIsdigit(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcIsdigit(c)
+}
+
+func libcIsgraph(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcIsgraph(c)
+}
+
+func libcIslower(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcIslower(c)
+}
+
+func libcIsprint(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcIsprint(c)
+}
+
+func libcIspunct(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcIspunct(c)
+}
+
+func libcIsspace(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcIsspace(c)
+}
+
+func libcIsupper(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcIsupper(c)
+}
+
+func libcIsxdigit(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcIsxdigit(c)
+}
+
+func libcTolower(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcTolower(c)
+}
+
+func libcToupper(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcToupper(c)
+}
+
+func libcToascii(ctx uintptr, c uint32) uint32 {
+	return proc(ctx).libcToascii(c)
+}
+
+func libcMemmem(ctx uintptr, h, hn, n, nn uint32) uint32 {
+	return proc(ctx).libcMemmem(h, hn, n, nn)
+}
+
+func libcMempcpy(ctx uintptr, d, s, n uint32) uint32 {
+	return proc(ctx).libcMempcpy(d, s, n)
+}
+
+func libcStrnlen(ctx uintptr, s, n uint32) uint32 {
+	return proc(ctx).libcStrnlen(s, n)
+}
+
+func libcStrncat(ctx uintptr, d, s, n uint32) uint32 {
+	return proc(ctx).libcStrncat(d, s, n)
+}
+
+func libcStrlcpy(ctx uintptr, d, s, n uint32) uint32 {
+	return proc(ctx).libcStrlcpy(d, s, n)
+}
+
+func libcStrlcat(ctx uintptr, d, s, n uint32) uint32 {
+	return proc(ctx).libcStrlcat(d, s, n)
+}
+
+func libcStrstr(ctx uintptr, h, n uint32) uint32 {
+	return proc(ctx).libcStrstr(h, n)
+}
+
+func libcStrpbrk(ctx uintptr, s, accept uint32) uint32 {
+	return proc(ctx).libcStrpbrk(s, accept)
+}
+
+func libcExplicit_bzero(ctx uintptr, d, n uint32) {
+	proc(ctx).libcExplicit_bzero(d, n)
+}
+
+func libcBcopy(ctx uintptr, s, d, n uint32) {
+	proc(ctx).libcBcopy(s, d, n)
+}
+
+func libcBzero(ctx uintptr, d, n uint32) {
+	proc(ctx).libcBzero(d, n)
+}
+
+func libcMemcpy(ctx uintptr, d, s, n uint32) uint32 {
+	return proc(ctx).libcMemcpy(d, s, n)
+}
+
+func libcMemmove(ctx uintptr, d, s, n uint32) uint32 {
+	return proc(ctx).libcMemmove(d, s, n)
+}
+
+func libcMemset(ctx uintptr, d, c, n uint32) uint32 {
+	return proc(ctx).libcMemset(d, c, n)
+}
+
+func libcMemcmp(ctx uintptr, a, b, n uint32) uint32 {
+	return proc(ctx).libcMemcmp(a, b, n)
+}
+
+func libcBcmp(ctx uintptr, a, b, n uint32) uint32 {
+	return proc(ctx).libcBcmp(a, b, n)
+}
+
+func libcMemchr(ctx uintptr, s, c, n uint32) uint32 {
+	return proc(ctx).libcMemchr(s, c, n)
+}
+
+func libcStrlen(ctx uintptr, s uint32) uint32 {
+	return proc(ctx).libcStrlen(s)
+}
+
+func libcStrcpy(ctx uintptr, d, s uint32) uint32 {
+	return proc(ctx).libcStrcpy(d, s)
+}
+
+func libcStrcat(ctx uintptr, d, s uint32) uint32 {
+	return proc(ctx).libcStrcat(d, s)
+}
+
+func libcStrcmp(ctx uintptr, a, b uint32) uint32 {
+	return proc(ctx).libcStrcmp(a, b)
+}
+
+func libcStrspn(ctx uintptr, s, set uint32) uint32 {
+	return proc(ctx).libcStrspn(s, set)
+}
+
+func libcStrcspn(ctx uintptr, s, set uint32) uint32 {
+	return proc(ctx).libcStrcspn(s, set)
 }

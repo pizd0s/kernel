@@ -30,7 +30,7 @@ def section(kind, body):
 
 
 def program(code, *, elements=None, data=None, exports=None, import_name=None, addressable=False, global_import=False, globals=None, start=None, memory_import=False):
-    types = b"\2\x60\0\0" + (b"\x60\1\x7f\1\x7f" if import_name == "__kernel_strlen" else b"\x60\0\1\x7f")
+    types = b"\2\x60\0\0" + (b"\x60\1\x7f\1\x7f" if import_name == "strlen" else b"\x60\0\1\x7f")
     module = b"\0asm\1\0\0\0" + section(1, types)
     if import_name:
         module += section(2, b"\1" + text("kernel") + text(import_name) + b"\0\1")
@@ -86,8 +86,7 @@ def main():
              ("bad-export-kind", program(b"", exports=text("_start") + b"\4\0"), "malformed export kind"),
              ("duplicate-export", program(b"", exports=text("alias") + b"\0\0", addressable=True), "duplicate export name"),
              ("undeclared-import-reference", program(b"\x41\0\xd2\0\x26\0", import_name="getpid"), "ref.func of a function no element, export or global names"),
-             ("undeclared-intrinsic-reference", program(b"\x41\0\xd2\0\x26\0", import_name="__kernel_strlen"), "unsupported: the address of an import compiled at its calls"),
-             ("intrinsic-import-address", program(b"\xd2\0\x1a", import_name="__kernel_strlen", addressable=True), "unsupported: the address of an import compiled at its calls")]
+             ("undeclared-compiled-import-reference", program(b"\x41\0\xd2\0\x26\0", import_name="strlen"), "ref.func of a function no element, export or global names")]
     env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-compiler-rejections-") as directory:
         work = Path(directory)
@@ -99,7 +98,7 @@ def main():
             env = dict(env, W2X_MEMORY_TAIL="optimized" if padded else "strict")
             source.write_bytes(data)
             reference = subprocess.run([wazero, "-compile", str(source)], capture_output=True, timeout=30)
-            if label not in ("intrinsic-import-address", "computed-element-offset", "low-data", "low-stack", "imported-memory"):
+            if label not in ("computed-element-offset", "low-data", "low-stack", "imported-memory"):
                 assert reference.returncode != 0, (label, reference)
             else:
                 assert reference.returncode == 0, (label, reference)

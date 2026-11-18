@@ -397,3 +397,57 @@ func (p *Process) libcSetlocale(cat, name uint32) uint32 {
 func (p *Process) libcLocaleconv() uint32 {
 	return p.localeconv()
 }
+
+func (p *Process) libcIsalnum(c uint32) uint32 {
+	return ctype("alnum", c)
+}
+
+func (p *Process) libcIsalpha(c uint32) uint32 {
+	return ctype("alpha", c)
+}
+
+func (p *Process) libcIsascii(c uint32) uint32 {
+	return bit(c < 0x80)
+}
+
+func (p *Process) libcIsblank(c uint32) uint32 {
+	return ctype("blank", c)
+}
+
+func (p *Process) libcIscntrl(c uint32) uint32 {
+	return ctype("cntrl", c)
+}
+
+func (p *Process) libcIsgraph(c uint32) uint32 {
+	return ctype("graph", c)
+}
+
+func (p *Process) libcIslower(c uint32) uint32 {
+	return ctype("lower", c)
+}
+
+func (p *Process) libcIsprint(c uint32) uint32 {
+	return ctype("print", c)
+}
+
+func (p *Process) libcIspunct(c uint32) uint32 {
+	return ctype("punct", c)
+}
+
+func (p *Process) libcIsupper(c uint32) uint32 {
+	return ctype("upper", c)
+}
+
+func (p *Process) libcIsxdigit(c uint32) uint32 {
+	return ctype("xdigit", c)
+}
+
+func (p *Process) libcToascii(c uint32) uint32 {
+	return c & 0x7f
+}
+
+// ctype tells a class of the C locale's ctype functions: only ASCII is in
+// one.
+func ctype(class string, c uint32) uint32 {
+	return bit(c < 0x80 && inClass(class, byte(c)))
+}

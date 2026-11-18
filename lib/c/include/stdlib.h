@@ -126,4 +126,21 @@ __INLINE void free(void* __a) {
     __kernel_free(__a);
 }
 
+/* The kernel's too, which the compiler may compile at a call of one. */
+int __kernel_abs(int) __KERNEL(abs);
+long __kernel_labs(long) __KERNEL(labs);
+long long __kernel_llabs(long long) __KERNEL(llabs);
+
+__INLINE int abs(int __a) {
+    return __kernel_abs(__a);
+}
+
+__INLINE long labs(long __a) {
+    return __kernel_labs(__a);
+}
+
+__INLINE long long llabs(long long __a) {
+    return __kernel_llabs(__a);
+}
+
 __END_DECLS

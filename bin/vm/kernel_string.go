@@ -865,3 +865,190 @@ func (p *Process) libcStpncpy(d, s, n uint32) uint32 {
 func (p *Process) libcStrndup(s, n uint32) uint32 {
 	return p.strndup(s, n)
 }
+
+func (p *Process) libcIsdigit(c uint32) uint32 {
+	if c >= '0' && c <= '9' {
+		return 1
+	}
+
+	return 0
+}
+
+func (p *Process) libcIsspace(c uint32) uint32 {
+	switch c {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return 1
+	}
+
+	return 0
+}
+
+func (p *Process) libcTolower(c uint32) uint32 {
+	if c >= 'A' && c <= 'Z' {
+		return c + ('a' - 'A')
+	}
+
+	return c
+}
+
+func (p *Process) libcToupper(c uint32) uint32 {
+	if c >= 'a' && c <= 'z' {
+		return c - ('a' - 'A')
+	}
+
+	return c
+}
+
+func (p *Process) libcMemmem(h, hn, n, nn uint32) uint32 {
+	if i := bytes.Index(p.span(h, hn), p.span(n, nn)); i >= 0 {
+		return h + uint32(i)
+	}
+
+	return 0
+}
+
+func (p *Process) libcMempcpy(d, s, n uint32) uint32 {
+	copy(p.span(d, n), p.span(s, n))
+
+	return d + n
+}
+
+func (p *Process) libcStrnlen(s, n uint32) uint32 {
+	return p.strnlen(s, n)
+}
+
+func (p *Process) libcStrncat(d, s, n uint32) uint32 {
+	end := d + uint32(len(p.cstr(d)))
+	l := p.strnlen(s, n)
+	copy(p.span(end, l), p.span(s, l))
+	p.span(end+l, 1)[0] = 0
+
+	return d
+}
+
+func (p *Process) libcStrlcpy(d, s, n uint32) uint32 {
+	src := p.cstr(s)
+
+	if n > 0 {
+		k := min(uint32(len(src)), n-1)
+		copy(p.span(d, k), src[:k])
+		p.span(d+k, 1)[0] = 0
+	}
+
+	return uint32(len(src))
+}
+
+func (p *Process) libcStrlcat(d, s, n uint32) uint32 {
+	l := p.strnlen(d, n)
+	src := p.cstr(s)
+
+	if l == n {
+		return l + uint32(len(src))
+	}
+
+	k := min(uint32(len(src)), n-l-1)
+	copy(p.span(d+l, k), src[:k])
+	p.span(d+l+k, 1)[0] = 0
+
+	return l + uint32(len(src))
+}
+
+func (p *Process) libcStrstr(h, n uint32) uint32 {
+	return p.strstr(h, n, false)
+}
+
+func (p *Process) libcStrpbrk(s, accept uint32) uint32 {
+	n := p.spanSet(s, accept, true)
+
+	if p.u8(s+n) == 0 {
+		return 0
+	}
+
+	return s + n
+}
+
+func (p *Process) libcExplicit_bzero(d, n uint32) {
+	clear(p.span(d, n))
+}
+
+func (p *Process) libcBcopy(s, d, n uint32) {
+	copy(p.span(d, n), p.span(s, n))
+}
+
+func (p *Process) libcBzero(d, n uint32) {
+	clear(p.span(d, n))
+}
+
+// The memory and string functions lib/str has. The code a module
+// compiles to calls lib/str's at a direct call of one, its ranges and
+// strings checked there (bin/aot); these are the kernel's own, which a
+// call through a pointer to the import reaches, and what that code must
+// do the same as: a range past the memory's end traps, a comparison's
+// result is -1, 0 or 1, memchr looks no further than the memory has.
+func (p *Process) libcMemcpy(d, s, n uint32) uint32 {
+	copy(p.span(d, n), p.span(s, n))
+
+	return d
+}
+
+func (p *Process) libcMemmove(d, s, n uint32) uint32 {
+	copy(p.span(d, n), p.span(s, n))
+
+	return d
+}
+
+func (p *Process) libcMemset(d, c, n uint32) uint32 {
+	b := p.span(d, n)
+
+	for i := range b {
+		b[i] = byte(c)
+	}
+
+	return d
+}
+
+func (p *Process) libcMemcmp(a, b, n uint32) uint32 {
+	return uint32(int32(bytes.Compare(p.span(a, n), p.span(b, n))))
+}
+
+func (p *Process) libcBcmp(a, b, n uint32) uint32 {
+	return p.libcMemcmp(a, b, n)
+}
+
+func (p *Process) libcMemchr(s, c, n uint32) uint32 {
+	at, found := p.search(s, n, byte(c))
+
+	if !found {
+		return 0
+	}
+
+	return at
+}
+
+func (p *Process) libcStrlen(s uint32) uint32 {
+	return uint32(len(p.cstr(s)))
+}
+
+func (p *Process) libcStrcpy(d, s uint32) uint32 {
+	p.strcpy(d, s)
+
+	return d
+}
+
+func (p *Process) libcStrcat(d, s uint32) uint32 {
+	p.strcpy(d+uint32(len(p.cstr(d))), s)
+
+	return d
+}
+
+func (p *Process) libcStrcmp(a, b uint32) uint32 {
+	return uint32(int32(bytes.Compare(p.cstr(a), p.cstr(b))))
+}
+
+func (p *Process) libcStrspn(s, set uint32) uint32 {
+	return p.spanSet(s, set, false)
+}
+
+func (p *Process) libcStrcspn(s, set uint32) uint32 {
+	return p.spanSet(s, set, true)
+}
