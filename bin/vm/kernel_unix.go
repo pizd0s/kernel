@@ -294,19 +294,34 @@ func (s *unixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
 	}
 
 	for {
-		if e := l.pop(); e != nil {
+		e := l.pop()
+
+		if e == nil && !l.listens() {
+			return nil, nil, syscall.EINVAL
+		}
+
+		if e == nil && s.nonblock.Load() {
+			return nil, nil, syscall.EAGAIN
+		}
+
+		if e == nil {
+			// The connection that comes is given to the accept that waits.
+			pk, given, _, err := l.conns.receive(p, func() bool { return !l.listens() }, time.Time{}, restarts)
+
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if given && len(pk.files) > 0 {
+				e = pk.files[0].asPair()
+			}
+		}
+
+		if e != nil {
 			e.nonblock.Store(flags&sockNonblock != 0)
 			e.options.copyOptions(&s.options)
 
 			return e, unixAddress(nil), nil
-		}
-
-		if s.nonblock.Load() {
-			return nil, nil, syscall.EAGAIN
-		}
-
-		if _, err := p.waitObject(s, pollIn, -1, true); err != nil {
-			return nil, nil, err
 		}
 	}
 }
@@ -381,15 +396,10 @@ func (p *Process) connectUnix(v Dir, path string, kind int, nonblock bool, to *a
 		}
 
 		if !refused && !nonblock {
-			timeout := -1
+			end, how := until(to)
+			var timedOut bool
 
-			if ns := to.Load(); ns > 0 {
-				timeout = waitMs(time.Duration(ns))
-			}
-
-			var ready int
-
-			if ready, err = p.waitObject(l, pollOut, timeout, timeout < 0); err == nil && ready > 0 {
+			if timedOut, err = l.conns.writable(p, func() bool { return !l.listens() }, end, how); err == nil && !timedOut {
 				continue
 			} else if err == nil {
 				err = syscall.EAGAIN

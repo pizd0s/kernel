@@ -615,7 +615,7 @@ func (e *callEnd) called(p *Process, pk *packet, peek, wait bool) (ok, eof bool,
 		p.turns.put(w)
 	}()
 
-	_, err = p.await(&w.done, time.Time{}, true)
+	_, err = p.await(&w.done, time.Time{}, restarts)
 
 	return false, false, err
 }
@@ -642,7 +642,7 @@ func (e *callEnd) answered(p *Process, pk *packet, peek, wait bool) (ok, eof boo
 
 	defer e.leave(p, w)
 
-	if _, err := p.await(&w.done, time.Time{}, true); err != nil && e.forget(w) {
+	if _, err := p.await(&w.done, time.Time{}, restarts); err != nil && e.forget(w) {
 		return false, false, err
 	}
 

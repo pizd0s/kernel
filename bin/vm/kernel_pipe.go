@@ -17,9 +17,10 @@ import (
 // as several, which POSIX allows of a larger write. The pipe holds
 // queueMax packets: a capacity in writes, where POSIX asks only that an
 // empty pipe take PIPE_BUF. The last writer's close ends the data, the
-// last reader's makes a write EPIPE and SIGPIPE. A blocking end waits as
-// every file of the kernel does: subscribed to the pipe's channel, which
-// what fills it wakes for the reader, what drains it for the writer.
+// last reader's makes a write EPIPE and SIGPIPE. A blocking end waits at
+// the pipe's channel for its turn to look again (kernel_queue.go): a
+// read's comes with what fills the channel, a write's with what drains
+// it.
 //
 // The pipe of a FIFO (kernel_fifo.go) has a name, and ends join it as the
 // FIFO is opened: a reader that joins after the readers have gone, or a
@@ -411,7 +412,9 @@ func (e *pipeEnd) read(p *Process, b []byte, mode ioMode) (int, error) {
 			return 0, syscall.EAGAIN
 		}
 
-		if _, err := p.waitObject(e, pollIn, -1, true); err != nil {
+		ch := pp.channel()
+
+		if _, err := ch.readable(p, func() bool { return ch.ended.Load() }, time.Time{}, restarts); err != nil {
 			return 0, err
 		}
 	}
@@ -474,7 +477,7 @@ func (e *pipeEnd) write(p *Process, b []byte, mode ioMode) (int, error) {
 			return 0, syscall.EAGAIN
 		}
 
-		if _, err := p.waitObject(e, pollOut, -1, true); err != nil {
+		if _, err := pp.channel().writable(p, func() bool { return false }, time.Time{}, restarts); err != nil {
 			if total > 0 {
 				return total, nil
 			}

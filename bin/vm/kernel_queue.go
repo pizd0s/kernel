@@ -493,29 +493,95 @@ func (p *Process) wait(end time.Time, done func(e *event) (bool, error)) (timedO
 	}
 }
 
+// How a wait for an answer takes a signal the call took, in this wait or
+// in one before it: it waits on, as a call of the kernel's to a server
+// does (waitsOn); it ends with EINTR unless the handlers all asked to
+// restart calls (restarts); or it ends with EINTR whatever they asked, as
+// a wait with a timeout does (interrupts).
+type signalled uint8
+
+const (
+	waitsOn signalled = iota
+	restarts
+	interrupts
+)
+
 // await waits until a waiter of the process's has its answer, done, or the
-// deadline, end, zero for none: timedOut then. A signal the call took
-// interrupts it, in this wait or in one before it: then the error is
-// EINTR, unless its handlers all asked to restart calls and restart is
-// set. The waiter is at its object still after either, for the caller to
-// take back.
-func (p *Process) await(done *atomic.Bool, end time.Time, restart bool) (timedOut bool, err error) {
+// deadline, end, zero for none: timedOut then; a signal ends it as how
+// says. The waiter is at its object still after either, for the caller
+// to take back.
+func (p *Process) await(done *atomic.Bool, end time.Time, how signalled) (timedOut bool, err error) {
 	return p.wait(end, func(*event) (bool, error) {
 		if done.Load() {
 			return true, nil
 		}
 
-		return p.interrupts(restart), syscall.EINTR
+		if how == waitsOn {
+			return false, nil
+		}
+
+		return p.interrupts(how == restarts), syscall.EINTR
 	})
 }
 
+// attend is the wait of a blocking call of p's at an object, among the
+// waiters of its list l, with a waiter of spare's. It waits unless ready
+// says the call has something to look at now, asked with the object's
+// lock, mu: who changes the object wakes those that wait with that lock,
+// so nothing is missed. given says the waiter was answered, with answer;
+// timedOut that the deadline passed, end, zero for none; a signal ends
+// the wait as how says. A wait that ends unanswered takes its waiter
+// back; one answered meanwhile is given all the same.
+func attend[T any](p *Process, spare *spareWaiters[T], mu *sync.Mutex, l *waiters[T], ready func() bool, end time.Time, how signalled) (answer T, given, timedOut bool, err error) {
+	mu.Lock()
+
+	if ready() {
+		mu.Unlock()
+
+		return answer, false, false, nil
+	}
+
+	w := spare.get(p)
+	l.push(w)
+	mu.Unlock()
+
+	defer func() {
+		if !w.done.Load() {
+			mu.Lock()
+			l.remove(w)
+			mu.Unlock()
+		}
+
+		spare.put(w)
+	}()
+
+	if timedOut, err = p.await(&w.done, end, how); timedOut || err != nil {
+		mu.Lock()
+		taken := l.remove(w)
+		mu.Unlock()
+
+		if taken {
+			return answer, false, timedOut, err
+		}
+	}
+
+	return w.answer, true, false, nil
+}
+
 // msgChannel is a channel of messages: the oldest first, at most limit of
-// them, its ends, and the subscriptions it wakes, readers as it may
-// become readable, a message or its writer's going, writers as it may
-// become writable, a take from a full channel or its reader's going.
-// ended says its writer is gone, the end of the data after the messages;
-// finished that its reader is, and a write is EPIPE. mu guards the
-// messages; held counts them, so a poll asks without taking it.
+// them, its ends, and who waits at it. A receive of messages that waits is
+// among taking: a put gives its message to the first of them, and a
+// change of what else such a receive sees, the writer's going or a
+// shutdown, makes them all look again. A read of a stream waits among
+// looking, for its turn to look at what was put, and a write for room
+// among putting. The subscriptions it wakes are of poll and epoll,
+// readers as it may become readable, a message queued or its writer's
+// going, writers as it may become writable, a take from a full channel
+// or its reader's going. ended says its writer is gone, the end of the
+// data after the messages; finished that its reader is, and a write is
+// EPIPE; retired that a FIFO goes on with another channel (renew). mu
+// guards the messages and those that wait; held counts the messages, so
+// a poll asks without taking it.
 type msgChannel struct {
 	mu sync.Mutex
 	// sink takes the channel's messages as they are put, in place of a
@@ -533,6 +599,10 @@ type msgChannel struct {
 	held     atomic.Int32
 	ended    atomic.Bool
 	finished atomic.Bool
+	retired  atomic.Bool
+	taking   waiters[received]
+	looking  waiters[turn]
+	putting  waiters[turn]
 	readers  subscribers
 	writers  subscribers
 }
@@ -550,14 +620,54 @@ func (c *msgChannel) init(limit int) {
 	c.messages = c.one[:0]
 }
 
-// nudge wakes the readers, nudgeWriter the writers: something of the
-// channel changed for them.
+// nudge wakes who reads, nudgeWriter who writes: something of the
+// channel changed for them, which those that wait look at, and the
+// subscriptions are told of.
 func (c *msgChannel) nudge() {
+	c.mu.Lock()
+	c.taking.wake(received{eof: true})
+	c.looking.wake(turn{})
+	c.mu.Unlock()
 	c.readers.tell()
 }
 
 func (c *msgChannel) nudgeWriter() {
+	c.mu.Lock()
+	c.putting.wake(turn{})
+	c.mu.Unlock()
 	c.writers.tell()
+}
+
+// receive waits for a message, for a receive of p's that found none:
+// given, it is the message, which a put gave it. Not given, with no
+// timeout and no error, there is something for the receive to look at: a
+// message that came meanwhile, or what look tells of, which a nudge of
+// the channel comes with.
+func (c *msgChannel) receive(p *Process, look func() bool, end time.Time, how signalled) (pk packet, given, timedOut bool, err error) {
+	got, given, timedOut, err := attend(p, &p.receives, &c.mu, &c.taking, func() bool {
+		return len(c.messages) > c.head || c.retired.Load() || look()
+	}, end, how)
+
+	return got.pk, given && !got.eof, timedOut, err
+}
+
+// readable waits for the turn of a stream's read of p's that found
+// nothing to look again, as receive waits; writable for that of a write
+// that found the channel full.
+func (c *msgChannel) readable(p *Process, look func() bool, end time.Time, how signalled) (timedOut bool, err error) {
+	_, _, timedOut, err = attend(p, &p.turns, &c.mu, &c.looking, func() bool {
+		return len(c.messages) > c.head || c.retired.Load() || look()
+	}, end, how)
+
+	return timedOut, err
+}
+
+func (c *msgChannel) writable(p *Process, look func() bool, end time.Time, how signalled) (timedOut bool, err error) {
+	_, _, timedOut, err = attend(p, &p.turns, &c.mu, &c.putting, func() bool {
+		return c.held.Load() < c.limit.Load() || c.finished.Load() || c.retired.Load() || look()
+	}, end, how)
+
+	return timedOut, err
 }
 
 // setLimit is the most messages the channel holds from now on: more room
@@ -583,8 +693,8 @@ func (c *msgChannel) gone() bool {
 	return c.finished.Load()
 }
 
-// put queues a message, a copy of pk: EPIPE when the reader is gone, full
-// when there is no room, else it wakes the readers.
+// put queues a message, a copy of pk, or gives it to a receive that
+// waits: EPIPE when the reader is gone, full when there is no room.
 func (c *msgChannel) put(pk *packet) (full bool, err error) {
 	c.mu.Lock()
 
@@ -601,6 +711,13 @@ func (c *msgChannel) put(pk *packet) (full bool, err error) {
 		return false, nil
 	}
 
+	if w := c.taking.pop(); w != nil {
+		w.wake(received{pk: *pk})
+		c.mu.Unlock()
+
+		return false, nil
+	}
+
 	if c.held.Load() >= c.limit.Load() {
 		c.mu.Unlock()
 
@@ -609,8 +726,9 @@ func (c *msgChannel) put(pk *packet) (full bool, err error) {
 
 	c.messages = append(c.messages, *pk)
 	c.held.Add(1)
+	c.looking.wake(turn{})
 	c.mu.Unlock()
-	c.nudge()
+	c.readers.tell()
 
 	return false, nil
 }
@@ -646,19 +764,26 @@ func (c *msgChannel) take() (pk packet, eof, ok, freed bool) {
 
 	c.held.Add(-1)
 	freed = held >= int(c.limit.Load())
+
+	if freed {
+		c.putting.wake(turn{})
+	}
+
 	c.mu.Unlock()
 
 	if freed {
-		c.nudgeWriter()
+		c.writers.tell()
 	}
 
 	return pk, false, true, freed
 }
 
 // renew is a channel in place of c, a FIFO's that starts again: with c's
-// limit and subscriptions, and what c holds unless its reader is gone.
+// limit and subscriptions, and what c holds unless its reader is gone. c
+// is retired: who waits at it, once nudged, goes on at the new one.
 func (c *msgChannel) renew() *msgChannel {
 	n := newMsgChannel(int(c.limit.Load()))
+	c.retired.Store(true)
 	n.readers.takeOver(&c.readers)
 	n.writers.takeOver(&c.writers)
 

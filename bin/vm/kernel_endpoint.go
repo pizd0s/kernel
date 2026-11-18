@@ -14,9 +14,11 @@ import (
 
 // A pair is the kernel's, of AF_UNIX sockets of a kind, SOCK_SEQPACKET,
 // SOCK_STREAM or SOCK_DGRAM: two channels of messages (kernel_queue.go),
-// one each way, and an end of the pair reads one and writes the other; a
-// wait for an end subscribes to the channel it reads, for input, and to
-// the one it writes, for room. A packet is bytes, the files sent with
+// one each way, and an end of the pair reads one and writes the other. A
+// receive that blocks waits at the channel it reads, where the send gives
+// it its packet, a stream's read for its turn to look, and a send that
+// blocks at the one it writes, for room; a poll of an end subscribes to
+// both. A packet is bytes, the files sent with
 // them, SCM_RIGHTS, which the receiver's table takes, and the sender's
 // credentials, which go to a receiver that asks for them (SO_PASSCRED).
 // A read of a seqpacket or a datagram pair takes one packet, as much of
@@ -292,10 +294,10 @@ func (e *pairEnd) poll(events int16) int16 {
 	return mask & (events | pollErr | pollHup)
 }
 
-// wait waits for events of the end as its blocking call does, until the
-// timeout of to, SO_RCVTIMEO's or SO_SNDTIMEO's: false when it passed. A
-// signal is EINTR, after the handlers, which restart the call only
-// without a timeout.
+// wait waits for events of the end as a poll does, for a receive that
+// only looks, until the timeout of to, SO_RCVTIMEO's: false when it
+// passed. A signal is EINTR, after the handlers, which restart the call
+// only without a timeout.
 func (e *pairEnd) wait(p *Process, events int16, to *atomic.Int64) (bool, error) {
 	timeout := -1
 
@@ -445,8 +447,11 @@ func (e *pairEnd) kernelSend(p *Process, data []byte, files []Object) error {
 }
 
 func (e *pairEnd) kernelPut(p *Process, pk *packet) error {
-	// Room at once, as there mostly is: no wait is made for it.
-	if !e.noWrite.Load() {
+	for {
+		if e.noWrite.Load() {
+			return syscall.EPIPE
+		}
+
 		if full, err := e.to.put(pk); err != nil || !full {
 			return err
 		}
@@ -454,44 +459,9 @@ func (e *pairEnd) kernelPut(p *Process, pk *packet) error {
 		if e.nonblock.Load() {
 			return syscall.EAGAIN
 		}
+
+		e.to.writable(p, func() bool { return e.noWrite.Load() }, time.Time{}, waitsOn)
 	}
-
-	var sub *subscription
-
-	defer func() {
-		if sub != nil {
-			e.unsubscribe(sub)
-			p.release(sub)
-		}
-	}()
-
-	_, err := p.wait(time.Time{}, func(*event) (bool, error) {
-		for {
-			if e.noWrite.Load() {
-				return true, syscall.EPIPE
-			}
-
-			full, err := e.to.put(pk)
-
-			if err != nil || !full {
-				return true, err
-			}
-
-			if e.nonblock.Load() {
-				return true, syscall.EAGAIN
-			}
-
-			if sub != nil {
-				return false, nil
-			}
-
-			// A take from the full channel wakes its writers.
-			sub = p.subscription(0)
-			e.subscribe(sub, pollOut)
-		}
-	})
-
-	return err
 }
 
 func (e *pairEnd) queue(p *Process, pk packet, mode ioMode) error {
@@ -521,12 +491,32 @@ func (e *pairEnd) queueAs(p *Process, pk packet, nonblock bool, timeout *atomic.
 			return syscall.EAGAIN
 		}
 
-		if ready, err := e.wait(p, pollOut, timeout); err != nil {
+		end, how := until(timeout)
+
+		if timedOut, err := e.to.writable(p, func() bool { return e.noWrite.Load() }, end, how); err != nil {
 			return err
-		} else if !ready {
+		} else if timedOut {
 			return syscall.EAGAIN
 		}
 	}
+}
+
+// until is when a wait with the timeout of to ends, SO_RCVTIMEO's or
+// SO_SNDTIMEO's, zero for none, and how a signal ends it: after the
+// handlers, which restart the call only without a timeout.
+func until(to *atomic.Int64) (time.Time, signalled) {
+	if ns := to.Load(); ns > 0 {
+		return deadline(waitMs(time.Duration(ns))), interrupts
+	}
+
+	return time.Time{}, restarts
+}
+
+// seen tells whether a receive of the end that found no packet has
+// something else to see: a packet looked at, the end's own shutdown, and,
+// but for a datagram pair, the other end's going or its shutdown.
+func (e *pairEnd) seen() bool {
+	return e.peeked.Load() || e.noRead.Load() || e.shared.kind != sockDgram && (e.from.ended.Load() || e.peer.noWrite.Load())
 }
 
 // take is the next packet without waiting: the one peeked, else the
@@ -596,7 +586,9 @@ func (e *pairEnd) keepFront(pk packet) {
 }
 
 // recv takes the next packet, or looks at it with peek: EOF is an empty
-// packet with eof set.
+// packet with eof set. With none there it waits for one, which the send
+// gives it, until the timeout of SO_RCVTIMEO; a look waits as a poll
+// does, for the end to be readable.
 func (e *pairEnd) recv(p *Process, mode ioMode, peek bool) (packet, bool, error) {
 	nonblock := mode.nonblock || e.nonblock.Load()
 
@@ -611,10 +603,26 @@ func (e *pairEnd) recv(p *Process, mode ioMode, peek bool) (packet, bool, error)
 			return packet{}, false, syscall.EAGAIN
 		}
 
-		if ready, err := e.wait(p, pollIn, &e.options.rcvTimeout); err != nil {
+		if peek {
+			if ready, err := e.wait(p, pollIn, &e.options.rcvTimeout); err != nil {
+				return packet{}, false, err
+			} else if !ready {
+				return packet{}, false, syscall.EAGAIN
+			}
+
+			continue
+		}
+
+		end, how := until(&e.options.rcvTimeout)
+		pk, given, timedOut, err := e.from.receive(p, func() bool { return e.seen() }, end, how)
+
+		switch {
+		case err != nil:
 			return packet{}, false, err
-		} else if !ready {
+		case timedOut:
 			return packet{}, false, syscall.EAGAIN
+		case given:
+			return pk, false, nil
 		}
 	}
 }
@@ -705,9 +713,10 @@ func (e *pairEnd) receiveStream(p *Process, bufs [][]byte, flags uint32, control
 			return 0, 0, 0, syscall.EAGAIN
 		}
 
-		ready, err := e.wait(p, pollIn, &e.options.rcvTimeout)
+		end, how := until(&e.options.rcvTimeout)
+		timedOut, err := e.from.readable(p, func() bool { return e.seen() }, end, how)
 
-		if err != nil || !ready {
+		if err != nil || timedOut {
 			if got > 0 {
 				return got, written, cut, nil
 			}
