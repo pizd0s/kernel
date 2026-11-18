@@ -546,27 +546,6 @@ func pollEntries(entries []pollEntry) int {
 	return ready
 }
 
-// waitFor waits until ready says so, as waitObjects waits for files: the
-// process subscribed to the changes of list. A signal interrupts it,
-// restart as there.
-func (p *Process) waitFor(ready func() bool, list *subscribers, restart bool) error {
-	sub := p.subscription(0)
-	list.add(&sub.in)
-
-	defer p.release(sub)
-	defer list.remove(&sub.in)
-
-	_, err := p.wait(time.Time{}, func(*event) (bool, error) {
-		if ready() {
-			return true, nil
-		}
-
-		return p.interrupts(restart), syscall.EINTR
-	})
-
-	return err
-}
-
 // waitObject waits until one object is ready for events.
 func (p *Process) waitObject(obj Object, events int16, timeout int, restart bool) (int, error) {
 	return p.waitObjects([]pollEntry{{obj: obj, events: events}}, timeout, restart)

@@ -46,9 +46,9 @@ type pipe struct {
 	writers     int
 	readerOpens uint64
 	writerOpens uint64
-	// opened are the subscriptions an end's joining wakes, of the opens of
-	// a FIFO that wait for the other side; name is a FIFO's.
-	opened subscribers
+	// opened are the opens of a FIFO that wait for the other side, which
+	// an end's joining wakes to look; name is a FIFO's.
+	opened waiters[turn]
 	name   *fifoName
 	ino    uint64
 	made   time.Time
@@ -139,6 +139,7 @@ func (pp *pipe) join(reads, writes bool) (uint64, uint64) {
 	}
 
 	readerOpens, writerOpens := pp.readerOpens, pp.writerOpens
+	pp.opened.wake(turn{})
 	pp.mu.Unlock()
 
 	if renew {
@@ -146,17 +147,25 @@ func (pp *pipe) join(reads, writes bool) (uint64, uint64) {
 		old.nudgeWriter()
 	}
 
-	pp.opened.tell()
-
 	return readerOpens, writerOpens
 }
 
-// met tells whether an open of one side of a FIFO, after the joins it saw,
-// has its other side: an end there now, or one that joined since.
-func (pp *pipe) met(reads bool, readerOpens, writerOpens uint64) bool {
-	pp.mu.Lock()
-	defer pp.mu.Unlock()
+// meet waits, for an open of one side of a FIFO, until it has its other
+// side (met). A signal interrupts it, unless its handlers restart calls.
+func (pp *pipe) meet(p *Process, reads bool, readerOpens, writerOpens uint64) error {
+	for {
+		_, woken, _, err := attend(p, &p.turns, &pp.mu, &pp.opened, func() bool { return pp.met(reads, readerOpens, writerOpens) }, time.Time{}, restarts)
 
+		if err != nil || !woken {
+			return err
+		}
+	}
+}
+
+// met tells whether an open of one side of a FIFO, after the joins it saw,
+// has its other side: an end there now, or one that joined since; with
+// the pipe's lock.
+func (pp *pipe) met(reads bool, readerOpens, writerOpens uint64) bool {
 	if reads {
 		return pp.writers > 0 || pp.writerOpens > writerOpens
 	}

@@ -6,6 +6,7 @@ import (
 	"math"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // The locks of flock and fcntl are the kernel's. A server knows one thing
@@ -25,9 +26,10 @@ import (
 // an ino a file system gives again starts with no locks. Those that wait
 // have a lock in the order they asked: none is taken past one that waits
 // for it, a shared one behind an exclusive one, nor by one that only
-// tries. A process that waits sleeps as in any wait (waitFor): a signal it
-// takes interrupts it, unless its handlers restart calls, and then it
-// keeps its place.
+// tries. A process that waits is among those that wait at the file
+// (kernel_queue.go), woken as a lock is given to look whether it is its
+// own: a signal it takes interrupts it, unless its handlers restart
+// calls, and then it keeps its place.
 
 // lockPast is the stop of a range to the end of a file and past it.
 const lockPast = math.MaxUint64
@@ -46,11 +48,11 @@ type fileLock struct {
 }
 
 // lockedFile is the locks of a file: those held, those waited for, the
-// first to come first, and the processes that wait, told when a lock is
-// given.
+// first to come first, and the processes that wait, woken when a lock is
+// given, all with the table's lock.
 type lockedFile struct {
 	held, waiting *fileLock
-	given         subscribers
+	given         waiters[turn]
 }
 
 type lockTable struct {
@@ -165,22 +167,22 @@ func (f *lockedFile) give() bool {
 		w = f.waiting
 	}
 
+	if given {
+		f.given.wake(turn{})
+	}
+
 	return given
 }
 
 // settle is what follows a change of a file's locks, under the table's
 // lock: those that wait are given what is free now, and a file with no
-// lock held or waited for leaves the table. It tells whether a lock was
-// given: those that wait are told then (given.tell), the table's lock let
-// go of.
-func (t *lockTable) settle(key fileKey, f *lockedFile) bool {
-	given := f.give()
+// lock held or waited for leaves the table.
+func (t *lockTable) settle(key fileKey, f *lockedFile) {
+	f.give()
 
 	if f.held == nil && f.waiting == nil {
 		delete(t.files, key)
 	}
-
-	return given
 }
 
 // lock takes a lock for its open file, the lock's owner: at once when it
@@ -200,12 +202,8 @@ func (t *lockTable) lock(p *Process, want *fileLock, waits bool) error {
 
 	if f.ready(want, nil) {
 		f.hold(want)
-		given := t.settle(n.file, f)
+		t.settle(n.file, f)
 		t.mu.Unlock()
-
-		if given {
-			f.given.tell()
-		}
 
 		return nil
 	}
@@ -227,12 +225,8 @@ func (t *lockTable) lock(p *Process, want *fileLock, waits bool) error {
 	}
 
 	*last = want
-	given := f.give()
+	f.give()
 	t.mu.Unlock()
-
-	if given {
-		f.given.tell()
-	}
 
 	return t.wait(p, f, want)
 }
@@ -248,31 +242,25 @@ func (t *lockTable) wait(p *Process, f *lockedFile, w *fileLock) (err error) {
 
 	defer func() {
 		t.mu.Lock()
-		given := false
 
 		if w.granted {
 			err = nil
 		} else {
 			f.leave(w)
-			given = t.settle(n.file, f)
+			t.settle(n.file, f)
 		}
 
 		t.mu.Unlock()
-
-		if given {
-			f.given.tell()
-		}
-
 		n.unref()
 	}()
 
-	return p.waitFor(func() bool {
-		t.mu.Lock()
-		granted := w.granted
-		t.mu.Unlock()
+	for {
+		_, woken, _, err := attend(p, &p.turns, &t.mu, &f.given, func() bool { return w.granted }, time.Time{}, restarts)
 
-		return granted
-	}, &f.given, true)
+		if err != nil || !woken {
+			return err
+		}
+	}
 }
 
 // unlock lets go of what an open file holds: flock's lock, or with ranged
@@ -283,19 +271,12 @@ func (t *lockTable) unlock(n *remoteNode, ranged bool, start, stop uint64) {
 	}
 
 	t.mu.Lock()
-	f := t.files[n.file]
-	given := false
-
-	if f != nil {
+	if f := t.files[n.file]; f != nil {
 		f.drop(n, ranged, start, stop)
-		given = t.settle(n.file, f)
+		t.settle(n.file, f)
 	}
 
 	t.mu.Unlock()
-
-	if given {
-		f.given.tell()
-	}
 }
 
 // way is the lock another open file holds in the way of one, for
@@ -316,10 +297,7 @@ func (t *lockTable) way(want *fileLock) (fileLock, bool) {
 // forget lets go of all an open file holds, as its last reference goes.
 func (t *lockTable) forget(n *remoteNode) {
 	t.mu.Lock()
-	f := t.files[n.file]
-	given := false
-
-	if f != nil {
+	if f := t.files[n.file]; f != nil {
 		for at := &f.held; *at != nil; {
 			if l := *at; l.owner == n {
 				*at = l.next
@@ -328,12 +306,8 @@ func (t *lockTable) forget(n *remoteNode) {
 			}
 		}
 
-		given = t.settle(n.file, f)
+		t.settle(n.file, f)
 	}
 
 	t.mu.Unlock()
-
-	if given {
-		f.given.tell()
-	}
 }
