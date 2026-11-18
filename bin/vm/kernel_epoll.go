@@ -15,8 +15,9 @@ import (
 // the set (kernel_queue.go): a change of its object wakes the set with the
 // member's id, which marks it, in the order of the marks; a member is
 // marked as it is added, as it may be ready then. epoll_wait asks the
-// marked members and no other, and sleeps on the process's mail while
-// none of them is ready, among the set's sleepers, whom a mark wakes. A
+// marked members and no other, and while none of them is ready it waits
+// among those that wait at the set (kernel_queue.go), whom a mark wakes
+// to ask again. A
 // level-triggered member reported stays marked, asked again by the next
 // wait while it is ready; an edge-triggered one is reported once a change
 // of its object, a one-shot one once until EPOLL_CTL_MOD. Any object can
@@ -51,10 +52,10 @@ type epoll struct {
 	ready  []*epollMember
 	spare  []*epollMember
 	// subs are the subscriptions to the set: of the polls it is asked by,
-	// of the sets it is a member of; waiters those of its waits, which a
-	// mark wakes.
+	// of the sets it is a member of; waiting are its waits that found no
+	// member ready, each woken by a mark to ask again, with mu.
 	subs    subscribers
-	waiters subscribers
+	waiting waiters[turn]
 	refs    atomic.Int32
 	ino     uint64
 	made    time.Time
@@ -220,7 +221,7 @@ func (ep *epoll) mark(m *epollMember) {
 
 	m.queued = true
 	ep.ready = append(ep.ready, m)
-	ep.waiters.tell()
+	ep.waiting.wake(turn{})
 }
 
 func (ep *epoll) flags() (int, error) {
@@ -354,6 +355,13 @@ func (ep *epoll) add(key epollKey, events uint32, data uint64) error {
 // is the member reported last, for a collect of one.
 func (ep *epoll) collect(buf []byte, max int, who **epollMember) int {
 	ep.mu.Lock()
+
+	if len(ep.ready) == 0 {
+		ep.mu.Unlock()
+
+		return 0
+	}
+
 	marked := ep.ready
 	ep.ready, ep.spare = ep.spare[:0], nil
 
@@ -361,20 +369,18 @@ func (ep *epoll) collect(buf []byte, max int, who **epollMember) int {
 		m.queued = false
 	}
 
-	ep.mu.Unlock()
 	n, i := 0, 0
 
 	for ; i < len(marked) && n < max; i++ {
 		m := marked[i]
-		ep.mu.Lock()
-		events, skip := m.events, m.disabled || m.removed
-		m.asking = !skip
-		ep.mu.Unlock()
+		events := m.events
 
-		if skip {
+		if m.disabled || m.removed {
 			continue
 		}
 
+		m.asking = true
+		ep.mu.Unlock()
 		revents := m.key.obj.poll(int16(events))
 		ep.mu.Lock()
 		m.asking = false
@@ -386,8 +392,6 @@ func (ep *epoll) collect(buf []byte, max int, who **epollMember) int {
 				ep.mark(m)
 			}
 
-			ep.mu.Unlock()
-
 			continue
 		}
 
@@ -398,16 +402,13 @@ func (ep *epoll) collect(buf []byte, max int, who **epollMember) int {
 		if who != nil {
 			*who = m
 		}
+
 		m.disabled = events&epollOneshot != 0
 
 		if events&epollEt == 0 {
 			ep.mark(m)
 		}
-
-		ep.mu.Unlock()
 	}
-
-	ep.mu.Lock()
 
 	if i < len(marked) {
 		left := make([]*epollMember, 0, len(marked)-i+len(ep.ready))
@@ -429,64 +430,48 @@ func (ep *epoll) collect(buf []byte, max int, who **epollMember) int {
 	return n
 }
 
-// wait waits for up to max ready members until end, zero for never: its
-// subscription to the set's marks makes each an event of the process's,
-// as a signal is, which interrupts it.
+// wait waits for up to max ready members until end, zero for never: with
+// none ready it waits at the set for a mark, and asks again. A signal
+// interrupts it.
 func (ep *epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, error) {
-	sub := p.subscription(0)
-	ep.waiters.add(&sub.in)
-
-	defer p.release(sub)
-	defer ep.waiters.remove(&sub.in)
-
-	n := 0
-	_, err := p.wait(end, func(*event) (bool, error) {
-		if n = ep.collect(buf, max, nil); n > 0 {
-			return true, nil
+	for {
+		if n := ep.collect(buf, max, nil); n > 0 {
+			return n, nil
 		}
 
-		if !end.IsZero() && !time.Now().Before(end) {
-			return true, nil
+		if timedOut, err := ep.marked(p, end); timedOut || err != nil {
+			return 0, err
 		}
+	}
+}
 
-		return p.interrupts(false), syscall.EINTR
-	})
+// marked waits at the set, for a wait of p's that found no member ready,
+// until a member is marked: timedOut when end passed first, zero for
+// never.
+func (ep *epoll) marked(p *Process, end time.Time) (timedOut bool, err error) {
+	if !end.IsZero() && !time.Now().Before(end) {
+		return true, nil
+	}
 
-	return n, err
+	_, _, timedOut, err = attend(p, &p.turns, &ep.mu, &ep.waiting, func() bool { return len(ep.ready) > 0 }, end, interrupts)
+
+	return timedOut, err
 }
 
 // one waits as wait does for one ready member: the member, and its
 // epoll_event in out, or none past the end.
 func (ep *epoll) one(p *Process, out []byte, end time.Time) (*epollMember, error) {
-	var m *epollMember
+	for {
+		var m *epollMember
 
-	if ep.collect(out, 1, &m) > 0 {
-		return m, nil
-	}
-
-	sub := p.subscription(0)
-	ep.waiters.add(&sub.in)
-
-	defer p.release(sub)
-	defer ep.waiters.remove(&sub.in)
-
-	_, err := p.wait(end, func(*event) (bool, error) {
 		if ep.collect(out, 1, &m) > 0 {
-			return true, nil
+			return m, nil
 		}
 
-		if !end.IsZero() && !time.Now().Before(end) {
-			return true, nil
+		if timedOut, err := ep.marked(p, end); timedOut || err != nil {
+			return nil, err
 		}
-
-		return p.interrupts(false), syscall.EINTR
-	})
-
-	if err != nil {
-		return nil, err
 	}
-
-	return m, nil
 }
 
 // epollAt is the epoll of a descriptor: another file is EINVAL.
