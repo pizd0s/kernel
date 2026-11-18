@@ -526,17 +526,12 @@ func (n *remoteNode) readiness() int16 {
 	return int16(n.ready.Load())
 }
 
-// A connector is a process that asked a server to connect: note is its
-// event of the answer, pk the answer once done is set, eof for a server
-// that went with none; left says the process waits no more, and the
-// answer goes.
+// A connector is the place of a process that asked a server to connect,
+// among those of the open file in the order of the questions, as the
+// answers come: w is the waiter the answer is given to, none once the
+// process waits no more, and its answer goes.
 type connector struct {
-	p    *Process
-	note event
-	done atomic.Bool
-	pk   packet
-	eof  bool
-	left bool
+	w *waiter[received]
 }
 
 // deliver takes what the server sends on its endpoint of the open file:
@@ -578,20 +573,20 @@ func (n *remoteNode) deliver(pk *packet) {
 			break
 		}
 
-		w := n.connecting[0]
+		c := n.connecting[0]
 		n.connecting[0] = nil
 		n.connecting = n.connecting[1:]
+		w := c.w
 
-		if w.left {
+		if w == nil {
 			n.mu.Unlock()
 
 			break
 		}
 
-		w.pk = *pk
-		w.done.Store(true)
+		c.w = nil
+		w.wake(received{pk: *pk})
 		n.mu.Unlock()
-		w.p.post(&w.note)
 
 		return
 	}
@@ -608,19 +603,14 @@ func (n *remoteNode) hungUp() {
 	waiting := n.connecting
 	n.connecting = nil
 
-	for _, w := range waiting {
-		w.eof = true
-		w.done.Store(true)
-	}
-
-	n.mu.Unlock()
-
-	for _, w := range waiting {
-		if !w.left {
-			w.p.post(&w.note)
+	for _, c := range waiting {
+		if w := c.w; w != nil {
+			c.w = nil
+			w.wake(received{eof: true})
 		}
 	}
 
+	n.mu.Unlock()
 	n.watchers.tell()
 }
 
@@ -629,92 +619,68 @@ func (n *remoteNode) hungUp() {
 // call pair it made. The process takes its signals as it waits, and waits
 // on. A server that is gone is EIO.
 func (n *remoteNode) connect(p *Process) (*callEnd, error) {
-	w := &connector{p: p}
-	w.note.kind = eventChanged
 	data := make([]byte, remoteHeader)
 	p.head(data, rConnect, 0)
 	pk := packet{data: data}
+	w := p.receives.get(p)
+	place := &connector{w: w}
 
+	// However the wait ends, the place has no waiter after it: an answer
+	// that comes then goes.
 	defer func() {
 		n.mu.Lock()
-
-		if !w.done.Load() {
-			w.left = true
-		}
-
+		place.w = nil
 		n.mu.Unlock()
-		p.events.drop(&w.note)
+		p.receives.put(w)
 	}()
 
 	// The question and its place among those that wait, as one: the
-	// answers come in the questions' order.
-	var sub *subscription
-	_, err := p.wait(time.Time{}, func(*event) (bool, error) {
-		for {
-			n.mu.Lock()
+	// answers come in the questions' order. A full endpoint is waited
+	// for, for room.
+	for {
+		n.mu.Lock()
 
-			if n.gone {
-				n.mu.Unlock()
-
-				return true, syscall.EIO
-			}
-
-			full, err := n.end.to.put(&pk)
-
-			if err == nil && !full {
-				n.connecting = append(n.connecting, w)
-			}
-
+		if n.gone {
 			n.mu.Unlock()
 
-			if err != nil {
-				return true, syscall.EIO
-			}
-
-			if !full {
-				return true, nil
-			}
-
-			if sub != nil {
-				return false, nil
-			}
-
-			// A take from the full channel wakes its writers.
-			sub = p.subscription(0)
-			n.end.subscribe(sub, pollOut)
+			return nil, syscall.EIO
 		}
-	})
 
-	if sub != nil {
-		n.end.unsubscribe(sub)
-		p.release(sub)
+		full, err := n.end.to.put(&pk)
+
+		if err == nil && !full {
+			n.connecting = append(n.connecting, place)
+		}
+
+		n.mu.Unlock()
+
+		if err != nil {
+			return nil, syscall.EIO
+		}
+
+		if !full {
+			break
+		}
+
+		n.end.to.writable(p, func() bool { return false }, time.Time{}, waitsOn)
 	}
 
-	if err != nil {
+	p.await(&w.done, time.Time{}, waitsOn)
+	got := w.answer
+
+	if err := replyOf(&got.pk, got.eof); err != nil {
 		return nil, err
 	}
 
-	p.wait(time.Time{}, func(*event) (bool, error) {
-		return w.done.Load(), nil
-	})
-
-	if !w.done.Load() {
+	if len(got.pk.files) == 0 {
 		return nil, syscall.EIO
 	}
 
-	if err := replyOf(&w.pk, w.eof); err != nil {
-		return nil, err
-	}
-
-	if len(w.pk.files) == 0 {
-		return nil, syscall.EIO
-	}
-
-	dropFiles(w.pk.files[1:])
-	c := w.pk.files[0].asCall()
+	dropFiles(got.pk.files[1:])
+	c := got.pk.files[0].asCall()
 
 	if c == nil || c.serves {
-		w.pk.files[0].unref()
+		got.pk.files[0].unref()
 
 		return nil, syscall.EIO
 	}
@@ -891,10 +857,7 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 	outer, was := p.ask(c)
 	defer p.unask(outer, was)
 
-	p.wait(time.Time{}, func(*event) (bool, error) {
-		return w.done.Load(), nil
-	})
-
+	p.await(&w.done, time.Time{}, waitsOn)
 	pk = w.answer.pk
 	err = replyOf(&pk, w.answer.eof)
 	dropFiles(pk.files)
@@ -939,10 +902,7 @@ func (n *remoteNode) asked(p *Process, op uint32, data []byte, files []Object) (
 	outer, was := p.ask(c)
 	defer p.unask(outer, was)
 
-	p.wait(time.Time{}, func(*event) (bool, error) {
-		return w.done.Load(), nil
-	})
-
+	p.await(&w.done, time.Time{}, waitsOn)
 	pk := w.answer.pk
 
 	if err := replyOf(&pk, w.answer.eof); err != nil {
