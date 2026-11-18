@@ -96,6 +96,7 @@ func (c *consoleEnd) asPair() *pairEnd          { return nil }
 func (c *consoleEnd) asListener() *unixListener { return nil }
 func (c *consoleEnd) asConsole() *consoleEnd    { return c }
 func (c *consoleEnd) asVFS() *remoteDir         { return nil }
+func (c *consoleEnd) asCall() *callEnd          { return nil }
 
 // stat is a character device's, as a terminal's.
 func (c *consoleEnd) stat(p *Process, st *syscall.Stat_t) error {
@@ -579,6 +580,7 @@ func (f *diskFile) asPair() *pairEnd          { return nil }
 func (f *diskFile) asListener() *unixListener { return nil }
 func (f *diskFile) asConsole() *consoleEnd    { return nil }
 func (f *diskFile) asVFS() *remoteDir         { return nil }
+func (f *diskFile) asCall() *callEnd          { return nil }
 
 // size is the file's size now.
 func (f *diskFile) size() (int64, error) {

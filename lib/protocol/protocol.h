@@ -15,22 +15,29 @@
 //   An open file's: the kernel's calls on the endpoint of an open file, a
 //   file system's or a device's (bin/tools); a handle takes them too.
 //
-// An endpoint is one end of a seqpacket pair: whose holds the other end
-// answers on it. Every request brings a fresh endpoint, last among its
-// descriptors, which the reply goes on. An open file is a pair the server
-// makes as it opens, with servedpair (lib/c's sys/served.h): it keeps the
-// first end, a plain one the requests come on, and the second, born the
-// open file the server describes, a file, a terminal's, a handle of a
-// directory or of what O_PATH opened, the OPEN's OK brings to who asked,
-// fds[0]. A server may hand a request on, its descriptors with it, to
-// another, which answers on that endpoint: the one that handed it on is
-// out of the way from then on. A server that is gone is EIO.
+// An open file is a pair the server makes as it opens, a seqpacket
+// socketpair: it keeps the first end, the open file's endpoint, and makes
+// the second the open file it describes with SO_SERVED (lib/c's
+// sys/socket.h), a file, a terminal's, a handle of a directory or of what
+// O_PATH opened, which the OPEN's OK brings to who asked, fds[0].
+//
+// A call on an open file goes on a connection to it, which who calls
+// asks for on the open file's endpoint: CONNECT, a question, answered
+// there, the questions' answers in their order. The server makes a call
+// pair for it, socketpair's SOCK_CALL (sys/socket.h), keeps the serving
+// end and answers with the asking end. A request is a call sent on the
+// connection, and its reply the answer that comes on it. A server may
+// hand a request on, its descriptors and the connection it came on with
+// it, to another, which answers on that: the call in hand is the other's
+// from then on, the one that handed it on out of the way, and the
+// connection stays its own for the calls after. A server that is gone is
+// EIO, and so is one a call was handed on to and that let go of it
+// unanswered.
 //
 // A READ or a WRITE, which waits as long as its file says, may hear
-// CANCEL on its endpoint from who asked, whose caller gave up for a
+// CANCEL on its connection from who asked, whose caller gave up for a
 // signal: the server answers it at once, with the count so far or ERR
-// EINTR. A request already answered has no endpoint left to hear it on,
-// and a server that never waits need not listen.
+// EINTR. A server that never waits need not listen.
 //
 // A packet is a Header and a body; descriptors ride with it (SCM_RIGHTS).
 //
@@ -87,8 +94,10 @@
 //   the root's in the stat its connection answered, 1 for a file system
 //   rootfs starts itself. A name is no "." or "..", has no "/" and is
 //   never followed. The file system checks who may, by the header's ids.
-//   A call that brings no endpoint is a question of rootfs's, answered on
-//   the channel itself, in the order the questions came.
+//   A call that brings no connection is a question of rootfs's, answered
+//   on the channel itself, in the order the questions came; one rootfs
+//   hands on brings the connection it came on, last among its
+//   descriptors, where it is answered.
 //     LOOKUP                node u64, name    OK stat: the name's; ".." the
 //                                         parent, the root's the root
 //     GETATTR               node u64          OK stat
@@ -122,7 +131,7 @@
 //                                         flags u32: fsNocache, of a file
 //                                         system that changes by itself
 //
-//   An open file's, on its endpoint:
+//   An open file's, on a connection to it:
 //     READ      arg len     io            OK count u32; fds[0] a memfd of
 //                                         the reader's memory, the bytes
 //                                         go there from its byte woff on
@@ -139,8 +148,11 @@
 //     FTRUNCATE             size u64
 //     FSYNC     arg data
 //     FSTATFS                             OK statfs
-//     CANCEL                              on a request's endpoint, which
-//                                         the server keeps while it waits
+//     CANCEL                              of the request the server
+//                                         keeps while it waits
+//   on its endpoint:
+//     CONNECT                             OK, fds[0] the asking end of a
+//                                         call pair, a connection
 //   and from the server, on its end of an open file it made telling
 //   (SERVED_TELLS), the file's readiness, which select, poll and epoll
 //   find: until the first, nothing is ready; the last counts.
@@ -196,7 +208,8 @@
 //     OK has openControlling, and the kernel opens that terminal instead,
 //     with an OPEN on the open file it keeps of it, a slave's.
 //   /dev/init's open is a plain socket, an end of a pair devfs keeps the
-//   other end of, which its opener speaks the protocol on itself.
+//   other end of, which its opener speaks the protocol on itself: a
+//   request on it is answered on it.
 //     REGISTER  arg mode    name          on /dev/init. OK stat: a device,
 //                                         S_IFCHR or S_IFBLK, of that name
 //                                         in /dev, whose owner is who asks
@@ -230,7 +243,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <sys/served.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 
 struct iovec;
@@ -292,6 +305,7 @@ enum : uint32_t {
     opFstatfs,
     opCancel,
     opReady,
+    opConnect,
     // A service's.
     opOpen = 96,
     opRegister,
@@ -314,8 +328,8 @@ enum : uint32_t {
     opErr,
 };
 
-// The most descriptors a packet brings: a READ's or WRITE's memfd and its
-// endpoint, a REGISTER's end and its endpoint.
+// The most descriptors a packet brings: a READ's or WRITE's memfd and,
+// handed on, its connection.
 constexpr size_t maxFds = 4;
 constexpr uint32_t noId = 0xffffffff; // a uid or gid CHOWN keeps
 constexpr uint32_t fsNocache = 1;     // ROOT's flags: the file system changes by itself

@@ -811,7 +811,7 @@ static void release(Waiting& w) {
     if (w.window >= 0) {
         close(w.window);
     }
-    unwatch(epoll, w.at);
+    unkeep(epoll, w.at);
     w = {};
     w.window = -1;
 }
@@ -887,7 +887,7 @@ static void progress(Terminal& t) {
     tellAll(t);
 }
 
-// Keeps a request to answer it later: its endpoint hears CANCEL.
+// Keeps a request to answer it later: its connection hears CANCEL.
 static Waiting* hold(Open& o, Request& r, Wait kind) {
     for (Waiting& w : waits) {
         if (!w.at) {
@@ -897,11 +897,10 @@ static Waiting* hold(Open& o, Request& r, Wait kind) {
             w.window = r.window();
             w.length = r.h.arg;
             w.start = now();
-            w.at = watch(epoll, {r.reply(), false, false, false, &w});
+            w.at = keep(epoll, r, &w);
             if (w.window >= 0) {
                 r.fds[0] = -1;
             }
-            r.fds[r.count - 1] = -1;
             return &w;
         }
     }

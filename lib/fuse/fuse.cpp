@@ -278,7 +278,7 @@ static bool nameAt(const Request& r, size_t at, const char*& name, size_t& lengt
     return length > 0;
 }
 
-// An open of a file at path, on the reply's endpoint: emptied with
+// An open of a file at path, answered where its request says: emptied with
 // O_TRUNC, the file system's open of it; made with O_CREAT. A link is
 // ELOOP, a FIFO is its stat, the kernel makes its pipe, a device has no
 // driver here.

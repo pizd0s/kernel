@@ -4,7 +4,7 @@
 // opener's controlling terminal, which the kernel opens instead; init,
 // where the services of the system register their devices (REGISTER,
 // lib/protocol/service.h); those devices, each a service's: an open of
-// one goes on to its service, the reply's endpoint with it, and the
+// one goes on to its service, the connection it came on with it, and the
 // service serves the open file from then on; and the sockets the file
 // systems of the system bind there, for mount(2) to connect to. devfs
 // keeps a device's name, its mode and its owner, and lets the name go when
@@ -220,7 +220,7 @@ static bool nameAt(const Request& r, size_t at, const char*& name, size_t& lengt
 // An open of a node: tty's the opener's controlling terminal, which the
 // kernel opens; init's a plain socket, an end of a pair of ours, which
 // the opener speaks the protocol on itself, REGISTER; a device's open
-// handed on to its service with the reply's endpoint, which the service
+// handed on to its service with the connection it came on, which the service
 // answers on, ENXIO when the service is gone.
 static void openNode(Node& n, Request& r) {
     const uint32_t access = r.h.arg & O_ACCMODE;
@@ -243,7 +243,7 @@ static void openNode(Node& n, Request& r) {
             if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
                 return fail(r.reply(), errno);
             }
-            watch(epoll, {pair[0], false, reads, writes, &registryTag});
+            watch(epoll, {pair[0], false, reads, writes, &registryTag, false, true});
             const Header h{opOk, 0, 0, 0};
             const iovec part{const_cast<Header*>(&h), sizeof h};
             sendPacket(r.reply(), &part, 1, &pair[1], 1);

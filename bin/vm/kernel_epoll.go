@@ -144,6 +144,7 @@ func (ep *epoll) asPair() *pairEnd          { return nil }
 func (ep *epoll) asListener() *unixListener { return nil }
 func (ep *epoll) asConsole() *consoleEnd    { return nil }
 func (ep *epoll) asVFS() *remoteDir         { return nil }
+func (ep *epoll) asCall() *callEnd          { return nil }
 
 // stat is an anonymous inode's: no type, as Linux has it.
 func (ep *epoll) stat(p *Process, st *syscall.Stat_t) error {

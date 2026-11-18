@@ -136,7 +136,7 @@ namespace tools {
     // ---- replies ------------------------------------------------------------------------
 
     // The descriptors of the request the loop handles, a memfd of a READ's
-    // or a WRITE's first, the reply's endpoint last; one a call keeps it
+    // or a WRITE's first, where it is answered last; one a call keeps it
     // sets to -1. And the bytes a reply assembles: one of each for the
     // process, whose loop takes a request and is done with it before the
     // next, and sends each reply whole.
@@ -159,7 +159,7 @@ namespace tools {
     void answer(int fd, int e);
 
     // The memfd of the memory a READ fills or a WRITE takes from: the
-    // first of the request's descriptors, before its reply endpoint; -1
+    // first of the request's descriptors, before where it is answered; -1
     // when it brought none.
     int window();
 
@@ -183,8 +183,9 @@ namespace tools {
 
     // What an endpoint is to the loop.
     enum class Role : u8 {
-        File,    // an open file: requests come on it
-        Channel, // rootfs's channel: its calls by node come on it
+        File,       // an open file: who asks connects on it
+        Connection, // a connection to an open file: its requests come on it
+        Channel,    // rootfs's channel: its calls by node come on it
     };
 
     struct Endpoint {
@@ -197,6 +198,9 @@ namespace tools {
         Endpoint* next;  // among the free ones
         Endpoint* after; // among the live ones
         Endpoint* before;
+        Endpoint* file;  // a Connection's open file
+        Endpoint* first; // a File's connections,
+        Endpoint* other; // each the next of its file's
     };
 
     // A file system's calls: rootfs's on its channel, by node, and those
@@ -211,19 +215,23 @@ namespace tools {
     Endpoint* listen(int fd, Role role, void* node, bool reads, bool writes);
 
     // Answers an open on fd, of flags, with a new open file of node: a
-    // served pair of SERVED_FILE, of the file's dev and ino, which the
-    // kernel keeps its locks by, whose second end, the open file, goes
-    // with the OK to who asked, and whose first, an endpoint of the
-    // loop's, to read, to write or both, its requests come on. That
-    // endpoint, or none, the error answered.
+    // pair whose second end is made the open file (SO_SERVED), a
+    // SERVED_FILE of the file's dev and ino, which the kernel keeps its
+    // locks by, and goes with the OK to who asked; the first, an endpoint
+    // of the loop's, to read, to write or both, is the open file's, which
+    // who asks connects on. That endpoint, or none, the error answered.
     Endpoint* openFile(int fd, u32 flags, void* node, u64 dev, u64 ino, bool reads, bool writes);
 
     // Serves the endpoints until the last of them closes: rootfs's channel,
-    // and the open files after it. A question of rootfs's, which brings no
-    // endpoint, is answered on its channel, in order; a call brings the
-    // reply's endpoint, and an open the reply's too, which its open file
-    // goes on (openFile). The descriptors of a request close after it, but
-    // for those the call set to -1.
+    // and the open files after it. A question of rootfs's, which brings
+    // nowhere to answer, is answered on its channel, in order; a call
+    // rootfs hands on brings the connection it came on, where it is
+    // answered, and an open's open file goes there (openFile). An open
+    // file's endpoint takes CONNECT, which the loop answers: a call pair,
+    // whose asking end the OK brings and whose serving end is a connection
+    // of the file's, where its requests come and are answered. The
+    // descriptors of a request close after it, but for those the call set
+    // to -1 and the connection it came on.
     void serve(FsCall fsCall, FileCall fileCall, Closing closing);
 }
 

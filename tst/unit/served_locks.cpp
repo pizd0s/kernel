@@ -3,7 +3,7 @@
 //@ stdout: "one name, one file: busy 1, a range busy 1, free after the close 1\nanother ino: free 1\nanother dev: free 1\nanother process, the same name: busy 1\nno ino: EINVAL 1\n"
 
 // The kernel keeps the locks of flock and fcntl by what names a file: the
-// dev and ino its server made the open file with (servedpair). The open
+// dev and ino its server made the open file with (SO_SERVED). The open
 // files given one dev and ino are one file to lock, whichever process
 // made them, as rootfs makes a directory's handle of its file system's
 // numbers; those of another ino or dev are other files. A file made with
@@ -15,7 +15,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <sys/file.h>
-#include <sys/served.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -23,7 +23,8 @@
 static int file(uint64_t dev, uint64_t ino) {
     const struct served what{SERVED_FILE, O_RDWR, dev, ino, 0};
     int sv[2];
-    assert(servedpair(&what, sv) == 0);
+    assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sv) == 0);
+    assert(setsockopt(sv[1], SOL_SOCKET, SO_SERVED, &what, sizeof what) == 0);
     return sv[1];
 }
 

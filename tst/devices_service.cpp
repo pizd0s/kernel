@@ -85,7 +85,7 @@ static void deliver(int window, uint32_t woff, uint32_t room, int to) {
 
 static void letReaderGo() {
     close(reader.window);
-    unwatch(epoll, reader.at);
+    unkeep(epoll, reader.at);
     reader = {};
 }
 
@@ -106,10 +106,10 @@ static void readMail(const Endpoint& e, Request& r) {
     if (reader.at) {
         return fail(r.reply(), EBUSY);
     }
-    // The READ waits: its endpoint and the memfd are ours until it ends.
-    reader = {watch(epoll, {r.reply(), false, false, false, &readerTag}), r.window(), r.h.arg, io.woff};
+    // The READ waits: its connection hears of it and the memfd is ours
+    // until it ends.
+    reader = {keep(epoll, r, &readerTag), r.window(), r.h.arg, io.woff};
     r.fds[0] = -1;
-    r.fds[r.count - 1] = -1;
 }
 
 static void writeMail(const Endpoint& e, const Request& r) {

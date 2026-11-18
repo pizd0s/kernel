@@ -362,10 +362,12 @@ func (p *Process) wait(end time.Time, done func(e *event) (bool, error)) (timedO
 // messages; held counts them, so a poll asks without taking it.
 type msgChannel struct {
 	mu sync.Mutex
-	// latest is set for a channel of which only the last message counts,
-	// an open file's readiness (kernel_remote.go): a message takes the
-	// place of those held, and the channel is never full.
-	latest   atomic.Bool
+	// sink takes the channel's messages as they are put, in place of a
+	// reader: what a server sends the kernel on an open file's endpoint
+	// (kernel_remote.go). Nothing is held then, and the channel is never
+	// full. closed hears of the writer's going.
+	sink     func(pk *packet)
+	closed   func()
 	limit    atomic.Int32
 	messages []packet
 	head     int
@@ -436,16 +438,9 @@ func (c *msgChannel) put(pk *packet) (full bool, err error) {
 		return false, syscall.EPIPE
 	}
 
-	if c.latest.Load() {
-		for _, old := range c.messages[c.head:] {
-			dropFiles(old.files)
-		}
-
-		clear(c.messages)
-		c.messages, c.head = append(c.messages[:0], *pk), 0
-		c.held.Store(1)
+	if sink := c.sink; sink != nil {
 		c.mu.Unlock()
-		c.nudge()
+		sink(pk)
 
 		return false, nil
 	}
@@ -534,6 +529,33 @@ func (c *msgChannel) takeAll() []packet {
 func (c *msgChannel) end() {
 	c.ended.Store(true)
 	c.nudge()
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+
+	if closed != nil {
+		closed()
+	}
+}
+
+// drain makes sink take the channel's messages from now on, those it
+// holds first, and closed hear of its writer's going, at once when the
+// writer is gone.
+func (c *msgChannel) drain(sink func(pk *packet), closed func()) {
+	c.mu.Lock()
+	held := c.messages[c.head:]
+	c.messages, c.head = nil, 0
+	c.held.Store(0)
+	c.sink, c.closed = sink, closed
+	c.mu.Unlock()
+
+	for i := range held {
+		sink(&held[i])
+	}
+
+	if c.ended.Load() {
+		closed()
+	}
 }
 
 // finish is the reader's going: what is queued goes, files and all, and a

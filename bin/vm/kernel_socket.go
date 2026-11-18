@@ -104,6 +104,10 @@ func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 
 	base := int(kind & sockTypeMask)
 
+	if base == sockCall {
+		return p.result(0, p.callPair(kind, at))
+	}
+
 	switch base {
 	case sockStream, sockDgram, sockSeqpacket:
 	case sockRaw:
@@ -140,6 +144,11 @@ func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 const (
 	sockTypeMask = 0xf
 	sockRaw      = 3
+	// SOCK_CALL, a call pair's (kernel_call.go), and SO_SERVED, which makes
+	// an end of a pair the open file a server describes (kernel_remote.go):
+	// lib/c's own, of sys/socket.h.
+	sockCall = 7
+	soServed = 200
 )
 
 func (p *Process) libcBind(fd, addr, n uint32) uint32 {
@@ -226,7 +235,38 @@ func (p *Process) libcGetsockopt(fd, level, name, at, lenAt uint32) uint32 {
 	return p.result(0, err)
 }
 
+// callPair is socketpair's SOCK_CALL: a call pair (kernel_call.go), its
+// serving end first.
+func (p *Process) callPair(kind, at uint32) error {
+	serving, asking := newCall(kind&sockNonblock != 0)
+	cloexec := kind&sockCloexec != 0
+	x, err := p.install(serving, 0, cloexec)
+
+	if err != nil {
+		asking.unref()
+
+		return err
+	}
+
+	y, err := p.install(asking, 0, cloexec)
+
+	if err != nil {
+		p.closeFd(x)
+
+		return err
+	}
+
+	p.put32(at, uint32(x))
+	p.put32(at+4, uint32(y))
+
+	return nil
+}
+
 func (p *Process) libcSetsockopt(fd, level, name, at, n uint32) uint32 {
+	if level == solSocket && name == soServed {
+		return p.result(0, p.serve(fd, at, n))
+	}
+
 	s, err := p.socketAt(fd)
 
 	if err == nil {

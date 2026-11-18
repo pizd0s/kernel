@@ -111,6 +111,7 @@ func (f *memfdFile) asPair() *pairEnd          { return nil }
 func (f *memfdFile) asListener() *unixListener { return nil }
 func (f *memfdFile) asConsole() *consoleEnd    { return nil }
 func (f *memfdFile) asVFS() *remoteDir         { return nil }
+func (f *memfdFile) asCall() *callEnd          { return nil }
 
 func (f *memfdFile) stat(p *Process, st *syscall.Stat_t) error {
 	*st = syscall.Stat_t{Ino: f.ino, Mode: syscall.S_IFREG | 0o777, Nlink: 1, Size: int64(len(f.mem)),

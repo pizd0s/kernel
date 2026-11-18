@@ -269,7 +269,7 @@ Endpoint* tools::listen(int fd, Role role, void* node, bool reads, bool writes) 
     } else {
         ep = static_cast<Endpoint*>(allocate(sizeof(Endpoint)));
     }
-    *ep = {fd, reads, writes, role, false, node, nullptr, live, nullptr};
+    *ep = {fd, reads, writes, role, false, node, nullptr, live, nullptr, nullptr, nullptr, nullptr};
     if (live) {
         live->before = ep;
     }
@@ -287,8 +287,15 @@ Endpoint* tools::listen(int fd, Role role, void* node, bool reads, bool writes) 
 Endpoint* tools::openFile(int fd, u32 flags, void* node, u64 dev, u64 ino, bool reads, bool writes) {
     const served what{SERVED_FILE, flags & (O_ACCMODE | O_APPEND | O_NONBLOCK), dev, ino, 0};
     int pair[2];
-    if (servedpair(&what, pair) != 0) {
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         error(fd, errno);
+        return nullptr;
+    }
+    if (setsockopt(pair[1], SOL_SOCKET, SO_SERVED, &what, sizeof what) != 0) {
+        const int e = errno;
+        close(pair[0]);
+        close(pair[1]);
+        error(fd, e);
         return nullptr;
     }
     Endpoint* ep = listen(pair[0], Role::File, node, reads, writes);
@@ -297,10 +304,13 @@ Endpoint* tools::openFile(int fd, u32 flags, void* node, u64 dev, u64 ino, bool 
     return ep;
 }
 
-// An endpoint that closes: what is the file system's of it goes first.
+// An endpoint that closes: what is the file system's of it goes first,
+// an open file's; a connection is none of the file system's.
 static void forget(Endpoint* ep, Closing closing) {
     ep->dead = true;
-    closing(ep);
+    if (ep->role != Role::Connection) {
+        closing(ep);
+    }
     if (ep->before) {
         ep->before->after = ep->after;
     } else {
@@ -315,10 +325,40 @@ static void forget(Endpoint* ep, Closing closing) {
 }
 
 static void closed(Endpoint* ep, Closing closing) {
+    // An open file's connections go with it; a connection goes out of
+    // its file's.
+    while (Endpoint* c = ep->first) {
+        closed(c, closing);
+    }
+    if (ep->file) {
+        for (Endpoint** at = &ep->file->first; *at; at = &(*at)->other) {
+            if (*at == ep) {
+                *at = ep->other;
+                break;
+            }
+        }
+    }
     const int fd = ep->fd;
     epoll_ctl(watcher, EPOLL_CTL_DEL, fd, nullptr);
     forget(ep, closing);
     close(fd);
+}
+
+// An open file's CONNECT: a call pair, whose serving end is a connection
+// of the file's from now on and whose asking end the OK brings, on the
+// file's endpoint, the question's.
+static void connect(Endpoint* ep) {
+    int pair[2];
+    if (socketpair(AF_UNIX, SOCK_CALL | SOCK_CLOEXEC, 0, pair) != 0) {
+        error(ep->fd, errno);
+        return;
+    }
+    Endpoint* c = listen(pair[0], Role::Connection, ep->node, ep->reads, ep->writes);
+    c->file = ep;
+    c->other = ep->first;
+    ep->first = c;
+    reply(ep->fd, opOk, 0, nullptr, 0, &pair[1], 1);
+    close(pair[1]);
 }
 
 static void bury() {
@@ -340,6 +380,32 @@ static void handle(Endpoint* ep, FsCall fsCall, FileCall fileCall, Closing closi
         return;
     }
     const Body body{packet + sizeof(Header), packet + sizeof(Header) + n};
+    if (ep->role == Role::File) {
+        // Who asks connects; nothing else comes on an open file's own
+        // endpoint.
+        if (h.op == opConnect) {
+            connect(ep);
+        }
+        for (usize i = 0; i < packetFdCount; ++i) {
+            close(packetFds[i]);
+        }
+        return;
+    }
+    if (ep->role == Role::Connection) {
+        // A request of the open file's, answered on the connection, which
+        // is the last of its descriptors to the call.
+        const usize brought = packetFdCount;
+        if (brought < maxFds) {
+            packetFds[packetFdCount++] = ep->fd;
+        }
+        fileCall(ep->file, h, body, ep->fd);
+        for (usize i = 0; i < brought; ++i) {
+            if (packetFds[i] >= 0) {
+                close(packetFds[i]);
+            }
+        }
+        return;
+    }
     if (packetFdCount == 0) {
         // A question of rootfs's, answered on its channel, in order; an
         // open's file goes on an endpoint, which a question has none of.
@@ -359,11 +425,7 @@ static void handle(Endpoint* ep, FsCall fsCall, FileCall fileCall, Closing closi
         return;
     }
     const int fd = packetFds[packetFdCount - 1];
-    if (ep->role == Role::Channel) {
-        fsCall(h, body, fd);
-    } else {
-        fileCall(ep, h, body, fd);
-    }
+    fsCall(h, body, fd);
     for (usize i = 0; i < packetFdCount; ++i) {
         if (packetFds[i] >= 0) {
             close(packetFds[i]);

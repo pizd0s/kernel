@@ -1005,7 +1005,7 @@ static void pathOf(const Node* n, int fd) {
     }
 }
 
-// An open of a node, answered on the reply's endpoint with a new open
+// An open of a node, answered where its request says with a new open
 // file: read or written as its access mode says and who asks may,
 // emptied when O_TRUNC asks. A link is ELOOP, ENOTDIR with O_DIRECTORY; a
 // directory is rootfs's to open, EISDIR here; a FIFO is its stat, the

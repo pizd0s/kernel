@@ -140,6 +140,7 @@ func (s *unixSocket) asPair() *pairEnd          { return nil }
 func (s *unixSocket) asListener() *unixListener { return nil }
 func (s *unixSocket) asConsole() *consoleEnd    { return nil }
 func (s *unixSocket) asVFS() *remoteDir         { return nil }
+func (s *unixSocket) asCall() *callEnd          { return nil }
 
 func (s *unixSocket) state() (*unixListener, *pairEnd) {
 	s.mu.Lock()
@@ -579,6 +580,7 @@ func (l *unixListener) asPair() *pairEnd          { return nil }
 func (l *unixListener) asListener() *unixListener { return l }
 func (l *unixListener) asConsole() *consoleEnd    { return nil }
 func (l *unixListener) asVFS() *remoteDir         { return nil }
+func (l *unixListener) asCall() *callEnd          { return nil }
 
 // shut ends the listener: it refuses from then on, and the connections
 // that waited are reset.
@@ -772,6 +774,7 @@ func (s *unixDgram) asPair() *pairEnd          { return nil }
 func (s *unixDgram) asListener() *unixListener { return nil }
 func (s *unixDgram) asConsole() *consoleEnd    { return nil }
 func (s *unixDgram) asVFS() *remoteDir         { return nil }
+func (s *unixDgram) asCall() *callEnd          { return nil }
 
 // targetEnd is connect's target, with a reference of its own, or nil.
 func (s *unixDgram) targetEnd() *pairEnd {

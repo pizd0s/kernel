@@ -59,6 +59,21 @@ struct ucred {
 #define SOCK_RAW 3
 #define SOCK_RDM 4
 #define SOCK_SEQPACKET 5
+/*
+ * A call pair, the system's own: socketpair's alone. A call and its
+ * answer go on it, one call at a time and nothing queued. The first end
+ * serves and the second asks: the asking end sends a call, a packet with
+ * its descriptors, the serving end receives it and sends its answer, a
+ * packet too, which the asking end receives. A call sent before the
+ * answer to the one before was received is EBUSY, an answer to no call
+ * received EPIPE. The serving end receives after a call the CANCEL who
+ * asked may send of it (lib/protocol/protocol.h), and reads the end once
+ * the asking end is gone; the asking end reads the end when the call was
+ * left unanswered, the server gone. A serving end sent with a packet is
+ * the call in hand: who receives it answers that call alone, and when it
+ * lets go of it unanswered who asked reads the end.
+ */
+#define SOCK_CALL 7
 #define SOCK_NONBLOCK 04000
 #define SOCK_CLOEXEC 02000000
 
@@ -98,6 +113,41 @@ struct ucred {
 #define SO_SNDTIMEO 21
 #define SO_BINDTODEVICE 25
 #define SO_ACCEPTCONN 30
+/*
+ * The system's own, of an end of a seqpacket pair no other descriptor
+ * refers to: a struct served makes it the open file a server describes
+ * (lib/protocol/protocol.h), whose calls the kernel makes requests of to
+ * the pair's other end, the server's endpoint of it. The descriptor is
+ * that open file from then on, and goes to who asked as an OPEN's OK
+ * brings it. kind is SERVED_FILE, an open file; SERVED_TERMINAL, a
+ * terminal's, which takes a terminal's calls too; SERVED_DIR, a handle
+ * of a directory of the VFS's, which calls with a path go to; or
+ * SERVED_PATH, a handle of what O_PATH opened that is no directory; with
+ * SERVED_TELLS the server tells its readiness (READY). flags are the
+ * open's: O_ACCMODE, O_APPEND and O_NONBLOCK, and O_PATH of a
+ * directory's handle, which takes no locks then. dev and ino are the
+ * file's or the directory's, as its stat has them, or a terminal's
+ * device's: they name it to the kernel. The kernel keeps the locks of
+ * flock and fcntl by them, so the open files given one dev and ino are
+ * one file to lock; a file of ino 0 has no locks. And two opens of a
+ * terminal are one terminal by them. id is a handle's, which calls with
+ * a path name the root by.
+ */
+#define SO_SERVED 200
+
+#define SERVED_FILE 1
+#define SERVED_TERMINAL 2
+#define SERVED_DIR 3
+#define SERVED_PATH 4
+#define SERVED_TELLS 16
+
+struct served {
+    unsigned kind;
+    unsigned flags;
+    unsigned long long dev;
+    unsigned long long ino;
+    unsigned long long id;
+};
 
 #define MSG_OOB 0x0001
 #define MSG_PEEK 0x0002

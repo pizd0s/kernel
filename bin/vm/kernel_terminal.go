@@ -62,6 +62,7 @@ func (t *remoteTerminal) asPair() *pairEnd          { return nil }
 func (t *remoteTerminal) asListener() *unixListener { return nil }
 func (t *remoteTerminal) asConsole() *consoleEnd    { return nil }
 func (t *remoteTerminal) asVFS() *remoteDir         { return nil }
+func (t *remoteTerminal) asCall() *callEnd          { return nil }
 
 func (t *remoteTerminal) stat(p *Process, st *syscall.Stat_t) error { return t.node.stat(p, st) }
 func (t *remoteTerminal) poll(events int16) int16                   { return t.node.poll(events) }

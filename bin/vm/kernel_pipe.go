@@ -225,6 +225,7 @@ func (e *pipeEnd) asPair() *pairEnd          { return nil }
 func (e *pipeEnd) asListener() *unixListener { return nil }
 func (e *pipeEnd) asConsole() *consoleEnd    { return nil }
 func (e *pipeEnd) asVFS() *remoteDir         { return nil }
+func (e *pipeEnd) asCall() *callEnd          { return nil }
 
 // sides are what of the end a wait for events is on: its reading, its
 // writing, or both, of an end that does both and is asked neither.

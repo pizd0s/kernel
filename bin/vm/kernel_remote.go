@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/binary"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -13,11 +14,20 @@ import (
 // A server's files: the kernel speaks the protocol of
 // lib/protocol/protocol.h here for the POSIX calls of a process, as the
 // libc of the process would. An open file is the second end of a pair its
-// server made with servedpair, born what the server described: a file, a
+// server made, a seqpacket socketpair's, which the server made the open
+// file it describes with SO_SERVED (lib/c's sys/socket.h): a file, a
 // terminal's (kernel_terminal.go), a handle of a directory of rootfs's,
 // which the calls with a path go to whole (kernel_vfs.go), or one of what
-// O_PATH opened that is no directory; the server holds the first end and
-// answers on it.
+// O_PATH opened that is no directory; the server holds the first end, its
+// endpoint of the open file.
+//
+// A call on an open file goes on a connection to it. The kernel connects
+// for the process: CONNECT on the open file's endpoint, a question, which
+// the server answers there, the questions' answers in their order, with
+// the asking end of a call pair it made (kernel_call.go), whose serving
+// end it keeps. The request is the call sent on the connection, and the
+// reply its answer, the server's own or that of one it handed the
+// request on to, serving end and all.
 //
 // A packet is a header and a body; files ride with it.
 //
@@ -27,14 +37,12 @@ import (
 //	are vm's; a server makes what it creates theirs and lets them do what
 //	its modes say, gid their group (permits). A reply's are zero.
 //
-//	Every request brings a fresh endpoint, last among its files: the reply
-//	comes on it. An open's OK brings the open file, the second end of a
-//	pair the server made with servedpair, whose first end it keeps. A READ
-//	or a WRITE brings before it a memfd of the memory the process reads
-//	into or writes from (kernel_memfd.go): the server writes the bytes
-//	there or reads them from there itself, from the memfd's byte woff on,
-//	one copy, as many as asked, and closes it as it answers. A server that
-//	is gone is EIO. An open file's calls:
+//	An open's OK brings the open file, the second end of a pair the server
+//	made, whose first end it keeps. A READ or a WRITE brings a memfd of the
+//	memory the process reads into or writes from (kernel_memfd.go): the
+//	server writes the bytes there or reads them from there itself, from
+//	the memfd's byte woff on, one copy, as many as asked, and closes it as
+//	it answers. A server that is gone is EIO. An open file's calls:
 //	  READ      arg len   io               OK count u32
 //	  WRITE     arg len   io               OK count u32 at u64, where an
 //	                                       append went
@@ -47,10 +55,12 @@ import (
 //	  FTRUNCATE           size u64
 //	  FSYNC     arg data
 //	  FSTATFS                              OK statfs
-//	  CANCEL              on the endpoint of a READ or a WRITE the server
+//	  CANCEL              on the connection of a READ or a WRITE the server
 //	                      keeps while it waits, from the kernel (waiting):
 //	                      the server answers that request now, with the
 //	                      count so far or ERR EINTR
+//	  CONNECT             on the open file's endpoint: OK, fds[0] the asking
+//	                      end of a call pair, a connection
 //	  READY     arg events                 from the server, on its end of an
 //	                                       open file it made telling
 //	                                       (servedTells): what poll finds
@@ -85,10 +95,11 @@ const (
 	rFstatfs
 	rCancel
 	rReady
+	rConnect
 )
 
-// The kinds of struct served (lib/c's sys/served.h), what a server's pair
-// for what it serves is born, and its server's telling of its readiness.
+// The kinds of struct served (lib/c's sys/socket.h), what SO_SERVED makes
+// the end of a server's pair, and its server's telling of its readiness.
 // READY's flags: the terminal's TOSTOP.
 const (
 	servedFile     = 1
@@ -128,6 +139,14 @@ const (
 type remoteNode struct {
 	end  *pairEnd
 	refs atomic.Int32
+	// connecting are who asked the server for a connection and has no
+	// answer yet, the first to ask first, with mu; gone is set once the
+	// server's end closed. watchers are the subscriptions of a file whose
+	// server tells its readiness.
+	mu         sync.Mutex
+	connecting []*connector
+	gone       bool
+	watchers   subscribers
 	// accmode is the O_ACCMODE it was opened with, append its O_APPEND,
 	// which F_SETFL sets as well as O_NONBLOCK.
 	accmode  int
@@ -138,8 +157,8 @@ type remoteNode struct {
 	pos   int64
 	after uint64
 	// tells is set for a file whose server tells its readiness, READY on
-	// its endpoint, whose channel keeps only the last; ready is what that
-	// said, and a terminal's foreground group and TOSTOP.
+	// its endpoint; ready is what the last said, and a terminal's
+	// foreground group and TOSTOP.
 	tells      bool
 	ready      atomic.Int32
 	foreground atomic.Int32
@@ -210,6 +229,7 @@ func (f *remoteFile) asPair() *pairEnd          { return nil }
 func (f *remoteFile) asListener() *unixListener { return nil }
 func (f *remoteFile) asConsole() *consoleEnd    { return nil }
 func (f *remoteFile) asVFS() *remoteDir         { return nil }
+func (f *remoteFile) asCall() *callEnd          { return nil }
 
 func (f *remoteFile) stat(p *Process, st *syscall.Stat_t) error { return f.node.stat(p, st) }
 func (f *remoteFile) poll(events int16) int16                   { return f.node.poll(events) }
@@ -281,6 +301,7 @@ func (d *remoteDir) asPair() *pairEnd          { return nil }
 func (d *remoteDir) asListener() *unixListener { return nil }
 func (d *remoteDir) asConsole() *consoleEnd    { return nil }
 func (d *remoteDir) asVFS() *remoteDir         { return d }
+func (d *remoteDir) asCall() *callEnd          { return nil }
 
 func (d *remoteDir) stat(p *Process, st *syscall.Stat_t) error { return d.node.stat(p, st) }
 func (d *remoteDir) poll(events int16) int16                   { return d.node.poll(events) }
@@ -323,6 +344,7 @@ func (h *remotePath) asPair() *pairEnd          { return nil }
 func (h *remotePath) asListener() *unixListener { return nil }
 func (h *remotePath) asConsole() *consoleEnd    { return nil }
 func (h *remotePath) asVFS() *remoteDir         { return nil }
+func (h *remotePath) asCall() *callEnd          { return nil }
 
 func (h *remotePath) stat(p *Process, st *syscall.Stat_t) error { return h.node.stat(p, st) }
 func (h *remotePath) poll(events int16) int16                   { return h.node.poll(events) }
@@ -338,110 +360,48 @@ func (h *remotePath) chown(p *Process, uid, gid int) error           { return h.
 func (h *remotePath) utimes(p *Process, ts []syscall.Timespec) error { return h.node.utimes(p, ts) }
 func (h *remotePath) statfs(p *Process, st *syscall.Statfs_t) error  { return h.node.statfs(p, st) }
 
-// servedpair is a pair a server makes for what it serves: the first end
-// is the server's, a plain one; the second is born the open file struct
-// served at what describes, whose calls are requests on the first. Both
-// close on exec.
-func (p *Process) libcServedpair(what, sv uint32) uint32 {
-	a, b := newPair(false)
-	f, err := served(p, p.u32(what), int(p.u32(what+4)), p.u64(what+8), p.u64(what+16), p.u64(what+24), b)
-
-	if err != nil {
-		a.unref()
-		b.unref()
-
-		return p.result(0, err)
+// serve is setsockopt's SO_SERVED (lib/c's sys/socket.h): the end of a
+// seqpacket pair the descriptor refers to, and nothing else does, becomes
+// the open file the struct served at at describes, whose calls the kernel
+// makes requests of on connections to the pair's other end, the server's
+// endpoint of it; that is what the descriptor refers to from now on, and
+// what goes to who asked as an OPEN's OK brings it.
+func (p *Process) serve(fd, at, n uint32) error {
+	if n != sizeofServed {
+		return syscall.EINVAL
 	}
 
-	x, err := p.install(a, 0, true)
+	d, ok := p.files.at(int(fd))
 
-	if err != nil {
-		f.unref()
-
-		return p.result(0, err)
+	if !ok {
+		return syscall.EBADF
 	}
 
-	y, err := p.install(f, 0, true)
+	end := d.obj.asPair()
 
-	if err != nil {
-		p.closeFd(x)
-
-		return p.result(0, err)
+	if end == nil {
+		return syscall.ENOTSOCK
 	}
 
-	p.put32(sv, uint32(x))
-	p.put32(sv+4, uint32(y))
+	if end.shared.kind != sockSeqpacket || end.refs.Load() != 1 {
+		return syscall.EINVAL
+	}
 
-	return 0
+	f, err := served(p, p.u32(at), int(p.u32(at+4)), p.u64(at+8), p.u64(at+16), p.u64(at+24), end)
+
+	if err != nil {
+		return err
+	}
+
+	// The descriptor's reference to the end is the open file's now.
+	p.files.take(int(fd))
+	p.files.put(int(fd), f, d.cloexec)
+
+	return nil
 }
 
-// servedturn is a server's turn (lib/c's sys/served.h): the answer to the
-// request in hand, then the next request, in one call. With reply a
-// descriptor, the guest's msghdr at answer goes there as sendmsg sends
-// it, quiet and at once, and the descriptor closes, answered or not: an
-// asker that is gone is its own loss. Then the call waits as epoll_pwait
-// does, timeout milliseconds and with mask, for a member of the set epfd
-// that has a packet or has ended, and receives it into the msghdr at
-// request as recvmsg does, its descriptors close-on-exec; the member's
-// epoll_event goes to event. It is the packet's length, 0 for an end's;
-// ETIMEDOUT past the timeout, EINTR for a signal taken, and EAGAIN, with
-// the event, for a member ready for something that is no reading.
-func (p *Process) libcServedturn(epfd, reply, answer, request, event, timeout, mask uint32) uint32 {
-	return p.result(p.withMask(mask, func() (int, error) {
-		return p.servedTurn(epfd, reply, answer, request, event, int(int32(timeout)))
-	}))
-}
-
-func (p *Process) servedTurn(epfd, reply, answer, request, event uint32, timeout int) (int, error) {
-	ep, err := p.epollAt(epfd)
-
-	if err != nil {
-		return 0, err
-	}
-
-	if int32(reply) >= 0 {
-		obj, err := p.fd(reply)
-
-		if err != nil {
-			return 0, err
-		}
-
-		if s := obj.asSocket(); s != nil && answer != 0 {
-			s.sendmsg(p, answer, msgNosignal|msgDontwait)
-		}
-
-		p.closeFd(int(reply))
-	}
-
-	end := deadline(timeout)
-	out := p.span(event, epollEventSize)
-
-	for {
-		m, err := ep.one(p, out, end)
-
-		if err != nil {
-			return 0, err
-		}
-
-		if m == nil {
-			return 0, syscall.ETIMEDOUT
-		}
-
-		s := m.key.obj.asSocket()
-
-		if s == nil || int16(binary.LittleEndian.Uint32(out))&(pollIn|pollRdnorm|pollHup|pollErr) == 0 {
-			return 0, syscall.EAGAIN
-		}
-
-		// A member ready a moment ago with nothing there now waits again.
-		if n, err := s.recvmsg(p, request, msgDontwait|msgCmsgCloexec); err != syscall.EAGAIN {
-			return n, err
-		}
-	}
-}
-
-// served is the open file a kind of struct served makes of a pair's
-// second end for the process that serves it, as the open flags say: a
+// served is the open file a kind of struct served makes of a pair's end
+// for the process that serves it, as the open flags say: a
 // file, a terminal's, or a handle of id, of a directory or of what O_PATH
 // opened; with servedTells its server's READY is its readiness. The dev
 // and ino it gives name it (fileKey): a file and a directory have their
@@ -478,9 +438,9 @@ func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *pairEn
 	n.append.Store(flags&syscall.O_APPEND != 0)
 	n.nonblock.Store(flags&syscall.O_NONBLOCK != 0)
 
-	if n.tells {
-		end.from.latest.Store(true)
-	}
+	// What the server sends on its endpoint is the kernel's to take: its
+	// READY, and the answers to who connects.
+	end.from.drain(n.deliver, n.hungUp)
 
 	return f, nil
 }
@@ -503,13 +463,13 @@ func (n *remoteNode) unref() {
 // READY comes; any other is ready whenever asked.
 func (n *remoteNode) subscribe(s *subscription, events int16) {
 	if n.tells {
-		n.end.from.readers.add(&s.in)
+		n.watchers.add(&s.in)
 	}
 }
 
 func (n *remoteNode) unsubscribe(s *subscription) {
 	if n.tells {
-		n.end.from.readers.remove(&s.in)
+		n.watchers.remove(&s.in)
 	}
 }
 
@@ -524,20 +484,36 @@ func (n *remoteNode) poll(events int16) int16 {
 // readiness is what the server said last of the file, the READY that came
 // on its endpoint; a server gone is a hangup and an error.
 func (n *remoteNode) readiness() int16 {
-	for {
-		pk, eof, ok := n.end.take(false)
+	return int16(n.ready.Load())
+}
 
-		if !ok {
-			break
-		}
+// A connector is a process that asked a server to connect: note is its
+// event of the answer, pk the answer once done is set, eof for a server
+// that went with none; left says the process waits no more, and the
+// answer goes.
+type connector struct {
+	p    *Process
+	note event
+	done atomic.Bool
+	pk   packet
+	eof  bool
+	left bool
+}
 
-		if eof {
-			n.ready.Store(int32(pollHup | pollErr))
+// deliver takes what the server sends on its endpoint of the open file:
+// READY, the file's readiness now, which wakes who watches it; and the
+// answer to a CONNECT, the first's of those that wait, as the answers
+// come in the order of the questions.
+func (n *remoteNode) deliver(pk *packet) {
+	if len(pk.data) < remoteHeader {
+		dropFiles(pk.files)
 
-			break
-		}
+		return
+	}
 
-		if len(pk.data) >= remoteHeader+8 && binary.LittleEndian.Uint32(pk.data) == rReady {
+	switch binary.LittleEndian.Uint32(pk.data) {
+	case rReady:
+		if n.tells && len(pk.data) >= remoteHeader+8 {
 			n.foreground.Store(int32(binary.LittleEndian.Uint32(pk.data[remoteHeader:])))
 			n.tostop.Store(binary.LittleEndian.Uint32(pk.data[remoteHeader+4:])&readyTostop != 0)
 
@@ -552,12 +528,159 @@ func (n *remoteNode) readiness() int16 {
 			}
 
 			n.ready.Store(int32(events))
+			n.watchers.tell()
+		}
+	case rOk, rErr:
+		n.mu.Lock()
+
+		if len(n.connecting) == 0 {
+			n.mu.Unlock()
+
+			break
 		}
 
-		dropFiles(pk.files)
+		w := n.connecting[0]
+		n.connecting[0] = nil
+		n.connecting = n.connecting[1:]
+
+		if w.left {
+			n.mu.Unlock()
+
+			break
+		}
+
+		w.pk = *pk
+		w.done.Store(true)
+		n.mu.Unlock()
+		w.p.post(&w.note)
+
+		return
 	}
 
-	return int16(n.ready.Load())
+	dropFiles(pk.files)
+}
+
+// hungUp hears that the server's end closed: the file hangs up, and who
+// waits for a connection reads the end.
+func (n *remoteNode) hungUp() {
+	n.ready.Store(int32(pollHup | pollErr))
+	n.mu.Lock()
+	n.gone = true
+	waiting := n.connecting
+	n.connecting = nil
+
+	for _, w := range waiting {
+		w.eof = true
+		w.done.Store(true)
+	}
+
+	n.mu.Unlock()
+
+	for _, w := range waiting {
+		if !w.left {
+			w.p.post(&w.note)
+		}
+	}
+
+	n.watchers.tell()
+}
+
+// connect is a connection of p's to the open file: CONNECT on its
+// endpoint, a question the server answers there with the asking end of a
+// call pair it made. The process takes its signals as it waits, and waits
+// on. A server that is gone is EIO.
+func (n *remoteNode) connect(p *Process) (*callEnd, error) {
+	w := &connector{p: p}
+	w.note.kind = eventChanged
+	data := make([]byte, remoteHeader)
+	p.head(data, rConnect, 0)
+	pk := packet{data: data}
+
+	defer func() {
+		n.mu.Lock()
+
+		if !w.done.Load() {
+			w.left = true
+		}
+
+		n.mu.Unlock()
+		p.events.drop(&w.note)
+	}()
+
+	// The question and its place among those that wait, as one: the
+	// answers come in the questions' order.
+	var sub *subscription
+	_, err := p.wait(time.Time{}, func(*event) (bool, error) {
+		for {
+			n.mu.Lock()
+
+			if n.gone {
+				n.mu.Unlock()
+
+				return true, syscall.EIO
+			}
+
+			full, err := n.end.to.put(&pk)
+
+			if err == nil && !full {
+				n.connecting = append(n.connecting, w)
+			}
+
+			n.mu.Unlock()
+
+			if err != nil {
+				return true, syscall.EIO
+			}
+
+			if !full {
+				return true, nil
+			}
+
+			if sub != nil {
+				return false, nil
+			}
+
+			// A take from the full channel wakes its writers.
+			sub = p.subscription(0)
+			n.end.subscribe(sub, pollOut)
+		}
+	})
+
+	if sub != nil {
+		n.end.unsubscribe(sub)
+		p.release(sub)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	p.wait(time.Time{}, func(*event) (bool, error) {
+		return w.done.Load(), nil
+	})
+
+	if !w.done.Load() {
+		return nil, syscall.EIO
+	}
+
+	if err := replyOf(&w.pk, w.eof); err != nil {
+		return nil, err
+	}
+
+	if len(w.pk.files) == 0 {
+		return nil, syscall.EIO
+	}
+
+	dropFiles(w.pk.files[1:])
+	c := w.pk.files[0].asCall()
+
+	if c == nil || c.serves {
+		w.pk.files[0].unref()
+
+		return nil, syscall.EIO
+	}
+
+	return c, nil
 }
 
 func (n *remoteNode) flags() (int, error) {
@@ -579,18 +702,6 @@ func (n *remoteNode) setFlags(fl int) error {
 	n.append.Store(fl&syscall.O_APPEND != 0)
 
 	return nil
-}
-
-// request sends a request on an endpoint, the files with it, as the
-// process's effective user and group. The process waits for a server as
-// for anything: it takes its signals meanwhile, and a call goes on after
-// their handlers.
-func request(p *Process, to *pairEnd, op, arg uint32, body []byte, files []Object) error {
-	data := make([]byte, remoteHeader+len(body))
-	p.head(data, op, arg)
-	copy(data[remoteHeader:], body)
-
-	return to.kernelSend(p, data, files)
 }
 
 // head writes a request's header, the process the kernel calls for its
@@ -638,28 +749,35 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 		return packet{}, false, syscall.EINTR
 	}
 
-	r := newReply(p)
-	defer r.leave()
-	err = request(p, n.end, op, arg, body, r.with(files))
-	r.unref()
-
-	if err == syscall.EPIPE {
-		err = syscall.EIO // the server is gone
-	}
+	c, err := n.connect(p)
 
 	if err != nil {
 		return packet{}, false, err
 	}
 
-	outer, was := p.ask(r)
+	defer c.unref()
+
+	if p.interrupts(true) {
+		return packet{}, false, syscall.EINTR
+	}
+
+	data := make([]byte, remoteHeader+len(body))
+	p.head(data, op, arg)
+	copy(data[remoteHeader:], body)
+
+	if err := c.ask(p, data, files); err != nil {
+		return packet{}, false, syscall.EIO // the server is gone
+	}
+
+	outer, was := p.ask(c)
 	defer p.unask(outer, was)
 
 	_, err = p.wait(time.Time{}, func(*event) (bool, error) {
-		if r.state.Load() == replyWaits {
+		if !c.answered() {
 			return false, nil
 		}
 
-		err = replyOf(&pk, r.take(&pk))
+		err = replyOf(&pk, c.take(&pk))
 		dropFiles(pk.files)
 		pk.files = nil
 
@@ -669,11 +787,11 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 	return pk, p.cancelled && !p.interrupts(true), err
 }
 
-// call is a call on the node: a fresh endpoint for the reply
-// (kernel_reply.go) with the request, the reply's packet. files go with the
-// request and stay the caller's. Only an OPEN's reply brings a file, the
-// open file's endpoint, and a CONNECT's, the listener, which the packet
-// keeps; the files of any other reply, or the rest of theirs, go here.
+// call is a call on the node: the request sent on a connection to it,
+// the reply's packet. files go with the request and stay the caller's.
+// Only an OPEN's reply brings a file, the open file's endpoint, and a
+// CONNECT's, the listener, which the packet keeps; the files of any other
+// reply, or the rest of theirs, go here.
 func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []Object) (packet, error) {
 	data := make([]byte, remoteHeader+len(body))
 	p.head(data, op, arg)
@@ -685,25 +803,24 @@ func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []Objec
 // asked is call with the request made already, its header and its body
 // in data, which the packet keeps.
 func (n *remoteNode) asked(p *Process, op uint32, data []byte, files []Object) (packet, error) {
-	r := newReply(p)
-	defer r.leave()
-	err := n.end.kernelSend(p, data, r.with(files))
-	r.unref()
-
-	if err == syscall.EPIPE {
-		err = syscall.EIO // the server is gone
-	}
+	c, err := n.connect(p)
 
 	if err != nil {
 		return packet{}, err
 	}
 
-	outer, was := p.ask(r)
+	defer c.unref()
+
+	if err := c.ask(p, data, files); err != nil {
+		return packet{}, syscall.EIO // the server is gone
+	}
+
+	outer, was := p.ask(c)
 	defer p.unask(outer, was)
 
 	var pk packet
 
-	if err := replyOf(&pk, r.wait(p, &pk)); err != nil {
+	if err := replyOf(&pk, c.wait(p, &pk)); err != nil {
 		return packet{}, err
 	}
 
@@ -1288,6 +1405,7 @@ func (r *noRoot) asPair() *pairEnd          { return nil }
 func (r *noRoot) asListener() *unixListener { return nil }
 func (r *noRoot) asConsole() *consoleEnd    { return nil }
 func (r *noRoot) asVFS() *remoteDir         { return nil }
+func (r *noRoot) asCall() *callEnd          { return nil }
 
 func (r *noRoot) poll(events int16) int16 {
 	return events & (pollIn | pollOut | pollRdnorm | pollWrnorm)

@@ -28,9 +28,11 @@
 // process that asks. A place is a mount and a node of its file system. A
 // handle is an endpoint of rootfs's at a place, which a path walks from:
 // the root, the working directory and the directory descriptors of a
-// process are handles, and so is what O_PATH opens. An open file is its
-// file system's endpoint: the kernel reads and writes it there, and the
-// VFS is out of the way.
+// process are handles, and so is what O_PATH opens. Who calls connects to
+// the handle, and its calls come on the connection and are answered on
+// it, by rootfs or by the file system it hands a call on to, connection
+// and all. An open file is its file system's endpoint: the kernel reads
+// and writes it there, and the VFS is out of the way.
 //
 // A walk goes through a directory who asks may search, as the stat its
 // file system gave says; a file system checks the rest of what it does
@@ -480,8 +482,9 @@ namespace {
 
     // What an endpoint is to the loop.
     enum class Role : u8 {
-        Handle, // a handle of the VFS's, at a place: calls with a path walk from there
-        Fs,     // ours of the channel of a file system: the answers to its questions come on it
+        Handle,     // a handle of the VFS's, at a place: who asks connects on it
+        Connection, // a connection to a handle: its calls come on it, and walk from the handle's place
+        Fs,         // ours of the channel of a file system: the answers to its questions come on it
     };
 
     // A file system of the VFS's, another process's behind the channel
@@ -534,12 +537,17 @@ namespace {
         bool writes;
         Role role;
         bool dead;       // closed, while a batch of events may still name it
-        Place at;        // a Handle's
-        u64 id;          // a Handle's
-        Fs* fs;          // a Fs's
-        Endpoint* next;  // among the free ones
-        Endpoint* after; // among the live ones
+        Place at;         // a Handle's
+        u64 id;           // a Handle's
+        Fs* fs;           // a Fs's
+        Endpoint* next;   // among the free ones
+        Endpoint* after;  // among the live ones
         Endpoint* before;
+        Endpoint* handle; // a Connection's handle, none once that closed
+        Endpoint* first;  // a Handle's connections,
+        Endpoint* other;  // each the next of its handle's
+        u32 calls;        // a Connection's calls not done yet, which answer on it
+        bool left;        // a Connection whose other end closed: it goes with its last call
     };
 }
 
@@ -580,18 +588,6 @@ alignas(Header) static u8 packet[maxPacket];
 static int packetFds[maxFds];
 static usize packetFdCount;
 
-// The answer that waits for the next turn of the loop (turn): one that
-// brings no descriptor and is little enough to copy is not sent at once,
-// when none waits yet. The turn sends it, closes its endpoint and takes
-// the next request in one call of the kernel, servedturn. waitingFd is its
-// endpoint, -1 for none; waitingClosed says its call let go of the
-// endpoint since, as a call does once it answered: else the turn sends
-// the answer alone.
-static int waitingFd = -1;
-static bool waitingClosed;
-static usize waitingSize;
-alignas(Header) static u8 waiting[4096];
-
 // A reply: the header, then the parts where they are.
 static void reply(int fd, u32 op, u32 arg, const iovec* parts, usize count, const int* fds = nullptr, usize fdCount = 0) {
     Header head{op, arg, 0, 0};
@@ -599,35 +595,10 @@ static void reply(int fd, u32 op, u32 arg, const iovec* parts, usize count, cons
     if (count > 2 || fdCount > maxFds) {
         fatal("rootfs: a reply of %zu parts and %zu descriptors", count, fdCount);
     }
-    usize size = sizeof head;
     for (usize i = 0; i < count; ++i) {
         iov[1 + i] = parts[i];
-        size += parts[i].iov_len;
-    }
-    if (fdCount == 0 && waitingFd < 0 && size <= sizeof waiting) {
-        usize at = 0;
-        for (usize i = 0; i < 1 + count; ++i) {
-            if (iov[i].iov_len > 0) {
-                memcpy(waiting + at, iov[i].iov_base, iov[i].iov_len);
-                at += iov[i].iov_len;
-            }
-        }
-        waitingFd = fd;
-        waitingClosed = false;
-        waitingSize = size;
-        return;
     }
     sendPacket(fd, iov, 1 + count, fds, fdCount); // a gone reader is its own loss
-}
-
-// Lets go of a reply's endpoint, its call done with it: closed now, or by
-// the turn that sends the answer waiting on it.
-static void closeReply(int fd) {
-    if (fd == waitingFd) {
-        waitingClosed = true;
-    } else {
-        close(fd);
-    }
 }
 
 static iovec part(const void* data, usize size) {
@@ -639,7 +610,7 @@ static void ok(int fd, const void* data = nullptr, usize size = 0) {
     reply(fd, opOk, 0, &body, size ? 1 : 0);
 }
 
-// A reply of an error: the reply's endpoint is not kept.
+// A reply of an error: the call is done with its connection.
 static bool error(int fd, int e) {
     reply(fd, opErr, u32(e), nullptr, 0);
     return false;
@@ -720,8 +691,42 @@ static Endpoint* listen(int fd, Role role) {
 static void hold(const Place& p);
 static void letGo(Mount* m);
 
-// A handle of id at a place, on our end of its served pair; O_PATH's
-// reads nothing and changes nothing.
+// The connections by their descriptors, for a call to find the one it
+// answers on.
+static Buffer connections;
+
+static Endpoint*& connectionSlot(int fd) {
+    return static_cast<Endpoint**>(connections.data())[usize(fd)];
+}
+
+static Endpoint* connectionAt(int fd) {
+    return fd >= 0 && usize(fd) < connections.size() / sizeof(Endpoint*) ? connectionSlot(fd) : nullptr;
+}
+
+// A handle's CONNECT: a call pair, whose serving end is a connection of
+// the handle's from now on and whose asking end the OK brings, on the
+// handle's endpoint, the question's.
+static void connect(Endpoint* ep) {
+    int pair[2];
+    if (socketpair(AF_UNIX, SOCK_CALL | SOCK_CLOEXEC, 0, pair) != 0) {
+        error(ep->fd, errno);
+        return;
+    }
+    Endpoint* c = listen(pair[0], Role::Connection);
+    c->handle = ep;
+    c->other = ep->first;
+    ep->first = c;
+    while (connections.size() / sizeof(Endpoint*) <= usize(pair[0])) {
+        Endpoint* none = nullptr;
+        connections.append(&none, sizeof none);
+    }
+    connectionSlot(pair[0]) = c;
+    reply(ep->fd, opOk, 0, nullptr, 0, &pair[1], 1);
+    close(pair[1]);
+}
+
+// A handle of id at a place, on our end of its pair; O_PATH's reads
+// nothing and changes nothing.
 static Endpoint* listenHandle(int fd, const Place& p, bool opath, u64 id) {
     Endpoint* ep = listen(fd, Role::Handle);
     ep->at = p;
@@ -738,12 +743,46 @@ static Endpoint* listenHandle(int fd, const Place& p, bool opath, u64 id) {
 static void forget(Endpoint* ep);
 
 // The other end of an endpoint closed, or it is let go of: the file is
-// closed.
+// closed. A handle's connections go with it. A connection with calls not
+// done yet stays, out of the loop, until the last of them is: they answer
+// on its descriptor, which no other may take meanwhile.
 static void closed(Endpoint* ep) {
+    while (Endpoint* c = ep->first) {
+        ep->first = c->other;
+        c->handle = nullptr;
+        closed(c);
+    }
+    if (ep->handle) {
+        for (Endpoint** at = &ep->handle->first; *at; at = &(*at)->other) {
+            if (*at == ep) {
+                *at = ep->other;
+                break;
+            }
+        }
+        ep->handle = nullptr;
+    }
     const int fd = ep->fd;
-    epoll_ctl(watcher, EPOLL_CTL_DEL, fd, nullptr);
+    if (!ep->left) {
+        epoll_ctl(watcher, EPOLL_CTL_DEL, fd, nullptr);
+    }
+    if (ep->role == Role::Connection && ep->calls > 0) {
+        ep->left = true;
+        return;
+    }
+    if (ep->role == Role::Connection) {
+        connectionSlot(fd) = nullptr;
+    }
     forget(ep);
     close(fd);
+}
+
+// A call is done with the connection it answers on: one whose other end
+// closed meanwhile goes with its last call.
+static void done(int fd) {
+    Endpoint* c = connectionAt(fd);
+    if (c && --c->calls == 0 && c->left) {
+        closed(c);
+    }
 }
 
 // The endpoints closed in a batch of events are free once it is done.
@@ -771,6 +810,8 @@ static void forget(Endpoint* ep) {
             if (ep->fs) {
                 gone(ep->fs);
             }
+            break;
+        case Role::Connection:
             break;
     }
     if (ep->before) {
@@ -1483,19 +1524,26 @@ Answer Ask::await_resume() const noexcept {
 
 // ---- opens and calls handed on ---------------------------------------------------
 
-// A new handle at a place: a served pair, of a directory's handle or of
-// what O_PATH opened that is no directory, its id the next; our end is
-// the handle, the other end, the kernel's, -1 when there is no pair. The
-// place's dev and ino go with it, its file system's, which the kernel
-// keeps a directory's locks by: none of a place whose file system has not
-// said its stat yet.
+// A new handle at a place: a pair whose second end is made the handle
+// (SO_SERVED), a directory's or of what O_PATH opened that is no
+// directory, its id the next; our end is the handle's endpoint, the
+// other end, the kernel's, -1 when there is no pair. The place's dev and
+// ino go with it, its file system's, which the kernel keeps a directory's
+// locks by: none of a place whose file system has not said its stat yet.
 static int makeHandle(const Place& at, int flags, int& theirs) {
     const bool opath = (flags & O_PATH) != 0;
     const u64 id = ++handleIds;
     const u64 ino = at.st.dev != 0 ? at.st.ino : 0;
     const served what{u32(isDir(at) ? SERVED_DIR : SERVED_PATH), u32(flags) & (O_ACCMODE | O_APPEND | O_NONBLOCK | O_PATH), at.st.dev, ino, id};
     int pair[2];
-    if (servedpair(&what, pair) != 0) {
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+        return -1;
+    }
+    if (setsockopt(pair[1], SOL_SOCKET, SO_SERVED, &what, sizeof what) != 0) {
+        const int e = errno;
+        close(pair[0]);
+        close(pair[1]);
+        errno = e;
         return -1;
     }
     listenHandle(pair[0], at, opath, id);
@@ -1503,8 +1551,8 @@ static int makeHandle(const Place& at, int flags, int& theirs) {
     return 0;
 }
 
-// A handle's open, answered on fd: a new handle, whose served pair's
-// second end goes with the OK to who asked.
+// A handle's open, answered on fd: a new handle, the second end of whose
+// pair goes with the OK to who asked.
 static void openHandle(int fd, const Place& at, int flags) {
     int theirs;
     if (makeHandle(at, flags, theirs) != 0) {
@@ -1515,10 +1563,10 @@ static void openHandle(int fd, const Place& at, int flags) {
     close(theirs);
 }
 
-// A call handed on to a file system, with the kernel's endpoint, which
-// the file system answers on: the node of a place,
-// then what follows it in the call. EIO when the file system is gone,
-// EAGAIN when it does not keep up.
+// A call handed on to a file system, with the connection it came on,
+// which the file system answers on, the call in hand its own from then
+// on: the node of a place, then what follows it in the call. EIO when
+// the file system is gone, EAGAIN when it does not keep up.
 static bool hand(const Place& p, const Header& h, u32 op, u32 arg, const void* args, usize size, Name name, int fd, int extra = -1) {
     const Header head{op, arg, h.uid, h.gid};
     const iovec parts[] = {part(&head, sizeof head), part(&p.node, 8), part(args, size), part(name.at, name.length)};
@@ -2054,7 +2102,7 @@ Walk::Step Walk::answered(const Answer& a) {
 // the request it copies before it first waits.
 
 namespace {
-    // The kernel's endpoint of a call.
+    // The connection a call answers on, the call's until it is done.
     struct Reply {
         int fd;
 
@@ -2724,7 +2772,7 @@ static Task unmountCall(Header h, int fd, Place root, Place from, Name path) {
 
 Reply::~Reply() {
     if (fd >= 0) {
-        closeReply(fd);
+        done(fd);
     }
 }
 
@@ -2984,24 +3032,32 @@ static void handle(Endpoint* ep, ssize_t n) {
     }
     Header h;
     memcpy(&h, packet, sizeof h);
-    if (packetFdCount == 0) {
-        return; // a request without its reply endpoint: nobody to answer
-    }
-    if (h.op == opOk || h.op == opErr) {
-        for (usize i = 0; i < packetFdCount; ++i) {
-            close(packetFds[i]);
+    if (ep->role == Role::Handle) {
+        // Who asks connects; nothing else comes on a handle's own
+        // endpoint.
+        if (h.op == opConnect) {
+            connect(ep);
         }
-        return;
+    } else if (ep->handle && h.op != opOk && h.op != opErr) {
+        // A call of the handle's, answered on the connection: the call's
+        // until it is done, at once or when what it waits for came. The
+        // connection is the last of the request's descriptors to the call.
+        const Body body{packet + sizeof(Header), packet + n};
+        const int fd = ep->fd;
+        const usize brought = packetFdCount;
+        if (brought < maxFds) {
+            packetFds[packetFdCount++] = fd;
+        }
+        ++ep->calls;
+        const bool kept = onHandle(ep->handle, h, body, fd);
+        if (!kept) {
+            done(fd);
+        }
+        packetFdCount = brought;
     }
-    const int fd = packetFds[packetFdCount - 1];
-    const Body body{packet + sizeof(Header), packet + n};
-    const bool kept = onHandle(ep, h, body, fd);
-    if (!kept) {
-        closeReply(fd);
-    }
-    // The request's other descriptors, a READ's or WRITE's window, are
-    // done with once it is answered; one a call kept is -1.
-    for (usize i = 0; i + 1 < packetFdCount; ++i) {
+    // The request's descriptors, a MOUNT's connection or a BIND's
+    // listener, are done with once it is answered; one a call kept is -1.
+    for (usize i = 0; i < packetFdCount; ++i) {
         if (packetFds[i] >= 0) {
             close(packetFds[i]);
         }
@@ -3053,45 +3109,27 @@ static i64 monotonicMilliseconds() {
     return i64(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
 }
 
-// Sends the answer that waits, when one does, and closes its endpoint
-// when its call let go of it.
-static void sendWaiting() {
-    if (waitingFd < 0) {
-        return;
-    }
-    const iovec out{waiting, waitingSize};
-    sendPacket(waitingFd, &out, 1, nullptr, 0); // a gone reader is its own loss
-    if (waitingClosed) {
-        close(waitingFd);
-    }
-    waitingFd = -1;
-}
-
-// A turn of the loop, one call of the kernel: the answer that waits goes
-// and its endpoint closes, then the next packet of an endpoint comes into
-// packet, its descriptors into packetFds, the endpoint's event into
-// event. The packet's length, 0 for an endpoint that ended; -1 when none
-// came, for a signal or the time. An answer whose call keeps its endpoint
-// goes alone, before.
+// A turn of the loop: the next packet of an endpoint comes into packet,
+// its descriptors into packetFds, the endpoint's event into event. The
+// packet's length, 0 for an endpoint that ended; -1 when none came, for a
+// signal or the time.
 static ssize_t turn(epoll_event& event, int timeout) {
     alignas(cmsghdr) static unsigned char control[CMSG_SPACE(maxFds * sizeof(int))];
-    if (waitingFd >= 0 && !waitingClosed) {
-        sendWaiting();
+    packetFdCount = 0;
+    if (epoll_pwait(watcher, &event, 1, timeout, waitMasked ? &waitMask : nullptr) <= 0) {
+        return -1;
     }
-    iovec out{waiting, waitingSize};
-    msghdr answer{};
-    answer.msg_iov = &out;
-    answer.msg_iovlen = 1;
+    const Endpoint* ep = static_cast<const Endpoint*>(event.data.ptr);
+    if (ep != &bootMarker && ep->dead) {
+        return -1;
+    }
     iovec in{packet, sizeof packet};
     msghdr request{};
     request.msg_iov = &in;
     request.msg_iovlen = 1;
     request.msg_control = control;
     request.msg_controllen = sizeof control;
-    const int reply = waitingFd;
-    waitingFd = -1;
-    packetFdCount = 0;
-    const ssize_t n = servedturn(watcher, reply, &answer, &request, &event, timeout, waitMasked ? &waitMask : nullptr);
+    const ssize_t n = recvmsg(ep == &bootMarker ? bootEnd : ep->fd, &request, MSG_DONTWAIT | MSG_CMSG_CLOEXEC);
     if (n < 0) {
         return n;
     }
@@ -3138,7 +3176,6 @@ static void serve() {
         }
         bury();
     }
-    sendWaiting();
     close(watcher);
     watcher = -1;
 }
@@ -3384,7 +3421,7 @@ static Task boot() {
         rootMount->fs->cached = !nocacheIn(a);
     }
     if (makeHandle(rootOf(rootMount), O_RDONLY, rootEnd) != 0) {
-        fatal("rootfs: servedpair: errno %d", errno);
+        fatal("rootfs: a handle of the root: errno %d", errno);
     }
 
     const struct {

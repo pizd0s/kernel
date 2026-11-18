@@ -61,6 +61,7 @@ type Object interface {
 	asListener() *unixListener
 	asConsole() *consoleEnd
 	asVFS() *remoteDir
+	asCall() *callEnd
 }
 
 // A File is an open file, what any descriptor's object is: what fstat

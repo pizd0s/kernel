@@ -28,7 +28,7 @@ struct Device {
 // Registers a device of name and mode, S_IFCHR, S_IFBLK or S_IFSOCK with
 // the permissions, its owner uid and gid, on an endpoint of /dev/init:
 // the far end of a pair goes with the request, the device's stat comes
-// back. 0, or the errno.
+// back on the endpoint. 0, or the errno.
 int enroll(int registry, const char* name, uint32_t mode, uint32_t uid, uint32_t gid, Device& out);
 
 // Registers a device of the service's at /dev/init, or ends the service.
@@ -40,9 +40,13 @@ Device enroll(const char* program, const char* name, uint32_t mode);
 int readyDescriptor(int argc, char** argv, int& first);
 
 // What an event of the loop is of: ours of a device's pair, where its
-// opens come, or the endpoint of an open file of it, with what its open
-// lets it do and what the service keeps of it; or a socket that listens,
-// whose connections the loop accepts.
+// opens come, each with where to answer it; or the endpoint of an open
+// file of it, with what its open lets it do and what the service keeps of
+// it, which who asks connects on; or a socket that listens, whose
+// connections the loop accepts; or one whose requests are answered on it,
+// answers, as a socket a program speaks the protocol on is. The loop's
+// own are the connections to an open file, file theirs: the requests of
+// the open file come on them and are answered there.
 struct Endpoint {
     int fd;
     bool channel;
@@ -50,7 +54,12 @@ struct Endpoint {
     bool writes;
     void* of;
     bool listens = false;
-    Endpoint* next = nullptr; // among those let go of, the loop's
+    bool answers = false;
+    Endpoint* file = nullptr;  // a connection's open file
+    Endpoint* first = nullptr; // an open file's connections,
+    Endpoint* after = nullptr; // each the next of its file's
+    bool kept = false;         // a connection whose request waits (keep)
+    Endpoint* next = nullptr;  // among those let go of, the loop's
 };
 
 Endpoint* watch(int epoll, Endpoint e);
@@ -58,15 +67,16 @@ Endpoint* watch(int epoll, Endpoint e);
 // Lets go of an endpoint watch gave: it is closed, and no event names it.
 void unwatch(int epoll, Endpoint* e);
 
-// A request on an endpoint: its header and body, its descriptors, the
-// reply's endpoint last, a memfd of a READ's or WRITE's before it.
+// A request on an endpoint: its header and body, its descriptors, where
+// to answer it last, a memfd of a READ's or WRITE's before it.
 struct Request {
     Header h;
     const unsigned char* body;
     size_t size;
     int fds[maxFds];
     size_t count;
-    bool onEndpoint; // a question with no endpoint of its own: answered on the one it came on
+    bool onEndpoint;      // answered on the endpoint it came on, whose descriptor is the last
+    Endpoint* connection; // the connection it came on, of an open file's
 
     int reply() const;
     int window() const;
@@ -85,12 +95,20 @@ bool Request::at(size_t offset, T& out) const {
     return copy(offset, &out, sizeof out);
 }
 
-// Answers an OPEN with a new open file: a served pair of what describes,
-// the OPEN's flags its, whose second end, the open file, goes with the OK
-// to who asked, and whose first, watched in epoll with of, to read and
-// write as the flags let it, its requests come on. That endpoint, or
-// none, the error answered.
+// Answers an OPEN with a new open file: a pair whose second end is made
+// the open file what describes (SO_SERVED), the OPEN's flags its, and
+// goes with the OK to who asked; the first, watched in epoll with of, to
+// read and write as the flags let it, is the open file's endpoint, which
+// who asks connects on. That endpoint, or none, the error answered.
 Endpoint* answerOpen(int epoll, const Request& r, served what, void* of);
+
+// Keeps a request to answer it later, of saying what waits: the endpoint
+// to answer it on, whose descriptor stays open, and which hears of it
+// meanwhile, a CANCEL as a request to handle and the asker's going as
+// gone, each with that endpoint, whose of is the one given. unkeep lets
+// go of it once the request is answered.
+Endpoint* keep(int epoll, Request& r, void* of);
+void unkeep(int epoll, Endpoint* e);
 
 // handle answers a request; gone hears of an endpoint whose other end
 // closed.
@@ -106,16 +124,19 @@ using Expire = int (*)();
 // the system ends, what is open of them is still served until it closes.
 // Every request goes to handle, its descriptors closed after it but for
 // those it set to -1; on a channel only OPEN, which devfs handed on, and
-// handle answers with answerOpen. A request without an endpoint is a
-// question, answered on the endpoint it came on. An endpoint whose other
-// end closed goes to gone, then is closed.
+// handle answers with answerOpen. A request that brings nowhere to answer
+// is a question, answered on the endpoint it came on. An endpoint whose
+// other end closed goes to gone, then is closed.
 // A socket that listens has its connections accepted, each to accepted.
 // Before each wait, expire runs what is due and bounds the wait.
 //
-// A READ or a WRITE that waits keeps its endpoint until handle answers it:
-// handle sets its descriptor in r.fds to -1 and watches it, of saying what
-// waits. A CANCEL comes on it as a question, and gone hears that the asker
-// went; once answered, the endpoint is let go of (unwatch).
+// An open file's endpoint takes CONNECT, which the loop answers itself: a
+// call pair, whose asking end goes with the OK and whose serving end is a
+// connection of the open file's. A request on a connection goes to handle
+// with the open file's endpoint, and is answered on the connection, which
+// closes when who asked lets go of it, and with its open file.
+//
+// A READ or a WRITE that waits is kept until handle answers it (keep).
 void serve(int epoll, Handle handle, Gone gone = nullptr, Accepted accepted = nullptr, Expire expire = nullptr);
 
 // Ends serve once the events it has are handled.

@@ -44,8 +44,15 @@ void tell(int fd, uint32_t events, uint32_t foreground, uint32_t flags) {
 Endpoint* answerOpen(int epoll, const Request& r, served what, void* of) {
     what.flags = r.h.arg & (O_ACCMODE | O_APPEND | O_NONBLOCK);
     int pair[2];
-    if (servedpair(&what, pair) != 0) {
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         fail(r.reply(), errno);
+        return nullptr;
+    }
+    if (setsockopt(pair[1], SOL_SOCKET, SO_SERVED, &what, sizeof what) != 0) {
+        const int e = errno;
+        close(pair[0]);
+        close(pair[1]);
+        fail(r.reply(), e);
         return nullptr;
     }
     const uint32_t access = r.h.arg & O_ACCMODE;
@@ -59,31 +66,21 @@ Endpoint* answerOpen(int epoll, const Request& r, served what, void* of) {
 
 int enroll(int registry, const char* name, uint32_t mode, uint32_t uid, uint32_t gid, Device& out) {
     int pair[2];
-    int reply[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         return errno;
     }
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, reply) != 0) {
-        const int e = errno;
-        close(pair[0]);
-        close(pair[1]);
-        return e;
-    }
     Header h{opRegister, mode, uid, gid};
     const iovec parts[] = {{&h, sizeof h}, {const_cast<char*>(name), strlen(name)}};
-    const int fds[] = {pair[1], reply[1]};
-    const bool sent = sendPacket(registry, parts, 2, fds, 2) >= 0;
+    const bool sent = sendPacket(registry, parts, 2, &pair[1], 1) >= 0;
     const int e = errno;
     close(pair[1]);
-    close(reply[1]);
 
     struct {
         Header h;
         Stat st;
     } got{};
 
-    const ssize_t n = sent ? recv(reply[0], &got, sizeof got, 0) : -1;
-    close(reply[0]);
+    const ssize_t n = sent ? recv(registry, &got, sizeof got, 0) : -1;
     if (n == ssize_t(sizeof got) && got.h.op == opOk) {
         out = {pair[0], got.st};
         return 0;
@@ -140,13 +137,72 @@ static void releaseAll() {
     }
 }
 
-void unwatch(int epoll, Endpoint* e) {
+// Lets go of an endpoint: its descriptor closes, and it is freed after
+// the events in hand.
+static void drop(int epoll, Endpoint* e) {
     epoll_ctl(epoll, EPOLL_CTL_DEL, e->fd, nullptr);
     close(e->fd);
     e->fd = -1;
     --watched;
     e->next = released;
     released = e;
+}
+
+// A connection goes: out of its open file's.
+static void disconnect(int epoll, Endpoint* c) {
+    for (Endpoint** at = &c->file->first; *at; at = &(*at)->after) {
+        if (*at == c) {
+            *at = c->after;
+            break;
+        }
+    }
+    drop(epoll, c);
+}
+
+void unwatch(int epoll, Endpoint* e) {
+    while (Endpoint* c = e->first) {
+        disconnect(epoll, c);
+    }
+    drop(epoll, e);
+}
+
+// An open file's CONNECT: a call pair, whose serving end is a connection
+// of the file's from now on and whose asking end the OK brings, on the
+// file's endpoint, the question's.
+static void connect(int epoll, Endpoint* e) {
+    int pair[2];
+    if (socketpair(AF_UNIX, SOCK_CALL | SOCK_CLOEXEC, 0, pair) != 0) {
+        fail(e->fd, errno);
+        return;
+    }
+    Endpoint* c = watch(epoll, {pair[0], false, e->reads, e->writes, e->of});
+    c->file = e;
+    c->after = e->first;
+    e->first = c;
+    Header h{opOk, 0, 0, 0};
+    const iovec part{&h, sizeof h};
+    sendPacket(e->fd, &part, 1, &pair[1], 1); // a gone asker is its own loss
+    close(pair[1]);
+}
+
+Endpoint* keep(int epoll, Request& r, void* of) {
+    if (Endpoint* c = r.connection) {
+        c->kept = true;
+        c->of = of;
+        return c;
+    }
+    Endpoint* e = watch(epoll, {r.reply(), false, false, false, of});
+    r.fds[r.count - 1] = -1;
+    return e;
+}
+
+void unkeep(int epoll, Endpoint* e) {
+    if (e->file) {
+        e->kept = false;
+        e->of = e->file->of;
+    } else {
+        unwatch(epoll, e);
+    }
 }
 
 int Request::reply() const {
@@ -197,6 +253,22 @@ static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepte
     Request r{};
     const ssize_t got = receivePacket(e->fd, packet, sizeof packet, r.fds, r.count);
     if (got <= 0) {
+        if (e->file) {
+            // A connection whose asker let go of it, a request kept on it
+            // gone with it.
+            if (e->kept && gone) {
+                gone(*e);
+            }
+            disconnect(epoll, e);
+            return;
+        }
+        // An open file closed: what is kept of it on its connections
+        // first.
+        for (Endpoint* c = e->first; c; c = c->after) {
+            if (c->kept && gone) {
+                gone(*c);
+            }
+        }
         if (gone && !e->channel) {
             gone(*e);
         }
@@ -209,18 +281,22 @@ static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepte
         }
         return;
     }
-    if (r.count == 0) {
-        // A question: its answer goes on the endpoint it came on, in the
-        // order the questions came.
-        r.fds[0] = e->fd;
-        r.count = 1;
-        r.onEndpoint = true;
-    }
     memcpy(&r.h, packet, sizeof r.h);
     r.body = packet + sizeof(Header);
     r.size = size_t(got) - sizeof(Header);
-    if (e->channel && r.h.op != opOpen) {
+    if ((e->file || e->answers || r.count == 0) && r.count < maxFds) {
+        // Answered on the endpoint it came on: a connection's request, and
+        // a question, in the order the questions came.
+        r.fds[r.count++] = e->fd;
+        r.onEndpoint = true;
+    }
+    if (r.h.op == opConnect && !e->channel && !e->file && !e->answers) {
+        connect(epoll, e);
+    } else if (e->channel && r.h.op != opOpen) {
         fail(r.reply(), EINVAL);
+    } else if (e->file && !e->kept) {
+        r.connection = e;
+        handle(*e->file, r);
     } else {
         handle(*e, r);
     }

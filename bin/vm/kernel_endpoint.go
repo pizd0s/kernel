@@ -223,6 +223,7 @@ func (e *pairEnd) asPair() *pairEnd          { return e }
 func (e *pairEnd) asListener() *unixListener { return nil }
 func (e *pairEnd) asConsole() *consoleEnd    { return nil }
 func (e *pairEnd) asVFS() *remoteDir         { return nil }
+func (e *pairEnd) asCall() *callEnd          { return nil }
 
 // subscribe makes to learn of what may make the end readable, for input,
 // and writable, for output; of both when neither is asked.
@@ -358,6 +359,8 @@ func (e *pairEnd) sendCred(p *Process, data []byte, files []Object, cred *ucred,
 
 	if err != nil {
 		dropFiles(files)
+	} else {
+		armFiles(files)
 	}
 
 	return err
@@ -1176,6 +1179,11 @@ func (p *Process) rights(at, n uint32) ([]Object, *ucred, error) {
 
 				if err != nil {
 					return nil, nil, err
+				}
+
+				// A call's serving end goes as the call in hand.
+				if e := f.asCall(); e != nil {
+					f = e.pass()
 				}
 
 				files = append(files, f)
