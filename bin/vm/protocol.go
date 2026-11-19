@@ -11,8 +11,7 @@ const (
 	openedTerminal         = 2
 	openedDir              = 3
 	openedPath             = 4
-	openedTells            = 16
-	sizeofOpened           = 32
+	sizeofOpened           = 40
 	readyTostop            = 1
 	rOk             uint32 = 128
 	rErr            uint32 = 129
@@ -84,15 +83,13 @@ const (
 	vConnect
 )
 
-func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *PairEnd) (*RemoteFD, error) {
-	what := kind &^ openedTells
-
-	if what != openedFile && what != openedTerminal && what != openedDir && what != openedPath {
+func served(p *Process, kind uint32, flags int, dev, ino, id uint64, events uint32, end *PairEnd) (*RemoteFD, error) {
+	if kind != openedFile && kind != openedTerminal && kind != openedDir && kind != openedPath {
 		return nil, EINVAL
 	}
 
-	f := &RemoteFD{end: end, id: id, key: FileKey{dev, ino}, accmode: flags & O_ACCMODE, opath: flags&O_PATH != 0 || what == openedPath,
-		append: flags&O_APPEND != 0, nonblock: flags&O_NONBLOCK != 0, tells: kind&openedTells != 0}
+	f := &RemoteFD{end: end, id: id, key: FileKey{dev, ino}, accmode: flags & O_ACCMODE, opath: flags&O_PATH != 0 || kind == openedPath,
+		append: flags&O_APPEND != 0, nonblock: flags&O_NONBLOCK != 0, ready: readiness(events)}
 
 	if ino != 0 {
 		f.locks = &p.k.locks
@@ -102,6 +99,20 @@ func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *PairEn
 	end.consume(f.deliver)
 
 	return f, nil
+}
+
+func readiness(events uint32) int16 {
+	ready := int16(events) & (POLLIN | POLLPRI | POLLOUT | POLLERR | POLLHUP)
+
+	if ready&POLLIN != 0 {
+		ready |= POLLRDNORM
+	}
+
+	if ready&POLLOUT != 0 {
+		ready |= POLLWRNORM
+	}
+
+	return ready
 }
 
 func replyOf(pk *Packet, eof bool) error {

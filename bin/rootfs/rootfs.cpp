@@ -1463,7 +1463,8 @@ static void openHandle(int fd, const Place& at, int flags) {
         return;
     }
     const u64 id = ++handleIds;
-    const Opened what{u32(isDir(at) ? openedDir : openedPath), u32(flags) & (O_ACCMODE | O_APPEND | O_NONBLOCK | O_PATH), at.st.dev, ino, id};
+    const Opened what{u32(isDir(at) ? openedDir : openedPath), u32(flags) & (O_ACCMODE | O_APPEND | O_NONBLOCK | O_PATH), at.st.dev, ino, id,
+                      POLLIN | POLLOUT};
     listenHandle(pair[0], at, opath, id);
     const iovec said = part(&what, sizeof what);
     reply(fd, opOk, 0, &said, 1, &pair[1], 1);

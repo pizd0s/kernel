@@ -23,7 +23,6 @@ type RemoteFD struct {
 	append   bool
 	nonblock bool
 	pos      int64
-	tells    bool
 	ready    int16
 	group    int32
 	tostop   bool
@@ -149,26 +148,18 @@ func (f *RemoteFD) asRemote() *RemoteFD {
 }
 
 func (f *RemoteFD) subscribe(s *Subscription, events int16) {
-	if f.tells {
-		f.mu.Lock()
-		f.watchers.add(&s.in)
-		f.mu.Unlock()
-	}
+	f.mu.Lock()
+	f.watchers.add(&s.in)
+	f.mu.Unlock()
 }
 
 func (f *RemoteFD) unsubscribe(s *Subscription) {
-	if f.tells {
-		f.mu.Lock()
-		f.watchers.remove(&s.in)
-		f.mu.Unlock()
-	}
+	f.mu.Lock()
+	f.watchers.remove(&s.in)
+	f.mu.Unlock()
 }
 
 func (f *RemoteFD) poll(events int16) int16 {
-	if !f.tells {
-		return events & (POLLIN | POLLOUT | POLLRDNORM | POLLWRNORM)
-	}
-
 	f.mu.Lock()
 
 	ready := f.ready
@@ -188,21 +179,11 @@ func (f *RemoteFD) deliver(pk *Packet) {
 		return
 	}
 
-	if f.tells && len(pk.data) >= remoteHeader+8 && binary.LittleEndian.Uint32(pk.data) == rReady {
-		events := int16(binary.LittleEndian.Uint32(pk.data[4:])) & (POLLIN | POLLPRI | POLLOUT | POLLERR | POLLHUP)
-
-		if events&POLLIN != 0 {
-			events |= POLLRDNORM
-		}
-
-		if events&POLLOUT != 0 {
-			events |= POLLWRNORM
-		}
-
+	if len(pk.data) >= remoteHeader+8 && binary.LittleEndian.Uint32(pk.data) == rReady {
 		f.mu.Lock()
 		f.group = int32(binary.LittleEndian.Uint32(pk.data[remoteHeader:]))
 		f.tostop = binary.LittleEndian.Uint32(pk.data[remoteHeader+4:])&readyTostop != 0
-		f.ready = events
+		f.ready = readiness(binary.LittleEndian.Uint32(pk.data[4:]))
 		f.watchers.tell()
 		f.mu.Unlock()
 	}

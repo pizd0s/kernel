@@ -7847,7 +7847,7 @@ func (p *Process) opened(pk *Packet) (Object, bool, error) {
 	kind := binary.LittleEndian.Uint32(b)
 
 	obj, err := served(p, kind, int(binary.LittleEndian.Uint32(b[4:])), binary.LittleEndian.Uint64(b[8:]), binary.LittleEndian.Uint64(b[16:]),
-		binary.LittleEndian.Uint64(b[24:]), end)
+		binary.LittleEndian.Uint64(b[24:]), binary.LittleEndian.Uint32(b[32:]), end)
 
 	if err != nil {
 		f.unref()
@@ -7855,7 +7855,7 @@ func (p *Process) opened(pk *Packet) (Object, bool, error) {
 		return nil, false, EIO
 	}
 
-	return obj, kind&^openedTells == openedTerminal, nil
+	return obj, kind == openedTerminal, nil
 }
 
 func (p *Process) head(data []byte, op, arg uint32) {

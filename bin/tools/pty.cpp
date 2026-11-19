@@ -1188,19 +1188,24 @@ static void fileCall(Open& o, Request& r) {
     }
 }
 
-// An open of a terminal's end: a new open file, which hears the
-// terminal's readiness from its OK on.
+// An open of a terminal's end: a new open file, whose OK says its
+// readiness as the open makes it, and READY each change from then on. The
+// kernel has no foreground group nor TOSTOP of it before its first READY.
 static void opened(Terminal& t, bool master, Request& r) {
     const uint32_t access = r.h.arg & O_ACCMODE;
     for (Open& o : opens) {
         if (!o.terminal) {
             const Stat& st = master ? device.st : t.slave.st;
-            const Endpoint* e = answerOpen(epoll, r, {openedTerminal | openedTells, 0, st.dev, st.ino, 0}, &o);
+            o = {&t, master, access != O_WRONLY, access != O_RDONLY, -1, 0, 0, 0};
+            ++(master ? t.masters : t.slaves);
+            o.told = eventsOf(o);
+            const Endpoint* e = answerOpen(epoll, r, {openedTerminal, 0, st.dev, st.ino, 0, o.told}, &o);
             if (!e) {
+                --(master ? t.masters : t.slaves);
+                o = {};
                 return;
             }
-            o = {&t, master, access != O_WRONLY, access != O_RDONLY, e->fd, 0xffffffff, 0, 0};
-            ++(master ? t.masters : t.slaves);
+            o.fd = e->fd;
             progress(t);
             return;
         }

@@ -158,9 +158,9 @@
 //     FSTATFS                             OK statfs
 //     CANCEL                              of the request the server
 //                                         keeps while it waits
-//   and from the server, on its end of an open file it made telling
-//   (openedTells), the file's readiness, which select, poll and epoll
-//   find: until the first, nothing is ready; the last counts.
+//   and from the server, on its end of an open file, the file's readiness
+//   when it changes, which select, poll and epoll find: the OPEN's OK said
+//   it first (opened's events), the last READY counts.
 //     READY     arg events  foreground u32, flags u32
 //                                         events: POLLIN, POLLPRI, POLLOUT,
 //                                         POLLERR and POLLHUP, Linux's bits;
@@ -238,12 +238,15 @@
 //   rootfs's: the system is noatime.
 //
 //   replies: OK, ERR with arg the errno
-//   opened { kind u32, flags u32, dev u64, ino u64, id u64 }   kind:
+//   opened { kind u32, flags u32, dev u64, ino u64, id u64, events u32 }   kind:
 //          openedFile, an open file; openedTerminal, a terminal's, which
 //          takes a terminal's calls too; openedDir, a handle of a directory
 //          of the VFS's, which calls with a path go to; openedPath, a handle
-//          of what O_PATH opened that is no directory; with openedTells the
-//          server tells its readiness (READY). flags are the open's:
+//          of what O_PATH opened that is no directory. events are its
+//          readiness as it opens, READY's events: POLLIN and POLLOUT of
+//          what is always ready, a file's, a directory's, a device's; a
+//          terminal's as it is, which READY tells when it changes. flags
+//          are the open's:
 //          O_ACCMODE, O_APPEND and O_NONBLOCK, and O_PATH of a directory's
 //          handle, which takes no locks then. dev and ino are the file's or
 //          the directory's, as its stat has them, or a terminal's device's:
@@ -261,6 +264,7 @@
 //   statfs { blocks u64, bfree u64, files u64, ffree u64, dev u64,
 //            bsize u32, namemax u32, flags u32 }  flags: 1 read-only
 
+#include <poll.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/socket.h>
@@ -381,13 +385,13 @@ struct Opened {
     uint64_t dev;
     uint64_t ino;
     uint64_t id;
+    uint32_t events;
 };
 
 constexpr uint32_t openedFile = 1;
 constexpr uint32_t openedTerminal = 2;
 constexpr uint32_t openedDir = 3;
 constexpr uint32_t openedPath = 4;
-constexpr uint32_t openedTells = 16;
 
 // A READ's and a WRITE's body.
 struct Io {
@@ -421,7 +425,7 @@ struct [[gnu::packed]] Statfs {
 };
 
 static_assert(sizeof(Header) == 16);
-static_assert(sizeof(Opened) == 32);
+static_assert(sizeof(Opened) == 40);
 static_assert(sizeof(Stat) == 64 && offsetof(Stat, atime) == 40);
 static_assert(sizeof(Statfs) == 52);
 

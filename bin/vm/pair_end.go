@@ -918,7 +918,7 @@ func (e *PairEnd) directory(p *Process) *RemoteFD {
 
 	e.ref()
 
-	e.dir, _ = served(p, openedDir, O_RDONLY, 0, 0, 0, e)
+	e.dir, _ = served(p, openedDir, O_RDONLY, 0, 0, 0, POLLIN|POLLOUT, e)
 
 	return e.dir
 }

@@ -289,7 +289,7 @@ Endpoint* tools::listen(int fd, Role role, void* node, bool reads, bool writes) 
 }
 
 Endpoint* tools::openFile(int fd, u32 flags, void* node, u64 dev, u64 ino, bool reads, bool writes) {
-    const Opened what{openedFile, flags & (O_ACCMODE | O_APPEND | O_NONBLOCK), dev, ino, 0};
+    const Opened what{openedFile, flags & (O_ACCMODE | O_APPEND | O_NONBLOCK), dev, ino, 0, POLLIN | POLLOUT};
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         error(fd, errno);

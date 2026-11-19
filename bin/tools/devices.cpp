@@ -102,7 +102,7 @@ static void handle(Endpoint& e, Request& r) {
     const Source& s = *static_cast<Source*>(e.of);
     const Stat& st = s.registered.st;
     if (e.channel) {
-        answerOpen(epoll, r, {openedFile, 0, 0, 0, 0}, e.of);
+        answerOpen(epoll, r, {openedFile, 0, 0, 0, 0, POLLIN | POLLOUT}, e.of);
         return;
     }
     switch (r.h.op) {

@@ -339,7 +339,7 @@ static void openFile(Request& r, char* path, uint32_t mode, bool creates) {
     Open* o = listed(false, path);
     o->opened = opened;
     o->info = info;
-    if (!answerOpen(epoll, r, {openedFile, 0, device, uint64_t(st.st_ino), 0}, o)) {
+    if (!answerOpen(epoll, r, {openedFile, 0, device, uint64_t(st.st_ino), 0, POLLIN | POLLOUT}, o)) {
         unlisted(o);
     }
 }
