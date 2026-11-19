@@ -87,10 +87,10 @@ func (n *RemoteNode) unsubscribe(s *Subscription) {
 
 func (n *RemoteNode) poll(events int16) int16 {
 	if !n.tells {
-		return events & (pollIn | pollOut | pollRdnorm | pollWrnorm)
+		return events & (POLLIN | POLLOUT | POLLRDNORM | POLLWRNORM)
 	}
 
-	return n.readiness() & (events | pollErr | pollHup)
+	return n.readiness() & (events | POLLERR | POLLHUP)
 }
 
 func (n *RemoteNode) readiness() int16 {
@@ -114,14 +114,14 @@ func (n *RemoteNode) deliver(pk *Packet) {
 			n.foreground.Store(int32(binary.LittleEndian.Uint32(pk.data[remoteHeader:])))
 			n.tostop.Store(binary.LittleEndian.Uint32(pk.data[remoteHeader+4:])&readyTostop != 0)
 
-			events := int16(binary.LittleEndian.Uint32(pk.data[4:])) & (pollIn | pollPri | pollOut | pollErr | pollHup)
+			events := int16(binary.LittleEndian.Uint32(pk.data[4:])) & (POLLIN | POLLPRI | POLLOUT | POLLERR | POLLHUP)
 
-			if events&pollIn != 0 {
-				events |= pollRdnorm
+			if events&POLLIN != 0 {
+				events |= POLLRDNORM
 			}
 
-			if events&pollOut != 0 {
-				events |= pollWrnorm
+			if events&POLLOUT != 0 {
+				events |= POLLWRNORM
 			}
 
 			n.ready.Store(int32(events))
@@ -162,7 +162,7 @@ func (n *RemoteNode) deliver(pk *Packet) {
 }
 
 func (n *RemoteNode) hungUp() {
-	n.ready.Store(int32(pollHup | pollErr))
+	n.ready.Store(int32(POLLHUP | POLLERR))
 	n.mu.Lock()
 	n.gone = true
 
@@ -203,7 +203,7 @@ func (n *RemoteNode) connect(p *Process) (*CallEnd, error) {
 		if n.gone {
 			n.mu.Unlock()
 
-			return nil, eIo
+			return nil, EIO
 		}
 
 		full, err := n.end.to.put(&pk)
@@ -215,7 +215,7 @@ func (n *RemoteNode) connect(p *Process) (*CallEnd, error) {
 		n.mu.Unlock()
 
 		if err != nil {
-			return nil, eIo
+			return nil, EIO
 		}
 
 		if !full {
@@ -234,7 +234,7 @@ func (n *RemoteNode) connect(p *Process) (*CallEnd, error) {
 	}
 
 	if len(got.pk.files) == 0 {
-		return nil, eIo
+		return nil, EIO
 	}
 
 	dropFiles(got.pk.files[1:])
@@ -244,7 +244,7 @@ func (n *RemoteNode) connect(p *Process) (*CallEnd, error) {
 	if c == nil || c.serves {
 		got.pk.files[0].unref()
 
-		return nil, eIo
+		return nil, EIO
 	}
 
 	return c, nil
@@ -254,19 +254,19 @@ func (n *RemoteNode) flags() (int, error) {
 	fl := n.accmode
 
 	if n.append.Load() {
-		fl |= oAppend
+		fl |= O_APPEND
 	}
 
 	if n.nonblock.Load() {
-		fl |= oNonblock
+		fl |= O_NONBLOCK
 	}
 
 	return fl, nil
 }
 
 func (n *RemoteNode) setFlags(fl int) error {
-	n.nonblock.Store(fl&oNonblock != 0)
-	n.append.Store(fl&oAppend != 0)
+	n.nonblock.Store(fl&O_NONBLOCK != 0)
+	n.append.Store(fl&O_APPEND != 0)
 
 	return nil
 }
@@ -324,7 +324,7 @@ func (n *RemoteNode) keep(p *Process, c *CallEnd) {
 
 func (n *RemoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Object) (pk Packet, restart bool, err error) {
 	if p.interrupts(true) {
-		return Packet{}, false, eIntr
+		return Packet{}, false, EINTR
 	}
 
 	c, err := n.connected(p)
@@ -336,7 +336,7 @@ func (n *RemoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 	defer n.keep(p, c)
 
 	if p.interrupts(true) {
-		return Packet{}, false, eIntr
+		return Packet{}, false, EINTR
 	}
 
 	data := make([]byte, remoteHeader+len(body))
@@ -349,7 +349,7 @@ func (n *RemoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 	defer c.leave(p, w)
 
 	if err := c.ask(w, data, files); err != nil {
-		return Packet{}, false, eIo
+		return Packet{}, false, EIO
 	}
 
 	outer, was := p.ask(c)
@@ -388,7 +388,7 @@ func (n *RemoteNode) asked(p *Process, op uint32, data []byte, files []Object) (
 	defer c.leave(p, w)
 
 	if err := c.ask(w, data, files); err != nil {
-		return Packet{}, eIo
+		return Packet{}, EIO
 	}
 
 	outer, was := p.ask(c)
@@ -481,26 +481,26 @@ func (n *RemoteNode) statfs(p *Process, st *Statfs) error {
 
 func (n *RemoteNode) flock(p *Process, op int) error {
 	if n.locks == nil {
-		return eInval
+		return EINVAL
 	}
 
-	switch kind := op &^ lockNb; kind {
-	case lockUn:
+	switch kind := op &^ LOCK_NB; kind {
+	case LOCK_UN:
 		n.locks.unlock(n, false, 0, 0)
 
 		return nil
-	case lockSh, lockEx:
-		return n.locks.lock(p, &FileLock{owner: n, write: kind == lockEx}, op&lockNb == 0)
+	case LOCK_SH, LOCK_EX:
+		return n.locks.lock(p, &FileLock{owner: n, write: kind == LOCK_EX}, op&LOCK_NB == 0)
 	}
 
-	return eInval
+	return EINVAL
 }
 
 func (n *RemoteNode) waits(p *Process, op, arg uint32, body []byte) error {
 	for {
 		_, restart, err := n.waiting(p, op, arg, body, nil)
 
-		if err == eIntr && restart {
+		if err == EINTR && restart {
 			continue
 		}
 
@@ -510,7 +510,7 @@ func (n *RemoteNode) waits(p *Process, op, arg uint32, body []byte) error {
 
 func (n *RemoteNode) recordLock(p *Process, cmd int, lk *Flock) error {
 	if n.locks == nil {
-		return eInval
+		return EINVAL
 	}
 
 	start, length := lk.Start, lk.Len
@@ -528,41 +528,41 @@ func (n *RemoteNode) recordLock(p *Process, cmd int, lk *Flock) error {
 
 		start += st.Size
 	default:
-		return eInval
+		return EINVAL
 	}
 
 	if length < 0 {
 		start, length = start+length, -length
 	}
 
-	if start < 0 || lk.Type != fRdlck && lk.Type != fWrlck && lk.Type != fUnlck {
-		return eInval
+	if start < 0 || lk.Type != F_RDLCK && lk.Type != F_WRLCK && lk.Type != F_UNLCK {
+		return EINVAL
 	}
 
-	want := &FileLock{owner: n, ranged: true, write: lk.Type == fWrlck, start: uint64(start), stop: lockPast}
+	want := &FileLock{owner: n, ranged: true, write: lk.Type == F_WRLCK, start: uint64(start), stop: lockPast}
 
 	if length != 0 && want.start <= lockPast-uint64(length) {
 		want.stop = want.start + uint64(length)
 	}
 
 	switch {
-	case cmd != fOfdGetlk && (lk.Type == fRdlck && n.accmode == oWronly || lk.Type == fWrlck && n.accmode == oRdonly):
-		return eBadf
+	case cmd != fOfdGetlk && (lk.Type == F_RDLCK && n.accmode == O_WRONLY || lk.Type == F_WRLCK && n.accmode == O_RDONLY):
+		return EBADF
 	case cmd == fOfdGetlk:
 		lk.Whence, lk.Pid = 0, -1
 
 		way, found := n.locks.way(want)
 
 		if !found {
-			lk.Type, lk.Start, lk.Len = fUnlck, start, length
+			lk.Type, lk.Start, lk.Len = F_UNLCK, start, length
 
 			return nil
 		}
 
-		lk.Type, lk.Start, lk.Len = fRdlck, int64(way.start), 0
+		lk.Type, lk.Start, lk.Len = F_RDLCK, int64(way.start), 0
 
 		if way.write {
-			lk.Type = fWrlck
+			lk.Type = F_WRLCK
 		}
 
 		if way.stop != lockPast {
@@ -570,7 +570,7 @@ func (n *RemoteNode) recordLock(p *Process, cmd int, lk *Flock) error {
 		}
 
 		return nil
-	case lk.Type == fUnlck:
+	case lk.Type == F_UNLCK:
 		n.locks.unlock(n, true, want.start, want.stop)
 
 		return nil
@@ -584,7 +584,7 @@ func (n *RemoteNode) readAt(p *Process, b []byte, off int64) (int, error) {
 		return n.readInto(p, nil, 0, 0, off)
 	}
 
-	w := window(p, b, oWronly)
+	w := window(p, b, O_WRONLY)
 	count, err := n.readInto(p, w, 0, len(b), off)
 
 	w.unref()
@@ -594,7 +594,7 @@ func (n *RemoteNode) readAt(p *Process, b []byte, off int64) (int, error) {
 
 func (n *RemoteNode) readInto(p *Process, w *MemfdFile, woff uint32, size int, off int64) (int, error) {
 	if off < 0 {
-		return 0, eInval
+		return 0, EINVAL
 	}
 
 	if size == 0 {
@@ -606,7 +606,7 @@ func (n *RemoteNode) readInto(p *Process, w *MemfdFile, woff uint32, size int, o
 	for {
 		pk, cancelled, err := n.waiting(p, rRead, uint32(size), body[:], []Object{w})
 
-		if err == eIntr && cancelled && p.interrupted() {
+		if err == EINTR && cancelled && p.interrupted() {
 			continue
 		}
 
@@ -615,7 +615,7 @@ func (n *RemoteNode) readInto(p *Process, w *MemfdFile, woff uint32, size int, o
 		}
 
 		if len(pk.data) < 4 || int(binary.LittleEndian.Uint32(pk.data)) > size {
-			return 0, eIo
+			return 0, EIO
 		}
 
 		return int(binary.LittleEndian.Uint32(pk.data)), nil
@@ -650,7 +650,7 @@ func (n *RemoteNode) put(p *Process, b []byte, off int64, atEnd bool) (int, int6
 		return n.writeFrom(p, nil, 0, 0, off, atEnd)
 	}
 
-	w := window(p, b, oRdonly)
+	w := window(p, b, O_RDONLY)
 	count, at, err := n.writeFrom(p, w, 0, len(b), off, atEnd)
 
 	w.unref()
@@ -660,7 +660,7 @@ func (n *RemoteNode) put(p *Process, b []byte, off int64, atEnd bool) (int, int6
 
 func (n *RemoteNode) writeFrom(p *Process, w *MemfdFile, woff uint32, size int, off int64, atEnd bool) (int, int64, error) {
 	if off < 0 {
-		return 0, 0, eInval
+		return 0, 0, EINVAL
 	}
 
 	if size == 0 {
@@ -678,7 +678,7 @@ func (n *RemoteNode) writeFrom(p *Process, w *MemfdFile, woff uint32, size int, 
 	for {
 		pk, cancelled, err := n.waiting(p, rWrite, uint32(size), body[:], []Object{w})
 
-		if err == eIntr && cancelled && p.interrupted() {
+		if err == EINTR && cancelled && p.interrupted() {
 			continue
 		}
 
@@ -687,7 +687,7 @@ func (n *RemoteNode) writeFrom(p *Process, w *MemfdFile, woff uint32, size int, 
 		}
 
 		if len(pk.data) < 12 || int(binary.LittleEndian.Uint32(pk.data)) > size {
-			return 0, 0, eIo
+			return 0, 0, EIO
 		}
 
 		return int(binary.LittleEndian.Uint32(pk.data)), int64(binary.LittleEndian.Uint64(pk.data[4:])), nil
@@ -696,7 +696,7 @@ func (n *RemoteNode) writeFrom(p *Process, w *MemfdFile, woff uint32, size int, 
 
 func (n *RemoteNode) read(p *Process, b []byte, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
-		return 0, eIo
+		return 0, EIO
 	}
 
 	count, err := n.readAt(p, b, atomic.LoadInt64(&n.pos))
@@ -708,7 +708,7 @@ func (n *RemoteNode) read(p *Process, b []byte, mode IoMode) (int, error) {
 
 func (n *RemoteNode) write(p *Process, b []byte, mode IoMode) (int, error) {
 	if p.chaosFail("write") {
-		return 0, eIo
+		return 0, EIO
 	}
 
 	off := atomic.LoadInt64(&n.pos)
@@ -742,11 +742,11 @@ func (n *RemoteNode) seek(p *Process, off int64, whence int) (int64, error) {
 
 		base = st.Size
 	default:
-		return 0, eInval
+		return 0, EINVAL
 	}
 
 	if base+off < 0 {
-		return 0, eInval
+		return 0, EINVAL
 	}
 
 	atomic.StoreInt64(&n.pos, base+off)
@@ -782,7 +782,7 @@ func (n *RemoteNode) readWindow(p *Process, w *MemfdFile, woff uint32, size int,
 
 func (n *RemoteNode) writeWindow(p *Process, w *MemfdFile, woff uint32, size int, to *int64) (int, error) {
 	if n.append.Load() {
-		return 0, eBadf
+		return 0, EBADF
 	}
 
 	if to != nil {

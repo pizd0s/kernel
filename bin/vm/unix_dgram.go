@@ -26,7 +26,7 @@ func newUnixDgram(nonblock bool) *UnixDgram {
 
 	s.refs.Store(1)
 	s.nonblock.Store(nonblock)
-	s.inbox, s.mouth = newPairOf(sockDgram, false)
+	s.inbox, s.mouth = newPairOf(SOCK_DGRAM, false)
 	s.inner.init(s, 0)
 
 	return s
@@ -146,8 +146,8 @@ func (s *UnixDgram) stat(p *Process, st *Stat) error {
 }
 
 func (s *UnixDgram) poll(events int16) int16 {
-	out := events & (pollOut | pollWrnorm)
-	ready := s.inbox.poll(events) &^ (pollOut | pollWrnorm)
+	out := events & (POLLOUT | POLLWRNORM)
+	ready := s.inbox.poll(events) &^ (POLLOUT | POLLWRNORM)
 
 	if t := s.targetEnd(); t != nil {
 		defer t.unref()
@@ -162,7 +162,7 @@ func (s *UnixDgram) subscribe(sub *Subscription, events int16) {
 	in, out := ioSides(events)
 
 	if in {
-		s.inbox.subscribe(sub, pollIn)
+		s.inbox.subscribe(sub, POLLIN)
 	}
 
 	if out {
@@ -186,17 +186,17 @@ func (s *UnixDgram) wake(*Hook) {
 }
 
 func (s *UnixDgram) flags() (int, error) {
-	fl := oRdwr
+	fl := O_RDWR
 
 	if s.nonblock.Load() {
-		fl |= oNonblock
+		fl |= O_NONBLOCK
 	}
 
 	return fl, nil
 }
 
 func (s *UnixDgram) setFlags(fl int) error {
-	s.nonblock.Store(fl&oNonblock != 0)
+	s.nonblock.Store(fl&O_NONBLOCK != 0)
 
 	return nil
 }
@@ -215,15 +215,15 @@ func (s *UnixDgram) bind(p *Process, at, n uint32) error {
 	s.mu.Unlock()
 
 	if named {
-		return eInval
+		return EINVAL
 	}
 
-	err = p.onPath(atFdcwd, path, func(v Dir) error {
+	err = p.onPath(AT_FDCWD, path, func(v Dir) error {
 		return v.bindPath(p, path, 0o777&^p.umask, s.mouth)
 	})
 
-	if err == eExist {
-		err = eAddrinuse
+	if err == EEXIST {
+		err = EADDRINUSE
 	}
 
 	if err == nil {
@@ -260,7 +260,7 @@ func (s *UnixDgram) connect(p *Process, at, n uint32) error {
 		old.unref()
 	}
 
-	mouth.subscribe(&s.inner, pollOut)
+	mouth.subscribe(&s.inner, POLLOUT)
 	s.mu.Lock()
 	s.writers.tell()
 	s.mu.Unlock()
@@ -269,11 +269,11 @@ func (s *UnixDgram) connect(p *Process, at, n uint32) error {
 }
 
 func (s *UnixDgram) listen(backlog int) error {
-	return eOpnotsupp
+	return EOPNOTSUPP
 }
 
 func (s *UnixDgram) accept(p *Process, flags uint32) (Object, []byte, error) {
-	return nil, nil, eOpnotsupp
+	return nil, nil, EOPNOTSUPP
 }
 
 func (s *UnixDgram) sockname(p *Process) ([]byte, error) {
@@ -290,14 +290,14 @@ func (s *UnixDgram) peername(p *Process) ([]byte, error) {
 	defer s.mu.Unlock()
 
 	if s.target == nil {
-		return nil, eNotconn
+		return nil, ENOTCONN
 	}
 
 	return unixAddress([]byte(s.peer)), nil
 }
 
 func (s *UnixDgram) socketKind() int {
-	return sockDgram
+	return SOCK_DGRAM
 }
 
 func (s *UnixDgram) shutdown(how int) error {
@@ -314,11 +314,11 @@ func (s *UnixDgram) setsockopt(p *Process, level, name, at, n uint32) error {
 
 func (s *UnixDgram) send(p *Process, data []byte, files []Object, cred *Ucred, nonblock bool, path string) (int, error) {
 	if s.inbox.noWrite.Load() {
-		return 0, ePipe
+		return 0, EPIPE
 	}
 
 	if len(data) > packetMax {
-		return 0, eMsgsize
+		return 0, EMSGSIZE
 	}
 
 	var to *PairEnd
@@ -330,7 +330,7 @@ func (s *UnixDgram) send(p *Process, data []byte, files []Object, cred *Ucred, n
 			return 0, err
 		}
 	} else if to = s.targetEnd(); to == nil {
-		return 0, eNotconn
+		return 0, ENOTCONN
 	}
 
 	defer to.unref()
@@ -371,7 +371,7 @@ func (s *UnixDgram) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, e
 		return 0, err
 	}
 
-	return s.send(p, slices.Clone(p.span(buf, n)), nil, nil, flags&msgDontwait != 0, path)
+	return s.send(p, slices.Clone(p.span(buf, n)), nil, nil, flags&MSG_DONTWAIT != 0, path)
 }
 
 func (s *UnixDgram) sendmsg(p *Process, at, flags uint32) (int, error) {
@@ -394,7 +394,7 @@ func (s *UnixDgram) sendmsg(p *Process, at, flags uint32) (int, error) {
 		return 0, err
 	}
 
-	return s.send(p, data, files, cred, flags&msgDontwait != 0, path)
+	return s.send(p, data, files, cred, flags&MSG_DONTWAIT != 0, path)
 }
 
 func (s *UnixDgram) recvmsg(p *Process, at, flags uint32) (int, error) {
@@ -407,14 +407,14 @@ func (s *UnixDgram) recvfrom(p *Process, buf, n, flags uint32) (int, []byte, err
 
 func (s *UnixDgram) dontwait() uint32 {
 	if s.nonblock.Load() {
-		return msgDontwait
+		return MSG_DONTWAIT
 	}
 
 	return 0
 }
 
 func (s *UnixDgram) read(p *Process, b []byte, mode IoMode) (int, error) {
-	n, _, _, _, err := s.inbox.receive(p, [][]byte{b}, s.dontwait()|bit(mode.nonblock)*msgDontwait, 0, 0)
+	n, _, _, _, err := s.inbox.receive(p, [][]byte{b}, s.dontwait()|bit(mode.nonblock)*MSG_DONTWAIT, 0, 0)
 
 	return n, err
 }
@@ -424,9 +424,9 @@ func (s *UnixDgram) write(p *Process, b []byte, mode IoMode) (int, error) {
 }
 
 func (s *UnixDgram) pread(p *Process, b []byte, off int64) (int, error) {
-	return 0, eSpipe
+	return 0, ESPIPE
 }
 
 func (s *UnixDgram) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return 0, eSpipe
+	return 0, ESPIPE
 }

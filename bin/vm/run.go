@@ -28,7 +28,7 @@ func runModule(path string, argv []string, asan bool, disks []Disk, user Cred) i
 		obj, err = compileModule(data, options)
 	}
 
-	if err == eNoexec {
+	if err == ENOEXEC {
 		throwFmt("%s: not a WebAssembly module", path)
 	}
 
@@ -83,7 +83,7 @@ func hostProgram(path string) (data []byte, exe bool, tail []byte, err error) {
 			}
 
 			if n == 0 {
-				return eNoexec
+				return ENOEXEC
 			}
 
 			at += n
@@ -148,7 +148,7 @@ func runKernel(path string, argv []string, options CompileOptions, data []byte, 
 			names[i] = d.name
 
 			if d.mem != nil {
-				p.files.put(max(p.files.size(), 3), newMemfd(nil, d.mem, oRdonly), false)
+				p.files.put(max(p.files.size(), 3), newMemfd(nil, d.mem, O_RDONLY), false)
 
 				continue
 			}

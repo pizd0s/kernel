@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-var soInts = map[uint32]bool{1: true, 2: true, 5: true, 6: true, 9: true, 10: true, 12: false, 15: true, soRcvlowat: false}
+var soInts = map[uint32]bool{1: true, 2: true, 5: true, 6: true, 9: true, 10: true, 12: false, 15: true, SO_RCVLOWAT: false}
 
 type SockOptions struct {
 	rcvTimeout, sndTimeout atomic.Int64
@@ -42,27 +42,27 @@ func (o *SockOptions) intOption(name uint32) uint32 {
 		return v
 	}
 
-	return bit(name == soRcvlowat)
+	return bit(name == SO_RCVLOWAT)
 }
 
 func (o *SockOptions) get(p *Process, kind int, level, name, at, lenAt uint32) error {
-	if level != solSocket {
-		return eNoprotoopt
+	if level != SOL_SOCKET {
+		return ENOPROTOOPT
 	}
 
 	var value uint32
 
 	switch name {
-	case soType:
+	case SO_TYPE:
 		value = uint32(kind)
-	case soError, soAcceptconn:
+	case SO_ERROR, SO_ACCEPTCONN:
 		value = 0
-	case soPasscred:
+	case SO_PASSCRED:
 		value = bit(o.passcred.Load())
-	case soRcvtimeo, soSndtimeo:
+	case SO_RCVTIMEO, SO_SNDTIMEO:
 		to := &o.rcvTimeout
 
-		if name == soSndtimeo {
+		if name == SO_SNDTIMEO {
 			to = &o.sndTimeout
 		}
 
@@ -79,11 +79,11 @@ func (o *SockOptions) get(p *Process, kind int, level, name, at, lenAt uint32) e
 		p.put32(lenAt, length)
 
 		return nil
-	case soSndbuf, soRcvbuf:
+	case SO_SNDBUF, SO_RCVBUF:
 		value = queueMax * packetMax
-	case 1, 2, 5, 6, 9, 10, 12, 15, soRcvlowat:
+	case 1, 2, 5, 6, 9, 10, 12, 15, SO_RCVLOWAT:
 		value = o.intOption(name)
-	case soPeercred:
+	case SO_PEERCRED:
 
 		b := make([]byte, 12)
 
@@ -98,7 +98,7 @@ func (o *SockOptions) get(p *Process, kind int, level, name, at, lenAt uint32) e
 
 		return nil
 	default:
-		return eNoprotoopt
+		return ENOPROTOOPT
 	}
 
 	length := min(p.u32(lenAt), 4)
@@ -112,20 +112,20 @@ func (o *SockOptions) get(p *Process, kind int, level, name, at, lenAt uint32) e
 }
 
 func (o *SockOptions) set(p *Process, level, name, at, n uint32) error {
-	if level != solSocket {
-		return eNoprotoopt
+	if level != SOL_SOCKET {
+		return ENOPROTOOPT
 	}
 
 	switch name {
-	case soRcvtimeo, soSndtimeo:
+	case SO_RCVTIMEO, SO_SNDTIMEO:
 		if n < 16 {
-			return eInval
+			return EINVAL
 		}
 
 		sec, usec := int64(p.u64(at)), int64(p.u64(at+8))
 
 		if usec < 0 || usec >= 1e6 {
-			return eDom
+			return EDOM
 		}
 
 		d := time.Duration(0)
@@ -134,20 +134,20 @@ func (o *SockOptions) set(p *Process, level, name, at, n uint32) error {
 			d = time.Duration(min(sec, 1<<33))*time.Second + time.Duration(usec)*time.Microsecond
 		}
 
-		if name == soRcvtimeo {
+		if name == SO_RCVTIMEO {
 			o.rcvTimeout.Store(int64(d))
 		} else {
 			o.sndTimeout.Store(int64(d))
 		}
-	case soPasscred:
+	case SO_PASSCRED:
 		if n < 4 {
-			return eInval
+			return EINVAL
 		}
 
 		o.passcred.Store(p.u32(at) != 0)
-	case 1, 2, 5, 6, 9, 10, 12, 15, soRcvlowat:
+	case 1, 2, 5, 6, 9, 10, 12, 15, SO_RCVLOWAT:
 		if n < 4 {
-			return eInval
+			return EINVAL
 		}
 
 		v := p.u32(at)
@@ -155,7 +155,7 @@ func (o *SockOptions) set(p *Process, level, name, at, n uint32) error {
 		switch {
 		case soInts[name]:
 			v = bit(v != 0)
-		case name == soRcvlowat:
+		case name == SO_RCVLOWAT:
 			v = uint32(max(int32(v), 1))
 		}
 

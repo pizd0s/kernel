@@ -80,7 +80,7 @@ func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *PairEn
 
 		n, f = &t.node, t
 	case openedDir:
-		d := &RemoteDir{id: id, opath: flags&oPath != 0}
+		d := &RemoteDir{id: id, opath: flags&O_PATH != 0}
 
 		n, f = &d.node, d
 	case openedPath:
@@ -88,17 +88,17 @@ func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *PairEn
 
 		n, f = &h.node, h
 	default:
-		return nil, eInval
+		return nil, EINVAL
 	}
 
 	if what := kind &^ openedTells; ino != 0 && (what == openedFile || what == openedDir) {
 		n.locks, n.file = &p.k.locks, FileKey{dev, ino}
 	}
 
-	n.end, n.accmode, n.tells = end, flags&oAccmode, kind&openedTells != 0
+	n.end, n.accmode, n.tells = end, flags&O_ACCMODE, kind&openedTells != 0
 	n.refs.Store(1)
-	n.append.Store(flags&oAppend != 0)
-	n.nonblock.Store(flags&oNonblock != 0)
+	n.append.Store(flags&O_APPEND != 0)
+	n.nonblock.Store(flags&O_NONBLOCK != 0)
 
 	end.from.drain(n.deliver, n.hungUp)
 
@@ -110,7 +110,7 @@ func replyOf(pk *Packet, eof bool) error {
 		dropFiles(pk.files)
 		pk.files = nil
 
-		return eIo
+		return EIO
 	}
 
 	if binary.LittleEndian.Uint32(pk.data) == rErr {
@@ -128,7 +128,7 @@ func replyOf(pk *Packet, eof bool) error {
 
 func decodeStat(b []byte, st *Stat) error {
 	if len(b) < remoteStat {
-		return eIo
+		return EIO
 	}
 
 	le := binary.LittleEndian
@@ -147,7 +147,7 @@ func decodeStat(b []byte, st *Stat) error {
 
 func decodeStatfs(b []byte, st *Statfs) error {
 	if len(b) < remoteStatfs {
-		return eIo
+		return EIO
 	}
 
 	le := binary.LittleEndian
@@ -178,9 +178,9 @@ func whens(ts []Timespec) (uint32, []byte) {
 		}
 
 		switch t.Nsec {
-		case utimeNow:
+		case UTIME_NOW:
 			when |= now
-		case utimeOmit:
+		case UTIME_OMIT:
 			when |= kept
 		default:
 			binary.LittleEndian.PutUint64(body[8*i:], uint64(t.Sec)*1e9+uint64(t.Nsec))

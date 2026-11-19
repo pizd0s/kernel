@@ -201,7 +201,7 @@ func (d *RemoteDir) readdir(p *Process, b []byte) (int, error) {
 
 func (d *RemoteDir) seek(p *Process, off int64, whence int) (int64, error) {
 	if off != 0 || whence != 0 {
-		return 0, eInval
+		return 0, EINVAL
 	}
 
 	d.node.after = 0
@@ -214,12 +214,12 @@ func flagOf(follow bool) uint32 {
 		return 0
 	}
 
-	return atSymlinkNofollow
+	return AT_SYMLINK_NOFOLLOW
 }
 
 func (d *RemoteDir) openPath(p *Process, path string, flags int, mode uint32) (Object, error) {
 	if p.chaosFail("openat") {
-		return nil, eIo
+		return nil, EIO
 	}
 
 	body := make([]byte, 4, 4+len(path))
@@ -241,8 +241,8 @@ func (d *RemoteDir) openPath(p *Process, path string, flags int, mode uint32) (O
 	if len(pk.files) == 0 {
 		var st Stat
 
-		if err := decodeStat(pk.data, &st); err != nil || st.Mode&sIfmt != sIfifo {
-			return nil, eIo
+		if err := decodeStat(pk.data, &st); err != nil || st.Mode&S_IFMT != S_IFIFO {
+			return nil, EIO
 		}
 
 		return p.openFifo(&st, flags)
@@ -254,13 +254,13 @@ func (d *RemoteDir) openPath(p *Process, path string, flags int, mode uint32) (O
 		return nil, err
 	}
 
-	if flags&oDirectory != 0 && f.asDir() == nil {
+	if flags&O_DIRECTORY != 0 && f.asDir() == nil {
 		f.unref()
 
-		return nil, eNotdir
+		return nil, ENOTDIR
 	}
 
-	if t := f.asTerminal(); t != nil && flags&oNoctty == 0 {
+	if t := f.asTerminal(); t != nil && flags&O_NOCTTY == 0 {
 		p.acquire(t)
 	}
 
@@ -269,7 +269,7 @@ func (d *RemoteDir) openPath(p *Process, path string, flags int, mode uint32) (O
 
 func (d *RemoteDir) statPath(p *Process, path string, follow bool, st *Stat) error {
 	if p.chaosFail("file-stat") {
-		return eIo
+		return EIO
 	}
 
 	arg := uint32(0)
@@ -319,7 +319,7 @@ func (d *RemoteDir) unlinkPath(p *Process, path string, dir bool) error {
 	flags := uint32(0)
 
 	if dir {
-		flags = atRemovedir
+		flags = AT_REMOVEDIR
 	}
 
 	_, err := d.node.vfs(p, d.id, vUnlink, flags, []byte(path))
@@ -331,7 +331,7 @@ func twoPaths(to Dir, old, new string) ([]byte, error) {
 	h := to.asVFS()
 
 	if h == nil {
-		return nil, eXdev
+		return nil, EXDEV
 	}
 
 	body := make([]byte, 8, 8+len(old)+1+len(new))
@@ -467,7 +467,7 @@ func (d *RemoteDir) connectPath(p *Process, path string) (Object, error) {
 	}
 
 	if len(pk.files) == 0 {
-		return nil, eConnrefused
+		return nil, ECONNREFUSED
 	}
 
 	return pk.files[0], nil

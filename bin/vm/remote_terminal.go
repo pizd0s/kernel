@@ -166,7 +166,7 @@ func (t *RemoteTerminal) recordLock(p *Process, cmd int, lk *Flock) error {
 }
 
 func (t *RemoteTerminal) read(p *Process, b []byte, mode IoMode) (int, error) {
-	if err := p.background(t, sigTtin); err != nil {
+	if err := p.background(t, SIGTTIN); err != nil {
 		return 0, err
 	}
 
@@ -175,7 +175,7 @@ func (t *RemoteTerminal) read(p *Process, b []byte, mode IoMode) (int, error) {
 
 func (t *RemoteTerminal) write(p *Process, b []byte, mode IoMode) (int, error) {
 	if _, tostop, _ := t.jobs(); tostop {
-		if err := p.background(t, sigTtou); err != nil {
+		if err := p.background(t, SIGTTOU); err != nil {
 			return 0, err
 		}
 	}
@@ -184,18 +184,18 @@ func (t *RemoteTerminal) write(p *Process, b []byte, mode IoMode) (int, error) {
 }
 
 func (t *RemoteTerminal) pread(p *Process, b []byte, off int64) (int, error) {
-	return 0, eSpipe
+	return 0, ESPIPE
 }
 
 func (t *RemoteTerminal) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return 0, eSpipe
+	return 0, ESPIPE
 }
 
 func (t *RemoteTerminal) count(p *Process, op uint32) (uint32, error) {
 	pk, err := t.node.on(p, op, 0, nil)
 
 	if err == nil && len(pk.data) != 4 {
-		err = eIo
+		err = EIO
 	}
 
 	if err != nil {
@@ -210,7 +210,7 @@ func (t *RemoteTerminal) device() FileKey {
 }
 
 func (t *RemoteTerminal) jobs() (int32, bool, bool) {
-	hungUp := t.node.readiness()&pollHup != 0
+	hungUp := t.node.readiness()&POLLHUP != 0
 
 	return t.node.foreground.Load(), t.node.tostop.Load(), hungUp
 }
@@ -219,7 +219,7 @@ func (t *RemoteTerminal) getattr(p *Process) ([]byte, error) {
 	pk, err := t.node.on(p, rTcgetattr, 0, nil)
 
 	if err == nil && len(pk.data) != sizeofTermios {
-		err = eIo
+		err = EIO
 	}
 
 	return bytes.Clone(pk.data), err
@@ -249,7 +249,7 @@ func (t *RemoteTerminal) window(p *Process) ([]byte, error) {
 	pk, err := t.node.on(p, rGetWinsize, 0, nil)
 
 	if err == nil && len(pk.data) != sizeofWinsize {
-		err = eIo
+		err = EIO
 	}
 
 	return bytes.Clone(pk.data), err
@@ -292,7 +292,7 @@ func (t *RemoteTerminal) reopen(p *Process, flags int) (Terminal, error) {
 	if len(pk.files) != 1 {
 		dropFiles(pk.files)
 
-		return nil, eIo
+		return nil, EIO
 	}
 
 	f, err := p.opened(&pk)
@@ -307,7 +307,7 @@ func (t *RemoteTerminal) reopen(p *Process, flags int) (Terminal, error) {
 
 	f.unref()
 
-	return nil, eIo
+	return nil, EIO
 }
 
 func (t *RemoteTerminal) name(p *Process, peer bool) (string, error) {

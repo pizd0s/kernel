@@ -147,7 +147,7 @@ func (l *UnixListener) push(e *PairEnd) (queued, refused bool) {
 }
 
 func (l *UnixListener) stat(p *Process, st *Stat) error {
-	*st = Stat{Ino: l.ino, Mode: sIfsock | 0o777, Nlink: 1, Blksize: 4096}
+	*st = Stat{Ino: l.ino, Mode: S_IFSOCK | 0o777, Nlink: 1, Blksize: 4096}
 
 	return nil
 }
@@ -163,18 +163,18 @@ func (l *UnixListener) poll(events int16) int16 {
 	mask := int16(0)
 
 	if n > 0 {
-		mask |= pollIn | pollRdnorm
+		mask |= POLLIN | POLLRDNORM
 	}
 
 	if room || shut {
-		mask |= pollOut | pollWrnorm
+		mask |= POLLOUT | POLLWRNORM
 	}
 
 	if shut {
-		mask |= pollHup
+		mask |= POLLHUP
 	}
 
-	return mask & (events | pollErr | pollHup)
+	return mask & (events | POLLERR | POLLHUP)
 }
 
 func (l *UnixListener) subscribe(s *Subscription, events int16) {
@@ -195,7 +195,7 @@ func (l *UnixListener) unsubscribe(s *Subscription) {
 }
 
 func (l *UnixListener) sides(events int16) (in, out bool) {
-	in, out = events&(pollIn|pollRdnorm) != 0, events&(pollOut|pollWrnorm) != 0
+	in, out = events&(POLLIN|POLLRDNORM) != 0, events&(POLLOUT|POLLWRNORM) != 0
 
 	if !in && !out {
 		in, out = true, true
@@ -205,7 +205,7 @@ func (l *UnixListener) sides(events int16) (in, out bool) {
 }
 
 func (l *UnixListener) flags() (int, error) {
-	return oRdwr, nil
+	return O_RDWR, nil
 }
 
 func (l *UnixListener) setFlags(fl int) error {

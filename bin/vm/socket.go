@@ -17,10 +17,10 @@ const (
 
 func unixAddress(path []byte) []byte {
 	if len(path) == 0 {
-		return []byte{afUnix, 0}
+		return []byte{AF_UNIX, 0}
 	}
 
-	return append(append([]byte{afUnix, 0}, path...), 0)
+	return append(append([]byte{AF_UNIX, 0}, path...), 0)
 }
 
 func guestAlign(n uint32) uint32 {
@@ -28,7 +28,7 @@ func guestAlign(n uint32) uint32 {
 }
 
 func ioSides(events int16) (in, out bool) {
-	in, out = events&(pollIn|pollRdnorm|pollPri) != 0, events&(pollOut|pollWrnorm) != 0
+	in, out = events&(POLLIN|POLLRDNORM|POLLPRI) != 0, events&(POLLOUT|POLLWRNORM) != 0
 
 	if !in && !out {
 		in, out = true, true

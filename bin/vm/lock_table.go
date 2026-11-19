@@ -162,7 +162,7 @@ func (t *LockTable) lock(p *Process, want *FileLock, waits bool) error {
 	if !waits {
 		t.mu.Unlock()
 
-		return eAgain
+		return EAGAIN
 	}
 
 	if !want.ranged {

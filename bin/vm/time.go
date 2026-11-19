@@ -18,14 +18,14 @@ var (
 )
 
 var hostClocks = map[uint32]uintptr{
-	clockRealtime:        hostClockRealtime,
-	clockMonotonic:       hostClockMonotonic,
-	clockProcessCputime:  hostClockProcessCputime,
-	clockThreadCputime:   hostClockProcessCputime,
-	clockMonotonicRaw:    hostClockMonotonicRaw,
-	clockRealtimeCoarse:  hostClockRealtimeCoarse,
-	clockMonotonicCoarse: hostClockMonotonicCoarse,
-	clockBoottime:        hostClockBoottime,
+	CLOCK_REALTIME:           hostClockRealtime,
+	CLOCK_MONOTONIC:          hostClockMonotonic,
+	CLOCK_PROCESS_CPUTIME_ID: hostClockProcessCputime,
+	CLOCK_THREAD_CPUTIME_ID:  hostClockProcessCputime,
+	CLOCK_MONOTONIC_RAW:      hostClockMonotonicRaw,
+	CLOCK_REALTIME_COARSE:    hostClockRealtimeCoarse,
+	CLOCK_MONOTONIC_COARSE:   hostClockMonotonicCoarse,
+	CLOCK_BOOTTIME:           hostClockBoottime,
 }
 
 func hostClock(clock uint32) (uintptr, bool) {

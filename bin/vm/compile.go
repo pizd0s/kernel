@@ -230,7 +230,7 @@ func exeLength(header []byte, size int64) (int, error) {
 	length := int64(binary.LittleEndian.Uint32(header[len(exeMagic):]))
 
 	if length <= exeHeader || length > size {
-		return 0, fmt.Errorf("PZD1: a length of %d in a file of %d bytes: %w", length, size, eNoexec)
+		return 0, fmt.Errorf("PZD1: a length of %d in a file of %d bytes: %w", length, size, ENOEXEC)
 	}
 
 	return int(length), nil
@@ -240,7 +240,7 @@ func unpack(exe []byte) ([]byte, error) {
 	module, err := unpacker().DecodeAll(exe[exeHeader:], nil)
 
 	if err != nil {
-		return nil, fmt.Errorf("zstd: %v: %w", err, eNoexec)
+		return nil, fmt.Errorf("zstd: %v: %w", err, ENOEXEC)
 	}
 
 	return module, nil
@@ -258,15 +258,15 @@ func compileExecutable(exe []byte, options CompileOptions) (*ElfObject, error) {
 
 func compileModule(data []byte, options CompileOptions) (obj *ElfObject, err error) {
 	if !bytes.HasPrefix(data, wasmHeader) {
-		return nil, eNoexec
+		return nil, ENOEXEC
 	}
 
 	if t := tryAs[*Trap](func() {
 		if e := try(func() { obj = readObject(compileModuleWithOptions(data, options)) }); e != nil {
-			err = fmt.Errorf("%s: %w", e, eNoexec)
+			err = fmt.Errorf("%s: %w", e, ENOEXEC)
 		}
 	}); t != nil {
-		return nil, fmt.Errorf("the compiler: %s: %w", t.Error(), eNoexec)
+		return nil, fmt.Errorf("the compiler: %s: %w", t.Error(), ENOEXEC)
 	}
 
 	return obj, err

@@ -2616,7 +2616,7 @@ func libcStrcspn(ctx uintptr, s, set uint32) uint32 {
 
 func fcntlSize(cmd uint32) uint32 {
 	switch cmd {
-	case fGetlk, fSetlk, fSetlkw:
+	case F_GETLK, F_SETLK, F_SETLKW:
 		return sizeofFlock
 	}
 
@@ -2625,9 +2625,9 @@ func fcntlSize(cmd uint32) uint32 {
 
 func ioctlSize(req uint32) uint32 {
 	switch req {
-	case tcgets, tcsets, tcsets + 1, tcsets + 2:
+	case TCGETS, TCSETS, TCSETS + 1, TCSETS + 2:
 		return sizeofTermios
-	case tiocgwinsz, tiocswinsz:
+	case TIOCGWINSZ, TIOCSWINSZ:
 		return sizeofWinsize
 	}
 

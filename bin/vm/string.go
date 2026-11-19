@@ -9,37 +9,37 @@ import (
 )
 
 var signalMessages = map[int]string{
-	sigHup:    "Hangup",
-	sigInt:    "Interrupt",
-	sigQuit:   "Quit",
-	sigIll:    "Illegal instruction",
-	sigTrap:   "Trace/breakpoint trap",
-	sigAbrt:   "Aborted",
-	sigBus:    "Bus error",
-	sigFpe:    "Floating point exception",
-	sigKill:   "Killed",
-	sigUsr1:   "User defined signal 1",
-	sigSegv:   "Segmentation fault",
-	sigUsr2:   "User defined signal 2",
-	sigPipe:   "Broken pipe",
-	sigAlrm:   "Alarm clock",
-	sigTerm:   "Terminated",
-	sigStkflt: "Stack fault",
-	sigChld:   "Child exited",
-	sigCont:   "Continued",
-	sigStop:   "Stopped (signal)",
-	sigTstp:   "Stopped",
-	sigTtin:   "Stopped (tty input)",
-	sigTtou:   "Stopped (tty output)",
-	sigUrg:    "Urgent I/O condition",
-	sigXcpu:   "CPU time limit exceeded",
-	sigXfsz:   "File size limit exceeded",
-	sigVtalrm: "Virtual timer expired",
-	sigProf:   "Profiling timer expired",
-	sigWinch:  "Window changed",
-	sigIo:     "I/O possible",
-	sigPwr:    "Power failure",
-	sigSys:    "Bad system call",
+	SIGHUP:    "Hangup",
+	SIGINT:    "Interrupt",
+	SIGQUIT:   "Quit",
+	SIGILL:    "Illegal instruction",
+	SIGTRAP:   "Trace/breakpoint trap",
+	SIGABRT:   "Aborted",
+	SIGBUS:    "Bus error",
+	SIGFPE:    "Floating point exception",
+	SIGKILL:   "Killed",
+	SIGUSR1:   "User defined signal 1",
+	SIGSEGV:   "Segmentation fault",
+	SIGUSR2:   "User defined signal 2",
+	SIGPIPE:   "Broken pipe",
+	SIGALRM:   "Alarm clock",
+	SIGTERM:   "Terminated",
+	SIGSTKFLT: "Stack fault",
+	SIGCHLD:   "Child exited",
+	SIGCONT:   "Continued",
+	SIGSTOP:   "Stopped (signal)",
+	SIGTSTP:   "Stopped",
+	SIGTTIN:   "Stopped (tty input)",
+	SIGTTOU:   "Stopped (tty output)",
+	SIGURG:    "Urgent I/O condition",
+	SIGXCPU:   "CPU time limit exceeded",
+	SIGXFSZ:   "File size limit exceeded",
+	SIGVTALRM: "Virtual timer expired",
+	SIGPROF:   "Profiling timer expired",
+	SIGWINCH:  "Window changed",
+	SIGIO:     "I/O possible",
+	SIGPWR:    "Power failure",
+	SIGSYS:    "Bad system call",
 }
 
 func lower(c byte) byte {
@@ -105,8 +105,8 @@ func capitalize(s string) string {
 }
 
 func signalMessage(sig int) string {
-	if sig >= sigRtmin && sig <= sigRtmax {
-		return fmt.Sprintf("Real-time signal %d", sig-sigRtmin)
+	if sig >= SIGRTMIN && sig <= SIGRTMAX {
+		return fmt.Sprintf("Real-time signal %d", sig-SIGRTMIN)
 	}
 
 	if s, ok := signalMessages[sig]; ok {
@@ -196,7 +196,7 @@ func strverscmp(a, b []byte) int {
 
 func fnmatch(pat, s []byte, flags int, start bool) bool {
 	hidden := func() bool {
-		return start && flags&fnmPeriod != 0 && len(s) > 0 && s[0] == '.'
+		return start && flags&FNM_PERIOD != 0 && len(s) > 0 && s[0] == '.'
 	}
 
 	for len(pat) > 0 {
@@ -217,20 +217,20 @@ func fnmatch(pat, s []byte, flags int, start bool) bool {
 					return true
 				}
 
-				if i < len(s) && flags&fnmPathname != 0 && s[i] == '/' {
+				if i < len(s) && flags&FNM_PATHNAME != 0 && s[i] == '/' {
 					return false
 				}
 			}
 
 			return false
 		case '?':
-			if len(s) == 0 || flags&fnmPathname != 0 && s[0] == '/' || hidden() {
+			if len(s) == 0 || flags&FNM_PATHNAME != 0 && s[0] == '/' || hidden() {
 				return false
 			}
 
 			c, pat = s[0], pat[1:]
 		case '[':
-			if len(s) == 0 || flags&fnmPathname != 0 && s[0] == '/' || hidden() {
+			if len(s) == 0 || flags&FNM_PATHNAME != 0 && s[0] == '/' || hidden() {
 				return false
 			}
 
@@ -254,11 +254,11 @@ func fnmatch(pat, s []byte, flags int, start bool) bool {
 
 			pat = pat[1:]
 
-			if lit == '\\' && flags&fnmNoescape == 0 && len(pat) > 0 {
+			if lit == '\\' && flags&FNM_NOESCAPE == 0 && len(pat) > 0 {
 				lit, pat = pat[0], pat[1:]
 			}
 
-			if len(s) == 0 || lit != s[0] && (flags&fnmCasefold == 0 || lower(lit) != lower(s[0])) {
+			if len(s) == 0 || lit != s[0] && (flags&FNM_CASEFOLD == 0 || lower(lit) != lower(s[0])) {
 				return false
 			}
 
@@ -266,10 +266,10 @@ func fnmatch(pat, s []byte, flags int, start bool) bool {
 		}
 
 		s = s[1:]
-		start = flags&fnmPathname != 0 && c == '/'
+		start = flags&FNM_PATHNAME != 0 && c == '/'
 	}
 
-	return len(s) == 0 || flags&fnmLeadingDir != 0 && s[0] == '/'
+	return len(s) == 0 || flags&FNM_LEADING_DIR != 0 && s[0] == '/'
 }
 
 func bracket(pat []byte, c byte, flags int) (int, bool) {
@@ -281,7 +281,7 @@ func bracket(pat []byte, c byte, flags int) (int, bool) {
 		i++
 	}
 
-	fold := flags&fnmCasefold != 0
+	fold := flags&FNM_CASEFOLD != 0
 	matched := false
 	first := true
 
@@ -312,7 +312,7 @@ func bracket(pat []byte, c byte, flags int) (int, bool) {
 
 		lo := pat[i]
 
-		if lo == '\\' && flags&fnmNoescape == 0 && i+1 < len(pat) {
+		if lo == '\\' && flags&FNM_NOESCAPE == 0 && i+1 < len(pat) {
 			i++
 			lo = pat[i]
 		}
@@ -325,7 +325,7 @@ func bracket(pat []byte, c byte, flags int) (int, bool) {
 			hi = pat[i+1]
 			i += 2
 
-			if hi == '\\' && flags&fnmNoescape == 0 && i < len(pat) {
+			if hi == '\\' && flags&FNM_NOESCAPE == 0 && i < len(pat) {
 				hi = pat[i]
 				i++
 			}

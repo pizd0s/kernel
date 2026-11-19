@@ -148,7 +148,7 @@ func (s *UnixSocket) stat(p *Process, st *Stat) error {
 		return c.stat(p, st)
 	}
 
-	*st = Stat{Mode: sIfsock | 0o777, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
+	*st = Stat{Mode: S_IFSOCK | 0o777, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
 
 	return nil
 }
@@ -160,7 +160,7 @@ func (s *UnixSocket) poll(events int16) int16 {
 	case c != nil:
 		return c.poll(events)
 	case l != nil:
-		return l.poll(events) & (pollIn | pollRdnorm | pollErr | pollHup)
+		return l.poll(events) & (POLLIN | POLLRDNORM | POLLERR | POLLHUP)
 	}
 
 	return 0
@@ -190,7 +190,7 @@ func (s *UnixSocket) unsubscribe(sub *Subscription) {
 }
 
 func (s *UnixSocket) attach(to Object) {
-	to.subscribe(&s.inner, pollIn|pollOut)
+	to.subscribe(&s.inner, POLLIN|POLLOUT)
 	s.mu.Lock()
 	s.readers.tell()
 	s.writers.tell()
@@ -210,17 +210,17 @@ func (s *UnixSocket) wake(l *Hook) {
 }
 
 func (s *UnixSocket) flags() (int, error) {
-	fl := oRdwr
+	fl := O_RDWR
 
 	if s.nonblock.Load() {
-		fl |= oNonblock
+		fl |= O_NONBLOCK
 	}
 
 	return fl, nil
 }
 
 func (s *UnixSocket) setFlags(fl int) error {
-	s.nonblock.Store(fl&oNonblock != 0)
+	s.nonblock.Store(fl&O_NONBLOCK != 0)
 
 	if _, c := s.state(); c != nil {
 		return c.setFlags(fl)
@@ -237,19 +237,19 @@ func (s *UnixSocket) bind(p *Process, at, n uint32) error {
 	}
 
 	if l, c := s.state(); l != nil || c != nil {
-		return eInval
+		return EINVAL
 	}
 
 	l := &UnixListener{ino: pairInodes.Add(1), conns: newMsgChannel(1), kind: s.kind}
 
 	l.refs.Store(1)
 
-	err = p.onPath(atFdcwd, path, func(v Dir) error {
+	err = p.onPath(AT_FDCWD, path, func(v Dir) error {
 		return v.bindPath(p, path, 0o777&^p.umask, l)
 	})
 
-	if err == eExist {
-		err = eAddrinuse
+	if err == EEXIST {
+		err = EADDRINUSE
 	}
 
 	if err != nil {
@@ -270,13 +270,13 @@ func (s *UnixSocket) listen(backlog int) error {
 	l, c := s.state()
 
 	if l == nil || c != nil {
-		return eInval
+		return EINVAL
 	}
 
 	l.mu.Lock()
 	l.listening = true
 	l.mu.Unlock()
-	l.conns.setLimit(min(max(backlog, 1), somaxconn))
+	l.conns.setLimit(min(max(backlog, 1), SOMAXCONN))
 	l.conns.nudge()
 	l.conns.nudgeWriter()
 
@@ -287,18 +287,18 @@ func (s *UnixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
 	l, _ := s.state()
 
 	if l == nil || !l.listens() {
-		return nil, nil, eInval
+		return nil, nil, EINVAL
 	}
 
 	for {
 		e := l.pop()
 
 		if e == nil && !l.listens() {
-			return nil, nil, eInval
+			return nil, nil, EINVAL
 		}
 
 		if e == nil && s.nonblock.Load() {
-			return nil, nil, eAgain
+			return nil, nil, EAGAIN
 		}
 
 		if e == nil {
@@ -314,7 +314,7 @@ func (s *UnixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
 		}
 
 		if e != nil {
-			e.nonblock.Store(flags&sockNonblock != 0)
+			e.nonblock.Store(flags&SOCK_NONBLOCK != 0)
 			e.options.copyOptions(&s.options)
 
 			return e, unixAddress(nil), nil
@@ -330,14 +330,14 @@ func (s *UnixSocket) connect(p *Process, at, n uint32) error {
 	}
 
 	if l, c := s.state(); c != nil {
-		return eIsconn
+		return EISCONN
 	} else if l != nil {
-		return eInval
+		return EINVAL
 	}
 
 	var conn *PairEnd
 
-	err = p.onPath(atFdcwd, path, func(v Dir) error {
+	err = p.onPath(AT_FDCWD, path, func(v Dir) error {
 		var err error
 		conn, err = p.connectUnix(v, path, s.kind, s.nonblock.Load(), &s.options.sndTimeout)
 
@@ -371,7 +371,7 @@ func (s *UnixSocket) peername(p *Process) ([]byte, error) {
 	defer s.mu.Unlock()
 
 	if s.conn == nil {
-		return nil, eNotconn
+		return nil, ENOTCONN
 	}
 
 	return unixAddress([]byte(s.peer)), nil
@@ -384,10 +384,10 @@ func (s *UnixSocket) connection() (*PairEnd, error) {
 	case c != nil:
 		return c, nil
 	case l != nil && l.listens():
-		return nil, eInval
+		return nil, EINVAL
 	}
 
-	return nil, eNotconn
+	return nil, ENOTCONN
 }
 
 func (s *UnixSocket) socketKind() int {
@@ -407,7 +407,7 @@ func (s *UnixSocket) shutdown(how int) error {
 func (s *UnixSocket) getsockopt(p *Process, level, name, at, lenAt uint32) error {
 	if l, c := s.state(); c != nil {
 		return c.getsockopt(p, level, name, at, lenAt)
-	} else if level == solSocket && name == soAcceptconn {
+	} else if level == SOL_SOCKET && name == SO_ACCEPTCONN {
 		value := uint32(0)
 
 		if l != nil && l.listens() {
@@ -496,9 +496,9 @@ func (s *UnixSocket) write(p *Process, b []byte, mode IoMode) (int, error) {
 }
 
 func (s *UnixSocket) pread(p *Process, b []byte, off int64) (int, error) {
-	return 0, eSpipe
+	return 0, ESPIPE
 }
 
 func (s *UnixSocket) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return 0, eSpipe
+	return 0, ESPIPE
 }

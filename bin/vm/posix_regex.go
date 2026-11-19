@@ -19,19 +19,19 @@ type PosixRegex struct {
 }
 
 func (r *PosixRegex) variant(eflags uint32) *regexp.Regexp {
-	v := eflags & (regNotbol | regNoteol)
+	v := eflags & (REG_NOTBOL | REG_NOTEOL)
 
 	if r.variants[v] == nil {
-		src, _, _ := translateRegex(r.pattern, r.flags, v&regNotbol != 0, v&regNoteol != 0)
+		src, _, _ := translateRegex(r.pattern, r.flags, v&REG_NOTBOL != 0, v&REG_NOTEOL != 0)
 
-		if r.flags&regNewline != 0 && v != 0 {
+		if r.flags&REG_NEWLINE != 0 && v != 0 {
 			src = "(" + src + ")"
 
-			if v&regNotbol != 0 {
+			if v&REG_NOTBOL != 0 {
 				src = "(?s:.)" + src
 			}
 
-			if v&regNoteol != 0 {
+			if v&REG_NOTEOL != 0 {
 				src += "(?s:.)"
 			}
 		}
@@ -76,8 +76,8 @@ func quoteByte(c byte) string {
 }
 
 func translateRegex(pat []byte, flags uint32, bolNever, eolNever bool) (string, int, uint32) {
-	ere := flags&regExtended != 0
-	newline := flags&regNewline != 0
+	ere := flags&REG_EXTENDED != 0
+	newline := flags&REG_NEWLINE != 0
 	w := &RegexWriter{}
 
 	switch {
@@ -87,7 +87,7 @@ func translateRegex(pat []byte, flags uint32, bolNever, eolNever bool) (string, 
 		w.out.WriteString("(?s)")
 	}
 
-	if flags&regIcase != 0 {
+	if flags&REG_ICASE != 0 {
 		w.out.WriteString("(?i)")
 	}
 
@@ -105,7 +105,7 @@ func translateRegex(pat []byte, flags uint32, bolNever, eolNever bool) (string, 
 		switch {
 		case c == '\\':
 			if i+1 == len(pat) {
-				return "", 0, regEescape
+				return "", 0, REG_EESCAPE
 			}
 
 			i++
@@ -120,7 +120,7 @@ func translateRegex(pat []byte, flags uint32, bolNever, eolNever bool) (string, 
 				start = true
 			case !ere && e == ')':
 				if len(w.groups) == 0 {
-					return "", 0, regEparen
+					return "", 0, REG_EPAREN
 				}
 
 				w.atom = w.groups[len(w.groups)-1]
@@ -134,17 +134,17 @@ func translateRegex(pat []byte, flags uint32, bolNever, eolNever bool) (string, 
 				end := bytes.Index(pat[i:], []byte(`\}`))
 
 				if end < 0 {
-					return "", 0, regEbrace
+					return "", 0, REG_EBRACE
 				}
 
 				if wasStart {
-					return "", 0, regBadrpt
+					return "", 0, REG_BADRPT
 				}
 
 				interval, ok := parseInterval(string(pat[i+1 : i+end]))
 
 				if !ok {
-					return "", 0, regBadbr
+					return "", 0, REG_BADBR
 				}
 
 				w.repeat(interval)
@@ -156,7 +156,7 @@ func translateRegex(pat []byte, flags uint32, bolNever, eolNever bool) (string, 
 					w.repeat(string(e))
 				}
 			case e >= '1' && e <= '9':
-				return "", 0, regEsubreg
+				return "", 0, REG_ESUBREG
 			case e == '<' || e == '>':
 				w.atomic(`\b`)
 			case e == 'b' || e == 'B' || e == 'w' || e == 'W' || e == 's' || e == 'S':
@@ -250,7 +250,7 @@ func translateRegex(pat []byte, flags uint32, bolNever, eolNever bool) (string, 
 	}
 
 	if len(w.groups) > 0 {
-		return "", 0, regEparen
+		return "", 0, REG_EPAREN
 	}
 
 	return w.out.String(), w.nsub, 0
@@ -306,7 +306,7 @@ func translateBracket(pat []byte, newline bool) (string, int, uint32) {
 
 	for {
 		if i >= len(pat) {
-			return "", 0, regEbrack
+			return "", 0, REG_EBRACK
 		}
 
 		c := pat[i]
@@ -322,7 +322,7 @@ func translateBracket(pat []byte, newline bool) (string, int, uint32) {
 			end := bytes.Index(pat[i+2:], []byte{kind, ']'})
 
 			if end < 0 {
-				return "", 0, regEbrack
+				return "", 0, REG_EBRACK
 			}
 
 			body := pat[i+2 : i+2+end]
@@ -335,7 +335,7 @@ func translateBracket(pat []byte, newline bool) (string, int, uint32) {
 				out.WriteString("[:" + string(body) + ":]")
 			} else {
 				if !utf8.Valid(body) || utf8.RuneCount(body) != 1 {
-					return "", 0, regEcollate
+					return "", 0, REG_ECOLLATE
 				}
 
 				for _, b := range body {

@@ -187,7 +187,7 @@ func (ep *Epoll) poll(events int16) int16 {
 
 	for _, m := range marked {
 		if m.obj.poll(int16(m.events)) != 0 {
-			return (pollIn | pollRdnorm) & events
+			return (POLLIN | POLLRDNORM) & events
 		}
 	}
 
@@ -234,7 +234,7 @@ func (ep *Epoll) mark(m *EpollMember) {
 }
 
 func (ep *Epoll) flags() (int, error) {
-	return oRdwr, nil
+	return O_RDWR, nil
 }
 
 func (ep *Epoll) setFlags(fl int) error {
@@ -242,19 +242,19 @@ func (ep *Epoll) setFlags(fl int) error {
 }
 
 func (ep *Epoll) read(p *Process, b []byte, mode IoMode) (int, error) {
-	return 0, eInval
+	return 0, EINVAL
 }
 
 func (ep *Epoll) write(p *Process, b []byte, mode IoMode) (int, error) {
-	return 0, eInval
+	return 0, EINVAL
 }
 
 func (ep *Epoll) pread(p *Process, b []byte, off int64) (int, error) {
-	return 0, eInval
+	return 0, EINVAL
 }
 
 func (ep *Epoll) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return 0, eInval
+	return 0, EINVAL
 }
 
 func (ep *Epoll) contains(inner *Epoll) bool {
@@ -275,9 +275,9 @@ func (ep *Epoll) contains(inner *Epoll) bool {
 
 func (ep *Epoll) ctl(op uint32, key EpollKey, events uint32, data uint64) error {
 	switch op {
-	case epollCtlAdd:
+	case EPOLL_CTL_ADD:
 		return ep.add(key, events, data)
-	case epollCtlMod:
+	case EPOLL_CTL_MOD:
 		ep.mu.Lock()
 
 		m := ep.members[key]
@@ -285,7 +285,7 @@ func (ep *Epoll) ctl(op uint32, key EpollKey, events uint32, data uint64) error 
 		if m == nil {
 			ep.mu.Unlock()
 
-			return eNoent
+			return ENOENT
 		}
 
 		m.events, m.data, m.disabled = events, data, false
@@ -295,7 +295,7 @@ func (ep *Epoll) ctl(op uint32, key EpollKey, events uint32, data uint64) error 
 		ep.wake(&m.sub.in)
 
 		return nil
-	case epollCtlDel:
+	case EPOLL_CTL_DEL:
 		ep.mu.Lock()
 
 		m := ep.members[key]
@@ -303,7 +303,7 @@ func (ep *Epoll) ctl(op uint32, key EpollKey, events uint32, data uint64) error 
 		if m == nil {
 			ep.mu.Unlock()
 
-			return eNoent
+			return ENOENT
 		}
 
 		ep.remove(m)
@@ -314,7 +314,7 @@ func (ep *Epoll) ctl(op uint32, key EpollKey, events uint32, data uint64) error 
 		return nil
 	}
 
-	return eInval
+	return EINVAL
 }
 
 func (ep *Epoll) remove(m *EpollMember) {
@@ -326,7 +326,7 @@ func (ep *Epoll) remove(m *EpollMember) {
 
 func (ep *Epoll) add(key EpollKey, events uint32, data uint64) error {
 	if inner := key.obj.asEpoll(); inner != nil && (inner == ep || inner.contains(ep)) {
-		return eLoop
+		return ELOOP
 	}
 
 	ep.mu.Lock()
@@ -334,7 +334,7 @@ func (ep *Epoll) add(key EpollKey, events uint32, data uint64) error {
 	if _, dup := ep.members[key]; dup {
 		ep.mu.Unlock()
 
-		return eExist
+		return EEXIST
 	}
 
 	ep.lastID++
@@ -400,17 +400,17 @@ func (ep *Epoll) collect(buf []byte, max int, who **EpollMember) int {
 			continue
 		}
 
-		binary.LittleEndian.PutUint32(buf[epollEventSize*n:], uint32(uint16(revents)))
-		binary.LittleEndian.PutUint64(buf[epollEventSize*n+8:], m.data)
+		binary.LittleEndian.PutUint32(buf[sizeofEpollEvent*n:], uint32(uint16(revents)))
+		binary.LittleEndian.PutUint64(buf[sizeofEpollEvent*n+8:], m.data)
 		n++
 
 		if who != nil {
 			*who = m
 		}
 
-		m.disabled = events&epollOneshot != 0
+		m.disabled = events&EPOLLONESHOT != 0
 
-		if events&epollEt == 0 {
+		if events&EPOLLET == 0 {
 			ep.mark(m)
 		}
 	}

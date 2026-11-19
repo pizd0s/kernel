@@ -94,7 +94,7 @@ func hostWindow() ([sizeofWinsize]byte, error) {
 	var host struct{ row, col, xpixel, ypixel uint16 }
 
 	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, 0, syscall.TIOCGWINSZ, uintptr(unsafe.Pointer(&host))); e != 0 {
-		return w, eNotty
+		return w, ENOTTY
 	}
 
 	for i, v := range []uint16{host.row, host.col, host.xpixel, host.ypixel} {

@@ -14,16 +14,16 @@ import (
 )
 
 var hostSignals = map[syscall.Signal]int{
-	syscall.SIGHUP:   sigHup,
-	syscall.SIGINT:   sigInt,
-	syscall.SIGQUIT:  sigQuit,
-	syscall.SIGUSR1:  sigUsr1,
-	syscall.SIGUSR2:  sigUsr2,
-	syscall.SIGALRM:  sigAlrm,
-	syscall.SIGTERM:  sigTerm,
-	syscall.SIGCONT:  sigCont,
-	syscall.SIGTSTP:  sigTstp,
-	syscall.SIGWINCH: sigWinch,
+	syscall.SIGHUP:   SIGHUP,
+	syscall.SIGINT:   SIGINT,
+	syscall.SIGQUIT:  SIGQUIT,
+	syscall.SIGUSR1:  SIGUSR1,
+	syscall.SIGUSR2:  SIGUSR2,
+	syscall.SIGALRM:  SIGALRM,
+	syscall.SIGTERM:  SIGTERM,
+	syscall.SIGCONT:  SIGCONT,
+	syscall.SIGTSTP:  SIGTSTP,
+	syscall.SIGWINCH: SIGWINCH,
 }
 
 type Kernel struct {
@@ -125,7 +125,7 @@ func (k *Kernel) code(p *Process, f Object, name string) (*Code, error) {
 	}
 
 	if !ok {
-		return nil, fmt.Errorf("%s: no executable of PZD1: %w", name, eNoexec)
+		return nil, fmt.Errorf("%s: no executable of PZD1: %w", name, ENOEXEC)
 	}
 
 	return k.codeOf(p, exe, name, nil)
@@ -135,7 +135,7 @@ func programData(p *Process, f Object, module bool) (data []byte, ok bool, err e
 	file := f.asFile()
 
 	if file == nil {
-		return nil, false, eAcces
+		return nil, false, EACCES
 	}
 
 	var st Stat
@@ -147,7 +147,7 @@ func programData(p *Process, f Object, module bool) (data []byte, ok bool, err e
 	t := f.asTransfer()
 
 	if t == nil {
-		return nil, false, eAcces
+		return nil, false, EACCES
 	}
 
 	return readProgram(st.Size, func(b []byte, off int64) error { return readAt(p, t, b, off) }, module)
@@ -189,7 +189,7 @@ func readAt(p *Process, t Transfer, b []byte, off int64) error {
 		}
 
 		if n == 0 {
-			return eNoexec
+			return ENOEXEC
 		}
 
 		at += n
@@ -269,7 +269,7 @@ func (k *Kernel) compile(data []byte, name string, obj *ElfObject) (*Code, error
 	if e := try(func() {
 		c = link(name, obj, k)
 	}); e != nil {
-		return nil, fmt.Errorf("%s: %s: %w", name, e, eNoexec)
+		return nil, fmt.Errorf("%s: %s: %w", name, e, ENOEXEC)
 	}
 
 	return c, nil
@@ -377,8 +377,8 @@ func (k *Kernel) orphans(groups []int32) {
 		k.mu.Unlock()
 
 		if hangs {
-			k.signalGroup(pgid, sigHup)
-			k.signalGroup(pgid, sigCont)
+			k.signalGroup(pgid, SIGHUP)
+			k.signalGroup(pgid, SIGCONT)
 		}
 	}
 }

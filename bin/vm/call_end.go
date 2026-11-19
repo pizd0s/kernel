@@ -227,13 +227,13 @@ func (e *CallEnd) ask(w *Waiter[Received], data []byte, files []Object) error {
 	if !c.served.Load() {
 		c.mu.Unlock()
 
-		return ePipe
+		return EPIPE
 	}
 
 	if c.phase.Load() != callNone || c.there.Load() || c.ended.Load() {
 		c.mu.Unlock()
 
-		return eBusy
+		return EBUSY
 	}
 
 	for _, f := range files {
@@ -303,7 +303,7 @@ func (e *CallEnd) reply(gather func(small []byte) ([]byte, error), files []Objec
 	if c.said.Load()&callLeft != 0 || c.phase.Load() != callReceived || e.passed && e.seq != c.seq {
 		c.mu.Unlock()
 
-		return 0, ePipe
+		return 0, EPIPE
 	}
 
 	data, err := gather(c.small[:])
@@ -464,16 +464,16 @@ func (e *CallEnd) poll(events int16) int16 {
 
 	if !e.serves {
 		if c.there.Load() || c.ended.Load() {
-			mask |= pollIn | pollRdnorm
+			mask |= POLLIN | POLLRDNORM
 		}
 
 		if !c.served.Load() {
-			mask |= pollHup
+			mask |= POLLHUP
 		} else if e.idle() {
-			mask |= pollOut | pollWrnorm
+			mask |= POLLOUT | POLLWRNORM
 		}
 
-		return mask & (events | pollErr | pollHup)
+		return mask & (events | POLLERR | POLLHUP)
 	}
 
 	c.mu.Lock()
@@ -483,18 +483,18 @@ func (e *CallEnd) poll(events int16) int16 {
 	c.mu.Unlock()
 
 	if ok {
-		mask |= pollIn | pollRdnorm
+		mask |= POLLIN | POLLRDNORM
 
 		if eof {
-			mask |= pollHup
+			mask |= POLLHUP
 		}
 	}
 
 	if c.phase.Load() == callReceived && e.has() {
-		mask |= pollOut | pollWrnorm
+		mask |= POLLOUT | POLLWRNORM
 	}
 
-	return mask & (events | pollErr | pollHup)
+	return mask & (events | POLLERR | POLLHUP)
 }
 
 func (e *CallEnd) subscribe(s *Subscription, events int16) {
@@ -527,23 +527,23 @@ func (e *CallEnd) stat(p *Process, st *Stat) error {
 		c.ino.CompareAndSwap(0, pairInodes.Add(1))
 	}
 
-	*st = Stat{Ino: c.ino.Load(), Mode: sIfsock | 0o777, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
+	*st = Stat{Ino: c.ino.Load(), Mode: S_IFSOCK | 0o777, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
 
 	return nil
 }
 
 func (e *CallEnd) flags() (int, error) {
-	fl := oRdwr
+	fl := O_RDWR
 
 	if e.nonblock.Load() {
-		fl |= oNonblock
+		fl |= O_NONBLOCK
 	}
 
 	return fl, nil
 }
 
 func (e *CallEnd) setFlags(fl int) error {
-	e.nonblock.Store(fl&oNonblock != 0)
+	e.nonblock.Store(fl&O_NONBLOCK != 0)
 
 	return nil
 }
@@ -623,8 +623,8 @@ func (e *CallEnd) answered(p *Process, pk *Packet, peek, wait bool) (ok, eof boo
 }
 
 func (e *CallEnd) receive(p *Process, bufs [][]byte, flags uint32, control, room uint32) (int, uint32, uint32, error) {
-	nonblock := flags&msgDontwait != 0 || e.nonblock.Load()
-	peek := flags&msgPeek != 0
+	nonblock := flags&MSG_DONTWAIT != 0 || e.nonblock.Load()
+	peek := flags&MSG_PEEK != 0
 
 	for {
 		var pk Packet
@@ -656,10 +656,10 @@ func (e *CallEnd) receive(p *Process, bufs [][]byte, flags uint32, control, room
 			}
 
 			if len(rest) > 0 {
-				out |= msgTrunc
+				out |= MSG_TRUNC
 			}
 
-			if flags&msgTrunc != 0 {
+			if flags&MSG_TRUNC != 0 {
 				n = len(pk.data)
 			}
 
@@ -667,17 +667,17 @@ func (e *CallEnd) receive(p *Process, bufs [][]byte, flags uint32, control, room
 				return n, 0, out, nil
 			}
 
-			written, cut := p.putRights(pk.files, control, room, flags&msgCmsgCloexec != 0)
+			written, cut := p.putRights(pk.files, control, room, flags&MSG_CMSG_CLOEXEC != 0)
 
 			return n, written, out | cut, nil
 		}
 
 		if nonblock {
-			return 0, 0, 0, eAgain
+			return 0, 0, 0, EAGAIN
 		}
 
 		if peek {
-			if _, err := p.waitObject(e, pollIn, -1, true); err != nil {
+			if _, err := p.waitObject(e, POLLIN, -1, true); err != nil {
 				return 0, 0, 0, err
 			}
 		}
@@ -688,7 +688,7 @@ func (e *CallEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 	flags := uint32(0)
 
 	if mode.nonblock {
-		flags = msgDontwait
+		flags = MSG_DONTWAIT
 	}
 
 	n, _, _, err := e.receive(p, [][]byte{b}, flags, 0, 0)
@@ -698,7 +698,7 @@ func (e *CallEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 
 func (e *CallEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 	if len(b) > packetMax {
-		return 0, eMsgsize
+		return 0, EMSGSIZE
 	}
 
 	return e.put(func(small []byte) ([]byte, error) {
@@ -711,27 +711,27 @@ func (e *CallEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 }
 
 func (e *CallEnd) pread(p *Process, b []byte, off int64) (int, error) {
-	return 0, eSpipe
+	return 0, ESPIPE
 }
 
 func (e *CallEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return 0, eSpipe
+	return 0, ESPIPE
 }
 
 func (e *CallEnd) bind(p *Process, at, n uint32) error {
-	return eInval
+	return EINVAL
 }
 
 func (e *CallEnd) connect(p *Process, at, n uint32) error {
-	return eIsconn
+	return EISCONN
 }
 
 func (e *CallEnd) listen(backlog int) error {
-	return eInval
+	return EINVAL
 }
 
 func (e *CallEnd) accept(p *Process, flags uint32) (Object, []byte, error) {
-	return nil, nil, eInval
+	return nil, nil, EINVAL
 }
 
 func (e *CallEnd) sockname(p *Process) ([]byte, error) {
@@ -743,26 +743,26 @@ func (e *CallEnd) peername(p *Process) ([]byte, error) {
 }
 
 func (e *CallEnd) socketKind() int {
-	return sockCall
+	return SOCK_CALL
 }
 
 func (e *CallEnd) shutdown(how int) error {
-	return eOpnotsupp
+	return EOPNOTSUPP
 }
 
 func (e *CallEnd) getsockopt(p *Process, level, name, at, lenAt uint32) error {
-	return eNoprotoopt
+	return ENOPROTOOPT
 }
 
 func (e *CallEnd) setsockopt(p *Process, level, name, at, n uint32) error {
-	return eNoprotoopt
+	return ENOPROTOOPT
 }
 
 func (e *CallEnd) sendmsg(p *Process, at, flags uint32) (int, error) {
 	h := p.span(at, sizeofMsghdr)
 
 	if binary.LittleEndian.Uint32(h) != 0 {
-		return 0, eIsconn
+		return 0, EISCONN
 	}
 
 	files, _, err := p.rights(binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
@@ -786,7 +786,7 @@ func (e *CallEnd) sendmsg(p *Process, at, flags uint32) (int, error) {
 
 func (e *CallEnd) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, error) {
 	if addr != 0 {
-		return 0, eIsconn
+		return 0, EISCONN
 	}
 
 	return e.write(p, p.span(buf, n), IoMode{})
@@ -812,7 +812,7 @@ func (e *CallEnd) recvmsg(p *Process, at, flags uint32) (int, error) {
 	}
 
 	p.put32(at+20, written)
-	p.put32(at+24, out|flags&msgCmsgCloexec)
+	p.put32(at+24, out|flags&MSG_CMSG_CLOEXEC)
 
 	return n, nil
 }

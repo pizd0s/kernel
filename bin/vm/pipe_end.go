@@ -134,8 +134,8 @@ func (e *PipeEnd) asCall() *CallEnd {
 func (e *PipeEnd) sides(events int16) (in, out bool) {
 	in, out = e.reads, e.writes
 
-	if in && out && events&(pollIn|pollRdnorm|pollOut|pollWrnorm) != 0 {
-		in, out = events&(pollIn|pollRdnorm) != 0, events&(pollOut|pollWrnorm) != 0
+	if in && out && events&(POLLIN|POLLRDNORM|POLLOUT|POLLWRNORM) != 0 {
+		in, out = events&(POLLIN|POLLRDNORM) != 0, events&(POLLOUT|POLLWRNORM) != 0
 	}
 
 	return in, out
@@ -172,7 +172,7 @@ func (e *PipeEnd) unsubscribe(s *Subscription) {
 func (e *PipeEnd) stat(p *Process, st *Stat) error {
 	pp := e.pipe
 
-	*st = Stat{Ino: pp.ino, Mode: sIfifo | 0o600, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: pipeChunk}
+	*st = Stat{Ino: pp.ino, Mode: S_IFIFO | 0o600, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: pipeChunk}
 
 	if n := pp.name; n != nil {
 		st.Dev, st.Ino, st.Mode = n.key.dev, n.key.ino, n.mode
@@ -198,52 +198,52 @@ func (e *PipeEnd) poll(events int16) int16 {
 
 	if e.writes {
 		if ch.room() {
-			mask |= pollOut | pollWrnorm
+			mask |= POLLOUT | POLLWRNORM
 		}
 
 		if readers == 0 {
-			mask |= pollErr
+			mask |= POLLERR
 		}
 	}
 
 	if e.reads {
 		if front > 0 || queued > 0 || writers == 0 {
-			mask |= pollIn | pollRdnorm
+			mask |= POLLIN | POLLRDNORM
 		}
 
 		if writers == 0 {
-			mask |= pollHup
+			mask |= POLLHUP
 		}
 	}
 
-	return mask & (events | pollErr | pollHup)
+	return mask & (events | POLLERR | POLLHUP)
 }
 
 func (e *PipeEnd) flags() (int, error) {
-	fl := oRdwr
+	fl := O_RDWR
 
 	if !e.writes {
-		fl = oRdonly
+		fl = O_RDONLY
 	} else if !e.reads {
-		fl = oWronly
+		fl = O_WRONLY
 	}
 
 	if e.nonblock.Load() {
-		fl |= oNonblock
+		fl |= O_NONBLOCK
 	}
 
 	return fl, nil
 }
 
 func (e *PipeEnd) setFlags(fl int) error {
-	e.nonblock.Store(fl&oNonblock != 0)
+	e.nonblock.Store(fl&O_NONBLOCK != 0)
 
 	return nil
 }
 
 func (e *PipeEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
-	if req != fionread || !e.reads {
-		return eNotty
+	if req != FIONREAD || !e.reads {
+		return ENOTTY
 	}
 
 	*(*int32)(arg) = int32(e.pipe.bytes.Load())
@@ -253,11 +253,11 @@ func (e *PipeEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
 
 func (e *PipeEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
-		return 0, eIo
+		return 0, EIO
 	}
 
 	if !e.reads {
-		return 0, eBadf
+		return 0, EBADF
 	}
 
 	if len(b) == 0 {
@@ -274,7 +274,7 @@ func (e *PipeEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 		}
 
 		if mode.nonblock || e.nonblock.Load() {
-			return 0, eAgain
+			return 0, EAGAIN
 		}
 
 		ch := pp.channel()
@@ -287,11 +287,11 @@ func (e *PipeEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 
 func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 	if p.chaosFail("write") {
-		return 0, eIo
+		return 0, EIO
 	}
 
 	if !e.writes {
-		return 0, eBadf
+		return 0, EBADF
 	}
 
 	pp := e.pipe
@@ -314,14 +314,14 @@ func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 
 		if finished {
 			if !mode.quiet {
-				p.sendSelf(sigPipe)
+				p.sendSelf(SIGPIPE)
 			}
 
 			if total > 0 {
 				return total, nil
 			}
 
-			return 0, ePipe
+			return 0, EPIPE
 		}
 
 		if sent {
@@ -335,7 +335,7 @@ func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 				return total, nil
 			}
 
-			return 0, eAgain
+			return 0, EAGAIN
 		}
 
 		if _, err := pp.channel().writable(p, func() bool { return false }, time.Time{}, restarts); err != nil {
@@ -351,9 +351,9 @@ func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 }
 
 func (e *PipeEnd) pread(p *Process, b []byte, off int64) (int, error) {
-	return 0, eSpipe
+	return 0, ESPIPE
 }
 
 func (e *PipeEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return 0, eSpipe
+	return 0, ESPIPE
 }

@@ -124,7 +124,7 @@ func (c *MsgChannel) put(pk *Packet) (full bool, err error) {
 	if c.finished.Load() {
 		c.mu.Unlock()
 
-		return false, ePipe
+		return false, EPIPE
 	}
 
 	if sink := c.sink; sink != nil {

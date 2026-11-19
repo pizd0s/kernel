@@ -25,7 +25,7 @@ type LinearMemory struct {
 
 func mmap(size int, prot int) []byte {
 	if chaosFail("mmap") {
-		throw(eNomem)
+		throw(ENOMEM)
 	}
 
 	return throw2(syscall.Mmap(-1, 0, size, prot, syscall.MAP_PRIVATE|syscall.MAP_ANON|syscall.MAP_NORESERVE))

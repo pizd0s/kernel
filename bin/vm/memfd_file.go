@@ -127,7 +127,7 @@ func (f *MemfdFile) asCall() *CallEnd {
 }
 
 func (f *MemfdFile) stat(p *Process, st *Stat) error {
-	*st = Stat{Ino: f.ino, Mode: sIfreg | 0o777, Nlink: 1, Size: int64(len(f.mem)),
+	*st = Stat{Ino: f.ino, Mode: S_IFREG | 0o777, Nlink: 1, Size: int64(len(f.mem)),
 		Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
 	st.Atim = nsecToTimespec(f.made.UnixNano())
 	st.Mtim, st.Ctim = st.Atim, st.Atim
@@ -136,7 +136,7 @@ func (f *MemfdFile) stat(p *Process, st *Stat) error {
 }
 
 func (f *MemfdFile) poll(events int16) int16 {
-	return events & (pollIn | pollRdnorm | pollOut | pollWrnorm)
+	return events & (POLLIN | POLLRDNORM | POLLOUT | POLLWRNORM)
 }
 
 func (f *MemfdFile) subscribe(s *Subscription, events int16) {
@@ -179,10 +179,10 @@ func (f *MemfdFile) write(p *Process, b []byte, mode IoMode) (int, error) {
 
 func (f *MemfdFile) pread(p *Process, b []byte, off int64) (int, error) {
 	switch {
-	case f.mode == oWronly:
-		return 0, eBadf
+	case f.mode == O_WRONLY:
+		return 0, EBADF
 	case off < 0:
-		return 0, eInval
+		return 0, EINVAL
 	case off >= int64(len(f.mem)):
 		return 0, nil
 	}
@@ -196,14 +196,14 @@ func (f *MemfdFile) pread(p *Process, b []byte, off int64) (int, error) {
 
 func (f *MemfdFile) pwrite(p *Process, b []byte, off int64) (int, error) {
 	switch {
-	case f.mode == oRdonly:
-		return 0, eBadf
+	case f.mode == O_RDONLY:
+		return 0, EBADF
 	case off < 0:
-		return 0, eInval
+		return 0, EINVAL
 	case len(b) == 0:
 		return 0, nil
 	case off >= int64(len(f.mem)):
-		return 0, eNospc
+		return 0, ENOSPC
 	}
 
 	n := min(len(b), len(f.mem)-int(off))
@@ -225,11 +225,11 @@ func (f *MemfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 	case 2:
 		off += int64(len(f.mem))
 	default:
-		return 0, eInval
+		return 0, EINVAL
 	}
 
 	if off < 0 {
-		return 0, eInval
+		return 0, EINVAL
 	}
 
 	f.off = off
@@ -239,22 +239,22 @@ func (f *MemfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 
 func (f *MemfdFile) fill(p *Process, src Object, from, to *int64, n int) (int, error) {
 	if src == Object(f) {
-		return 0, eInval
+		return 0, EINVAL
 	}
 
-	if f.mode == oRdonly {
-		return 0, eBadf
+	if f.mode == O_RDONLY {
+		return 0, EBADF
 	}
 
 	at := f.position(to)
 
 	switch {
 	case at < 0:
-		return 0, eInval
+		return 0, EINVAL
 	case n == 0:
 		return 0, nil
 	case at >= int64(len(f.mem)):
-		return 0, eNospc
+		return 0, ENOSPC
 	}
 
 	n = min(n, len(f.mem)-int(at))
@@ -266,7 +266,7 @@ func (f *MemfdFile) fill(p *Process, src Object, from, to *int64, n int) (int, e
 	} else if w := src.asWindowed(); w != nil {
 		count, err = w.readWindow(p, f, uint32(at), n, from)
 	} else {
-		err = eInval
+		err = EINVAL
 	}
 
 	f.moved(to, count)
@@ -275,15 +275,15 @@ func (f *MemfdFile) fill(p *Process, src Object, from, to *int64, n int) (int, e
 }
 
 func (f *MemfdFile) drain(p *Process, dst Object, from, to *int64, n int) (int, error) {
-	if f.mode == oWronly {
-		return 0, eBadf
+	if f.mode == O_WRONLY {
+		return 0, EBADF
 	}
 
 	at := f.position(from)
 
 	switch {
 	case at < 0:
-		return 0, eInval
+		return 0, EINVAL
 	case n == 0 || at >= int64(len(f.mem)):
 		return 0, nil
 	}
@@ -295,7 +295,7 @@ func (f *MemfdFile) drain(p *Process, dst Object, from, to *int64, n int) (int, 
 	if d := dst.asWindowed(); d != nil {
 		count, err = d.writeWindow(p, f, uint32(at), n, to)
 	} else {
-		err = eInval
+		err = EINVAL
 	}
 
 	f.moved(from, count)

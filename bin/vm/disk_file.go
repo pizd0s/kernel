@@ -108,7 +108,7 @@ func (f *DiskFile) size() (int64, error) {
 	var st syscall.Stat_t
 
 	if err := syscall.Fstat(f.fd, &st); err != nil {
-		return 0, eIo
+		return 0, EIO
 	}
 
 	return st.Size, nil
@@ -121,14 +121,14 @@ func (f *DiskFile) stat(p *Process, st *Stat) error {
 		return err
 	}
 
-	*st = Stat{Ino: f.ino, Mode: sIfblk | 0o660, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Size: size,
+	*st = Stat{Ino: f.ino, Mode: S_IFBLK | 0o660, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Size: size,
 		Blksize: 4096, Blocks: (size + 511) / 512}
 
 	return nil
 }
 
 func (f *DiskFile) poll(events int16) int16 {
-	return events & (pollIn | pollRdnorm | pollOut | pollWrnorm)
+	return events & (POLLIN | POLLRDNORM | POLLOUT | POLLWRNORM)
 }
 
 func (f *DiskFile) subscribe(s *Subscription, events int16) {
@@ -138,7 +138,7 @@ func (f *DiskFile) unsubscribe(s *Subscription) {
 }
 
 func (f *DiskFile) flags() (int, error) {
-	return oRdwr, nil
+	return O_RDWR, nil
 }
 
 func (f *DiskFile) setFlags(fl int) error {
@@ -147,7 +147,7 @@ func (f *DiskFile) setFlags(fl int) error {
 
 func (f *DiskFile) at(b []byte, off int64, write bool) (int, error) {
 	if off < 0 {
-		return 0, eInval
+		return 0, EINVAL
 	}
 
 	for {
@@ -165,7 +165,7 @@ func (f *DiskFile) at(b []byte, off int64, write bool) (int, error) {
 		}
 
 		if err != nil {
-			return 0, eIo
+			return 0, EIO
 		}
 
 		return n, nil
@@ -212,11 +212,11 @@ func (f *DiskFile) seek(p *Process, off int64, whence int) (int64, error) {
 
 		base = size
 	default:
-		return 0, eInval
+		return 0, EINVAL
 	}
 
 	if base+off < 0 {
-		return 0, eInval
+		return 0, EINVAL
 	}
 
 	f.pos.Store(base + off)
@@ -225,7 +225,7 @@ func (f *DiskFile) seek(p *Process, off int64, whence int) (int64, error) {
 }
 
 func (f *DiskFile) truncate(p *Process, size int64) error {
-	return eInval
+	return EINVAL
 }
 
 func (f *DiskFile) sync(p *Process, data bool) error {
@@ -236,22 +236,22 @@ func (f *DiskFile) sync(p *Process, data bool) error {
 	}
 
 	if err := sync(f.fd); err != nil {
-		return eIo
+		return EIO
 	}
 
 	return nil
 }
 
 func (f *DiskFile) chmod(p *Process, mode uint32) error {
-	return ePerm
+	return EPERM
 }
 
 func (f *DiskFile) chown(p *Process, uid, gid int) error {
-	return ePerm
+	return EPERM
 }
 
 func (f *DiskFile) utimes(p *Process, ts []Timespec) error {
-	return ePerm
+	return EPERM
 }
 
 func (f *DiskFile) statfs(p *Process, st *Statfs) error {

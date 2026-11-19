@@ -21,7 +21,7 @@ func (g *Globber) magic(comp string) bool {
 	for i := 0; i < len(comp); i++ {
 		switch comp[i] {
 		case '\\':
-			if g.flags&globNoescape == 0 {
+			if g.flags&GLOB_NOESCAPE == 0 {
 				i++
 			}
 		case '*', '?', '[':
@@ -33,7 +33,7 @@ func (g *Globber) magic(comp string) bool {
 }
 
 func (g *Globber) literal(comp string) string {
-	if g.flags&globNoescape != 0 {
+	if g.flags&GLOB_NOESCAPE != 0 {
 		return comp
 	}
 
@@ -67,7 +67,7 @@ func (g *Globber) failed(dir string, err error) bool {
 		}
 	}
 
-	if g.flags&globErr != 0 {
+	if g.flags&GLOB_ERR != 0 {
 		g.aborted = true
 	}
 
@@ -81,7 +81,7 @@ func (g *Globber) names(dir string) ([]string, error) {
 		path = "."
 	}
 
-	f, err := g.p.openPath(path, oRdonly|oDirectory, 0)
+	f, err := g.p.openPath(path, O_RDONLY|O_DIRECTORY, 0)
 
 	if err != nil {
 		return nil, err
@@ -92,7 +92,7 @@ func (g *Globber) names(dir string) ([]string, error) {
 	d := f.asDir()
 
 	if d == nil {
-		return nil, eNotdir
+		return nil, ENOTDIR
 	}
 
 	names := []string{".", ".."}
@@ -163,7 +163,7 @@ func (g *Globber) walk(dir string, comps []string) {
 
 	names, err := g.names(dir)
 
-	if err != nil && err != eNoent && err != eNotdir && !g.failed(strings.TrimSuffix(dir, "/"), err) {
+	if err != nil && err != ENOENT && err != ENOTDIR && !g.failed(strings.TrimSuffix(dir, "/"), err) {
 		return
 	}
 
@@ -171,12 +171,12 @@ func (g *Globber) walk(dir string, comps []string) {
 
 	flags := 0
 
-	if g.flags&globPeriod == 0 {
-		flags |= fnmPeriod
+	if g.flags&GLOB_PERIOD == 0 {
+		flags |= FNM_PERIOD
 	}
 
-	if g.flags&globNoescape != 0 {
-		flags |= fnmNoescape
+	if g.flags&GLOB_NOESCAPE != 0 {
+		flags |= FNM_NOESCAPE
 	}
 
 	for _, name := range names {
@@ -197,7 +197,7 @@ func (g *Globber) walk(dir string, comps []string) {
 }
 
 func (g *Globber) tilde(pattern string) (string, bool) {
-	if g.flags&(globTilde|globTildeChk) == 0 || !strings.HasPrefix(pattern, "~") {
+	if g.flags&(GLOB_TILDE|GLOB_TILDE_CHECK) == 0 || !strings.HasPrefix(pattern, "~") {
 		return pattern, true
 	}
 
@@ -211,7 +211,7 @@ func (g *Globber) tilde(pattern string) (string, bool) {
 	}
 
 	if home == "" {
-		return pattern, g.flags&globTildeChk == 0
+		return pattern, g.flags&GLOB_TILDE_CHECK == 0
 	}
 
 	if !slash {

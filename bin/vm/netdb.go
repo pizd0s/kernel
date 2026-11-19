@@ -42,7 +42,7 @@ func sockaddr(addr netip.Addr, port int, scope uint32) []byte {
 	if addr.Is4() {
 		b := make([]byte, 16)
 
-		binary.LittleEndian.PutUint16(b, afInet)
+		binary.LittleEndian.PutUint16(b, AF_INET)
 		binary.BigEndian.PutUint16(b[2:], uint16(port))
 
 		a := addr.As4()
@@ -54,7 +54,7 @@ func sockaddr(addr netip.Addr, port int, scope uint32) []byte {
 
 	b := make([]byte, 28)
 
-	binary.LittleEndian.PutUint16(b, afInet6)
+	binary.LittleEndian.PutUint16(b, AF_INET6)
 	binary.BigEndian.PutUint16(b[2:], uint16(port))
 
 	a := addr.As16()
