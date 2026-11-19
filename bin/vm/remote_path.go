@@ -2,9 +2,7 @@
 
 package main
 
-import (
-	"syscall"
-)
+import ()
 
 type RemotePath struct {
 	node RemoteNode
@@ -91,7 +89,7 @@ func (h *RemotePath) asCall() *CallEnd {
 	return nil
 }
 
-func (h *RemotePath) stat(p *Process, st *syscall.Stat_t) error {
+func (h *RemotePath) stat(p *Process, st *Stat) error {
 	return h.node.stat(p, st)
 }
 
@@ -131,11 +129,11 @@ func (h *RemotePath) chown(p *Process, uid, gid int) error {
 	return h.node.chown(p, uid, gid)
 }
 
-func (h *RemotePath) utimes(p *Process, ts []syscall.Timespec) error {
+func (h *RemotePath) utimes(p *Process, ts []Timespec) error {
 	return h.node.utimes(p, ts)
 }
 
-func (h *RemotePath) statfs(p *Process, st *syscall.Statfs_t) error {
+func (h *RemotePath) statfs(p *Process, st *Statfs) error {
 	return h.node.statfs(p, st)
 }
 

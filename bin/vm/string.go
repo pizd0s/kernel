@@ -6,16 +6,41 @@ import (
 	"bytes"
 	"fmt"
 	"math/bits"
-	"syscall"
 )
 
-const (
-	fnmPathname   = 0x1
-	fnmNoescape   = 0x2
-	fnmPeriod     = 0x4
-	fnmLeadingDir = 0x8
-	fnmCasefold   = 0x10
-)
+var signalMessages = map[int]string{
+	sigHup:    "Hangup",
+	sigInt:    "Interrupt",
+	sigQuit:   "Quit",
+	sigIll:    "Illegal instruction",
+	sigTrap:   "Trace/breakpoint trap",
+	sigAbrt:   "Aborted",
+	sigBus:    "Bus error",
+	sigFpe:    "Floating point exception",
+	sigKill:   "Killed",
+	sigUsr1:   "User defined signal 1",
+	sigSegv:   "Segmentation fault",
+	sigUsr2:   "User defined signal 2",
+	sigPipe:   "Broken pipe",
+	sigAlrm:   "Alarm clock",
+	sigTerm:   "Terminated",
+	sigStkflt: "Stack fault",
+	sigChld:   "Child exited",
+	sigCont:   "Continued",
+	sigStop:   "Stopped (signal)",
+	sigTstp:   "Stopped",
+	sigTtin:   "Stopped (tty input)",
+	sigTtou:   "Stopped (tty output)",
+	sigUrg:    "Urgent I/O condition",
+	sigXcpu:   "CPU time limit exceeded",
+	sigXfsz:   "File size limit exceeded",
+	sigVtalrm: "Virtual timer expired",
+	sigProf:   "Profiling timer expired",
+	sigWinch:  "Window changed",
+	sigIo:     "I/O possible",
+	sigPwr:    "Power failure",
+	sigSys:    "Bad system call",
+}
 
 func lower(c byte) byte {
 	if c >= 'A' && c <= 'Z' {
@@ -79,32 +104,16 @@ func capitalize(s string) string {
 	return s
 }
 
-func errorMessage(e syscall.Errno) string {
-	if e == 0 {
-		return "No error information"
-	}
-
-	s := e.Error()
-
-	if len(s) > 6 && s[:6] == "errno " {
-		return fmt.Sprintf("Unknown error %d", int(e))
-	}
-
-	return capitalize(s)
-}
-
 func signalMessage(sig int) string {
-	if sig >= 34 && sig <= 64 {
-		return fmt.Sprintf("Real-time signal %d", sig-34)
+	if sig >= sigRtmin && sig <= sigRtmax {
+		return fmt.Sprintf("Real-time signal %d", sig-sigRtmin)
 	}
 
-	s := syscall.Signal(sig).String()
-
-	if len(s) > 7 && s[:7] == "signal " {
-		return fmt.Sprintf("Unknown signal %d", sig)
+	if s, ok := signalMessages[sig]; ok {
+		return s
 	}
 
-	return capitalize(s)
+	return fmt.Sprintf("Unknown signal %d", sig)
 }
 
 func strverscmp(a, b []byte) int {

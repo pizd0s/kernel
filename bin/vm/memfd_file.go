@@ -5,7 +5,6 @@ package main
 import (
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -127,10 +126,10 @@ func (f *MemfdFile) asCall() *CallEnd {
 	return nil
 }
 
-func (f *MemfdFile) stat(p *Process, st *syscall.Stat_t) error {
-	*st = syscall.Stat_t{Ino: f.ino, Mode: syscall.S_IFREG | 0o777, Nlink: 1, Size: int64(len(f.mem)),
+func (f *MemfdFile) stat(p *Process, st *Stat) error {
+	*st = Stat{Ino: f.ino, Mode: sIfreg | 0o777, Nlink: 1, Size: int64(len(f.mem)),
 		Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
-	st.Atim = syscall.NsecToTimespec(f.made.UnixNano())
+	st.Atim = nsecToTimespec(f.made.UnixNano())
 	st.Mtim, st.Ctim = st.Atim, st.Atim
 
 	return nil
@@ -180,10 +179,10 @@ func (f *MemfdFile) write(p *Process, b []byte, mode IoMode) (int, error) {
 
 func (f *MemfdFile) pread(p *Process, b []byte, off int64) (int, error) {
 	switch {
-	case f.mode == syscall.O_WRONLY:
-		return 0, syscall.EBADF
+	case f.mode == oWronly:
+		return 0, eBadf
 	case off < 0:
-		return 0, syscall.EINVAL
+		return 0, eInval
 	case off >= int64(len(f.mem)):
 		return 0, nil
 	}
@@ -197,14 +196,14 @@ func (f *MemfdFile) pread(p *Process, b []byte, off int64) (int, error) {
 
 func (f *MemfdFile) pwrite(p *Process, b []byte, off int64) (int, error) {
 	switch {
-	case f.mode == syscall.O_RDONLY:
-		return 0, syscall.EBADF
+	case f.mode == oRdonly:
+		return 0, eBadf
 	case off < 0:
-		return 0, syscall.EINVAL
+		return 0, eInval
 	case len(b) == 0:
 		return 0, nil
 	case off >= int64(len(f.mem)):
-		return 0, syscall.ENOSPC
+		return 0, eNospc
 	}
 
 	n := min(len(b), len(f.mem)-int(off))
@@ -226,11 +225,11 @@ func (f *MemfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 	case 2:
 		off += int64(len(f.mem))
 	default:
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	if off < 0 {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	f.off = off
@@ -240,22 +239,22 @@ func (f *MemfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 
 func (f *MemfdFile) fill(p *Process, src Object, from, to *int64, n int) (int, error) {
 	if src == Object(f) {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
-	if f.mode == syscall.O_RDONLY {
-		return 0, syscall.EBADF
+	if f.mode == oRdonly {
+		return 0, eBadf
 	}
 
 	at := f.position(to)
 
 	switch {
 	case at < 0:
-		return 0, syscall.EINVAL
+		return 0, eInval
 	case n == 0:
 		return 0, nil
 	case at >= int64(len(f.mem)):
-		return 0, syscall.ENOSPC
+		return 0, eNospc
 	}
 
 	n = min(n, len(f.mem)-int(at))
@@ -267,7 +266,7 @@ func (f *MemfdFile) fill(p *Process, src Object, from, to *int64, n int) (int, e
 	} else if w := src.asWindowed(); w != nil {
 		count, err = w.readWindow(p, f, uint32(at), n, from)
 	} else {
-		err = syscall.EINVAL
+		err = eInval
 	}
 
 	f.moved(to, count)
@@ -276,15 +275,15 @@ func (f *MemfdFile) fill(p *Process, src Object, from, to *int64, n int) (int, e
 }
 
 func (f *MemfdFile) drain(p *Process, dst Object, from, to *int64, n int) (int, error) {
-	if f.mode == syscall.O_WRONLY {
-		return 0, syscall.EBADF
+	if f.mode == oWronly {
+		return 0, eBadf
 	}
 
 	at := f.position(from)
 
 	switch {
 	case at < 0:
-		return 0, syscall.EINVAL
+		return 0, eInval
 	case n == 0 || at >= int64(len(f.mem)):
 		return 0, nil
 	}
@@ -296,7 +295,7 @@ func (f *MemfdFile) drain(p *Process, dst Object, from, to *int64, n int) (int, 
 	if d := dst.asWindowed(); d != nil {
 		count, err = d.writeWindow(p, f, uint32(at), n, to)
 	} else {
-		err = syscall.EINVAL
+		err = eInval
 	}
 
 	f.moved(from, count)

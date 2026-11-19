@@ -7,23 +7,6 @@ import (
 	"encoding/binary"
 	"slices"
 	"strings"
-	"syscall"
-)
-
-const (
-	globErr      = 0x01
-	globMark     = 0x02
-	globNosort   = 0x04
-	globDooffs   = 0x08
-	globNocheck  = 0x10
-	globAppend   = 0x20
-	globNoescape = 0x40
-	globPeriod   = 0x80
-	globTilde    = 0x1000
-	globTildeChk = 0x4000
-	globNospace  = 1
-	globAborted  = 2
-	globNomatch  = 3
 )
 
 type Globber struct {
@@ -98,7 +81,7 @@ func (g *Globber) names(dir string) ([]string, error) {
 		path = "."
 	}
 
-	f, err := g.p.openPath(path, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	f, err := g.p.openPath(path, oRdonly|oDirectory, 0)
 
 	if err != nil {
 		return nil, err
@@ -109,7 +92,7 @@ func (g *Globber) names(dir string) ([]string, error) {
 	d := f.asDir()
 
 	if d == nil {
-		return nil, syscall.ENOTDIR
+		return nil, eNotdir
 	}
 
 	names := []string{".", ".."}
@@ -140,7 +123,7 @@ func (g *Globber) names(dir string) ([]string, error) {
 }
 
 func (g *Globber) exists(path string) bool {
-	var st syscall.Stat_t
+	var st Stat
 
 	return g.p.statPath(path, false, &st) == nil
 }
@@ -180,7 +163,7 @@ func (g *Globber) walk(dir string, comps []string) {
 
 	names, err := g.names(dir)
 
-	if err != nil && err != syscall.ENOENT && err != syscall.ENOTDIR && !g.failed(strings.TrimSuffix(dir, "/"), err) {
+	if err != nil && err != eNoent && err != eNotdir && !g.failed(strings.TrimSuffix(dir, "/"), err) {
 		return
 	}
 

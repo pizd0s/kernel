@@ -49,7 +49,7 @@ func newPerfOutput(setting string) *PerfOutput {
 func monotonic() uint64 {
 	var ts syscall.Timespec
 
-	syscall.Syscall(syscall.SYS_CLOCK_GETTIME, 1, uintptr(unsafe.Pointer(&ts)), 0)
+	syscall.Syscall(syscall.SYS_CLOCK_GETTIME, hostClockMonotonic, uintptr(unsafe.Pointer(&ts)), 0)
 
 	return uint64(ts.Sec)*1e9 + uint64(ts.Nsec)
 }

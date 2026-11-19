@@ -4,7 +4,6 @@ package main
 
 import (
 	"encoding/binary"
-	"syscall"
 )
 
 const openControlling = 4
@@ -100,7 +99,7 @@ func (d *RemoteDir) asCall() *CallEnd {
 	return nil
 }
 
-func (d *RemoteDir) stat(p *Process, st *syscall.Stat_t) error {
+func (d *RemoteDir) stat(p *Process, st *Stat) error {
 	return d.node.stat(p, st)
 }
 
@@ -140,11 +139,11 @@ func (d *RemoteDir) chown(p *Process, uid, gid int) error {
 	return d.node.chown(p, uid, gid)
 }
 
-func (d *RemoteDir) utimes(p *Process, ts []syscall.Timespec) error {
+func (d *RemoteDir) utimes(p *Process, ts []Timespec) error {
 	return d.node.utimes(p, ts)
 }
 
-func (d *RemoteDir) statfs(p *Process, st *syscall.Statfs_t) error {
+func (d *RemoteDir) statfs(p *Process, st *Statfs) error {
 	return d.node.statfs(p, st)
 }
 
@@ -152,7 +151,7 @@ func (d *RemoteDir) flock(p *Process, op int) error {
 	return d.node.flock(p, op)
 }
 
-func (d *RemoteDir) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
+func (d *RemoteDir) recordLock(p *Process, cmd int, lk *Flock) error {
 	return d.node.recordLock(p, cmd, lk)
 }
 
@@ -202,7 +201,7 @@ func (d *RemoteDir) readdir(p *Process, b []byte) (int, error) {
 
 func (d *RemoteDir) seek(p *Process, off int64, whence int) (int64, error) {
 	if off != 0 || whence != 0 {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	d.node.after = 0
@@ -220,7 +219,7 @@ func flagOf(follow bool) uint32 {
 
 func (d *RemoteDir) openPath(p *Process, path string, flags int, mode uint32) (Object, error) {
 	if p.chaosFail("openat") {
-		return nil, syscall.EIO
+		return nil, eIo
 	}
 
 	body := make([]byte, 4, 4+len(path))
@@ -240,10 +239,10 @@ func (d *RemoteDir) openPath(p *Process, path string, flags int, mode uint32) (O
 	}
 
 	if len(pk.files) == 0 {
-		var st syscall.Stat_t
+		var st Stat
 
-		if err := decodeStat(pk.data, &st); err != nil || st.Mode&syscall.S_IFMT != syscall.S_IFIFO {
-			return nil, syscall.EIO
+		if err := decodeStat(pk.data, &st); err != nil || st.Mode&sIfmt != sIfifo {
+			return nil, eIo
 		}
 
 		return p.openFifo(&st, flags)
@@ -255,22 +254,22 @@ func (d *RemoteDir) openPath(p *Process, path string, flags int, mode uint32) (O
 		return nil, err
 	}
 
-	if flags&syscall.O_DIRECTORY != 0 && f.asDir() == nil {
+	if flags&oDirectory != 0 && f.asDir() == nil {
 		f.unref()
 
-		return nil, syscall.ENOTDIR
+		return nil, eNotdir
 	}
 
-	if t := f.asTerminal(); t != nil && flags&syscall.O_NOCTTY == 0 {
+	if t := f.asTerminal(); t != nil && flags&oNoctty == 0 {
 		p.acquire(t)
 	}
 
 	return f, nil
 }
 
-func (d *RemoteDir) statPath(p *Process, path string, follow bool, st *syscall.Stat_t) error {
+func (d *RemoteDir) statPath(p *Process, path string, follow bool, st *Stat) error {
 	if p.chaosFail("file-stat") {
-		return syscall.EIO
+		return eIo
 	}
 
 	arg := uint32(0)
@@ -332,7 +331,7 @@ func twoPaths(to Dir, old, new string) ([]byte, error) {
 	h := to.asVFS()
 
 	if h == nil {
-		return nil, syscall.EXDEV
+		return nil, eXdev
 	}
 
 	body := make([]byte, 8, 8+len(old)+1+len(new))
@@ -389,7 +388,7 @@ func (d *RemoteDir) chownPath(p *Process, path string, uid, gid int, follow bool
 	return err
 }
 
-func (d *RemoteDir) utimesPath(p *Process, path string, ts []syscall.Timespec, follow bool) error {
+func (d *RemoteDir) utimesPath(p *Process, path string, ts []Timespec, follow bool) error {
 	when, times := whens(ts)
 	body := make([]byte, 4, 4+len(times)+len(path))
 
@@ -410,7 +409,7 @@ func (d *RemoteDir) truncatePath(p *Process, path string, size int64) error {
 	return err
 }
 
-func (d *RemoteDir) statfsPath(p *Process, path string, st *syscall.Statfs_t) error {
+func (d *RemoteDir) statfsPath(p *Process, path string, st *Statfs) error {
 	pk, err := d.node.vfs(p, d.id, vStatfs, 0, []byte(path))
 
 	if err != nil {
@@ -468,7 +467,7 @@ func (d *RemoteDir) connectPath(p *Process, path string) (Object, error) {
 	}
 
 	if len(pk.files) == 0 {
-		return nil, syscall.ECONNREFUSED
+		return nil, eConnrefused
 	}
 
 	return pk.files[0], nil

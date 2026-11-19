@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -228,13 +227,13 @@ func (e *CallEnd) ask(w *Waiter[Received], data []byte, files []Object) error {
 	if !c.served.Load() {
 		c.mu.Unlock()
 
-		return syscall.EPIPE
+		return ePipe
 	}
 
 	if c.phase.Load() != callNone || c.there.Load() || c.ended.Load() {
 		c.mu.Unlock()
 
-		return syscall.EBUSY
+		return eBusy
 	}
 
 	for _, f := range files {
@@ -304,7 +303,7 @@ func (e *CallEnd) reply(gather func(small []byte) ([]byte, error), files []Objec
 	if c.said.Load()&callLeft != 0 || c.phase.Load() != callReceived || e.passed && e.seq != c.seq {
 		c.mu.Unlock()
 
-		return 0, syscall.EPIPE
+		return 0, ePipe
 	}
 
 	data, err := gather(c.small[:])
@@ -521,30 +520,30 @@ func (e *CallEnd) unsubscribe(s *Subscription) {
 	c.mu.Unlock()
 }
 
-func (e *CallEnd) stat(p *Process, st *syscall.Stat_t) error {
+func (e *CallEnd) stat(p *Process, st *Stat) error {
 	c := e.c
 
 	if c.ino.Load() == 0 {
 		c.ino.CompareAndSwap(0, pairInodes.Add(1))
 	}
 
-	*st = syscall.Stat_t{Ino: c.ino.Load(), Mode: syscall.S_IFSOCK | 0o777, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
+	*st = Stat{Ino: c.ino.Load(), Mode: sIfsock | 0o777, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
 
 	return nil
 }
 
 func (e *CallEnd) flags() (int, error) {
-	fl := syscall.O_RDWR
+	fl := oRdwr
 
 	if e.nonblock.Load() {
-		fl |= syscall.O_NONBLOCK
+		fl |= oNonblock
 	}
 
 	return fl, nil
 }
 
 func (e *CallEnd) setFlags(fl int) error {
-	e.nonblock.Store(fl&syscall.O_NONBLOCK != 0)
+	e.nonblock.Store(fl&oNonblock != 0)
 
 	return nil
 }
@@ -674,7 +673,7 @@ func (e *CallEnd) receive(p *Process, bufs [][]byte, flags uint32, control, room
 		}
 
 		if nonblock {
-			return 0, 0, 0, syscall.EAGAIN
+			return 0, 0, 0, eAgain
 		}
 
 		if peek {
@@ -699,7 +698,7 @@ func (e *CallEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 
 func (e *CallEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 	if len(b) > packetMax {
-		return 0, syscall.EMSGSIZE
+		return 0, eMsgsize
 	}
 
 	return e.put(func(small []byte) ([]byte, error) {
@@ -712,27 +711,27 @@ func (e *CallEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 }
 
 func (e *CallEnd) pread(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.ESPIPE
+	return 0, eSpipe
 }
 
 func (e *CallEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.ESPIPE
+	return 0, eSpipe
 }
 
 func (e *CallEnd) bind(p *Process, at, n uint32) error {
-	return syscall.EINVAL
+	return eInval
 }
 
 func (e *CallEnd) connect(p *Process, at, n uint32) error {
-	return syscall.EISCONN
+	return eIsconn
 }
 
 func (e *CallEnd) listen(backlog int) error {
-	return syscall.EINVAL
+	return eInval
 }
 
 func (e *CallEnd) accept(p *Process, flags uint32) (Object, []byte, error) {
-	return nil, nil, syscall.EINVAL
+	return nil, nil, eInval
 }
 
 func (e *CallEnd) sockname(p *Process) ([]byte, error) {
@@ -748,22 +747,22 @@ func (e *CallEnd) socketKind() int {
 }
 
 func (e *CallEnd) shutdown(how int) error {
-	return syscall.EOPNOTSUPP
+	return eOpnotsupp
 }
 
 func (e *CallEnd) getsockopt(p *Process, level, name, at, lenAt uint32) error {
-	return syscall.ENOPROTOOPT
+	return eNoprotoopt
 }
 
 func (e *CallEnd) setsockopt(p *Process, level, name, at, n uint32) error {
-	return syscall.ENOPROTOOPT
+	return eNoprotoopt
 }
 
 func (e *CallEnd) sendmsg(p *Process, at, flags uint32) (int, error) {
 	h := p.span(at, sizeofMsghdr)
 
 	if binary.LittleEndian.Uint32(h) != 0 {
-		return 0, syscall.EISCONN
+		return 0, eIsconn
 	}
 
 	files, _, err := p.rights(binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
@@ -787,7 +786,7 @@ func (e *CallEnd) sendmsg(p *Process, at, flags uint32) (int, error) {
 
 func (e *CallEnd) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, error) {
 	if addr != 0 {
-		return 0, syscall.EISCONN
+		return 0, eIsconn
 	}
 
 	return e.write(p, p.span(buf, n), IoMode{})

@@ -5,7 +5,6 @@ package main
 import (
 	"math"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -163,7 +162,7 @@ func (t *LockTable) lock(p *Process, want *FileLock, waits bool) error {
 	if !waits {
 		t.mu.Unlock()
 
-		return syscall.EAGAIN
+		return eAgain
 	}
 
 	if !want.ranged {

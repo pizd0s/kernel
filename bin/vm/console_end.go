@@ -4,7 +4,6 @@ package main
 
 import (
 	"sync/atomic"
-	"syscall"
 	"unsafe"
 )
 
@@ -121,8 +120,8 @@ func (c *ConsoleEnd) asCall() *CallEnd {
 	return nil
 }
 
-func (c *ConsoleEnd) stat(p *Process, st *syscall.Stat_t) error {
-	*st = syscall.Stat_t{Ino: 1, Mode: syscall.S_IFCHR | 0o620, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
+func (c *ConsoleEnd) stat(p *Process, st *Stat) error {
+	*st = Stat{Ino: 1, Mode: sIfchr | 0o620, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
 
 	return nil
 }
@@ -160,24 +159,24 @@ func (c *ConsoleEnd) unsubscribe(s *Subscription) {
 }
 
 func (c *ConsoleEnd) flags() (int, error) {
-	fl := syscall.O_RDWR
+	fl := oRdwr
 
 	if c.nonblock.Load() {
-		fl |= syscall.O_NONBLOCK
+		fl |= oNonblock
 	}
 
 	return fl, nil
 }
 
 func (c *ConsoleEnd) setFlags(fl int) error {
-	c.nonblock.Store(fl&syscall.O_NONBLOCK != 0)
+	c.nonblock.Store(fl&oNonblock != 0)
 
 	return nil
 }
 
 func (c *ConsoleEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 	if c.in == nil {
-		return 0, syscall.EBADF
+		return 0, eBadf
 	}
 
 	mode.nonblock = mode.nonblock || c.nonblock.Load()
@@ -187,7 +186,7 @@ func (c *ConsoleEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 
 func (c *ConsoleEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 	if c.out == nil {
-		return 0, syscall.EBADF
+		return 0, eBadf
 	}
 
 	mode.nonblock = mode.nonblock || c.nonblock.Load()
@@ -196,16 +195,16 @@ func (c *ConsoleEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 }
 
 func (c *ConsoleEnd) pread(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.ESPIPE
+	return 0, eSpipe
 }
 
 func (c *ConsoleEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.ESPIPE
+	return 0, eSpipe
 }
 
 func (c *ConsoleEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
 	if c.in == nil {
-		return syscall.ENOTTY
+		return eNotty
 	}
 
 	return c.in.ioctl(req, arg)

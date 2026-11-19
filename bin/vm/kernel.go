@@ -13,6 +13,19 @@ import (
 	"time"
 )
 
+var hostSignals = map[syscall.Signal]int{
+	syscall.SIGHUP:   sigHup,
+	syscall.SIGINT:   sigInt,
+	syscall.SIGQUIT:  sigQuit,
+	syscall.SIGUSR1:  sigUsr1,
+	syscall.SIGUSR2:  sigUsr2,
+	syscall.SIGALRM:  sigAlrm,
+	syscall.SIGTERM:  sigTerm,
+	syscall.SIGCONT:  sigCont,
+	syscall.SIGTSTP:  sigTstp,
+	syscall.SIGWINCH: sigWinch,
+}
+
 type Kernel struct {
 	FunctionImports
 
@@ -112,7 +125,7 @@ func (k *Kernel) code(p *Process, f Object, name string) (*Code, error) {
 	}
 
 	if !ok {
-		return nil, fmt.Errorf("%s: no executable of PZD1: %w", name, syscall.ENOEXEC)
+		return nil, fmt.Errorf("%s: no executable of PZD1: %w", name, eNoexec)
 	}
 
 	return k.codeOf(p, exe, name, nil)
@@ -122,10 +135,10 @@ func programData(p *Process, f Object, module bool) (data []byte, ok bool, err e
 	file := f.asFile()
 
 	if file == nil {
-		return nil, false, syscall.EACCES
+		return nil, false, eAcces
 	}
 
-	var st syscall.Stat_t
+	var st Stat
 
 	if err := file.stat(p, &st); err != nil {
 		return nil, false, err
@@ -134,7 +147,7 @@ func programData(p *Process, f Object, module bool) (data []byte, ok bool, err e
 	t := f.asTransfer()
 
 	if t == nil {
-		return nil, false, syscall.EACCES
+		return nil, false, eAcces
 	}
 
 	return readProgram(st.Size, func(b []byte, off int64) error { return readAt(p, t, b, off) }, module)
@@ -176,7 +189,7 @@ func readAt(p *Process, t Transfer, b []byte, off int64) error {
 		}
 
 		if n == 0 {
-			return syscall.ENOEXEC
+			return eNoexec
 		}
 
 		at += n
@@ -256,7 +269,7 @@ func (k *Kernel) compile(data []byte, name string, obj *ElfObject) (*Code, error
 	if e := try(func() {
 		c = link(name, obj, k)
 	}); e != nil {
-		return nil, fmt.Errorf("%s: %s: %w", name, e, syscall.ENOEXEC)
+		return nil, fmt.Errorf("%s: %s: %w", name, e, eNoexec)
 	}
 
 	return c, nil
@@ -301,7 +314,7 @@ func (k *Kernel) routeSignals() {
 
 	go func() {
 		for s := range c {
-			sig := int(s.(syscall.Signal))
+			sig := hostSignals[s.(syscall.Signal)]
 
 			switch s {
 			case syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTSTP, syscall.SIGWINCH:
@@ -364,8 +377,8 @@ func (k *Kernel) orphans(groups []int32) {
 		k.mu.Unlock()
 
 		if hangs {
-			k.signalGroup(pgid, int(syscall.SIGHUP))
-			k.signalGroup(pgid, int(syscall.SIGCONT))
+			k.signalGroup(pgid, sigHup)
+			k.signalGroup(pgid, sigCont)
 		}
 	}
 }

@@ -108,20 +108,20 @@ func (f *DiskFile) size() (int64, error) {
 	var st syscall.Stat_t
 
 	if err := syscall.Fstat(f.fd, &st); err != nil {
-		return 0, syscall.EIO
+		return 0, eIo
 	}
 
 	return st.Size, nil
 }
 
-func (f *DiskFile) stat(p *Process, st *syscall.Stat_t) error {
+func (f *DiskFile) stat(p *Process, st *Stat) error {
 	size, err := f.size()
 
 	if err != nil {
 		return err
 	}
 
-	*st = syscall.Stat_t{Ino: f.ino, Mode: syscall.S_IFBLK | 0o660, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Size: size,
+	*st = Stat{Ino: f.ino, Mode: sIfblk | 0o660, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Size: size,
 		Blksize: 4096, Blocks: (size + 511) / 512}
 
 	return nil
@@ -138,7 +138,7 @@ func (f *DiskFile) unsubscribe(s *Subscription) {
 }
 
 func (f *DiskFile) flags() (int, error) {
-	return syscall.O_RDWR, nil
+	return oRdwr, nil
 }
 
 func (f *DiskFile) setFlags(fl int) error {
@@ -147,7 +147,7 @@ func (f *DiskFile) setFlags(fl int) error {
 
 func (f *DiskFile) at(b []byte, off int64, write bool) (int, error) {
 	if off < 0 {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	for {
@@ -165,7 +165,7 @@ func (f *DiskFile) at(b []byte, off int64, write bool) (int, error) {
 		}
 
 		if err != nil {
-			return 0, syscall.EIO
+			return 0, eIo
 		}
 
 		return n, nil
@@ -212,11 +212,11 @@ func (f *DiskFile) seek(p *Process, off int64, whence int) (int64, error) {
 
 		base = size
 	default:
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	if base+off < 0 {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	f.pos.Store(base + off)
@@ -225,7 +225,7 @@ func (f *DiskFile) seek(p *Process, off int64, whence int) (int64, error) {
 }
 
 func (f *DiskFile) truncate(p *Process, size int64) error {
-	return syscall.EINVAL
+	return eInval
 }
 
 func (f *DiskFile) sync(p *Process, data bool) error {
@@ -236,26 +236,26 @@ func (f *DiskFile) sync(p *Process, data bool) error {
 	}
 
 	if err := sync(f.fd); err != nil {
-		return syscall.EIO
+		return eIo
 	}
 
 	return nil
 }
 
 func (f *DiskFile) chmod(p *Process, mode uint32) error {
-	return syscall.EPERM
+	return ePerm
 }
 
 func (f *DiskFile) chown(p *Process, uid, gid int) error {
-	return syscall.EPERM
+	return ePerm
 }
 
-func (f *DiskFile) utimes(p *Process, ts []syscall.Timespec) error {
-	return syscall.EPERM
+func (f *DiskFile) utimes(p *Process, ts []Timespec) error {
+	return ePerm
 }
 
-func (f *DiskFile) statfs(p *Process, st *syscall.Statfs_t) error {
-	*st = syscall.Statfs_t{Bsize: 4096, Frsize: 4096, Namelen: 255}
+func (f *DiskFile) statfs(p *Process, st *Statfs) error {
+	*st = Statfs{Bsize: 4096, Frsize: 4096, Namelen: 255}
 
 	return nil
 }

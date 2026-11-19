@@ -7,17 +7,16 @@ import (
 	"encoding/binary"
 	"errors"
 	"runtime"
-	"syscall"
 	"time"
 )
 
-var wasiErrnos = map[syscall.Errno]uint32{
-	syscall.E2BIG: wasiE2big, syscall.EACCES: wasiEacces, syscall.EAGAIN: wasiEagain, syscall.EBADF: wasiEbadf,
-	syscall.EEXIST: wasiEexist, syscall.EFAULT: wasiEfault, syscall.EINTR: wasiEintr, syscall.EINVAL: wasiEinval,
-	syscall.EISDIR: wasiEisdir, syscall.ELOOP: wasiEloop, syscall.ENAMETOOLONG: wasiEnametoolong,
-	syscall.ENOENT: wasiEnoent, syscall.ENOMEM: wasiEnomem, syscall.ENOSPC: wasiEnospc, syscall.ENOSYS: wasiEnosys,
-	syscall.ENOTDIR: wasiEnotdir, syscall.ENOTEMPTY: wasiEnotempty, syscall.EPERM: wasiEperm, syscall.EPIPE: wasiEpipe,
-	syscall.ESPIPE: wasiEspipe, syscall.EXDEV: wasiExdev,
+var wasiErrnos = map[Errno]uint32{
+	e2big: wasiE2big, eAcces: wasiEacces, eAgain: wasiEagain, eBadf: wasiEbadf,
+	eExist: wasiEexist, eFault: wasiEfault, eIntr: wasiEintr, eInval: wasiEinval,
+	eIsdir: wasiEisdir, eLoop: wasiEloop, eNametoolong: wasiEnametoolong,
+	eNoent: wasiEnoent, eNomem: wasiEnomem, eNospc: wasiEnospc, eNosys: wasiEnosys,
+	eNotdir: wasiEnotdir, eNotempty: wasiEnotempty, ePerm: wasiEperm, ePipe: wasiEpipe,
+	eSpipe: wasiEspipe, eXdev: wasiExdev,
 }
 
 var wasiFunctions = map[string]any{
@@ -82,7 +81,7 @@ const (
 )
 
 func wasiErrno(err error) uint32 {
-	var e syscall.Errno
+	var e Errno
 
 	if err == nil {
 		return wasiOK
@@ -375,7 +374,7 @@ func wasiFdSync(ctx uintptr, fd uint32) uint32 {
 	p := proc(ctx)
 	a, err := p.attrsAt(fd)
 
-	if err == syscall.EBADF {
+	if err == eBadf {
 		return wasiEbadf
 	}
 
@@ -387,18 +386,18 @@ func wasiFdSync(ctx uintptr, fd uint32) uint32 {
 }
 
 func filetype(mode uint32) byte {
-	switch mode & syscall.S_IFMT {
-	case syscall.S_IFBLK:
+	switch mode & sIfmt {
+	case sIfblk:
 		return 1
-	case syscall.S_IFCHR:
+	case sIfchr:
 		return 2
-	case syscall.S_IFDIR:
+	case sIfdir:
 		return 3
-	case syscall.S_IFREG:
+	case sIfreg:
 		return 4
-	case syscall.S_IFSOCK:
+	case sIfsock:
 		return 6
-	case syscall.S_IFLNK:
+	case sIflnk:
 		return 7
 	}
 
@@ -419,7 +418,7 @@ func wasiFdFdstatGet(ctx uintptr, fd, at uint32) uint32 {
 		return wasiEfault
 	}
 
-	var st syscall.Stat_t
+	var st Stat
 
 	if err := obj.stat(p, &st); err != nil {
 		return wasiErrno(err)
@@ -433,11 +432,11 @@ func wasiFdFdstatGet(ctx uintptr, fd, at uint32) uint32 {
 
 	flags := uint16(0)
 
-	if fl&syscall.O_APPEND != 0 {
+	if fl&oAppend != 0 {
 		flags |= 1
 	}
 
-	if fl&syscall.O_NONBLOCK != 0 {
+	if fl&oNonblock != 0 {
 		flags |= 4
 	}
 
@@ -464,24 +463,24 @@ func wasiFdFdstatSetFlags(ctx uintptr, fd, flags uint32) uint32 {
 		return wasiErrno(err)
 	}
 
-	fl &^= syscall.O_APPEND | syscall.O_NONBLOCK
+	fl &^= oAppend | oNonblock
 
 	if flags&1 != 0 {
-		fl |= syscall.O_APPEND
+		fl |= oAppend
 	}
 
 	if flags&4 != 0 {
-		fl |= syscall.O_NONBLOCK
+		fl |= oNonblock
 	}
 
 	return wasiErrno(obj.setFlags(fl))
 }
 
-func nanos(t syscall.Timespec) uint64 {
+func nanos(t Timespec) uint64 {
 	return uint64(t.Sec)*1e9 + uint64(t.Nsec)
 }
 
-func filestat(b []byte, st *syscall.Stat_t) {
+func filestat(b []byte, st *Stat) {
 	clear(b)
 	binary.LittleEndian.PutUint64(b, st.Dev)
 	binary.LittleEndian.PutUint64(b[8:], st.Ino)
@@ -507,7 +506,7 @@ func wasiFdFilestatGet(ctx uintptr, fd, at uint32) uint32 {
 		return wasiEfault
 	}
 
-	var st syscall.Stat_t
+	var st Stat
 
 	if err := obj.stat(p, &st); err != nil {
 		return wasiErrno(err)
@@ -522,7 +521,7 @@ func wasiFdFilestatSetSize(ctx uintptr, fd uint32, size uint64) uint32 {
 	p := proc(ctx)
 	a, err := p.attrsAt(fd)
 
-	if err == syscall.EBADF {
+	if err == eBadf {
 		return wasiEbadf
 	}
 
@@ -569,17 +568,17 @@ func wasiFdPrestatDirName(ctx uintptr, fd, path, n uint32) uint32 {
 
 func direntType(t byte) byte {
 	switch t {
-	case syscall.DT_BLK:
+	case dtBlk:
 		return 1
-	case syscall.DT_CHR:
+	case dtChr:
 		return 2
-	case syscall.DT_DIR:
+	case dtDir:
 		return 3
-	case syscall.DT_REG:
+	case dtReg:
 		return 4
-	case syscall.DT_SOCK:
+	case dtSock:
 		return 6
-	case syscall.DT_LNK:
+	case dtLnk:
 		return 7
 	}
 
@@ -705,7 +704,7 @@ func wasiPathFilestatGet(ctx uintptr, fd, flags, path, n, at uint32) uint32 {
 		return wasiEfault
 	}
 
-	var st syscall.Stat_t
+	var st Stat
 
 	if err := p.statAt(dir, name, flags&1 != 0, &st); err != nil {
 		return wasiErrno(err)
@@ -740,29 +739,29 @@ func wasiPathOpen(ctx uintptr, fd, dirflags, path, n, oflags uint32, rights, inh
 
 	switch {
 	case read && write:
-		flags |= syscall.O_RDWR
+		flags |= oRdwr
 	case write:
-		flags |= syscall.O_WRONLY
+		flags |= oWronly
 	default:
-		flags |= syscall.O_RDONLY
+		flags |= oRdonly
 	}
 
-	for bit, f := range map[uint32]int{1: syscall.O_CREAT, 2: syscall.O_DIRECTORY, 4: syscall.O_EXCL, 8: syscall.O_TRUNC} {
+	for bit, f := range map[uint32]int{1: oCreat, 2: oDirectory, 4: oExcl, 8: oTrunc} {
 		if oflags&bit != 0 {
 			flags |= f
 		}
 	}
 
 	if fdflags&1 != 0 {
-		flags |= syscall.O_APPEND
+		flags |= oAppend
 	}
 
 	if fdflags&4 != 0 {
-		flags |= syscall.O_NONBLOCK
+		flags |= oNonblock
 	}
 
 	if dirflags&1 == 0 {
-		flags |= syscall.O_NOFOLLOW
+		flags |= oNofollow
 	}
 
 	if err := p.descriptorFree(); err != nil {
@@ -772,8 +771,8 @@ func wasiPathOpen(ctx uintptr, fd, dirflags, path, n, oflags uint32, rights, inh
 	mode := 0o666 &^ p.umask
 	f, err := p.openAt(dir, name, flags, mode)
 
-	if err == syscall.EISDIR && write && oflags&1 == 0 {
-		f, err = p.openAt(dir, name, flags&^(syscall.O_WRONLY|syscall.O_RDWR)|syscall.O_RDONLY, mode)
+	if err == eIsdir && write && oflags&1 == 0 {
+		f, err = p.openAt(dir, name, flags&^(oWronly|oRdwr)|oRdonly, mode)
 	}
 
 	if err != nil {

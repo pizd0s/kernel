@@ -4,7 +4,6 @@ package main
 
 import (
 	"sync/atomic"
-	"syscall"
 	"time"
 	"unsafe"
 )
@@ -170,16 +169,16 @@ func (e *PipeEnd) unsubscribe(s *Subscription) {
 	pp.ch.unsubscribe(&s.out)
 }
 
-func (e *PipeEnd) stat(p *Process, st *syscall.Stat_t) error {
+func (e *PipeEnd) stat(p *Process, st *Stat) error {
 	pp := e.pipe
 
-	*st = syscall.Stat_t{Ino: pp.ino, Mode: syscall.S_IFIFO | 0o600, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: pipeChunk}
+	*st = Stat{Ino: pp.ino, Mode: sIfifo | 0o600, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: pipeChunk}
 
 	if n := pp.name; n != nil {
 		st.Dev, st.Ino, st.Mode = n.key.dev, n.key.ino, n.mode
 	}
 
-	st.Atim = syscall.NsecToTimespec(pp.made.UnixNano())
+	st.Atim = nsecToTimespec(pp.made.UnixNano())
 	st.Mtim, st.Ctim = st.Atim, st.Atim
 
 	return nil
@@ -221,30 +220,30 @@ func (e *PipeEnd) poll(events int16) int16 {
 }
 
 func (e *PipeEnd) flags() (int, error) {
-	fl := syscall.O_RDWR
+	fl := oRdwr
 
 	if !e.writes {
-		fl = syscall.O_RDONLY
+		fl = oRdonly
 	} else if !e.reads {
-		fl = syscall.O_WRONLY
+		fl = oWronly
 	}
 
 	if e.nonblock.Load() {
-		fl |= syscall.O_NONBLOCK
+		fl |= oNonblock
 	}
 
 	return fl, nil
 }
 
 func (e *PipeEnd) setFlags(fl int) error {
-	e.nonblock.Store(fl&syscall.O_NONBLOCK != 0)
+	e.nonblock.Store(fl&oNonblock != 0)
 
 	return nil
 }
 
 func (e *PipeEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
 	if req != fionread || !e.reads {
-		return syscall.ENOTTY
+		return eNotty
 	}
 
 	*(*int32)(arg) = int32(e.pipe.bytes.Load())
@@ -254,11 +253,11 @@ func (e *PipeEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
 
 func (e *PipeEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
-		return 0, syscall.EIO
+		return 0, eIo
 	}
 
 	if !e.reads {
-		return 0, syscall.EBADF
+		return 0, eBadf
 	}
 
 	if len(b) == 0 {
@@ -275,7 +274,7 @@ func (e *PipeEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 		}
 
 		if mode.nonblock || e.nonblock.Load() {
-			return 0, syscall.EAGAIN
+			return 0, eAgain
 		}
 
 		ch := pp.channel()
@@ -288,11 +287,11 @@ func (e *PipeEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 
 func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 	if p.chaosFail("write") {
-		return 0, syscall.EIO
+		return 0, eIo
 	}
 
 	if !e.writes {
-		return 0, syscall.EBADF
+		return 0, eBadf
 	}
 
 	pp := e.pipe
@@ -315,14 +314,14 @@ func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 
 		if finished {
 			if !mode.quiet {
-				p.sendSelf(int(syscall.SIGPIPE))
+				p.sendSelf(sigPipe)
 			}
 
 			if total > 0 {
 				return total, nil
 			}
 
-			return 0, syscall.EPIPE
+			return 0, ePipe
 		}
 
 		if sent {
@@ -336,7 +335,7 @@ func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 				return total, nil
 			}
 
-			return 0, syscall.EAGAIN
+			return 0, eAgain
 		}
 
 		if _, err := pp.channel().writable(p, func() bool { return false }, time.Time{}, restarts); err != nil {
@@ -352,9 +351,9 @@ func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 }
 
 func (e *PipeEnd) pread(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.ESPIPE
+	return 0, eSpipe
 }
 
 func (e *PipeEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.ESPIPE
+	return 0, eSpipe
 }

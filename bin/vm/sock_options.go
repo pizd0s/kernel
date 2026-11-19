@@ -7,13 +7,10 @@ import (
 	"maps"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
 var soInts = map[uint32]bool{1: true, 2: true, 5: true, 6: true, 9: true, 10: true, 12: false, 15: true, soRcvlowat: false}
-
-const soRcvlowat = 18
 
 type SockOptions struct {
 	rcvTimeout, sndTimeout atomic.Int64
@@ -50,7 +47,7 @@ func (o *SockOptions) intOption(name uint32) uint32 {
 
 func (o *SockOptions) get(p *Process, kind int, level, name, at, lenAt uint32) error {
 	if level != solSocket {
-		return syscall.ENOPROTOOPT
+		return eNoprotoopt
 	}
 
 	var value uint32
@@ -101,7 +98,7 @@ func (o *SockOptions) get(p *Process, kind int, level, name, at, lenAt uint32) e
 
 		return nil
 	default:
-		return syscall.ENOPROTOOPT
+		return eNoprotoopt
 	}
 
 	length := min(p.u32(lenAt), 4)
@@ -116,19 +113,19 @@ func (o *SockOptions) get(p *Process, kind int, level, name, at, lenAt uint32) e
 
 func (o *SockOptions) set(p *Process, level, name, at, n uint32) error {
 	if level != solSocket {
-		return syscall.ENOPROTOOPT
+		return eNoprotoopt
 	}
 
 	switch name {
 	case soRcvtimeo, soSndtimeo:
 		if n < 16 {
-			return syscall.EINVAL
+			return eInval
 		}
 
 		sec, usec := int64(p.u64(at)), int64(p.u64(at+8))
 
 		if usec < 0 || usec >= 1e6 {
-			return syscall.EDOM
+			return eDom
 		}
 
 		d := time.Duration(0)
@@ -144,13 +141,13 @@ func (o *SockOptions) set(p *Process, level, name, at, n uint32) error {
 		}
 	case soPasscred:
 		if n < 4 {
-			return syscall.EINVAL
+			return eInval
 		}
 
 		o.passcred.Store(p.u32(at) != 0)
 	case 1, 2, 5, 6, 9, 10, 12, 15, soRcvlowat:
 		if n < 4 {
-			return syscall.EINVAL
+			return eInval
 		}
 
 		v := p.u32(at)

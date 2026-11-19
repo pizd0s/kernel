@@ -5,7 +5,6 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
-	"syscall"
 )
 
 const (
@@ -110,7 +109,7 @@ func (t *RemoteTerminal) asCall() *CallEnd {
 	return nil
 }
 
-func (t *RemoteTerminal) stat(p *Process, st *syscall.Stat_t) error {
+func (t *RemoteTerminal) stat(p *Process, st *Stat) error {
 	return t.node.stat(p, st)
 }
 
@@ -150,11 +149,11 @@ func (t *RemoteTerminal) chown(p *Process, uid, gid int) error {
 	return t.node.chown(p, uid, gid)
 }
 
-func (t *RemoteTerminal) utimes(p *Process, ts []syscall.Timespec) error {
+func (t *RemoteTerminal) utimes(p *Process, ts []Timespec) error {
 	return t.node.utimes(p, ts)
 }
 
-func (t *RemoteTerminal) statfs(p *Process, st *syscall.Statfs_t) error {
+func (t *RemoteTerminal) statfs(p *Process, st *Statfs) error {
 	return t.node.statfs(p, st)
 }
 
@@ -162,12 +161,12 @@ func (t *RemoteTerminal) flock(p *Process, op int) error {
 	return t.node.flock(p, op)
 }
 
-func (t *RemoteTerminal) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
+func (t *RemoteTerminal) recordLock(p *Process, cmd int, lk *Flock) error {
 	return t.node.recordLock(p, cmd, lk)
 }
 
 func (t *RemoteTerminal) read(p *Process, b []byte, mode IoMode) (int, error) {
-	if err := p.background(t, syscall.SIGTTIN); err != nil {
+	if err := p.background(t, sigTtin); err != nil {
 		return 0, err
 	}
 
@@ -176,7 +175,7 @@ func (t *RemoteTerminal) read(p *Process, b []byte, mode IoMode) (int, error) {
 
 func (t *RemoteTerminal) write(p *Process, b []byte, mode IoMode) (int, error) {
 	if _, tostop, _ := t.jobs(); tostop {
-		if err := p.background(t, syscall.SIGTTOU); err != nil {
+		if err := p.background(t, sigTtou); err != nil {
 			return 0, err
 		}
 	}
@@ -185,18 +184,18 @@ func (t *RemoteTerminal) write(p *Process, b []byte, mode IoMode) (int, error) {
 }
 
 func (t *RemoteTerminal) pread(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.ESPIPE
+	return 0, eSpipe
 }
 
 func (t *RemoteTerminal) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.ESPIPE
+	return 0, eSpipe
 }
 
 func (t *RemoteTerminal) count(p *Process, op uint32) (uint32, error) {
 	pk, err := t.node.on(p, op, 0, nil)
 
 	if err == nil && len(pk.data) != 4 {
-		err = syscall.EIO
+		err = eIo
 	}
 
 	if err != nil {
@@ -220,7 +219,7 @@ func (t *RemoteTerminal) getattr(p *Process) ([]byte, error) {
 	pk, err := t.node.on(p, rTcgetattr, 0, nil)
 
 	if err == nil && len(pk.data) != sizeofTermios {
-		err = syscall.EIO
+		err = eIo
 	}
 
 	return bytes.Clone(pk.data), err
@@ -250,7 +249,7 @@ func (t *RemoteTerminal) window(p *Process) ([]byte, error) {
 	pk, err := t.node.on(p, rGetWinsize, 0, nil)
 
 	if err == nil && len(pk.data) != sizeofWinsize {
-		err = syscall.EIO
+		err = eIo
 	}
 
 	return bytes.Clone(pk.data), err
@@ -293,7 +292,7 @@ func (t *RemoteTerminal) reopen(p *Process, flags int) (Terminal, error) {
 	if len(pk.files) != 1 {
 		dropFiles(pk.files)
 
-		return nil, syscall.EIO
+		return nil, eIo
 	}
 
 	f, err := p.opened(&pk)
@@ -308,7 +307,7 @@ func (t *RemoteTerminal) reopen(p *Process, flags int) (Terminal, error) {
 
 	f.unref()
 
-	return nil, syscall.EIO
+	return nil, eIo
 }
 
 func (t *RemoteTerminal) name(p *Process, peer bool) (string, error) {

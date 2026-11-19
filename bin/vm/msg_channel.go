@@ -5,7 +5,6 @@ package main
 import (
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -125,7 +124,7 @@ func (c *MsgChannel) put(pk *Packet) (full bool, err error) {
 	if c.finished.Load() {
 		c.mu.Unlock()
 
-		return false, syscall.EPIPE
+		return false, ePipe
 	}
 
 	if sink := c.sink; sink != nil {

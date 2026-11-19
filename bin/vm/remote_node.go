@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -204,7 +203,7 @@ func (n *RemoteNode) connect(p *Process) (*CallEnd, error) {
 		if n.gone {
 			n.mu.Unlock()
 
-			return nil, syscall.EIO
+			return nil, eIo
 		}
 
 		full, err := n.end.to.put(&pk)
@@ -216,7 +215,7 @@ func (n *RemoteNode) connect(p *Process) (*CallEnd, error) {
 		n.mu.Unlock()
 
 		if err != nil {
-			return nil, syscall.EIO
+			return nil, eIo
 		}
 
 		if !full {
@@ -235,7 +234,7 @@ func (n *RemoteNode) connect(p *Process) (*CallEnd, error) {
 	}
 
 	if len(got.pk.files) == 0 {
-		return nil, syscall.EIO
+		return nil, eIo
 	}
 
 	dropFiles(got.pk.files[1:])
@@ -245,7 +244,7 @@ func (n *RemoteNode) connect(p *Process) (*CallEnd, error) {
 	if c == nil || c.serves {
 		got.pk.files[0].unref()
 
-		return nil, syscall.EIO
+		return nil, eIo
 	}
 
 	return c, nil
@@ -255,19 +254,19 @@ func (n *RemoteNode) flags() (int, error) {
 	fl := n.accmode
 
 	if n.append.Load() {
-		fl |= syscall.O_APPEND
+		fl |= oAppend
 	}
 
 	if n.nonblock.Load() {
-		fl |= syscall.O_NONBLOCK
+		fl |= oNonblock
 	}
 
 	return fl, nil
 }
 
 func (n *RemoteNode) setFlags(fl int) error {
-	n.nonblock.Store(fl&syscall.O_NONBLOCK != 0)
-	n.append.Store(fl&syscall.O_APPEND != 0)
+	n.nonblock.Store(fl&oNonblock != 0)
+	n.append.Store(fl&oAppend != 0)
 
 	return nil
 }
@@ -325,7 +324,7 @@ func (n *RemoteNode) keep(p *Process, c *CallEnd) {
 
 func (n *RemoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Object) (pk Packet, restart bool, err error) {
 	if p.interrupts(true) {
-		return Packet{}, false, syscall.EINTR
+		return Packet{}, false, eIntr
 	}
 
 	c, err := n.connected(p)
@@ -337,7 +336,7 @@ func (n *RemoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 	defer n.keep(p, c)
 
 	if p.interrupts(true) {
-		return Packet{}, false, syscall.EINTR
+		return Packet{}, false, eIntr
 	}
 
 	data := make([]byte, remoteHeader+len(body))
@@ -350,7 +349,7 @@ func (n *RemoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 	defer c.leave(p, w)
 
 	if err := c.ask(w, data, files); err != nil {
-		return Packet{}, false, syscall.EIO
+		return Packet{}, false, eIo
 	}
 
 	outer, was := p.ask(c)
@@ -389,7 +388,7 @@ func (n *RemoteNode) asked(p *Process, op uint32, data []byte, files []Object) (
 	defer c.leave(p, w)
 
 	if err := c.ask(w, data, files); err != nil {
-		return Packet{}, syscall.EIO
+		return Packet{}, eIo
 	}
 
 	outer, was := p.ask(c)
@@ -454,13 +453,13 @@ func (n *RemoteNode) chown(p *Process, uid, gid int) error {
 	return n.simple(p, rFchown, 0, body[:])
 }
 
-func (n *RemoteNode) utimes(p *Process, ts []syscall.Timespec) error {
+func (n *RemoteNode) utimes(p *Process, ts []Timespec) error {
 	when, body := whens(ts)
 
 	return n.simple(p, rFutimes, when, body)
 }
 
-func (n *RemoteNode) stat(p *Process, st *syscall.Stat_t) error {
+func (n *RemoteNode) stat(p *Process, st *Stat) error {
 	pk, err := n.on(p, rFstat, 0, nil)
 
 	if err != nil {
@@ -470,7 +469,7 @@ func (n *RemoteNode) stat(p *Process, st *syscall.Stat_t) error {
 	return decodeStat(pk.data, st)
 }
 
-func (n *RemoteNode) statfs(p *Process, st *syscall.Statfs_t) error {
+func (n *RemoteNode) statfs(p *Process, st *Statfs) error {
 	pk, err := n.on(p, rFstatfs, 0, nil)
 
 	if err != nil {
@@ -482,26 +481,26 @@ func (n *RemoteNode) statfs(p *Process, st *syscall.Statfs_t) error {
 
 func (n *RemoteNode) flock(p *Process, op int) error {
 	if n.locks == nil {
-		return syscall.EINVAL
+		return eInval
 	}
 
-	switch kind := op &^ syscall.LOCK_NB; kind {
-	case syscall.LOCK_UN:
+	switch kind := op &^ lockNb; kind {
+	case lockUn:
 		n.locks.unlock(n, false, 0, 0)
 
 		return nil
-	case syscall.LOCK_SH, syscall.LOCK_EX:
-		return n.locks.lock(p, &FileLock{owner: n, write: kind == syscall.LOCK_EX}, op&syscall.LOCK_NB == 0)
+	case lockSh, lockEx:
+		return n.locks.lock(p, &FileLock{owner: n, write: kind == lockEx}, op&lockNb == 0)
 	}
 
-	return syscall.EINVAL
+	return eInval
 }
 
 func (n *RemoteNode) waits(p *Process, op, arg uint32, body []byte) error {
 	for {
 		_, restart, err := n.waiting(p, op, arg, body, nil)
 
-		if err == syscall.EINTR && restart {
+		if err == eIntr && restart {
 			continue
 		}
 
@@ -509,9 +508,9 @@ func (n *RemoteNode) waits(p *Process, op, arg uint32, body []byte) error {
 	}
 }
 
-func (n *RemoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
+func (n *RemoteNode) recordLock(p *Process, cmd int, lk *Flock) error {
 	if n.locks == nil {
-		return syscall.EINVAL
+		return eInval
 	}
 
 	start, length := lk.Start, lk.Len
@@ -521,7 +520,7 @@ func (n *RemoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error 
 	case 1:
 		start += atomic.LoadInt64(&n.pos)
 	case 2:
-		var st syscall.Stat_t
+		var st Stat
 
 		if err := n.stat(p, &st); err != nil {
 			return err
@@ -529,7 +528,7 @@ func (n *RemoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error 
 
 		start += st.Size
 	default:
-		return syscall.EINVAL
+		return eInval
 	}
 
 	if length < 0 {
@@ -537,7 +536,7 @@ func (n *RemoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error 
 	}
 
 	if start < 0 || lk.Type != fRdlck && lk.Type != fWrlck && lk.Type != fUnlck {
-		return syscall.EINVAL
+		return eInval
 	}
 
 	want := &FileLock{owner: n, ranged: true, write: lk.Type == fWrlck, start: uint64(start), stop: lockPast}
@@ -547,8 +546,8 @@ func (n *RemoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error 
 	}
 
 	switch {
-	case cmd != fOfdGetlk && (lk.Type == fRdlck && n.accmode == syscall.O_WRONLY || lk.Type == fWrlck && n.accmode == syscall.O_RDONLY):
-		return syscall.EBADF
+	case cmd != fOfdGetlk && (lk.Type == fRdlck && n.accmode == oWronly || lk.Type == fWrlck && n.accmode == oRdonly):
+		return eBadf
 	case cmd == fOfdGetlk:
 		lk.Whence, lk.Pid = 0, -1
 
@@ -585,7 +584,7 @@ func (n *RemoteNode) readAt(p *Process, b []byte, off int64) (int, error) {
 		return n.readInto(p, nil, 0, 0, off)
 	}
 
-	w := window(p, b, syscall.O_WRONLY)
+	w := window(p, b, oWronly)
 	count, err := n.readInto(p, w, 0, len(b), off)
 
 	w.unref()
@@ -595,7 +594,7 @@ func (n *RemoteNode) readAt(p *Process, b []byte, off int64) (int, error) {
 
 func (n *RemoteNode) readInto(p *Process, w *MemfdFile, woff uint32, size int, off int64) (int, error) {
 	if off < 0 {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	if size == 0 {
@@ -607,7 +606,7 @@ func (n *RemoteNode) readInto(p *Process, w *MemfdFile, woff uint32, size int, o
 	for {
 		pk, cancelled, err := n.waiting(p, rRead, uint32(size), body[:], []Object{w})
 
-		if err == syscall.EINTR && cancelled && p.interrupted() {
+		if err == eIntr && cancelled && p.interrupted() {
 			continue
 		}
 
@@ -616,7 +615,7 @@ func (n *RemoteNode) readInto(p *Process, w *MemfdFile, woff uint32, size int, o
 		}
 
 		if len(pk.data) < 4 || int(binary.LittleEndian.Uint32(pk.data)) > size {
-			return 0, syscall.EIO
+			return 0, eIo
 		}
 
 		return int(binary.LittleEndian.Uint32(pk.data)), nil
@@ -651,7 +650,7 @@ func (n *RemoteNode) put(p *Process, b []byte, off int64, atEnd bool) (int, int6
 		return n.writeFrom(p, nil, 0, 0, off, atEnd)
 	}
 
-	w := window(p, b, syscall.O_RDONLY)
+	w := window(p, b, oRdonly)
 	count, at, err := n.writeFrom(p, w, 0, len(b), off, atEnd)
 
 	w.unref()
@@ -661,7 +660,7 @@ func (n *RemoteNode) put(p *Process, b []byte, off int64, atEnd bool) (int, int6
 
 func (n *RemoteNode) writeFrom(p *Process, w *MemfdFile, woff uint32, size int, off int64, atEnd bool) (int, int64, error) {
 	if off < 0 {
-		return 0, 0, syscall.EINVAL
+		return 0, 0, eInval
 	}
 
 	if size == 0 {
@@ -679,7 +678,7 @@ func (n *RemoteNode) writeFrom(p *Process, w *MemfdFile, woff uint32, size int, 
 	for {
 		pk, cancelled, err := n.waiting(p, rWrite, uint32(size), body[:], []Object{w})
 
-		if err == syscall.EINTR && cancelled && p.interrupted() {
+		if err == eIntr && cancelled && p.interrupted() {
 			continue
 		}
 
@@ -688,7 +687,7 @@ func (n *RemoteNode) writeFrom(p *Process, w *MemfdFile, woff uint32, size int, 
 		}
 
 		if len(pk.data) < 12 || int(binary.LittleEndian.Uint32(pk.data)) > size {
-			return 0, 0, syscall.EIO
+			return 0, 0, eIo
 		}
 
 		return int(binary.LittleEndian.Uint32(pk.data)), int64(binary.LittleEndian.Uint64(pk.data[4:])), nil
@@ -697,7 +696,7 @@ func (n *RemoteNode) writeFrom(p *Process, w *MemfdFile, woff uint32, size int, 
 
 func (n *RemoteNode) read(p *Process, b []byte, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
-		return 0, syscall.EIO
+		return 0, eIo
 	}
 
 	count, err := n.readAt(p, b, atomic.LoadInt64(&n.pos))
@@ -709,7 +708,7 @@ func (n *RemoteNode) read(p *Process, b []byte, mode IoMode) (int, error) {
 
 func (n *RemoteNode) write(p *Process, b []byte, mode IoMode) (int, error) {
 	if p.chaosFail("write") {
-		return 0, syscall.EIO
+		return 0, eIo
 	}
 
 	off := atomic.LoadInt64(&n.pos)
@@ -735,7 +734,7 @@ func (n *RemoteNode) seek(p *Process, off int64, whence int) (int64, error) {
 	case 1:
 		base = atomic.LoadInt64(&n.pos)
 	case 2:
-		var st syscall.Stat_t
+		var st Stat
 
 		if err := n.stat(p, &st); err != nil {
 			return 0, err
@@ -743,11 +742,11 @@ func (n *RemoteNode) seek(p *Process, off int64, whence int) (int64, error) {
 
 		base = st.Size
 	default:
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	if base+off < 0 {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	atomic.StoreInt64(&n.pos, base+off)
@@ -783,7 +782,7 @@ func (n *RemoteNode) readWindow(p *Process, w *MemfdFile, woff uint32, size int,
 
 func (n *RemoteNode) writeWindow(p *Process, w *MemfdFile, woff uint32, size int, to *int64) (int, error) {
 	if n.append.Load() {
-		return 0, syscall.EBADF
+		return 0, eBadf
 	}
 
 	if to != nil {

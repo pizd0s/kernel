@@ -10,27 +10,6 @@ import (
 	"unicode/utf8"
 )
 
-const (
-	regExtended = 1
-	regIcase    = 2
-	regNewline  = 4
-	regNosub    = 8
-	regNotbol   = 1
-	regNoteol   = 2
-	regStartend = 4
-	regNomatch  = 1
-	regBadpat   = 2
-	regEcollate = 3
-	regEescape  = 5
-	regEsubreg  = 6
-	regEbrack   = 7
-	regEparen   = 8
-	regEbrace   = 9
-	regBadbr    = 10
-	regErange   = 11
-	regBadrpt   = 13
-)
-
 type PosixRegex struct {
 	pattern []byte
 	flags   uint32

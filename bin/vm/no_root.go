@@ -5,7 +5,6 @@ package main
 import (
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -30,9 +29,9 @@ func (r *NoRoot) unref() {
 	r.refs.Add(-1)
 }
 
-func (r *NoRoot) stat(p *Process, st *syscall.Stat_t) error {
-	*st = syscall.Stat_t{Ino: 1, Mode: syscall.S_IFDIR | 0o555, Nlink: 2, Blksize: 4096}
-	st.Mtim = syscall.NsecToTimespec(r.made.UnixNano())
+func (r *NoRoot) stat(p *Process, st *Stat) error {
+	*st = Stat{Ino: 1, Mode: sIfdir | 0o555, Nlink: 2, Blksize: 4096}
+	st.Mtim = nsecToTimespec(r.made.UnixNano())
 	st.Atim, st.Ctim = st.Mtim, st.Mtim
 
 	return nil
@@ -121,7 +120,7 @@ func (r *NoRoot) unsubscribe(s *Subscription) {
 }
 
 func (r *NoRoot) flags() (int, error) {
-	return syscall.O_RDONLY, nil
+	return oRdonly, nil
 }
 
 func (r *NoRoot) setFlags(fl int) error {
@@ -151,17 +150,17 @@ func (r *NoRoot) gone(path string, own error) error {
 		return own
 	}
 
-	return syscall.ENOENT
+	return eNoent
 }
 
 func (r *NoRoot) openPath(p *Process, path string, flags int, mode uint32) (Object, error) {
 	switch {
-	case !r.itself(path) && flags&syscall.O_CREAT != 0:
-		return nil, syscall.EROFS
+	case !r.itself(path) && flags&oCreat != 0:
+		return nil, eRofs
 	case !r.itself(path):
-		return nil, syscall.ENOENT
-	case flags&syscall.O_CREAT != 0 || flags&3 != syscall.O_RDONLY:
-		return nil, syscall.EISDIR
+		return nil, eNoent
+	case flags&oCreat != 0 || flags&3 != oRdonly:
+		return nil, eIsdir
 	}
 
 	r.ref()
@@ -169,16 +168,16 @@ func (r *NoRoot) openPath(p *Process, path string, flags int, mode uint32) (Obje
 	return r, nil
 }
 
-func (r *NoRoot) statPath(p *Process, path string, follow bool, st *syscall.Stat_t) error {
+func (r *NoRoot) statPath(p *Process, path string, follow bool, st *Stat) error {
 	if !r.itself(path) {
-		return syscall.ENOENT
+		return eNoent
 	}
 
 	return r.stat(p, st)
 }
 
 func (r *NoRoot) readlinkPath(p *Process, path string) (string, error) {
-	return "", r.gone(path, syscall.EINVAL)
+	return "", r.gone(path, eInval)
 }
 
 func (r *NoRoot) mkdirPath(p *Process, path string, mode uint32) error {
@@ -195,50 +194,50 @@ func (r *NoRoot) symlinkPath(p *Process, target, path string) error {
 
 func (r *NoRoot) makes(path string) error {
 	if r.itself(path) {
-		return syscall.EEXIST
+		return eExist
 	}
 
-	return syscall.EROFS
+	return eRofs
 }
 
 func (r *NoRoot) unlinkPath(p *Process, path string, dir bool) error {
 	if dir {
-		return r.gone(path, syscall.EBUSY)
+		return r.gone(path, eBusy)
 	}
 
-	return r.gone(path, syscall.EISDIR)
+	return r.gone(path, eIsdir)
 }
 
 func (r *NoRoot) renamePath(p *Process, old string, to Dir, new string) error {
-	return r.gone(old, syscall.EBUSY)
+	return r.gone(old, eBusy)
 }
 
 func (r *NoRoot) linkPath(p *Process, old string, to Dir, new string, follow bool) error {
-	return r.gone(old, syscall.EPERM)
+	return r.gone(old, ePerm)
 }
 
 func (r *NoRoot) chmodPath(p *Process, path string, mode uint32, follow bool) error {
-	return r.gone(path, syscall.EROFS)
+	return r.gone(path, eRofs)
 }
 
 func (r *NoRoot) chownPath(p *Process, path string, uid, gid int, follow bool) error {
-	return r.gone(path, syscall.EROFS)
+	return r.gone(path, eRofs)
 }
 
-func (r *NoRoot) utimesPath(p *Process, path string, ts []syscall.Timespec, follow bool) error {
-	return r.gone(path, syscall.EROFS)
+func (r *NoRoot) utimesPath(p *Process, path string, ts []Timespec, follow bool) error {
+	return r.gone(path, eRofs)
 }
 
 func (r *NoRoot) truncatePath(p *Process, path string, size int64) error {
-	return r.gone(path, syscall.EISDIR)
+	return r.gone(path, eIsdir)
 }
 
-func (r *NoRoot) statfsPath(p *Process, path string, st *syscall.Statfs_t) error {
+func (r *NoRoot) statfsPath(p *Process, path string, st *Statfs) error {
 	if !r.itself(path) {
-		return syscall.ENOENT
+		return eNoent
 	}
 
-	*st = syscall.Statfs_t{Bsize: 4096, Frsize: 4096, Namelen: 255}
+	*st = Statfs{Bsize: 4096, Frsize: 4096, Namelen: 255}
 
 	return nil
 }
@@ -248,17 +247,17 @@ func (r *NoRoot) realpathOf(p *Process, path string) (string, error) {
 }
 
 func (r *NoRoot) mountPath(p *Process, target, source string, conn Object) error {
-	return syscall.EINVAL
+	return eInval
 }
 
 func (r *NoRoot) unmountPath(p *Process, path string, flags uint32) error {
-	return syscall.EINVAL
+	return eInval
 }
 
 func (r *NoRoot) bindPath(p *Process, path string, mode uint32, held Object) error {
-	return syscall.EOPNOTSUPP
+	return eOpnotsupp
 }
 
 func (r *NoRoot) connectPath(p *Process, path string) (Object, error) {
-	return nil, syscall.EOPNOTSUPP
+	return nil, eOpnotsupp
 }

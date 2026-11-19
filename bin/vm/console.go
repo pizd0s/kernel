@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -90,9 +91,14 @@ func restoreHostTerminal() {
 
 func hostWindow() ([sizeofWinsize]byte, error) {
 	var w [sizeofWinsize]byte
+	var host struct{ row, col, xpixel, ypixel uint16 }
 
-	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, 0, syscall.TIOCGWINSZ, uintptr(unsafe.Pointer(&w[0]))); e != 0 {
-		return w, syscall.ENOTTY
+	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, 0, syscall.TIOCGWINSZ, uintptr(unsafe.Pointer(&host))); e != 0 {
+		return w, eNotty
+	}
+
+	for i, v := range []uint16{host.row, host.col, host.xpixel, host.ypixel} {
+		binary.LittleEndian.PutUint16(w[2*i:], v)
 	}
 
 	return w, nil

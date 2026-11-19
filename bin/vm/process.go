@@ -33,7 +33,7 @@ import (
 )
 
 var (
-	itimerSignals  = [3]int{int(syscall.SIGALRM), int(syscall.SIGVTALRM), int(syscall.SIGPROF)}
+	itimerSignals  = [3]int{sigAlrm, sigVtalrm, sigProf}
 	zoneDirs       = []string{"/usr/share/zoneinfo/", "/share/zoneinfo/", "/etc/zoneinfo/"}
 	pathconfValues = []int32{8, 255, 255, 255, 4096, 4096, 1, 1, 0, 1, -1, -1, -1, 64, 4096, 4096, 4096, 4096, 4096, -1, 1}
 	hostMessages   = []string{"Host not found", "Try again", "Non-recoverable error", "Address not available"}
@@ -92,6 +92,25 @@ var regMessages = map[uint32]string{
 	11: "Invalid character range", 12: "Out of memory", regBadrpt: "Repetition not preceded by valid expression",
 }
 
+var hostRlimits = [rlimitCount]int{
+	rlimitCpu:        syscall.RLIMIT_CPU,
+	rlimitFsize:      syscall.RLIMIT_FSIZE,
+	rlimitData:       syscall.RLIMIT_DATA,
+	rlimitStack:      syscall.RLIMIT_STACK,
+	rlimitCore:       syscall.RLIMIT_CORE,
+	rlimitRss:        hostRlimitRss,
+	rlimitNproc:      hostRlimitNproc,
+	rlimitNofile:     syscall.RLIMIT_NOFILE,
+	rlimitMemlock:    hostRlimitMemlock,
+	rlimitAs:         syscall.RLIMIT_AS,
+	rlimitLocks:      hostRlimitLocks,
+	rlimitSigpending: hostRlimitSigpending,
+	rlimitMsgqueue:   hostRlimitMsgqueue,
+	rlimitNice:       hostRlimitNice,
+	rlimitRtprio:     hostRlimitRtprio,
+	rlimitRttime:     hostRlimitRttime,
+}
+
 const (
 	staticDot        = 0
 	staticSlash      = 2
@@ -121,93 +140,20 @@ const (
 	staticNtoa       = 532
 	staticCrypt      = 548
 	staticSize       = 560
-	rlimitCount      = 16
-	rlimitNofile     = 7
-	rlimitNproc      = 6
-	prioProcess      = 0
-	prioPgrp         = 1
-	prioUser         = 2
 	niceMin          = -20
 	niceMax          = 19
-	schedOther       = 0
-	schedFifo        = 1
-	schedRr          = 2
-	schedBatch       = 3
-	schedIdle        = 5
 	ngroupsMax       = 65536
-	wNohang          = 1
-	wUntraced        = 2
-	wExited          = 4
-	wContinued       = 8
-	wNowait          = 0x1000000
-	pAll             = 0
-	pPid             = 1
-	pPgid            = 2
-	cldExited        = 1
-	cldKilled        = 2
-	cldStopped       = 5
-	cldCont          = 6
-	stoppedBy        = 0x7f
-	continued        = 0xffff
-	sigDfl           = 0
-	sigIgn           = ^uint32(1)
-	saNocldstop      = 1
-	saNocldwait      = 2
-	saSiginfo        = 4
-	saOnstack        = 0x08000000
-	saRestart        = 0x10000000
-	saNodefer        = 0x40000000
-	saResethand      = 0x80000000
-	sigBlock         = 0
-	sigUnblock       = 1
-	sigSetmask       = 2
-	nsig             = 65
-	ssOnstack        = 1
-	ssDisable        = 2
-	minSigstksz      = 2048
-	stopSignals      = 1<<(syscall.SIGSTOP-1) | 1<<(syscall.SIGTSTP-1) | 1<<(syscall.SIGTTIN-1) | 1<<(syscall.SIGTTOU-1)
-	unblockable      = 1<<(syscall.SIGKILL-1) | 1<<(syscall.SIGSTOP-1)
+	stopSignals      = 1<<(sigStop-1) | 1<<(sigTstp-1) | 1<<(sigTtin-1) | 1<<(sigTtou-1)
+	unblockable      = 1<<(sigKill-1) | 1<<(sigStop-1)
 	redZone          = 128
-	mapShared        = 0x01
-	mapAnonymous     = 0x20
-	protWrite        = 0x2
-	madvDontneed     = 4
 	shadowFree       = 0x00
 	shadowRedzone    = 0xfa
 	shadowFreed      = 0xfd
 	shadowOK         = 0xff
 	sysSyncfs        = 306
 	sysCopyFileRange = 326
-	fdSetsize        = 1024
 	pollInSet        = pollIn | pollHup | pollErr
 	pollOutSet       = pollOut | pollErr
-	posixFadvNoreuse = 5
-	fDupfd           = 0
-	fGetfd           = 1
-	fSetfd           = 2
-	fGetfl           = 3
-	fSetfl           = 4
-	fDupfdCloexec    = 1030
-	ignbrk           = 0o000001
-	brkint           = 0o000002
-	parmrk           = 0o000010
-	istrip           = 0o000040
-	inlcr            = 0o000100
-	igncr            = 0o000200
-	icrnl            = 0o000400
-	ixon             = 0o002000
-	opost            = 0o000001
-	csize            = 0o000060
-	cs8              = 0o000060
-	parenb           = 0o000400
-	echo             = 0o000010
-	echonl           = 0o000100
-	icanon           = 0o000002
-	isig             = 0o000001
-	iexten           = 0o100000
-	vtime            = 5
-	vmin             = 6
-	cbaud            = 0o010017
 	tempLetters      = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 	dirFd            = 0
 	dirPos           = 4
@@ -215,74 +161,16 @@ const (
 	dirIndex         = 12
 	dirBuf           = 16
 	dirBufLen        = 4096
-	umountNofollow   = 8
-	tiocsctty        = 0x540e
-	tiocoutq         = 0x5411
-	tiocnotty        = 0x5422
-	tiocgsid         = 0x5429
-	tiocgptn         = 0x80045430
-	tiocsptlck       = 0x40045431
 	passwordSize     = 128
-	itimerReal       = 0
-	itimerProf       = 2
 	zoneMax          = 1 << 20
-	logPid           = 0x01
-	logPerror        = 0x20
 	logIdentSize     = 32
-	prSetPdeathsig   = 1
-	prGetPdeathsig   = 2
-	prGetDumpable    = 3
-	prSetDumpable    = 4
-	prSetName        = 15
-	prGetName        = 16
-	prSetNoNewPrivs  = 38
-	prGetNoNewPrivs  = 39
 	utsSysname       = "pizdos"
 	utsRelease       = "1"
 	utsVersion       = "#1"
 	utsMachine       = "wasm32"
-	utsField         = 65
 	databaseMax      = 16 << 20
-	aiPassive        = 0x01
-	aiCanonname      = 0x02
-	aiNumerichost    = 0x04
-	aiV4mapped       = 0x08
-	aiAll            = 0x10
-	aiAddrconfig     = 0x20
-	aiNumericserv    = 0x400
-	niNumerichost    = 0x01
-	niNumericserv    = 0x02
-	niNofqdn         = 0x04
-	niNamereqd       = 0x08
-	niDgram          = 0x10
-	eaiBadflags      = -1
-	eaiNoname        = -2
-	eaiAgain         = -3
-	eaiFail          = -4
-	eaiFamily        = -6
-	eaiSocktype      = -7
-	eaiService       = -8
-	eaiMemory        = -10
-	eaiSystem        = -11
-	eaiOverflow      = -12
-	hostNotFound     = 1
-	tryAgain         = 2
-	noRecovery       = 3
-	ipprotoTCP       = 6
-	ipprotoUDP       = 17
 	resolveWait      = 10 * time.Second
-	lcCtype          = 0
-	lcNumeric        = 1
-	lcTime           = 2
-	lcMonetary       = 4
-	lcMessages       = 5
-	lcAll            = 6
 	localeNameMax    = 23
-	codeset          = 14
-	localeNameItem   = 0xffff
-	lconvStrings     = 10
-	lconvChars       = 14
-	charMax          = 127
 )
 
 const (
@@ -529,12 +417,12 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 func trapSignal(code uint32) int {
 	switch code {
 	case trapMemoryOOB, trapTableOOB, trapNullRef, trapUndefinedElem, trapUninitElem, trapAsan:
-		return int(syscall.SIGSEGV)
+		return sigSegv
 	case trapIntOverflow, trapDivByZero, trapConversion:
-		return int(syscall.SIGFPE)
+		return sigFpe
 	}
 
-	return int(syscall.SIGILL)
+	return sigIll
 }
 
 func (p *Process) terminate(status int) {
@@ -594,7 +482,7 @@ func (p *Process) terminate(status int) {
 	k.orphans(joined)
 
 	if adopted && p != k.first {
-		k.first.childChanged(int(syscall.SIGCHLD))
+		k.first.childChanged(sigChld)
 	}
 
 	for _, q := range bereaved {
@@ -602,7 +490,7 @@ func (p *Process) terminate(status int) {
 	}
 
 	if notify {
-		parent.childChanged(int(syscall.SIGCHLD))
+		parent.childChanged(sigChld)
 	}
 
 	if p == k.first {
@@ -615,7 +503,7 @@ func (p *Process) discardsChildren() bool {
 
 	defer p.sig.mu.Unlock()
 
-	act := p.sig.actions[syscall.SIGCHLD]
+	act := p.sig.actions[sigChld]
 
 	return act.handler == sigIgn || act.flags&saNocldwait != 0
 }
@@ -657,7 +545,7 @@ func (p *Process) libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameA
 	p.env = p.stringArray(p.image.envp)
 
 	if argv == 0 || p.env == 0 {
-		p.exitWith(int(syscall.SIGABRT))
+		p.exitWith(sigAbrt)
 	}
 
 	p.put32(argcAt, uint32(len(p.image.argv)))
@@ -669,11 +557,11 @@ func (p *Process) libc__kernel_program(buf, size uint32) uint32 {
 	path := p.image.path
 
 	if path == "" {
-		return p.pointer(0, syscall.ENOENT)
+		return p.pointer(0, eNoent)
 	}
 
 	if uint32(len(path)) >= size {
-		return p.pointer(0, syscall.ERANGE)
+		return p.pointer(0, eRange)
 	}
 
 	p.putString(buf, path)
@@ -819,7 +707,7 @@ func (p *Process) constant(s string) uint32 {
 	at := p.newString(s)
 
 	if at == 0 {
-		p.exitWith(int(syscall.SIGABRT))
+		p.exitWith(sigAbrt)
 	}
 
 	p.constants[s] = at
@@ -827,19 +715,19 @@ func (p *Process) constant(s string) uint32 {
 	return at
 }
 
-func errnoOf(err error) syscall.Errno {
-	var e syscall.Errno
+func errnoOf(err error) Errno {
+	var e Errno
 	errors.As(err, &e)
 
 	return e
 }
 
-func (p *Process) setErrno(e syscall.Errno) {
+func (p *Process) setErrno(e Errno) {
 	p.put32(p.errnoAt, uint32(e))
 }
 
-func (p *Process) errno() syscall.Errno {
-	return syscall.Errno(p.u32(p.errnoAt))
+func (p *Process) errno() Errno {
+	return Errno(p.u32(p.errnoAt))
 }
 
 func (p *Process) result(r int, err error) uint32 {
@@ -874,7 +762,7 @@ func (p *Process) staticAt(off uint32) uint32 {
 		p.static = p.malloc(staticSize)
 
 		if p.static == 0 {
-			p.exitWith(int(syscall.SIGABRT))
+			p.exitWith(sigAbrt)
 		}
 
 		clear(p.span(p.static, staticSize))
@@ -895,7 +783,7 @@ func hostLimits() [rlimitCount]Rlimit {
 	for i := range out {
 		var l syscall.Rlimit
 
-		if syscall.Getrlimit(i, &l) == nil {
+		if syscall.Getrlimit(hostRlimits[i], &l) == nil {
 			out[i] = Rlimit{l.Cur, l.Max}
 		} else {
 			out[i] = Rlimit{^uint64(0), ^uint64(0)}
@@ -919,7 +807,7 @@ func (p *Process) execFrom(path string, f Object, argv, envp []string) error {
 	img.envp = envp
 	p.execImage(img)
 
-	return syscall.ELOOP
+	return eLoop
 }
 
 func (p *Process) loadProgram(path string, argv []string) (*ExecImage, error) {
@@ -941,7 +829,7 @@ func (p *Process) loadFrom(path string, first Object, argv []string) (*ExecImage
 			}
 		}
 
-		var st syscall.Stat_t
+		var st Stat
 
 		t := f.asTransfer()
 
@@ -951,16 +839,16 @@ func (p *Process) loadFrom(path string, first Object, argv []string) (*ExecImage
 			return nil, err
 		}
 
-		if t == nil || st.Mode&syscall.S_IFMT != syscall.S_IFREG {
+		if t == nil || st.Mode&sIfmt != sIfreg {
 			f.unref()
 
-			return nil, syscall.EACCES
+			return nil, eAcces
 		}
 
 		if !p.permits(&st, 1) {
 			f.unref()
 
-			return nil, syscall.EACCES
+			return nil, eAcces
 		}
 
 		head := make([]byte, 256)
@@ -975,7 +863,7 @@ func (p *Process) loadFrom(path string, first Object, argv []string) (*ExecImage
 			fields := strings.Fields(string(line))
 
 			if len(fields) == 0 {
-				return nil, syscall.ENOEXEC
+				return nil, eNoexec
 			}
 
 			script := []string{fields[0]}
@@ -1005,7 +893,7 @@ func (p *Process) loadFrom(path string, first Object, argv []string) (*ExecImage
 		return &ExecImage{code: code, argv: argv, path: program}, nil
 	}
 
-	return nil, syscall.ELOOP
+	return nil, eLoop
 }
 
 func (p *Process) openProgram(path string) (Object, string, error) {
@@ -1015,7 +903,7 @@ func (p *Process) openProgram(path string) (Object, string, error) {
 	err := p.onPath(atFdcwd, path, func(d Dir) error {
 		var err error
 
-		if f, err = d.openPath(p, path, syscall.O_RDONLY, 0); err != nil {
+		if f, err = d.openPath(p, path, oRdonly, 0); err != nil {
 			return err
 		}
 
@@ -1031,7 +919,7 @@ func (p *Process) openProgram(path string) (Object, string, error) {
 
 func (p *Process) execPath(file string, argv, envp []string) error {
 	if file == "" {
-		return syscall.ENOENT
+		return eNoent
 	}
 
 	if strings.Contains(file, "/") {
@@ -1044,7 +932,7 @@ func (p *Process) execPath(file string, argv, envp []string) error {
 		path = "/usr/local/bin:/bin:/usr/bin"
 	}
 
-	err := error(syscall.ENOENT)
+	err := error(eNoent)
 
 	for _, dir := range strings.Split(path, ":") {
 		if dir == "" {
@@ -1052,8 +940,8 @@ func (p *Process) execPath(file string, argv, envp []string) error {
 		}
 
 		switch e := p.exec(dir+"/"+file, argv, envp); e {
-		case syscall.ENOENT, syscall.ENOTDIR:
-		case syscall.EACCES:
+		case eNoent, eNotdir:
+		case eAcces:
 			err = e
 		default:
 			return e
@@ -1196,7 +1084,7 @@ func (p *Process) variableName(at uint32) (string, bool) {
 	name := p.str(at)
 
 	if name == "" || strings.IndexByte(name, '=') >= 0 {
-		p.setErrno(syscall.EINVAL)
+		p.setErrno(eInval)
 
 		return "", false
 	}
@@ -1248,7 +1136,7 @@ func (p *Process) libcGetgroups(n, list uint32) uint32 {
 	}
 
 	if int(int32(n)) < len(groups) {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	for i, g := range groups {
@@ -1277,7 +1165,7 @@ func (p *Process) libcSysconf(name uint32) uint32 {
 		return uint32(v)
 	}
 
-	return p.result(0, syscall.EINVAL)
+	return p.result(0, eInval)
 }
 
 func (p *Process) libcUmask(mask uint32) uint32 {
@@ -1308,7 +1196,7 @@ func (p *Process) libcPutenv(s uint32) uint32 {
 	name, _, set := strings.Cut(p.str(s), "=")
 
 	if name == "" {
-		p.setErrno(syscall.EINVAL)
+		p.setErrno(eInval)
 
 		return math.MaxUint32
 	}
@@ -1318,7 +1206,7 @@ func (p *Process) libcPutenv(s uint32) uint32 {
 	}
 
 	if !p.setVariable(name, s) {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 
 		return math.MaxUint32
 	}
@@ -1341,7 +1229,7 @@ func (p *Process) libcSetenv(at, value, overwrite uint32) uint32 {
 
 	if s == 0 || !p.setVariable(name, s) {
 		p.free(s)
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 
 		return math.MaxUint32
 	}
@@ -1359,7 +1247,7 @@ func (p *Process) libcUnsetenv(at uint32) uint32 {
 	}
 
 	if !p.setVariable(name, 0) {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 
 		return math.MaxUint32
 	}
@@ -1468,16 +1356,16 @@ func (p *Process) libcSystem(cmd uint32) uint32 {
 		p.post(&p.own.child)
 	}()
 
-	intr := p.setAction(int(syscall.SIGINT), SigAction{handler: sigIgn})
-	quit := p.setAction(int(syscall.SIGQUIT), SigAction{handler: sigIgn})
-	mask := p.setMask(p.mask() | sigBit(int(syscall.SIGCHLD)))
+	intr := p.setAction(sigInt, SigAction{handler: sigIgn})
+	quit := p.setAction(sigQuit, SigAction{handler: sigIgn})
+	mask := p.setMask(p.mask() | sigBit(sigChld))
 
 	p.wait(time.Time{}, func(*Event) (bool, error) {
 		return ended.Load(), nil
 	})
 
-	p.setAction(int(syscall.SIGINT), intr)
-	p.setAction(int(syscall.SIGQUIT), quit)
+	p.setAction(sigInt, intr)
+	p.setAction(sigQuit, quit)
 	p.setMask(mask)
 
 	status := c.status
@@ -1533,7 +1421,7 @@ func (p *Process) libcSetpgid(pid, pgid uint32) uint32 {
 		p.k.mu.Unlock()
 
 		if !ok {
-			return p.result(0, syscall.ESRCH)
+			return p.result(0, eSrch)
 		}
 
 		target = q
@@ -1546,7 +1434,7 @@ func (p *Process) libcSetpgid(pid, pgid uint32) uint32 {
 	}
 
 	if group < 0 || group != target.pid && !p.groupExists(group) {
-		return p.result(0, syscall.EPERM)
+		return p.result(0, ePerm)
 	}
 
 	p.k.mu.Lock()
@@ -1560,7 +1448,7 @@ func (p *Process) consoleAt(fd uint32) error {
 	ok, err := p.isConsole(fd)
 
 	if err == nil && !ok {
-		err = syscall.ENOTTY
+		err = eNotty
 	}
 
 	return err
@@ -1572,7 +1460,7 @@ func (p *Process) setIds(ids *[3]uint32, r, e, s uint32) error {
 	defer p.k.mu.Unlock()
 
 	if !p.cred.privileged() && !(may(r, ids[0], ids[1], ids[2]) && may(e, ids[0], ids[1], ids[2]) && may(s, ids[0], ids[1], ids[2])) {
-		return syscall.EPERM
+		return ePerm
 	}
 
 	for i, id := range [3]uint32{r, e, s} {
@@ -1590,7 +1478,7 @@ func (p *Process) setId(ids *[3]uint32, id uint32) error {
 	}
 
 	if id != ids[0] && id != ids[2] {
-		return syscall.EPERM
+		return ePerm
 	}
 
 	return p.setIds(ids, keep, id, keep)
@@ -1598,7 +1486,7 @@ func (p *Process) setId(ids *[3]uint32, id uint32) error {
 
 func (p *Process) setReIds(ids *[3]uint32, r, e uint32) error {
 	if !p.cred.privileged() && (r != keep && r != ids[0] && r != ids[1] || !may(e, ids[0], ids[1], ids[2])) {
-		return syscall.EPERM
+		return ePerm
 	}
 
 	saved := keep
@@ -1626,7 +1514,7 @@ func (p *Process) process(pid int32) (*Process, error) {
 	p.k.mu.Unlock()
 
 	if !ok || q.zombie {
-		return nil, syscall.ESRCH
+		return nil, eSrch
 	}
 
 	return q, nil
@@ -1658,7 +1546,7 @@ func (p *Process) prioTargets(which, who uint32) ([]*Process, error) {
 		return p.k.processes(func(q *Process) bool { return !q.zombie && q.cred.uid() == who }), nil
 	}
 
-	return nil, syscall.EINVAL
+	return nil, eInval
 }
 
 func (p *Process) libcSetuid(uid uint32) uint32 {
@@ -1716,7 +1604,7 @@ func (p *Process) libcSetsid() uint32 {
 
 	for _, q := range p.k.procs {
 		if q.pgid == p.pid {
-			return p.result(0, syscall.EPERM)
+			return p.result(0, ePerm)
 		}
 	}
 
@@ -1765,7 +1653,7 @@ func (p *Process) libcNice(inc uint32) uint32 {
 	if n < p.nice && !p.cred.privileged() {
 		p.k.mu.Unlock()
 
-		return p.result(0, syscall.EPERM)
+		return p.result(0, ePerm)
 	}
 
 	p.nice = n
@@ -1778,7 +1666,7 @@ func (p *Process) libcGetpriority(which, who uint32) uint32 {
 	targets, err := p.prioTargets(which, who)
 
 	if err == nil && len(targets) == 0 {
-		err = syscall.ESRCH
+		err = eSrch
 	}
 
 	if err != nil {
@@ -1802,7 +1690,7 @@ func (p *Process) libcSetpriority(which, who, prio uint32) uint32 {
 	targets, err := p.prioTargets(which, who)
 
 	if err == nil && len(targets) == 0 {
-		err = syscall.ESRCH
+		err = eSrch
 	}
 
 	if err != nil {
@@ -1817,7 +1705,7 @@ func (p *Process) libcSetpriority(which, who, prio uint32) uint32 {
 
 	for _, q := range targets {
 		if n < q.nice && !p.cred.privileged() {
-			return p.result(0, syscall.EACCES)
+			return p.result(0, eAcces)
 		}
 	}
 
@@ -1842,7 +1730,7 @@ func (p *Process) libcSched_get_priority_max(policy uint32) uint32 {
 		return p.result(0, nil)
 	}
 
-	return p.result(0, syscall.EINVAL)
+	return p.result(0, eInval)
 }
 
 func (p *Process) libcSched_get_priority_min(policy uint32) uint32 {
@@ -1853,7 +1741,7 @@ func (p *Process) libcSched_get_priority_min(policy uint32) uint32 {
 		return p.result(0, nil)
 	}
 
-	return p.result(0, syscall.EINVAL)
+	return p.result(0, eInval)
 }
 
 func (p *Process) libcSched_getscheduler(pid uint32) uint32 {
@@ -1886,7 +1774,7 @@ func (p *Process) libcSched_setparam(pid, param uint32) uint32 {
 	}
 
 	if p.u32(param) != 0 {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	return p.result(0, nil)
@@ -1902,7 +1790,7 @@ func (p *Process) libcSched_setscheduler(pid, policy, param uint32) uint32 {
 	switch policy {
 	case schedOther, schedBatch, schedIdle:
 		if p.u32(param) != 0 {
-			return p.result(0, syscall.EINVAL)
+			return p.result(0, eInval)
 		}
 
 		p.k.mu.Lock()
@@ -1911,10 +1799,10 @@ func (p *Process) libcSched_setscheduler(pid, policy, param uint32) uint32 {
 
 		return p.result(0, nil)
 	case schedFifo, schedRr:
-		return p.result(0, syscall.EPERM)
+		return p.result(0, ePerm)
 	}
 
-	return p.result(0, syscall.EINVAL)
+	return p.result(0, eInval)
 }
 
 func (p *Process) libcSched_rr_get_interval(pid, ts uint32) uint32 {
@@ -1929,7 +1817,7 @@ func (p *Process) libcSched_rr_get_interval(pid, ts uint32) uint32 {
 
 func (p *Process) libcSetgroups(n, list uint32) uint32 {
 	if n > ngroupsMax {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	groups := make([]uint32, n)
@@ -1960,7 +1848,7 @@ func (p *Process) setGroups(groups []uint32) error {
 	defer p.k.mu.Unlock()
 
 	if !p.cred.privileged() {
-		return syscall.EPERM
+		return ePerm
 	}
 
 	p.cred.groups = groups
@@ -2013,7 +1901,7 @@ func (p *Process) startVfork() uint32 {
 
 func (p *Process) fork(setup func(c *Process)) (int32, error) {
 	if p.chaosFail("fork") {
-		return 0, syscall.EAGAIN
+		return 0, eAgain
 	}
 
 	j := new(Jump)
@@ -2025,7 +1913,7 @@ func (p *Process) fork(setup func(c *Process)) (int32, error) {
 	frames, ok := p.inst.frames(j, "_start")
 
 	if !ok {
-		return 0, syscall.ENOSYS
+		return 0, eNosys
 	}
 
 	from := uint64(binary.LittleEndian.Uint32(p.inst.block[p.stackPointer():])) &^ 4095
@@ -2124,7 +2012,7 @@ func (p *Process) endBorrowers(i *Instance, e any) {
 
 		q.vfork = nil
 
-		status := int(syscall.SIGKILL)
+		status := sigKill
 
 		if t, ok := e.(*Trap); ok {
 			status = trapSignal(t.code)
@@ -2198,7 +2086,7 @@ func (p *Process) waitChild(selects func(*Process) bool, options uint32) (int32,
 		}
 
 		if !found {
-			return 0, 0, syscall.ECHILD
+			return 0, 0, eChild
 		}
 
 		if options&wNohang != 0 {
@@ -2220,11 +2108,11 @@ func (p *Process) waitpid(pid int32, at, options uint32) (int, error) {
 	)
 
 	if options&^(basic|clone|all|notThread) != 0 {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	if options&clone != 0 && options&all == 0 {
-		return 0, syscall.ECHILD
+		return 0, eChild
 	}
 
 	q, status, err := p.waitChild(p.pidSelector(pid), options&basic|wExited)
@@ -2263,11 +2151,11 @@ func (p *Process) waitid(idtype, id, info, options uint32) uint32 {
 
 		selects = func(q *Process) bool { return q.pgid == pgid }
 	default:
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	if options&(wExited|wUntraced|wContinued) == 0 || options&^(wNohang|wExited|wUntraced|wContinued|wNowait) != 0 {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	q, status, err := p.waitChild(selects, options)
@@ -2286,12 +2174,12 @@ func (p *Process) waitid(idtype, id, info, options uint32) uint32 {
 			case status&0xff == stoppedBy:
 				code = cldStopped
 			case status == continued:
-				code, value = cldCont, int(syscall.SIGCONT)
+				code, value = cldCont, sigCont
 			case status&0x7f != 0:
 				code, value = cldKilled, status&0x7f
 			}
 
-			p.put32(info, uint32(syscall.SIGCHLD))
+			p.put32(info, uint32(sigChld))
 			p.put32(info+8, uint32(code))
 			p.put32(info+12, uint32(q))
 
@@ -2317,7 +2205,7 @@ func (p *Process) stopped(sig int) {
 		p.k.mu.Unlock()
 		p.sig.mu.Lock()
 
-		killed := p.sig.pending&sigBit(int(syscall.SIGKILL)) != 0
+		killed := p.sig.pending&sigBit(sigKill) != 0
 
 		p.sig.mu.Unlock()
 
@@ -2355,14 +2243,14 @@ func (p *Process) tellParent(flag uint32) {
 
 	parent.sig.mu.Lock()
 
-	quiet := parent.sig.actions[syscall.SIGCHLD].flags&flag != 0
+	quiet := parent.sig.actions[sigChld].flags&flag != 0
 
 	parent.sig.mu.Unlock()
 
 	if quiet {
 		parent.childChanged(0)
 	} else {
-		parent.childChanged(int(syscall.SIGCHLD))
+		parent.childChanged(sigChld)
 	}
 }
 
@@ -2372,7 +2260,7 @@ func (p *Process) waitEvent(ready func() bool) error {
 			return true, nil
 		}
 
-		return p.interrupts(true), syscall.EINTR
+		return p.interrupts(true), eIntr
 	})
 
 	return err
@@ -2409,12 +2297,12 @@ func (p *Process) libcWaitid(idtype, id, info, options uint32) uint32 {
 }
 
 func defaultAction(sig int) int {
-	switch syscall.Signal(sig) {
-	case syscall.SIGCHLD, syscall.SIGURG, syscall.SIGWINCH:
+	switch sig {
+	case sigChld, sigUrg, sigWinch:
 		return actIgnore
-	case syscall.SIGCONT:
+	case sigCont:
 		return actContinue
-	case syscall.SIGSTOP, syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU:
+	case sigStop, sigTstp, sigTtin, sigTtou:
 		return actStop
 	}
 
@@ -2427,10 +2315,10 @@ func sigBit(sig int) uint64 {
 
 func (s *SignalState) sent(sig int) {
 	switch {
-	case sig == int(syscall.SIGCONT):
+	case sig == sigCont:
 		s.pending &^= stopSignals
 	case sigBit(sig)&stopSignals != 0:
-		s.pending &^= sigBit(int(syscall.SIGCONT))
+		s.pending &^= sigBit(sigCont)
 	}
 }
 
@@ -2464,7 +2352,7 @@ func (a SigAction) ignored(sig int) bool {
 }
 
 func (p *Process) send(sig int) {
-	if sig == int(syscall.SIGCONT) {
+	if sig == sigCont {
 		p.cont()
 	}
 
@@ -2860,7 +2748,7 @@ func (p *Process) sigprocmask(how, set, old uint32) error {
 		case sigSetmask:
 			mask = s
 		default:
-			return syscall.EINVAL
+			return eInval
 		}
 
 		p.setMask(mask)
@@ -2897,11 +2785,11 @@ func (p *Process) sigwait(set uint64, timeout time.Duration) (int, error) {
 			return true, nil
 		}
 
-		return p.interrupts(false), syscall.EINTR
+		return p.interrupts(false), eIntr
 	})
 
 	if timedOut {
-		return 0, syscall.EAGAIN
+		return 0, eAgain
 	}
 
 	return sig, err
@@ -2916,7 +2804,7 @@ func (p *Process) putSiginfo(at uint32, sig int) {
 
 func (p *Process) setMember(sig uint32) bool {
 	if !validSignal(sig) || sig == 32 || sig == 33 {
-		p.setErrno(syscall.EINVAL)
+		p.setErrno(eInval)
 
 		return false
 	}
@@ -2976,13 +2864,13 @@ func validSignal(sig uint32) bool {
 
 func (p *Process) kill(pid int32, sig uint32) error {
 	if sig != 0 && !validSignal(sig) {
-		return syscall.EINVAL
+		return eInval
 	}
 
 	targets := p.k.signalTargets(p, pid)
 
 	if len(targets) == 0 {
-		return syscall.ESRCH
+		return eSrch
 	}
 
 	if sig != 0 {
@@ -2999,8 +2887,8 @@ func (p *Process) kill(pid int32, sig uint32) error {
 }
 
 func (p *Process) libcSignal(sig, handler uint32) uint32 {
-	if !validSignal(sig) || sig == uint32(syscall.SIGKILL) || sig == uint32(syscall.SIGSTOP) {
-		p.setErrno(syscall.EINVAL)
+	if !validSignal(sig) || sig == uint32(sigKill) || sig == uint32(sigStop) {
+		p.setErrno(eInval)
 
 		return ^uint32(0)
 	}
@@ -3009,8 +2897,8 @@ func (p *Process) libcSignal(sig, handler uint32) uint32 {
 }
 
 func (p *Process) libcSigaction(sig, act, old uint32) uint32 {
-	if !validSignal(sig) || act != 0 && (sig == uint32(syscall.SIGKILL) || sig == uint32(syscall.SIGSTOP)) {
-		return p.result(0, syscall.EINVAL)
+	if !validSignal(sig) || act != 0 && (sig == uint32(sigKill) || sig == uint32(sigStop)) {
+		return p.result(0, eInval)
 	}
 
 	p.sig.mu.Lock()
@@ -3186,13 +3074,13 @@ func (p *Process) libcSigaltstack(ss, old uint32) uint32 {
 
 	switch {
 	case on:
-		return p.result(0, syscall.EPERM)
+		return p.result(0, ePerm)
 	case flags&^(ssOnstack|ssDisable|1<<31) != 0:
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	case flags&ssDisable != 0:
 		alt.sp, alt.size = 0, 0
 	case p.u32(ss+8) < minSigstksz:
-		return p.result(0, syscall.ENOMEM)
+		return p.result(0, eNomem)
 	default:
 		alt.sp, alt.size = p.u32(ss), p.u32(ss+8)
 		p.span(alt.sp, alt.size)
@@ -3207,7 +3095,7 @@ func (p *Process) libcSigaltstack(ss, old uint32) uint32 {
 
 func (p *Process) libcSiginterrupt(sig, flag uint32) uint32 {
 	if !validSignal(sig) {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	p.sig.mu.Lock()
@@ -3230,7 +3118,7 @@ func (p *Process) libcPause() uint32 {
 		}
 	}
 
-	return p.result(0, syscall.EINTR)
+	return p.result(0, eIntr)
 }
 
 func (p *Process) libcSigsuspend(set uint32) uint32 {
@@ -3245,12 +3133,12 @@ func (p *Process) libcSigsuspend(set uint32) uint32 {
 	p.handleSignals()
 	p.setMask(old)
 
-	return p.result(0, syscall.EINTR)
+	return p.result(0, eIntr)
 }
 
 func (p *Process) libcRaise(sig uint32) uint32 {
 	if !validSignal(sig) {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	p.sendSelf(int(sig))
@@ -3264,7 +3152,7 @@ func (p *Process) libcKill(pid, sig uint32) uint32 {
 
 func (p *Process) libcSigqueue(pid, sig, value uint32) uint32 {
 	if int32(pid) <= 0 {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	return p.result(0, p.kill(int32(pid), sig))
@@ -3272,14 +3160,14 @@ func (p *Process) libcSigqueue(pid, sig, value uint32) uint32 {
 
 func (p *Process) libcKillpg(pgrp, sig uint32) uint32 {
 	if int32(pgrp) <= 1 {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	return p.result(0, p.kill(-int32(pgrp), sig))
 }
 
 func (p *Process) abort() {
-	abrt := int(syscall.SIGABRT)
+	abrt := sigAbrt
 
 	p.setMask(p.mask() &^ sigBit(abrt))
 	p.sendSelf(abrt)
@@ -3491,7 +3379,7 @@ func (p *Process) await(done *atomic.Bool, end time.Time, how Signalled) (timedO
 			return false, nil
 		}
 
-		return p.interrupts(how == restarts), syscall.EINTR
+		return p.interrupts(how == restarts), eIntr
 	})
 }
 
@@ -3918,7 +3806,7 @@ func (p *Process) realloc(ptr, n uint32) uint32 {
 
 func (p *Process) fatal(msg string) {
 	p.crash(msg, callers(1))
-	p.exitWith(int(syscall.SIGABRT))
+	p.exitWith(sigAbrt)
 }
 
 func (p *Process) crash(msg string, stack []uintptr) {
@@ -4013,7 +3901,7 @@ func (p *Process) writeBack(at uint32, m Mapping, from, n uint32) error {
 		return nil
 	}
 
-	var st syscall.Stat_t
+	var st Stat
 
 	if err := statFile(p, m.file, &st); err != nil {
 		return err
@@ -4087,7 +3975,7 @@ func (p *Process) libcMalloc(n uint32) uint32 {
 	at := p.malloc(n)
 
 	if at == 0 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 	}
 
 	return at
@@ -4097,7 +3985,7 @@ func (p *Process) libcCalloc(n, size uint32) uint32 {
 	total := uint64(n) * uint64(size)
 
 	if total > math.MaxUint32 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 
 		return 0
 	}
@@ -4105,7 +3993,7 @@ func (p *Process) libcCalloc(n, size uint32) uint32 {
 	at := p.malloc(uint32(total))
 
 	if at == 0 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 
 		return 0
 	}
@@ -4119,7 +4007,7 @@ func (p *Process) libcRealloc(ptr, n uint32) uint32 {
 	at := p.realloc(ptr, n)
 
 	if at == 0 && n != 0 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 	}
 
 	return at
@@ -4137,7 +4025,7 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 	const failed = math.MaxUint32
 
 	if n == 0 || off&4095 != 0 || flags&15 < 1 || flags&15 > 3 {
-		p.setErrno(syscall.EINVAL)
+		p.setErrno(eInval)
 
 		return failed
 	}
@@ -4145,7 +4033,7 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 	rounded := pageRound(n)
 
 	if rounded > math.MaxUint32 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 
 		return failed
 	}
@@ -4155,7 +4043,7 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 	at := p.memalign(4096, n)
 
 	if at == 0 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 
 		return failed
 	}
@@ -4175,7 +4063,7 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 			t := obj.asTransfer()
 
 			if t == nil || obj.asSeeker() == nil {
-				err = syscall.ENODEV
+				err = eNodev
 			} else {
 				f = t
 				_, err = f.pread(p, b, int64(off))
@@ -4204,7 +4092,7 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 
 func (p *Process) libcMunmap(addr, n uint32) uint32 {
 	if n == 0 {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	if m, ok := p.mappings[addr]; ok && pageRound(n) >= pageRound(m.length) {
@@ -4222,13 +4110,13 @@ func (p *Process) libcMsync(addr, n, flags uint32) uint32 {
 	)
 
 	if addr&4095 != 0 || flags&^(async|invalidate|sync) != 0 || flags&(async|sync) == async|sync {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	at, m, ok := p.mappingOf(addr)
 
 	if !ok {
-		return p.result(0, syscall.ENOMEM)
+		return p.result(0, eNomem)
 	}
 
 	n = min(n, m.length-(addr-at))
@@ -4266,7 +4154,7 @@ func (p *Process) libcMprotect(addr, n, prot uint32) uint32 {
 
 func (p *Process) libcMemalign(align, n uint32) uint32 {
 	if !alignment(align, false) {
-		p.setErrno(syscall.EINVAL)
+		p.setErrno(eInval)
 
 		return 0
 	}
@@ -4274,7 +4162,7 @@ func (p *Process) libcMemalign(align, n uint32) uint32 {
 	at := p.memalign(align, n)
 
 	if at == 0 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 	}
 
 	return at
@@ -4282,7 +4170,7 @@ func (p *Process) libcMemalign(align, n uint32) uint32 {
 
 func (p *Process) libcAligned_alloc(align, n uint32) uint32 {
 	if !alignment(align, false) {
-		p.setErrno(syscall.EINVAL)
+		p.setErrno(eInval)
 
 		return 0
 	}
@@ -4290,7 +4178,7 @@ func (p *Process) libcAligned_alloc(align, n uint32) uint32 {
 	at := p.memalign(align, n)
 
 	if at == 0 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 	}
 
 	return at
@@ -4300,7 +4188,7 @@ func (p *Process) libcValloc(n uint32) uint32 {
 	at := p.memalign(4096, n)
 
 	if at == 0 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 	}
 
 	return at
@@ -4308,13 +4196,13 @@ func (p *Process) libcValloc(n uint32) uint32 {
 
 func (p *Process) libcPosix_memalign(out, align, n uint32) uint32 {
 	if !alignment(align, true) {
-		return uint32(syscall.EINVAL)
+		return uint32(eInval)
 	}
 
 	at := p.memalign(align, n)
 
 	if at == 0 {
-		return uint32(syscall.ENOMEM)
+		return uint32(eNomem)
 	}
 
 	p.put32(out, at)
@@ -4340,7 +4228,7 @@ func (p *Process) libcReallocarray(ptr, n, size uint32) uint32 {
 	total := uint64(n) * uint64(size)
 
 	if total > math.MaxUint32 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 
 		return 0
 	}
@@ -4348,7 +4236,7 @@ func (p *Process) libcReallocarray(ptr, n, size uint32) uint32 {
 	at := p.realloc(ptr, uint32(total))
 
 	if at == 0 && total != 0 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 	}
 
 	return at
@@ -4551,7 +4439,7 @@ func (p *Process) fd(fd uint32) (Object, error) {
 	d, ok := p.files.at(int(fd))
 
 	if !ok {
-		return nil, syscall.EBADF
+		return nil, eBadf
 	}
 
 	return d.obj, nil
@@ -4568,7 +4456,7 @@ func (p *Process) fileAt(fd uint32) (File, error) {
 		return f, nil
 	}
 
-	return nil, syscall.EBADF
+	return nil, eBadf
 }
 
 func (p *Process) transferAt(fd uint32, read bool) (Transfer, error) {
@@ -4583,10 +4471,10 @@ func (p *Process) transferAt(fd uint32, read bool) (Transfer, error) {
 	}
 
 	if obj.asDir() != nil && read {
-		return nil, syscall.EISDIR
+		return nil, eIsdir
 	}
 
-	return nil, syscall.EBADF
+	return nil, eBadf
 }
 
 func (p *Process) seekerAt(fd uint32) (Seeker, error) {
@@ -4600,7 +4488,7 @@ func (p *Process) seekerAt(fd uint32) (Seeker, error) {
 		return s, nil
 	}
 
-	return nil, syscall.ESPIPE
+	return nil, eSpipe
 }
 
 func (p *Process) dirAt(fd uint32) (Dir, error) {
@@ -4614,7 +4502,7 @@ func (p *Process) dirAt(fd uint32) (Dir, error) {
 		return d, nil
 	}
 
-	return nil, syscall.ENOTDIR
+	return nil, eNotdir
 }
 
 func (p *Process) attrsAt(fd uint32) (Attrs, error) {
@@ -4628,7 +4516,7 @@ func (p *Process) attrsAt(fd uint32) (Attrs, error) {
 		return a, nil
 	}
 
-	return nil, syscall.EINVAL
+	return nil, eInval
 }
 
 func (p *Process) socketAt(fd uint32) (Socket, error) {
@@ -4642,7 +4530,7 @@ func (p *Process) socketAt(fd uint32) (Socket, error) {
 		return s, nil
 	}
 
-	return nil, syscall.ENOTSOCK
+	return nil, eNotsock
 }
 
 func (p *Process) lockerAt(fd uint32) (Locker, error) {
@@ -4656,7 +4544,7 @@ func (p *Process) lockerAt(fd uint32) (Locker, error) {
 		return l, nil
 	}
 
-	return nil, syscall.EBADF
+	return nil, eBadf
 }
 
 func (p *Process) install(obj Object, min int, cloexec bool) (int, error) {
@@ -4668,7 +4556,7 @@ func (p *Process) install(obj Object, min int, cloexec bool) (int, error) {
 
 	obj.unref()
 
-	return -1, syscall.EMFILE
+	return -1, eMfile
 }
 
 func (p *Process) fdLimit() int {
@@ -4677,7 +4565,7 @@ func (p *Process) fdLimit() int {
 
 func (p *Process) descriptorFree() error {
 	if p.files.lowest(0) >= p.fdLimit() {
-		return syscall.EMFILE
+		return eMfile
 	}
 
 	return nil
@@ -4707,7 +4595,7 @@ func (p *Process) dupTo(old, new uint32, cloexec bool) (int, error) {
 	}
 
 	if uint64(new) >= p.limits[rlimitNofile].cur {
-		return 0, syscall.EBADF
+		return 0, eBadf
 	}
 
 	p.placeAt(obj, new, cloexec)
@@ -4763,7 +4651,7 @@ func (p *Process) waitObjects(entries []PollEntry, timeout int, restart bool) (i
 			return true, nil
 		}
 
-		return p.interrupts(restart), syscall.EINTR
+		return p.interrupts(restart), eIntr
 	})
 
 	return ready, err
@@ -4793,7 +4681,7 @@ func (p *Process) ioSpans(iovs uint32, count uint32) ([][]byte, error) {
 
 func (p *Process) ioSpansIn(out [][]byte, iovs uint32, count uint32) ([][]byte, error) {
 	if count > 1024 {
-		return nil, syscall.EINVAL
+		return nil, eInval
 	}
 
 	table := p.span(iovs, 8*count)
@@ -4820,7 +4708,7 @@ func (p *Process) gather(iovs, count uint32, max int) ([]byte, error) {
 
 func (p *Process) gatherIn(small []byte, iovs, count uint32, max int) ([]byte, error) {
 	if count > 1024 {
-		return nil, syscall.EINVAL
+		return nil, eInval
 	}
 
 	table := p.span(iovs, 8*count)
@@ -4831,7 +4719,7 @@ func (p *Process) gatherIn(small []byte, iovs, count uint32, max int) ([]byte, e
 	}
 
 	if total > max {
-		return nil, syscall.EMSGSIZE
+		return nil, eMsgsize
 	}
 
 	data := small
@@ -4851,23 +4739,7 @@ func (p *Process) gatherIn(small []byte, iovs, count uint32, max int) ([]byte, e
 	return data, nil
 }
 
-func (p *Process) iovecs(iovs uint32, count uint32) ([]syscall.Iovec, error) {
-	spans, err := p.ioSpans(iovs, count)
-
-	if err != nil {
-		return nil, err
-	}
-
-	out := make([]syscall.Iovec, 0, len(spans))
-
-	for _, b := range spans {
-		out = append(out, syscall.Iovec{Base: &b[0], Len: uint64(len(b))})
-	}
-
-	return out, nil
-}
-
-func (p *Process) vectored(fd, iovs, count uint32, events int16, call uintptr, off uint64) uint32 {
+func (p *Process) vectored(fd, iovs, count uint32, events int16, positioned bool, off uint64) uint32 {
 	t, err := p.transferAt(fd, events == pollIn)
 
 	if err != nil {
@@ -4887,7 +4759,6 @@ func (p *Process) vectored(fd, iovs, count uint32, events int16, call uintptr, o
 	}
 
 	buf := make([]byte, 0, total)
-	positioned := call == syscall.SYS_PREADV || call == syscall.SYS_PWRITEV
 
 	if events == pollOut {
 		for _, b := range spans {
@@ -4924,7 +4795,7 @@ func (p *Process) vectored(fd, iovs, count uint32, events int16, call uintptr, o
 }
 
 func (p *Process) recordLock(l Locker, cmd, at uint32) error {
-	lk := syscall.Flock_t{Type: int16(p.u16(at)), Whence: int16(p.u16(at + 2)), Start: int64(p.u64(at + 8)), Len: int64(p.u64(at + 16))}
+	lk := Flock{Type: int16(p.u16(at)), Whence: int16(p.u16(at + 2)), Start: int64(p.u64(at + 8)), Len: int64(p.u64(at + 16))}
 
 	if cmd == fGetlk {
 		if err := l.recordLock(p, fOfdGetlk, &lk); err != nil {
@@ -4961,7 +4832,7 @@ func (s FdSet) set(p *Process, fd int) {
 
 func (p *Process) selectFds(n uint32, sets [3]FdSet, timeout int) (int, error) {
 	if n > fdSetsize {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	var entries []PollEntry
@@ -5028,7 +4899,7 @@ func (p *Process) withMask(mask uint32, wait func() (int, error)) (int, error) {
 	old := p.setMask(p.u64(mask))
 	n, err := wait()
 
-	if err == syscall.EINTR {
+	if err == eIntr {
 		p.handleSignals()
 	}
 
@@ -5094,7 +4965,7 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 	toWindow := dst.asMemfd() != nil
 
 	if flags != 0 {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	var from, to *int64
@@ -5137,24 +5008,24 @@ func copyFiles(p *Process, src, dst File, from, to *int64, n int) (int, error) {
 	inFlags, _ := src.flags()
 	outFlags, _ := dst.flags()
 
-	if in == nil || out == nil || inFlags&syscall.O_ACCMODE == syscall.O_WRONLY || outFlags&syscall.O_ACCMODE == syscall.O_RDONLY ||
-		outFlags&syscall.O_APPEND != 0 {
-		return 0, syscall.EBADF
+	if in == nil || out == nil || inFlags&oAccmode == oWronly || outFlags&oAccmode == oRdonly ||
+		outFlags&oAppend != 0 {
+		return 0, eBadf
 	}
 
 	for _, f := range []File{src, dst} {
-		var st syscall.Stat_t
+		var st Stat
 
 		if err := f.stat(p, &st); err != nil {
 			return 0, err
 		}
 
-		if st.Mode&syscall.S_IFMT == syscall.S_IFDIR {
-			return 0, syscall.EISDIR
+		if st.Mode&sIfmt == sIfdir {
+			return 0, eIsdir
 		}
 
-		if st.Mode&syscall.S_IFMT != syscall.S_IFREG {
-			return 0, syscall.EINVAL
+		if st.Mode&sIfmt != sIfreg {
+			return 0, eInval
 		}
 	}
 
@@ -5245,7 +5116,7 @@ func (p *Process) libcLockf(fd, cmd uint32, n uint64) uint32 {
 		return p.result(0, err)
 	}
 
-	lk := syscall.Flock_t{Type: fWrlck, Whence: 1, Len: int64(n)}
+	lk := Flock{Type: fWrlck, Whence: 1, Len: int64(n)}
 
 	switch cmd {
 	case 0:
@@ -5259,10 +5130,10 @@ func (p *Process) libcLockf(fd, cmd uint32, n uint64) uint32 {
 		lk.Type = fRdlck
 
 		if err = l.recordLock(p, fOfdGetlk, &lk); err == nil && lk.Type != fUnlck {
-			err = syscall.EACCES
+			err = eAcces
 		}
 	default:
-		err = syscall.EINVAL
+		err = eInval
 	}
 
 	return p.result(0, err)
@@ -5275,17 +5146,17 @@ func (p *Process) libcPosix_fadvise(fd uint32, off, n uint64, advice uint32) uin
 		return uint32(errnoOf(err))
 	}
 
-	var st syscall.Stat_t
+	var st Stat
 
 	if err := obj.stat(p, &st); err != nil {
 		return uint32(errnoOf(err))
 	}
 
 	switch {
-	case st.Mode&syscall.S_IFMT == syscall.S_IFIFO:
-		return uint32(syscall.ESPIPE)
+	case st.Mode&sIfmt == sIfifo:
+		return uint32(eSpipe)
 	case int64(n) < 0 || advice > posixFadvNoreuse:
-		return uint32(syscall.EINVAL)
+		return uint32(eInval)
 	}
 
 	return 0
@@ -5303,14 +5174,14 @@ func (p *Process) libcPosix_fallocate(fd uint32, off, n uint64) uint32 {
 
 func (p *Process) fallocate(obj File, off, n int64) error {
 	if off < 0 || n <= 0 {
-		return syscall.EINVAL
+		return eInval
 	}
 
-	if fl, err := obj.flags(); err != nil || fl&syscall.O_ACCMODE == syscall.O_RDONLY {
-		return syscall.EBADF
+	if fl, err := obj.flags(); err != nil || fl&oAccmode == oRdonly {
+		return eBadf
 	}
 
-	var st syscall.Stat_t
+	var st Stat
 
 	if err := obj.stat(p, &st); err != nil {
 		return err
@@ -5319,14 +5190,14 @@ func (p *Process) fallocate(obj File, off, n int64) error {
 	a := obj.asAttrs()
 
 	switch {
-	case st.Mode&syscall.S_IFMT == syscall.S_IFIFO:
-		return syscall.ESPIPE
-	case st.Mode&syscall.S_IFMT == syscall.S_IFDIR:
-		return syscall.EISDIR
-	case st.Mode&syscall.S_IFMT != syscall.S_IFREG || a == nil:
-		return syscall.ENODEV
+	case st.Mode&sIfmt == sIfifo:
+		return eSpipe
+	case st.Mode&sIfmt == sIfdir:
+		return eIsdir
+	case st.Mode&sIfmt != sIfreg || a == nil:
+		return eNodev
 	case off > math.MaxInt64-n:
-		return syscall.EFBIG
+		return eFbig
 	case off+n <= st.Size:
 		return nil
 	}
@@ -5352,7 +5223,7 @@ func (p *Process) libcSelect(n, r, w, e, tv uint32) uint32 {
 	start := time.Now()
 	count, err := p.selectFds(n, [3]FdSet{{r}, {w}, {e}}, timeout)
 
-	if tv != 0 && err != syscall.EINVAL {
+	if tv != 0 && err != eInval {
 		p.putTimeval(tv, max(d-time.Since(start), 0))
 	}
 
@@ -5389,7 +5260,7 @@ func (p *Process) libcLseek(fd uint32, off uint64, whence uint32) uint64 {
 
 func (p *Process) libcClose(fd uint32) uint32 {
 	if !p.closeFd(int(fd)) {
-		return p.result(0, syscall.EBADF)
+		return p.result(0, eBadf)
 	}
 
 	return p.result(0, nil)
@@ -5416,11 +5287,11 @@ func (p *Process) libcDup2(old, new uint32) uint32 {
 }
 
 func (p *Process) libcDup3(old, new, flags uint32) uint32 {
-	if old == new || flags&^syscall.O_CLOEXEC != 0 {
-		return p.result(0, syscall.EINVAL)
+	if old == new || flags&^oCloexec != 0 {
+		return p.result(0, eInval)
 	}
 
-	return p.result(p.dupTo(old, new, flags&syscall.O_CLOEXEC != 0))
+	return p.result(p.dupTo(old, new, flags&oCloexec != 0))
 }
 
 func (p *Process) libcCfgetospeed(at uint32) uint32 {
@@ -5459,15 +5330,15 @@ func (p *Process) libcFtruncate(fd uint32, size uint64) uint32 {
 	return p.result(0, err)
 }
 
-func statFile(p *Process, obj Object, st *syscall.Stat_t) error {
+func statFile(p *Process, obj Object, st *Stat) error {
 	if p.chaosFail("file-stat") {
-		return syscall.EIO
+		return eIo
 	}
 
 	f := obj.asFile()
 
 	if f == nil {
-		return syscall.EBADF
+		return eBadf
 	}
 
 	return f.stat(p, st)
@@ -5480,7 +5351,7 @@ func (p *Process) libcFstat(fd, at uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	var st syscall.Stat_t
+	var st Stat
 
 	if err := statFile(p, obj, &st); err != nil {
 		return p.result(0, err)
@@ -5547,7 +5418,7 @@ func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
 		min := p.varArg(va, 0)
 
 		if uint64(min) >= p.limits[rlimitNofile].cur {
-			return p.result(0, syscall.EINVAL)
+			return p.result(0, eInval)
 		}
 
 		obj.ref()
@@ -5577,12 +5448,12 @@ func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
 		return p.result(0, obj.setFlags(int(p.varArg(va, 0))))
 	}
 
-	return p.result(0, syscall.EINVAL)
+	return p.result(0, eInval)
 }
 
 func (p *Process) cfsetspeed(at, speed uint32) uint32 {
 	if speed&^cbaud != 0 {
-		p.setErrno(syscall.EINVAL)
+		p.setErrno(eInval)
 
 		return ^uint32(0)
 	}
@@ -5632,7 +5503,7 @@ func (p *Process) libcPpoll(at, n, ts, mask uint32) uint32 {
 
 func (p *Process) poll(at, n uint32, timeout int) (int, error) {
 	if n > 1<<16 {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	guest := p.span(at, 8*n)
@@ -5687,7 +5558,7 @@ func (p *Process) poll(at, n uint32, timeout int) (int, error) {
 	return ready + invalid, nil
 }
 
-func (p *Process) putStat(at uint32, st *syscall.Stat_t) {
+func (p *Process) putStat(at uint32, st *Stat) {
 	b := p.span(at, 112)
 
 	clear(b)
@@ -5705,13 +5576,13 @@ func (p *Process) putStat(at uint32, st *syscall.Stat_t) {
 	le.PutUint32(b[48:], uint32(st.Blksize))
 	le.PutUint64(b[56:], uint64(st.Blocks))
 
-	for i, t := range []syscall.Timespec{st.Atim, st.Mtim, st.Ctim} {
+	for i, t := range []Timespec{st.Atim, st.Mtim, st.Ctim} {
 		le.PutUint64(b[64+16*i:], uint64(t.Sec))
 		le.PutUint32(b[72+16*i:], uint32(t.Nsec))
 	}
 }
 
-func (p *Process) timespecs(at uint32) []syscall.Timespec {
+func (p *Process) timespecs(at uint32) []Timespec {
 	if at == 0 {
 		return nil
 	}
@@ -5719,26 +5590,26 @@ func (p *Process) timespecs(at uint32) []syscall.Timespec {
 	b := p.span(at, 32)
 	le := binary.LittleEndian
 
-	return []syscall.Timespec{
+	return []Timespec{
 		{Sec: int64(le.Uint64(b)), Nsec: int64(int32(le.Uint32(b[8:])))},
 		{Sec: int64(le.Uint64(b[16:])), Nsec: int64(int32(le.Uint32(b[24:])))},
 	}
 }
 
 func (p *Process) libcReadv(fd, iovs, count uint32) uint32 {
-	return p.vectored(fd, iovs, count, pollIn, syscall.SYS_READV, 0)
+	return p.vectored(fd, iovs, count, pollIn, false, 0)
 }
 
 func (p *Process) libcWritev(fd, iovs, count uint32) uint32 {
-	return p.vectored(fd, iovs, count, pollOut, syscall.SYS_WRITEV, 0)
+	return p.vectored(fd, iovs, count, pollOut, false, 0)
 }
 
 func (p *Process) libcPreadv(fd, iovs, count uint32, off uint64) uint32 {
-	return p.vectored(fd, iovs, count, pollIn, syscall.SYS_PREADV, off)
+	return p.vectored(fd, iovs, count, pollIn, true, off)
 }
 
 func (p *Process) libcPwritev(fd, iovs, count uint32, off uint64) uint32 {
-	return p.vectored(fd, iovs, count, pollOut, syscall.SYS_PWRITEV, off)
+	return p.vectored(fd, iovs, count, pollOut, true, off)
 }
 
 func (p *Process) libcPipe(fds uint32) uint32 {
@@ -5778,10 +5649,10 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 			return p.result(0, err)
 		}
 
-		fl &^= syscall.O_NONBLOCK
+		fl &^= oNonblock
 
 		if p.u32(p.varArg(va, 0)) != 0 {
-			fl |= syscall.O_NONBLOCK
+			fl |= oNonblock
 		}
 
 		return p.result(0, obj.setFlags(fl))
@@ -5830,15 +5701,15 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 		return p.result(0, nil)
 	}
 
-	return p.result(0, syscall.ENOTTY)
+	return p.result(0, eNotty)
 }
 
 func checked(path string) error {
 	switch {
 	case path == "":
-		return syscall.ENOENT
+		return eNoent
 	case len(path) >= 4096:
-		return syscall.ENAMETOOLONG
+		return eNametoolong
 	}
 
 	return nil
@@ -5914,7 +5785,7 @@ func attrsCall(call func(a Attrs) error) func(f Object) error {
 			return call(a)
 		}
 
-		return syscall.EINVAL
+		return eInval
 	}
 }
 
@@ -5934,7 +5805,7 @@ func (p *Process) openAt(dirfd int32, path string, flags int, mode uint32) (Obje
 func (p *Process) open(dirfd int32, path string, flags, va uint32) (int, error) {
 	mode := uint32(0)
 
-	if flags&(syscall.O_CREAT|0o20000000) != 0 {
+	if flags&(oCreat|0o20000000) != 0 {
 		mode = p.varArg(va, 0) & 0o7777 &^ p.umask
 	}
 
@@ -5942,13 +5813,13 @@ func (p *Process) open(dirfd int32, path string, flags, va uint32) (int, error) 
 		return 0, err
 	}
 
-	f, err := p.openAt(dirfd, path, int(flags&^syscall.O_CLOEXEC), mode)
+	f, err := p.openAt(dirfd, path, int(flags&^oCloexec), mode)
 
 	if err != nil {
 		return 0, err
 	}
 
-	return p.install(f, 0, flags&syscall.O_CLOEXEC != 0)
+	return p.install(f, 0, flags&oCloexec != 0)
 }
 
 func (p *Process) openPath(path string, flags int, mode uint32) (Object, error) {
@@ -5956,7 +5827,7 @@ func (p *Process) openPath(path string, flags int, mode uint32) (Object, error) 
 }
 
 func (p *Process) readPath(path string, max int) ([]byte, error) {
-	f, err := p.openPath(path, syscall.O_RDONLY, 0)
+	f, err := p.openPath(path, oRdonly, 0)
 
 	if err != nil {
 		return nil, err
@@ -5994,10 +5865,10 @@ func (p *Process) mkdir(dirfd int32, path string, mode uint32) error {
 }
 
 func (p *Process) mknod(dirfd int32, path string, mode uint32, dev uint64) error {
-	switch mode & syscall.S_IFMT {
-	case 0, syscall.S_IFREG, syscall.S_IFIFO:
+	switch mode & sIfmt {
+	case 0, sIfreg, sIfifo:
 	default:
-		return syscall.EPERM
+		return ePerm
 	}
 
 	return p.onPath(dirfd, path, func(d Dir) error {
@@ -6007,7 +5878,7 @@ func (p *Process) mknod(dirfd int32, path string, mode uint32, dev uint64) error
 
 func (p *Process) symlink(target string, dirfd int32, path string) error {
 	if target == "" {
-		return syscall.ENOENT
+		return eNoent
 	}
 
 	return p.onPath(dirfd, path, func(d Dir) error {
@@ -6033,7 +5904,7 @@ func (p *Process) link(olddir int32, old string, newdir int32, new string, follo
 	})
 }
 
-func (p *Process) statPath(path string, follow bool, st *syscall.Stat_t) error {
+func (p *Process) statPath(path string, follow bool, st *Stat) error {
 	return p.onPath(atFdcwd, path, func(d Dir) error {
 		return d.statPath(p, path, follow, st)
 	})
@@ -6046,20 +5917,20 @@ func (p *Process) accessAt(dirfd int32, path string, mode, flags uint32) error {
 }
 
 func (p *Process) access(d Dir, path string, mode, flags uint32) error {
-	var st syscall.Stat_t
+	var st Stat
 
 	if err := d.statPath(p, path, flags&atSymlinkNofollow == 0, &st); err != nil {
 		return err
 	}
 
 	if !p.permits(&st, mode&7) {
-		return syscall.EACCES
+		return eAcces
 	}
 
 	return nil
 }
 
-func (p *Process) putStatvfs(at uint32, st *syscall.Statfs_t) {
+func (p *Process) putStatvfs(at uint32, st *Statfs) {
 	b := p.span(at, 72)
 
 	clear(b)
@@ -6074,12 +5945,12 @@ func (p *Process) putStatvfs(at uint32, st *syscall.Statfs_t) {
 	le.PutUint64(b[32:], st.Files)
 	le.PutUint64(b[40:], st.Ffree)
 	le.PutUint64(b[48:], st.Ffree)
-	le.PutUint32(b[56:], uint32(st.Fsid.X__val[0]))
+	le.PutUint32(b[56:], uint32(st.Fsid[0]))
 	le.PutUint32(b[60:], uint32(st.Flags))
 	le.PutUint32(b[64:], uint32(st.Namelen))
 }
 
-func (p *Process) putStatfsOf(at uint32, st *syscall.Statfs_t) {
+func (p *Process) putStatfsOf(at uint32, st *Statfs) {
 	b := p.span(at, 88)
 
 	clear(b)
@@ -6093,14 +5964,14 @@ func (p *Process) putStatfsOf(at uint32, st *syscall.Statfs_t) {
 	le.PutUint64(b[24:], st.Bavail)
 	le.PutUint64(b[32:], st.Files)
 	le.PutUint64(b[40:], st.Ffree)
-	le.PutUint32(b[48:], uint32(st.Fsid.X__val[0]))
-	le.PutUint32(b[52:], uint32(st.Fsid.X__val[1]))
+	le.PutUint32(b[48:], uint32(st.Fsid[0]))
+	le.PutUint32(b[52:], uint32(st.Fsid[1]))
 	le.PutUint32(b[56:], uint32(st.Namelen))
 	le.PutUint32(b[60:], uint32(st.Frsize))
 	le.PutUint32(b[64:], uint32(st.Flags))
 }
 
-func (p *Process) statfsPath(path string, st *syscall.Statfs_t) error {
+func (p *Process) statfsPath(path string, st *Statfs) error {
 	return p.onPath(atFdcwd, path, func(d Dir) error {
 		return d.statfsPath(p, path, st)
 	})
@@ -6115,7 +5986,7 @@ func (p *Process) libcOpenat(dirfd, path, flags, va uint32) uint32 {
 }
 
 func (p *Process) libcFstatat(dirfd, path, at, flags uint32) uint32 {
-	var st syscall.Stat_t
+	var st Stat
 
 	err := p.statFlags(int32(dirfd), p.str(path), flags, &st)
 
@@ -6126,7 +5997,7 @@ func (p *Process) libcFstatat(dirfd, path, at, flags uint32) uint32 {
 	return p.result(0, err)
 }
 
-func (p *Process) statFlags(dirfd int32, path string, flags uint32, st *syscall.Stat_t) error {
+func (p *Process) statFlags(dirfd int32, path string, flags uint32, st *Stat) error {
 	return p.onAt(dirfd, path, flags, func(f Object) error {
 		return statFile(p, f, st)
 	}, func(d Dir, follow bool) error {
@@ -6134,7 +6005,7 @@ func (p *Process) statFlags(dirfd int32, path string, flags uint32, st *syscall.
 	})
 }
 
-func (p *Process) statAt(dirfd int32, path string, follow bool, st *syscall.Stat_t) error {
+func (p *Process) statAt(dirfd int32, path string, follow bool, st *Stat) error {
 	if follow {
 		return p.statFlags(dirfd, path, 0, st)
 	}
@@ -6161,7 +6032,7 @@ func (p *Process) libcTruncate(path uint32, size uint64) uint32 {
 }
 
 func (p *Process) libcStatvfs(path, at uint32) uint32 {
-	var st syscall.Statfs_t
+	var st Statfs
 
 	err := p.statfsPath(p.str(path), &st)
 
@@ -6179,7 +6050,7 @@ func (p *Process) libcFstatvfs(fd, at uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	var st syscall.Statfs_t
+	var st Statfs
 
 	if err := n.statfs(p, &st); err != nil {
 		return p.result(0, err)
@@ -6204,7 +6075,7 @@ func (p *Process) directory(path string) (Dir, error) {
 	var nd Dir
 
 	err := p.onPath(atFdcwd, path, func(d Dir) error {
-		f, err := d.openPath(p, path, oPath|syscall.O_DIRECTORY, 0)
+		f, err := d.openPath(p, path, oPath|oDirectory, 0)
 
 		if err != nil {
 			return err
@@ -6215,7 +6086,7 @@ func (p *Process) directory(path string) (Dir, error) {
 		if h == nil {
 			f.unref()
 
-			return syscall.ENOTDIR
+			return eNotdir
 		}
 
 		if err := p.access(h, "", 1, 0); err != nil {
@@ -6266,7 +6137,7 @@ func (p *Process) libcFchdir(fd uint32) uint32 {
 	}
 
 	if d == nil {
-		return p.result(0, syscall.ENOTDIR)
+		return p.result(0, eNotdir)
 	}
 
 	d.ref()
@@ -6299,7 +6170,7 @@ func (p *Process) cwdPath() (string, error) {
 	cwd, err := p.cwd.path(p)
 
 	if err == nil && len(cwd) >= 4096 {
-		err = syscall.ENAMETOOLONG
+		err = eNametoolong
 	}
 
 	return cwd, err
@@ -6316,14 +6187,14 @@ func (p *Process) libcGetcwd(buf, size uint32) uint32 {
 		at := p.newString(cwd)
 
 		if at == 0 {
-			return p.pointer(0, syscall.ENOMEM)
+			return p.pointer(0, eNomem)
 		}
 
 		return p.pointer(at, nil)
 	}
 
 	if uint32(len(cwd)) >= size {
-		return p.pointer(0, syscall.ERANGE)
+		return p.pointer(0, eRange)
 	}
 
 	p.putString(buf, cwd)
@@ -6349,7 +6220,7 @@ func (p *Process) libcUnlink(path uint32) uint32 {
 
 func (p *Process) libcUnlinkat(dirfd, path, flags uint32) uint32 {
 	if flags&^atRemovedir != 0 {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	return p.result(0, p.remove(int32(dirfd), p.str(path), flags&atRemovedir != 0))
@@ -6358,7 +6229,7 @@ func (p *Process) libcUnlinkat(dirfd, path, flags uint32) uint32 {
 func (p *Process) libcRemove(path uint32) uint32 {
 	err := p.remove(atFdcwd, p.str(path), false)
 
-	if err == syscall.EISDIR || err == syscall.EPERM {
+	if err == eIsdir || err == ePerm {
 		err = p.remove(atFdcwd, p.str(path), true)
 	}
 
@@ -6379,7 +6250,7 @@ func (p *Process) libcLink(old, new uint32) uint32 {
 
 func (p *Process) libcLinkat(olddir, old, newdir, new, flags uint32) uint32 {
 	if flags&^atSymlinkFollow != 0 {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	return p.result(0, p.link(int32(olddir), p.str(old), int32(newdir), p.str(new), flags&atSymlinkFollow != 0))
@@ -6395,7 +6266,7 @@ func (p *Process) libcSymlinkat(target, dirfd, path uint32) uint32 {
 
 func (p *Process) readlinkAt(dirfd int32, path string, buf, size uint32) (int, error) {
 	if p.chaosFail("readlink") {
-		return 0, syscall.EIO
+		return 0, eIo
 	}
 
 	var target string
@@ -6436,7 +6307,7 @@ func (p *Process) libcReadlinkat(dirfd, path, buf, size uint32) uint32 {
 	l := obj.asLink()
 
 	if l == nil {
-		return p.result(0, syscall.ENOENT)
+		return p.result(0, eNoent)
 	}
 
 	target, err := l.readlink(p)
@@ -6459,7 +6330,7 @@ func (p *Process) realpath(path string) (string, error) {
 	})
 
 	if err == nil && len(out) >= 4096 {
-		err = syscall.ENAMETOOLONG
+		err = eNametoolong
 	}
 
 	return out, err
@@ -6475,7 +6346,7 @@ func (p *Process) libcCanonicalize_file_name(path uint32) uint32 {
 	at := p.newString(guest)
 
 	if at == 0 {
-		return p.pointer(0, syscall.ENOMEM)
+		return p.pointer(0, eNomem)
 	}
 
 	return p.pointer(at, nil)
@@ -6491,14 +6362,14 @@ func (p *Process) libcGet_current_dir_name() uint32 {
 	at := p.newString(cwd)
 
 	if at == 0 {
-		return p.pointer(0, syscall.ENOMEM)
+		return p.pointer(0, eNomem)
 	}
 
 	return p.pointer(at, nil)
 }
 
 func (p *Process) libcCreat(path, mode uint32) uint32 {
-	f, err := p.openPath(p.str(path), syscall.O_WRONLY|syscall.O_CREAT|syscall.O_TRUNC, mode&0o7777&^p.umask)
+	f, err := p.openPath(p.str(path), oWronly|oCreat|oTrunc, mode&0o7777&^p.umask)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6516,7 +6387,7 @@ func (p *Process) libcEuidaccess(path, mode uint32) uint32 {
 }
 
 func (p *Process) libcStatfs(path, at uint32) uint32 {
-	var st syscall.Statfs_t
+	var st Statfs
 
 	err := p.statfsPath(p.str(path), &st)
 
@@ -6534,7 +6405,7 @@ func (p *Process) libcFstatfs(fd, at uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	var st syscall.Statfs_t
+	var st Statfs
 
 	if err := n.statfs(p, &st); err != nil {
 		return p.result(0, err)
@@ -6556,7 +6427,7 @@ func (p *Process) libcRealpath(path, resolved uint32) uint32 {
 		resolved = p.newString(guest)
 
 		if resolved == 0 {
-			return p.pointer(0, syscall.ENOMEM)
+			return p.pointer(0, eNomem)
 		}
 
 		return p.pointer(resolved, nil)
@@ -6614,10 +6485,10 @@ func (p *Process) libcLutimes(path, times uint32) uint32 {
 }
 
 func (p *Process) libcUtime(path, times uint32) uint32 {
-	var ts []syscall.Timespec
+	var ts []Timespec
 
 	if times != 0 {
-		ts = []syscall.Timespec{{Sec: int64(p.u64(times))}, {Sec: int64(p.u64(times + 8))}}
+		ts = []Timespec{{Sec: int64(p.u64(times))}, {Sec: int64(p.u64(times + 8))}}
 	}
 
 	return p.result(0, p.utimens(atFdcwd, p.str(path), ts, true))
@@ -6676,16 +6547,16 @@ func (p *Process) libcMkdtemp(template uint32) uint32 {
 
 func (p *Process) libcMktemp(template uint32) uint32 {
 	err := p.temporary(template, 0, func(path string) error {
-		var st syscall.Stat_t
+		var st Stat
 
 		err := p.statPath(path, false, &st)
 
-		if err == syscall.ENOENT {
+		if err == eNoent {
 			return nil
 		}
 
 		if err == nil {
-			return syscall.EEXIST
+			return eExist
 		}
 
 		return err
@@ -6699,7 +6570,7 @@ func (p *Process) libcMktemp(template uint32) uint32 {
 	return p.pointer(template, nil)
 }
 
-func (p *Process) timevals(at uint32) []syscall.Timespec {
+func (p *Process) timevals(at uint32) []Timespec {
 	if at == 0 {
 		return nil
 	}
@@ -6707,17 +6578,17 @@ func (p *Process) timevals(at uint32) []syscall.Timespec {
 	b := p.span(at, 32)
 	le := binary.LittleEndian
 
-	var ts []syscall.Timespec
+	var ts []Timespec
 
 	for i := range 2 {
-		ts = append(ts, syscall.Timespec{Sec: int64(le.Uint64(b[16*i:])), Nsec: 1000 * int64(le.Uint64(b[16*i+8:]))})
+		ts = append(ts, Timespec{Sec: int64(le.Uint64(b[16*i:])), Nsec: 1000 * int64(le.Uint64(b[16*i+8:]))})
 	}
 
 	return ts
 }
 
 func (p *Process) stat(path, at uint32, follow bool) uint32 {
-	var st syscall.Stat_t
+	var st Stat
 
 	err := p.statPath(p.str(path), follow, &st)
 
@@ -6734,7 +6605,7 @@ func (p *Process) chown(path, uid, gid uint32, follow bool) uint32 {
 	}))
 }
 
-func (p *Process) utimens(dirfd int32, path string, ts []syscall.Timespec, follow bool) error {
+func (p *Process) utimens(dirfd int32, path string, ts []Timespec, follow bool) error {
 	return p.onPath(dirfd, path, func(d Dir) error {
 		return d.utimesPath(p, path, ts, follow)
 	})
@@ -6745,7 +6616,7 @@ func (p *Process) temporary(template, suffix uint32, create func(path string) er
 	end := len(t) - int(suffix)
 
 	if int(suffix) > len(t) || end < 6 || string(t[end-6:end]) != "XXXXXX" {
-		return syscall.EINVAL
+		return eInval
 	}
 
 	for range 100 {
@@ -6753,22 +6624,22 @@ func (p *Process) temporary(template, suffix uint32, create func(path string) er
 			t[i] = tempLetters[mathrand.IntN(len(tempLetters))]
 		}
 
-		if err := create(string(t)); err != syscall.EEXIST {
+		if err := create(string(t)); err != eExist {
 			return err
 		}
 	}
 
-	return syscall.EEXIST
+	return eExist
 }
 
 func (p *Process) mkstemp(template, suffix, flags uint32) uint32 {
 	fd := -1
 
 	err := p.temporary(template, suffix, func(path string) error {
-		f, err := p.openPath(path, syscall.O_RDWR|syscall.O_CREAT|syscall.O_EXCL|int(flags&^syscall.O_CLOEXEC), 0o600)
+		f, err := p.openPath(path, oRdwr|oCreat|oExcl|int(flags&^oCloexec), 0o600)
 
 		if err == nil {
-			fd, err = p.install(f, 0, flags&syscall.O_CLOEXEC != 0)
+			fd, err = p.install(f, 0, flags&oCloexec != 0)
 		}
 
 		return err
@@ -6778,7 +6649,7 @@ func (p *Process) mkstemp(template, suffix, flags uint32) uint32 {
 }
 
 func (p *Process) libcOpendir(path uint32) uint32 {
-	f, err := p.openPath(p.str(path), syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	f, err := p.openPath(p.str(path), oRdonly|oDirectory, 0)
 
 	if err != nil {
 		return p.pointer(0, err)
@@ -6795,7 +6666,7 @@ func (p *Process) libcOpendir(path uint32) uint32 {
 	if dir == 0 {
 		p.closeFd(fd)
 
-		return p.pointer(0, syscall.ENOMEM)
+		return p.pointer(0, eNomem)
 	}
 
 	return p.pointer(dir, nil)
@@ -6821,20 +6692,20 @@ func (p *Process) libcFdopendir(fd uint32) uint32 {
 		return p.pointer(0, err)
 	}
 
-	var st syscall.Stat_t
+	var st Stat
 
 	if err := statFile(p, obj, &st); err != nil {
 		return p.pointer(0, err)
 	}
 
-	if obj.asDir() == nil || st.Mode&syscall.S_IFMT != syscall.S_IFDIR {
-		return p.pointer(0, syscall.ENOTDIR)
+	if obj.asDir() == nil || st.Mode&sIfmt != sIfdir {
+		return p.pointer(0, eNotdir)
 	}
 
 	dir := p.newDir(int(fd))
 
 	if dir == 0 {
-		return p.pointer(0, syscall.ENOMEM)
+		return p.pointer(0, eNomem)
 	}
 
 	p.files.slots[fd].cloexec = true
@@ -6898,7 +6769,7 @@ func (p *Process) libcClosedir(dir uint32) uint32 {
 	p.free(dir)
 
 	if !p.closeFd(int(fd)) {
-		return p.result(0, syscall.EBADF)
+		return p.result(0, eBadf)
 	}
 
 	return p.result(0, nil)
@@ -6913,7 +6784,7 @@ func (p *Process) libcLstat(path, at uint32) uint32 {
 }
 
 func (p *Process) libcAcct(path uint32) uint32 {
-	return p.result(0, syscall.EPERM)
+	return p.result(0, ePerm)
 }
 
 func (p *Process) libcChown(path, uid, gid uint32) uint32 {
@@ -6966,9 +6837,9 @@ func (p *Process) libcMount(source, target, fstype, flags, data uint32) uint32 {
 	}
 
 	err := p.onPath(atFdcwd, ".", func(v Dir) error {
-		var st syscall.Stat_t
+		var st Stat
 
-		if v.statPath(p, from, true, &st) != nil || st.Mode&syscall.S_IFMT != syscall.S_IFSOCK {
+		if v.statPath(p, from, true, &st) != nil || st.Mode&sIfmt != sIfsock {
 			return v.mountPath(p, to, from, nil)
 		}
 
@@ -6998,10 +6869,10 @@ func (p *Process) libcUmount(target uint32) uint32 {
 	return p.libcUmount2(target, 0)
 }
 
-func (p *Process) openFifo(st *syscall.Stat_t, flags int) (Object, error) {
-	access := flags & syscall.O_ACCMODE
-	reads, writes := access != syscall.O_WRONLY, access != syscall.O_RDONLY
-	nonblock := flags&syscall.O_NONBLOCK != 0
+func (p *Process) openFifo(st *Stat, flags int) (Object, error) {
+	access := flags & oAccmode
+	reads, writes := access != oWronly, access != oRdonly
+	nonblock := flags&oNonblock != 0
 	key := FileKey{st.Dev, st.Ino}
 	k := p.k
 
@@ -7030,7 +6901,7 @@ func (p *Process) openFifo(st *syscall.Stat_t, flags int) (Object, error) {
 
 			k.mu.Unlock()
 
-			return nil, syscall.ENXIO
+			return nil, eNxio
 		}
 	}
 
@@ -7059,8 +6930,8 @@ func (p *Process) openFifo(st *syscall.Stat_t, flags int) (Object, error) {
 }
 
 func (p *Process) pipe(at, flags uint32) uint32 {
-	if flags&^(syscall.O_CLOEXEC|syscall.O_NONBLOCK) != 0 {
-		return p.result(0, syscall.EINVAL)
+	if flags&^(oCloexec|oNonblock) != 0 {
+		return p.result(0, eInval)
 	}
 
 	pp := newPipe()
@@ -7068,13 +6939,13 @@ func (p *Process) pipe(at, flags uint32) uint32 {
 	pp.readers, pp.writers = 1, 1
 
 	ends := [2]*PipeEnd{{pipe: pp, reads: true}, {pipe: pp, writes: true}}
-	cloexec := flags&syscall.O_CLOEXEC != 0
+	cloexec := flags&oCloexec != 0
 
 	var fds [2]int
 
 	for i, e := range ends {
 		e.refs.Store(1)
-		e.nonblock.Store(flags&syscall.O_NONBLOCK != 0)
+		e.nonblock.Store(flags&oNonblock != 0)
 
 		fd, err := p.install(e, 0, cloexec)
 
@@ -7098,20 +6969,20 @@ func (p *Process) pipe(at, flags uint32) uint32 {
 }
 
 func (p *Process) libcMemfd_create(at, n, flags uint32) uint32 {
-	mode := int(flags & syscall.O_ACCMODE)
+	mode := int(flags & oAccmode)
 
-	if flags&^(syscall.O_ACCMODE|syscall.O_CLOEXEC) != 0 || mode == syscall.O_ACCMODE {
-		return p.result(0, syscall.EINVAL)
+	if flags&^(oAccmode|oCloexec) != 0 || mode == oAccmode {
+		return p.result(0, eInval)
 	}
 
 	i := p.inst
 
 	if i.memory == nil || uint64(at)+uint64(n) > i.memory.pages*pageSize {
-		return p.result(0, syscall.EFAULT)
+		return p.result(0, eFault)
 	}
 
 	f := newMemfd(i, i.memory.data[at:at+n:at+n], mode)
-	fd, err := p.install(f, 0, flags&syscall.O_CLOEXEC != 0)
+	fd, err := p.install(f, 0, flags&oCloexec != 0)
 
 	if err != nil {
 		f.unref()
@@ -7143,15 +7014,15 @@ func (p *Process) putAddress(addr []byte, at, lenAt uint32) {
 
 func (p *Process) libcSocket(domain, kind, protocol uint32) uint32 {
 	if domain != afUnix {
-		return p.result(0, syscall.EAFNOSUPPORT)
+		return p.result(0, eAfnosupport)
 	}
 
 	if kind&^(sockTypeMask|sockNonblock|sockCloexec) != 0 {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	if protocol != 0 {
-		return p.result(0, syscall.EPROTONOSUPPORT)
+		return p.result(0, eProtonosupport)
 	}
 
 	nonblock, cloexec := kind&sockNonblock != 0, kind&sockCloexec != 0
@@ -7163,20 +7034,20 @@ func (p *Process) libcSocket(domain, kind, protocol uint32) uint32 {
 		return p.result(p.install(newUnixDgram(nonblock), 0, cloexec))
 	}
 
-	return p.result(0, syscall.ESOCKTNOSUPPORT)
+	return p.result(0, eSocktnosupport)
 }
 
 func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 	if domain != afUnix {
-		return p.result(0, syscall.EOPNOTSUPP)
+		return p.result(0, eOpnotsupp)
 	}
 
 	if kind&^(sockTypeMask|sockNonblock|sockCloexec) != 0 {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	if protocol != 0 {
-		return p.result(0, syscall.EPROTONOSUPPORT)
+		return p.result(0, eProtonosupport)
 	}
 
 	base := int(kind & sockTypeMask)
@@ -7190,7 +7061,7 @@ func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 	case sockRaw:
 		base = sockDgram
 	default:
-		return p.result(0, syscall.ESOCKTNOSUPPORT)
+		return p.result(0, eSocktnosupport)
 	}
 
 	a, b := newPairOf(base, kind&sockNonblock != 0)
@@ -7393,7 +7264,7 @@ func (p *Process) libcSockatmark(fd uint32) uint32 {
 		return p.result(0, nil)
 	}
 
-	return p.result(0, syscall.EOPNOTSUPP)
+	return p.result(0, eOpnotsupp)
 }
 
 func (p *Process) socketAccept(fd, addr, lenAt, flags uint32) uint32 {
@@ -7404,7 +7275,7 @@ func (p *Process) socketAccept(fd, addr, lenAt, flags uint32) uint32 {
 	}
 
 	if flags&^(sockNonblock|sockCloexec) != 0 {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	if err := p.descriptorFree(); err != nil {
@@ -7466,7 +7337,7 @@ func (p *Process) rights(at, n uint32) ([]Object, *Ucred, error) {
 		length := p.u32(at + off)
 
 		if length < guestCmsgHeader || off+length > n {
-			return nil, nil, syscall.EINVAL
+			return nil, nil, eInval
 		}
 
 		level, kind := p.u32(at+off+4), p.u32(at+off+8)
@@ -7491,12 +7362,12 @@ func (p *Process) rights(at, n uint32) ([]Object, *Ucred, error) {
 			c := Ucred{binary.LittleEndian.Uint32(data), binary.LittleEndian.Uint32(data[4:]), binary.LittleEndian.Uint32(data[8:])}
 
 			if !p.cred.privileged() && (c.pid != uint32(p.pid) || !slices.Contains(p.cred.uids[:], c.uid) || !slices.Contains(p.cred.gids[:], c.gid)) {
-				return nil, nil, syscall.EPERM
+				return nil, nil, ePerm
 			}
 
 			cred = &c
 		default:
-			return nil, nil, syscall.EINVAL
+			return nil, nil, eInval
 		}
 
 		off += guestAlign(length)
@@ -7549,13 +7420,13 @@ func (p *Process) putRights(files []Object, at, room uint32, cloexec bool) (uint
 
 func (p *Process) unixSocketPath(at, n uint32) (string, error) {
 	if n <= 2 || n > sockaddrMax || p.u16(at) != afUnix {
-		return "", syscall.EINVAL
+		return "", eInval
 	}
 
 	path := p.span(at+2, n-2)
 
 	if path[0] == 0 {
-		return "", syscall.EOPNOTSUPP
+		return "", eOpnotsupp
 	}
 
 	if i := bytes.IndexByte(path, 0); i >= 0 {
@@ -7563,7 +7434,7 @@ func (p *Process) unixSocketPath(at, n uint32) (string, error) {
 	}
 
 	if len(path) == 0 || len(path) >= sunPathMax {
-		return "", syscall.EINVAL
+		return "", eInval
 	}
 
 	return string(path), nil
@@ -7582,10 +7453,10 @@ func (p *Process) connectUnix(v Dir, path string, kind int, nonblock bool, to *a
 		f.unref()
 
 		if f.asPair() != nil || l != nil {
-			return nil, syscall.EPROTOTYPE
+			return nil, ePrototype
 		}
 
-		return nil, syscall.ECONNREFUSED
+		return nil, eConnrefused
 	}
 
 	defer l.unref()
@@ -7607,12 +7478,12 @@ func (p *Process) connectUnix(v Dir, path string, kind int, nonblock bool, to *a
 			if timedOut, err = l.conns.writable(p, func() bool { return !l.listens() }, end, how); err == nil && !timedOut {
 				continue
 			} else if err == nil {
-				err = syscall.EAGAIN
+				err = eAgain
 			}
 		} else if refused {
-			err = syscall.ECONNREFUSED
+			err = eConnrefused
 		} else {
-			err = syscall.EAGAIN
+			err = eAgain
 		}
 
 		mine.unref()
@@ -7640,7 +7511,7 @@ func (p *Process) mouthOf(path string) (*PairEnd, error) {
 
 		f.unref()
 
-		return syscall.EPROTOTYPE
+		return ePrototype
 	})
 
 	return mouth, err
@@ -7665,23 +7536,23 @@ func (p *Process) epollAt(fd uint32) (*Epoll, error) {
 		return ep, nil
 	}
 
-	return nil, syscall.EINVAL
+	return nil, eInval
 }
 
 func (p *Process) libcEpoll_create(size uint32) uint32 {
 	if int32(size) <= 0 {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	return p.result(p.install(newEpoll(), 0, false))
 }
 
 func (p *Process) libcEpoll_create1(flags uint32) uint32 {
-	if flags&^syscall.O_CLOEXEC != 0 {
-		return p.result(0, syscall.EINVAL)
+	if flags&^oCloexec != 0 {
+		return p.result(0, eInval)
 	}
 
-	return p.result(p.install(newEpoll(), 0, flags&syscall.O_CLOEXEC != 0))
+	return p.result(p.install(newEpoll(), 0, flags&oCloexec != 0))
 }
 
 func (p *Process) libcEpoll_ctl(epfd, op, fd, at uint32) uint32 {
@@ -7698,7 +7569,7 @@ func (p *Process) libcEpoll_ctl(epfd, op, fd, at uint32) uint32 {
 	}
 
 	if fd == epfd {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	var events uint32
@@ -7706,7 +7577,7 @@ func (p *Process) libcEpoll_ctl(epfd, op, fd, at uint32) uint32 {
 
 	if op != epollCtlDel {
 		if at == 0 {
-			return p.result(0, syscall.EFAULT)
+			return p.result(0, eFault)
 		}
 
 		b := p.span(at, epollEventSize)
@@ -7719,7 +7590,7 @@ func (p *Process) libcEpoll_ctl(epfd, op, fd, at uint32) uint32 {
 
 func (p *Process) epollWait(epfd, at, max uint32, timeout int) (int, error) {
 	if int32(max) <= 0 || max > epollMaxEvents {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	ep, err := p.epollAt(epfd)
@@ -7753,7 +7624,7 @@ func (p *Process) opened(pk *Packet) (Object, error) {
 	if len(pk.data) != sizeofOpened || end == nil || end.shared.kind != sockSeqpacket {
 		f.unref()
 
-		return nil, syscall.EIO
+		return nil, eIo
 	}
 
 	b := pk.data
@@ -7764,7 +7635,7 @@ func (p *Process) opened(pk *Packet) (Object, error) {
 	if err != nil {
 		f.unref()
 
-		return nil, syscall.EIO
+		return nil, eIo
 	}
 
 	return obj, nil
@@ -7789,9 +7660,9 @@ func (p *Process) disconnect() {
 	}
 }
 
-func (p *Process) permits(st *syscall.Stat_t, want uint32) bool {
+func (p *Process) permits(st *Stat, want uint32) bool {
 	if p.cred.privileged() {
-		return want&1 == 0 || st.Mode&syscall.S_IFMT == syscall.S_IFDIR || st.Mode&0o111 != 0
+		return want&1 == 0 || st.Mode&sIfmt == sIfdir || st.Mode&0o111 != 0
 	}
 
 	bits := st.Mode
@@ -7840,13 +7711,13 @@ func (p *Process) openControlling(flags int) (Object, error) {
 	p.k.mu.Unlock()
 
 	if c == nil {
-		return nil, syscall.ENXIO
+		return nil, eNxio
 	}
 
 	defer c.unref()
 
 	if _, _, hungUp := c.jobs(); hungUp {
-		return nil, syscall.ENXIO
+		return nil, eNxio
 	}
 
 	return c.reopen(p, flags)
@@ -7873,7 +7744,7 @@ func (p *Process) shrugs(sig int) bool {
 	return p.sig.actions[sig].handler == sigIgn || p.sig.blocked&sigBit(sig) != 0
 }
 
-func (p *Process) background(t Terminal, sig syscall.Signal) error {
+func (p *Process) background(t Terminal, sig int) error {
 	for {
 		foreground, _, _ := t.jobs()
 
@@ -7887,22 +7758,22 @@ func (p *Process) background(t Terminal, sig syscall.Signal) error {
 			return nil
 		}
 
-		if p.shrugs(int(sig)) {
-			if sig == syscall.SIGTTIN {
-				return syscall.EIO
+		if p.shrugs(sig) {
+			if sig == sigTtin {
+				return eIo
 			}
 
 			return nil
 		}
 
 		if p.k.orphaned(pgid) {
-			return syscall.EIO
+			return eIo
 		}
 
-		p.k.signalGroup(pgid, int(sig))
+		p.k.signalGroup(pgid, sig)
 
 		if !p.interrupted() {
-			return syscall.EINTR
+			return eIntr
 		}
 	}
 }
@@ -7911,7 +7782,7 @@ func (p *Process) changeAt(fd uint32) (Terminal, error) {
 	t, err := p.terminalAt(fd)
 
 	if err == nil {
-		err = p.background(t, syscall.SIGTTOU)
+		err = p.background(t, sigTtou)
 	}
 
 	return t, err
@@ -7938,10 +7809,10 @@ func (p *Process) leaveSession(going bool) {
 	t.control(p, 0, 0)
 
 	if foreground > 0 {
-		p.k.signalGroup(foreground, int(syscall.SIGHUP))
+		p.k.signalGroup(foreground, sigHup)
 
 		if !going {
-			p.k.signalGroup(foreground, int(syscall.SIGCONT))
+			p.k.signalGroup(foreground, sigCont)
 		}
 	}
 
@@ -7958,7 +7829,7 @@ func (p *Process) terminalAt(fd uint32) (Terminal, error) {
 	t := f.asTerminal()
 
 	if t == nil {
-		return nil, syscall.ENOTTY
+		return nil, eNotty
 	}
 
 	return t, nil
@@ -8000,7 +7871,7 @@ func (p *Process) libcTcsetattr(fd, action, at uint32) uint32 {
 
 func (p *Process) tcsetattr(fd, action, at uint32) error {
 	if action > 2 {
-		return syscall.EINVAL
+		return eInval
 	}
 
 	t, err := p.changeAt(fd)
@@ -8049,9 +7920,9 @@ func (p *Process) libcTcsendbreak(fd, duration uint32) uint32 {
 }
 
 func (p *Process) libcTcgetpgrp(fd uint32) uint32 {
-	if t, err := p.terminalAt(fd); err != syscall.ENOTTY {
+	if t, err := p.terminalAt(fd); err != eNotty {
 		if err == nil && !p.isCtty(t) && !isMaster(p, t) {
-			err = syscall.ENOTTY
+			err = eNotty
 		}
 
 		if err != nil {
@@ -8074,22 +7945,22 @@ func (p *Process) libcTcsetpgrp(fd, pgrp uint32) uint32 {
 	t, err := p.terminalAt(fd)
 
 	switch {
-	case err == syscall.ENOTTY:
+	case err == eNotty:
 		err = p.consoleAt(fd)
 		t = nil
 	case err == nil && !p.isCtty(t):
-		err = syscall.ENOTTY
+		err = eNotty
 	case err == nil:
-		err = p.background(t, syscall.SIGTTOU)
+		err = p.background(t, sigTtou)
 	}
 
 	switch {
 	case err != nil:
 		return p.result(0, err)
 	case int32(pgrp) < 0:
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	case !p.groupExists(int32(pgrp)):
-		return p.result(0, syscall.EPERM)
+		return p.result(0, ePerm)
 	case t != nil:
 		return p.result(0, t.setForeground(p, pgrp))
 	}
@@ -8105,7 +7976,7 @@ func (p *Process) libcTcgetsid(fd uint32) uint32 {
 	t, err := p.terminalAt(fd)
 
 	if err == nil && !p.isCtty(t) {
-		err = syscall.ENOTTY
+		err = eNotty
 	}
 
 	if err != nil {
@@ -8137,7 +8008,7 @@ func (p *Process) controls(t Terminal) error {
 	case leads && c != nil && sameTerminal(c, t):
 		return nil
 	case !leads || c != nil:
-		return syscall.EPERM
+		return ePerm
 	}
 
 	if err := t.control(p, sid, pgid); err != nil {
@@ -8154,7 +8025,7 @@ func (p *Process) controls(t Terminal) error {
 
 func (p *Process) notty(t Terminal) error {
 	if !p.isCtty(t) {
-		return syscall.ENOTTY
+		return eNotty
 	}
 
 	p.leaveSession(false)
@@ -8175,7 +8046,7 @@ func (p *Process) terminalIoctl(t Terminal, fd, req, va uint32) (uint32, bool) {
 	case tcxonc:
 		return p.libcTcflow(fd, arg), true
 	case tcsbrk:
-		if err := p.background(t, syscall.SIGTTOU); err != nil || arg == 0 {
+		if err := p.background(t, sigTtou); err != nil || arg == 0 {
 			return p.result(0, err), true
 		}
 
@@ -8244,13 +8115,13 @@ func (p *Process) slaveNumber(t Terminal) (int, error) {
 	n, err := strconv.Atoi(strings.TrimPrefix(name, "/dev/pts/"))
 
 	if err != nil {
-		return 0, syscall.EIO
+		return 0, eIo
 	}
 
 	return n, nil
 }
 
-func (p *Process) terminalName(fd uint32) (string, syscall.Errno) {
+func (p *Process) terminalName(fd uint32) (string, Errno) {
 	t, err := p.terminalAt(fd)
 
 	if err == nil {
@@ -8303,7 +8174,7 @@ func (p *Process) libcPtsname_r(fd, buf, size uint32) uint32 {
 	case err != nil:
 		return uint32(errnoOf(err))
 	case uint32(len(name)) >= size:
-		return uint32(syscall.ERANGE)
+		return uint32(eRange)
 	}
 
 	p.putString(buf, name)
@@ -8322,7 +8193,7 @@ func (p *Process) ptsname(fd uint32) (string, error) {
 }
 
 func (p *Process) openPty(termp, winp uint32) (int, int, string, error) {
-	master, err := p.open(atFdcwd, "/dev/pty", syscall.O_RDWR|syscall.O_NOCTTY, 0)
+	master, err := p.open(atFdcwd, "/dev/pty", oRdwr|oNoctty, 0)
 
 	if err != nil {
 		return 0, 0, "", err
@@ -8332,7 +8203,7 @@ func (p *Process) openPty(termp, winp uint32) (int, int, string, error) {
 	slave := 0
 
 	if err == nil {
-		slave, err = p.open(atFdcwd, name, syscall.O_RDWR|syscall.O_NOCTTY, 0)
+		slave, err = p.open(atFdcwd, name, oRdwr|oNoctty, 0)
 	}
 
 	if err == nil && termp != 0 {
@@ -8432,7 +8303,7 @@ func (p *Process) libcForkpty(amaster, name, termp, winp uint32) uint32 {
 }
 
 func (p *Process) libcGetpass(prompt uint32) uint32 {
-	fd, err := p.open(atFdcwd, "/dev/tty", syscall.O_RDWR|syscall.O_NOCTTY|syscall.O_CLOEXEC, 0)
+	fd, err := p.open(atFdcwd, "/dev/tty", oRdwr|oNoctty|oCloexec, 0)
 
 	if err != nil {
 		p.setErrno(errnoOf(err))
@@ -8455,7 +8326,7 @@ func (p *Process) libcGetpass(prompt uint32) uint32 {
 	}
 
 	if p.passwordAt == 0 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 
 		return 0
 	}
@@ -8522,7 +8393,7 @@ func (p *Process) timespec(at uint32) (time.Duration, error) {
 	sec, nsec := int64(p.u64(at)), int64(int32(p.u32(at+8)))
 
 	if sec < 0 || nsec < 0 || nsec >= 1e9 {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	return time.Duration(min(sec, 1<<33))*time.Second + time.Duration(nsec), nil
@@ -8532,7 +8403,7 @@ func (p *Process) timeval(at uint32) (time.Duration, error) {
 	sec, usec := int64(p.u64(at)), int64(p.u64(at+8))
 
 	if sec < 0 || usec < 0 || usec >= 1e6 {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	return time.Duration(min(sec, 1<<33))*time.Second + time.Duration(usec)*time.Microsecond, nil
@@ -8769,7 +8640,7 @@ func (p *Process) localtime(t, at uint32) uint32 {
 	p.tzset()
 
 	if !p.writeTm(at, time.Unix(int64(p.u64(t)), 0).In(p.location())) {
-		p.setErrno(syscall.EOVERFLOW)
+		p.setErrno(eOverflow)
 
 		return 0
 	}
@@ -8781,7 +8652,7 @@ func (p *Process) libcAsctime(tm uint32) uint32 {
 	s, ok := asctime(p.readTm(tm))
 
 	if !ok {
-		p.setErrno(syscall.EOVERFLOW)
+		p.setErrno(eOverflow)
 
 		return 0
 	}
@@ -8797,7 +8668,7 @@ func (p *Process) libcAsctime_r(tm, buf uint32) uint32 {
 	s, ok := asctime(p.readTm(tm))
 
 	if !ok {
-		p.setErrno(syscall.EOVERFLOW)
+		p.setErrno(eOverflow)
 
 		return 0
 	}
@@ -8811,7 +8682,7 @@ func (p *Process) libcCtime_r(t, buf uint32) uint32 {
 	s, ok := asctime(tmOf(time.Unix(int64(p.u64(t)), 0).In(p.location())))
 
 	if !ok {
-		p.setErrno(syscall.EOVERFLOW)
+		p.setErrno(eOverflow)
 
 		return 0
 	}
@@ -8830,7 +8701,7 @@ func (p *Process) libcTimegm(at uint32) uint64 {
 	t := time.Date(tm.year+1900, time.Month(tm.mon+1), tm.mday, tm.hour, tm.min, tm.sec, 0, time.UTC)
 
 	if !p.writeTm(at, t) {
-		p.setErrno(syscall.EOVERFLOW)
+		p.setErrno(eOverflow)
 
 		return math.MaxUint64
 	}
@@ -8842,7 +8713,7 @@ func (p *Process) libcUsleep(us uint32) uint32 {
 	left := p.sleep(time.Duration(us) * time.Microsecond)
 
 	if left > 0 {
-		return p.result(0, syscall.EINTR)
+		return p.result(0, eIntr)
 	}
 
 	return p.result(0, nil)
@@ -8859,14 +8730,14 @@ func (p *Process) libcGmtime(t uint32) uint32 {
 }
 
 func (p *Process) libcClock() uint64 {
-	return uint64(clockGettime(clockProcessCputime) / time.Microsecond)
+	return uint64(clockGettime(hostClockProcessCputime) / time.Microsecond)
 }
 
 func (p *Process) libcClock_getres(clock, res uint32) uint32 {
 	host, ok := hostClock(clock)
 
 	if !ok {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	var t syscall.Timespec
@@ -8884,19 +8755,19 @@ func (p *Process) libcClock_nanosleep(clock, flags, req, rem uint32) uint32 {
 	switch clock {
 	case clockRealtime, clockMonotonic, clockBoottime:
 	case clockProcessCputime:
-		return uint32(syscall.ENOTSUP)
+		return uint32(eNotsup)
 	default:
-		return uint32(syscall.EINVAL)
+		return uint32(eInval)
 	}
 
 	d, err := p.timespec(req)
 
 	if err != nil {
-		return uint32(syscall.EINVAL)
+		return uint32(eInval)
 	}
 
 	if flags&timerAbstime != 0 {
-		d -= clockGettime(uintptr(clock))
+		d -= clockGettime(hostClocks[clock])
 	}
 
 	left := p.sleep(d)
@@ -8906,7 +8777,7 @@ func (p *Process) libcClock_nanosleep(clock, flags, req, rem uint32) uint32 {
 			p.putTimespec(rem, left)
 		}
 
-		return uint32(syscall.EINTR)
+		return uint32(eIntr)
 	}
 
 	return 0
@@ -8914,7 +8785,7 @@ func (p *Process) libcClock_nanosleep(clock, flags, req, rem uint32) uint32 {
 
 func (p *Process) libcSetitimer(which, value, old uint32) uint32 {
 	if which > itimerProf {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	interval, err := p.timeval(value)
@@ -8941,7 +8812,7 @@ func (p *Process) libcSetitimer(which, value, old uint32) uint32 {
 
 func (p *Process) libcGetitimer(which, at uint32) uint32 {
 	if which > itimerProf {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	t := &p.timers[which]
@@ -8966,7 +8837,7 @@ func (p *Process) libcMktime(at uint32) uint64 {
 	t := time.Date(tm.year+1900, time.Month(tm.mon+1), tm.mday, tm.hour, tm.min, tm.sec, 0, p.location())
 
 	if !p.writeTm(at, t) {
-		p.setErrno(syscall.EOVERFLOW)
+		p.setErrno(eOverflow)
 
 		return math.MaxUint64
 	}
@@ -9013,7 +8884,7 @@ func (p *Process) libcTimes(at uint32) uint64 {
 	ticks, err := syscall.Times(&t)
 
 	if err != nil {
-		return p.result64(0, err)
+		return p.result64(0, hostErrno(err))
 	}
 
 	if at != 0 {
@@ -9048,7 +8919,7 @@ func (p *Process) clockNow(clock uint32) (int64, error) {
 	host, ok := hostClock(clock)
 
 	if !ok {
-		return 0, syscall.EINVAL
+		return 0, eInval
 	}
 
 	var t syscall.Timespec
@@ -9072,7 +8943,7 @@ func (p *Process) libcNanosleep(req, rem uint32) uint32 {
 			p.put32(rem+8, uint32(left%time.Second/time.Nanosecond))
 		}
 
-		return p.result(0, syscall.EINTR)
+		return p.result(0, eIntr)
 	}
 
 	return p.result(0, nil)
@@ -9083,7 +8954,7 @@ func (p *Process) gmtime(t, at uint32) uint32 {
 	u := time.Unix(sec, 0).UTC()
 
 	if !p.writeTm(at, u) {
-		p.setErrno(syscall.EOVERFLOW)
+		p.setErrno(eOverflow)
 
 		return 0
 	}
@@ -9110,7 +8981,7 @@ func (p *Process) sleep(d time.Duration) time.Duration {
 }
 
 func (p *Process) libcClock_settime(clock, ts uint32) uint32 {
-	return p.result(0, syscall.EPERM)
+	return p.result(0, ePerm)
 }
 
 func (p *Process) libcTzset() {
@@ -9118,15 +8989,15 @@ func (p *Process) libcTzset() {
 }
 
 func (p *Process) libcSettimeofday(tv, tz uint32) uint32 {
-	return p.result(0, syscall.EPERM)
+	return p.result(0, ePerm)
 }
 
 func (p *Process) libcStime(t uint32) uint32 {
-	return p.result(0, syscall.EPERM)
+	return p.result(0, ePerm)
 }
 
 func (p *Process) libcAdjtime(delta, old uint32) uint32 {
-	return p.result(0, syscall.EPERM)
+	return p.result(0, ePerm)
 }
 
 func (p *Process) libcGmtime_r(t, at uint32) uint32 {
@@ -9163,7 +9034,7 @@ func (p *Process) syslog(priority, message uint32) {
 
 func (p *Process) pathconf(name uint32) uint32 {
 	if name >= uint32(len(pathconfValues)) {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	return p.result(int(pathconfValues[name]), nil)
@@ -9173,7 +9044,7 @@ func (p *Process) sysinfo(at uint32) error {
 	var si syscall.Sysinfo_t
 
 	if err := syscall.Sysinfo(&si); err != nil {
-		return err
+		return hostErrno(err)
 	}
 
 	sizes := []uint64{si.Totalram, si.Freeram, si.Sharedram, si.Bufferram, si.Totalswap, si.Freeswap, si.Totalhigh, si.Freehigh}
@@ -9241,7 +9112,7 @@ func (p *Process) putRusage(at uint32, ru *syscall.Rusage) {
 
 func (p *Process) limitOf(q *Process, res, set, old uint32) error {
 	if res >= rlimitCount {
-		return syscall.EINVAL
+		return eInval
 	}
 
 	p.k.mu.Lock()
@@ -9254,11 +9125,11 @@ func (p *Process) limitOf(q *Process, res, set, old uint32) error {
 		l := Rlimit{p.u64(set), p.u64(set + 8)}
 
 		if l.cur > l.max {
-			return syscall.EINVAL
+			return eInval
 		}
 
 		if l.max > cur.max && !p.cred.privileged() {
-			return syscall.EPERM
+			return ePerm
 		}
 
 		q.limits[res] = l
@@ -9346,14 +9217,14 @@ func (p *Process) libcGetrusage(who, at uint32) uint32 {
 		var ru syscall.Rusage
 
 		if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err != nil {
-			return p.result(0, err)
+			return p.result(0, hostErrno(err))
 		}
 
 		p.putRusage(at, &ru)
 	case -1:
 		p.putRusage(at, nil)
 	default:
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	return p.result(0, nil)
@@ -9387,7 +9258,7 @@ func (p *Process) libcGetdtablesize() uint32 {
 
 func (p *Process) libcConfstr(name, buf, n uint32) uint32 {
 	if name != 0 {
-		p.setErrno(syscall.EINVAL)
+		p.setErrno(eInval)
 
 		return 0
 	}
@@ -9402,7 +9273,7 @@ func (p *Process) libcConfstr(name, buf, n uint32) uint32 {
 }
 
 func (p *Process) libcPathconf(path, name uint32) uint32 {
-	var st syscall.Stat_t
+	var st Stat
 
 	if err := p.statPath(p.str(path), true, &st); err != nil {
 		return p.result(0, err)
@@ -9430,9 +9301,9 @@ func (p *Process) libcGetlogin_r(buf, n uint32) uint32 {
 
 	switch {
 	case !ok:
-		return uint32(syscall.ENXIO)
+		return uint32(eNxio)
 	case uint32(len(name)) >= n:
-		return uint32(syscall.ERANGE)
+		return uint32(eRange)
 	}
 
 	p.putString(buf, name)
@@ -9469,7 +9340,7 @@ func (p *Process) libcTtyname_r(fd, buf, n uint32) uint32 {
 	case e != 0:
 		return uint32(e)
 	case uint32(len(name)) >= n:
-		return uint32(syscall.ERANGE)
+		return uint32(eRange)
 	}
 
 	p.putString(buf, name)
@@ -9620,7 +9491,7 @@ func (p *Process) daemon(nochdir, noclose uint32) uint32 {
 	}
 
 	if noclose == 0 {
-		obj, err := p.openPath("/dev/null", syscall.O_RDWR, 0)
+		obj, err := p.openPath("/dev/null", oRdwr, 0)
 
 		if err != nil {
 			return p.result(0, err)
@@ -9661,7 +9532,7 @@ func (p *Process) daemon(nochdir, noclose uint32) uint32 {
 		k.mu.Lock()
 		k.procs[old] = &Process{k: k, pid: old, ppid: parent.pid, pgid: parent.pgid, sid: parent.sid, zombie: true}
 		k.mu.Unlock()
-		parent.childChanged(int(syscall.SIGCHLD))
+		parent.childChanged(sigChld)
 	}
 
 	return p.result(0, nil)
@@ -9685,7 +9556,7 @@ func (p *Process) prctl(option, va uint32) uint32 {
 	switch option {
 	case prSetPdeathsig:
 		if arg != 0 && !validSignal(arg) {
-			return p.result(0, syscall.EINVAL)
+			return p.result(0, eInval)
 		}
 
 		p.k.mu.Lock()
@@ -9702,7 +9573,7 @@ func (p *Process) prctl(option, va uint32) uint32 {
 		return p.result(int(bit(!p.undumpable)), nil)
 	case prSetDumpable:
 		if arg > 1 {
-			return p.result(0, syscall.EINVAL)
+			return p.result(0, eInval)
 		}
 
 		p.undumpable = arg == 0
@@ -9717,14 +9588,14 @@ func (p *Process) prctl(option, va uint32) uint32 {
 		copy(b, p.name())
 	case prSetNoNewPrivs:
 		if arg != 1 {
-			return p.result(0, syscall.EINVAL)
+			return p.result(0, eInval)
 		}
 
 		p.noNewPrivs = true
 	case prGetNoNewPrivs:
 		return p.result(int(bit(p.noNewPrivs)), nil)
 	default:
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	return p.result(0, nil)
@@ -9828,7 +9699,7 @@ func (p *Process) libcEndusershell() {
 
 func (p *Process) libcGetentropy(buf, n uint32) uint32 {
 	if n > 256 {
-		return p.result(0, syscall.EIO)
+		return p.result(0, eIo)
 	}
 
 	rand.Read(p.span(buf, n))
@@ -9885,11 +9756,11 @@ func (p *Process) libcPrctl(option, va uint32) uint32 {
 }
 
 func (p *Process) libcVhangup() uint32 {
-	return p.result(0, syscall.EPERM)
+	return p.result(0, ePerm)
 }
 
 func (p *Process) libcSethostid(id uint32) uint32 {
-	return p.result(0, syscall.EPERM)
+	return p.result(0, ePerm)
 }
 
 func (p *Process) libcUname(at uint32) uint32 {
@@ -9934,7 +9805,7 @@ func (p *Process) libcGetdomainname(name, n uint32) uint32 {
 	p.k.names.mu.Unlock()
 
 	if uint32(len(domain)) >= n {
-		return p.result(0, syscall.EINVAL)
+		return p.result(0, eInval)
 	}
 
 	p.putString(name, domain)
@@ -9952,11 +9823,11 @@ func (p *Process) libcSetdomainname(name, n uint32) uint32 {
 
 func (p *Process) setName(to *string, name, n uint32) error {
 	if !p.cred.privileged() {
-		return syscall.EPERM
+		return ePerm
 	}
 
 	if n >= utsField {
-		return syscall.EINVAL
+		return eInval
 	}
 
 	text := string(p.span(name, n))
@@ -10106,7 +9977,7 @@ func (p *Process) passwdResult(e *PasswdEntry, pwd, buf, size, result uint32) ui
 	}
 
 	if e.size() > size {
-		return uint32(syscall.ERANGE)
+		return uint32(eRange)
 	}
 
 	p.putPasswd(pwd, buf, e)
@@ -10123,7 +9994,7 @@ func (p *Process) groupResult(e *GroupEntry, grp, buf, size, result uint32) uint
 	}
 
 	if e.size(buf) > size {
-		return uint32(syscall.ERANGE)
+		return uint32(eRange)
 	}
 
 	p.putGroup(grp, buf, e)
@@ -10141,7 +10012,7 @@ func (p *Process) staticResult(slot, size uint32) uint32 {
 	block := p.malloc(size)
 
 	if block == 0 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 
 		return 0
 	}
@@ -11157,7 +11028,7 @@ func (p *Process) libcInet_pton(family, s, dst uint32) uint32 {
 
 		copy(p.span(dst, 16), v[:])
 	default:
-		p.setErrno(syscall.EAFNOSUPPORT)
+		p.setErrno(eAfnosupport)
 
 		return ^uint32(0)
 	}
@@ -11174,13 +11045,13 @@ func (p *Process) libcInet_ntop(family, src, dst, size uint32) uint32 {
 	case afInet6:
 		text = netip.AddrFrom16([16]byte(p.span(src, 16))).String()
 	default:
-		p.setErrno(syscall.EAFNOSUPPORT)
+		p.setErrno(eAfnosupport)
 
 		return 0
 	}
 
 	if uint32(len(text)) >= size {
-		p.setErrno(syscall.ENOSPC)
+		p.setErrno(eNospc)
 
 		return 0
 	}
@@ -11235,7 +11106,7 @@ func (p *Process) libcIf_nametoindex(name uint32) uint32 {
 	index := interfaceIndex(p.str(name))
 
 	if index == 0 {
-		p.setErrno(syscall.ENXIO)
+		p.setErrno(eNxio)
 	}
 
 	return index
@@ -11243,7 +11114,7 @@ func (p *Process) libcIf_nametoindex(name uint32) uint32 {
 
 func (p *Process) libcIf_indextoname(index, buf uint32) uint32 {
 	if index == 0 || int(index) > len(interfaces) {
-		p.setErrno(syscall.ENXIO)
+		p.setErrno(eNxio)
 
 		return 0
 	}
@@ -11263,7 +11134,7 @@ func (p *Process) libcIf_nameindex() uint32 {
 	block := p.malloc(size)
 
 	if block == 0 {
-		p.setErrno(syscall.ENOBUFS)
+		p.setErrno(eNobufs)
 
 		return 0
 	}
@@ -11699,7 +11570,7 @@ func (p *Process) strndup(s, n uint32) uint32 {
 	at := p.malloc(l + 1)
 
 	if at == 0 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 
 		return 0
 	}
@@ -11830,7 +11701,7 @@ func (p *Process) libcAbs(n uint32) uint32 {
 func (p *Process) libcStrerror(e uint32) uint32 {
 	at := p.staticAt(staticStrerror)
 
-	p.putString(at, truncate(errorMessage(syscall.Errno(e)), staticStrsignal-staticStrerror-1))
+	p.putString(at, truncate(Errno(e).message(), staticStrsignal-staticStrerror-1))
 
 	return at
 }
@@ -11951,14 +11822,14 @@ func (p *Process) libcStrxfrm(d, s, n uint32) uint32 {
 }
 
 func (p *Process) libcStrerror_r(e, buf, n uint32) uint32 {
-	msg := errorMessage(syscall.Errno(e))
+	msg := Errno(e).message()
 
 	if uint32(len(msg)) >= n {
 		if n > 0 {
 			p.putString(buf, msg[:n-1])
 		}
 
-		return uint32(syscall.ERANGE)
+		return uint32(eRange)
 	}
 
 	p.putString(buf, msg)
@@ -12490,7 +12361,7 @@ func (p *Process) libcWcsdup(s uint32) uint32 {
 	n := p.wcslen(s) + 1
 
 	if uint64(n)*4 > heapMax {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 
 		return 0
 	}
@@ -12498,7 +12369,7 @@ func (p *Process) libcWcsdup(s uint32) uint32 {
 	at := p.malloc(4 * n)
 
 	if at == 0 {
-		p.setErrno(syscall.ENOMEM)
+		p.setErrno(eNomem)
 
 		return 0
 	}
@@ -12770,9 +12641,9 @@ func (p *Process) glob(pattern, flags, errfunc, out uint32) uint32 {
 
 	if flags&globMark != 0 {
 		for i, name := range g.found {
-			var st syscall.Stat_t
+			var st Stat
 
-			isDir := p.statPath(name, true, &st) == nil && st.Mode&syscall.S_IFMT == syscall.S_IFDIR
+			isDir := p.statPath(name, true, &st) == nil && st.Mode&sIfmt == sIfdir
 
 			if isDir && !strings.HasSuffix(name, "/") {
 				g.found[i] = name + "/"
@@ -12860,7 +12731,7 @@ func (p *Process) libcCrypt(key, setting uint32) uint32 {
 	}
 
 	if !ok {
-		p.setErrno(syscall.EINVAL)
+		p.setErrno(eInval)
 
 		return 0
 	}
@@ -12878,7 +12749,7 @@ func (p *Process) sized(call string, sizes ...uint32) {
 	for k := 0; k+1 < len(sizes); k += 2 {
 		if sizes[k] != sizes[k+1] {
 			p.crash(fmt.Sprintf("%s: a structure of %d bytes, which this kernel knows of %d", call, sizes[k], sizes[k+1]), callers(1))
-			p.exitWith(int(syscall.SIGSYS))
+			p.exitWith(sigSys)
 		}
 	}
 }
@@ -12886,7 +12757,7 @@ func (p *Process) sized(call string, sizes ...uint32) {
 func (p *Process) wasiPreopen() {
 	p.wasiRoot = -1
 
-	f, err := p.openAt(atFdcwd, "/", syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	f, err := p.openAt(atFdcwd, "/", oRdonly|oDirectory, 0)
 
 	if err != nil {
 		return

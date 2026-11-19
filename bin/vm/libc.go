@@ -2613,3 +2613,23 @@ func libcStrspn(ctx uintptr, s, set uint32) uint32 {
 func libcStrcspn(ctx uintptr, s, set uint32) uint32 {
 	return proc(ctx).libcStrcspn(s, set)
 }
+
+func fcntlSize(cmd uint32) uint32 {
+	switch cmd {
+	case fGetlk, fSetlk, fSetlkw:
+		return sizeofFlock
+	}
+
+	return 0
+}
+
+func ioctlSize(req uint32) uint32 {
+	switch req {
+	case tcgets, tcsets, tcsets + 1, tcsets + 2:
+		return sizeofTermios
+	case tiocgwinsz, tiocswinsz:
+		return sizeofWinsize
+	}
+
+	return 0
+}

@@ -2,9 +2,7 @@
 
 package main
 
-import (
-	"syscall"
-)
+import ()
 
 type RemoteFile struct {
 	node RemoteNode
@@ -90,7 +88,7 @@ func (f *RemoteFile) asCall() *CallEnd {
 	return nil
 }
 
-func (f *RemoteFile) stat(p *Process, st *syscall.Stat_t) error {
+func (f *RemoteFile) stat(p *Process, st *Stat) error {
 	return f.node.stat(p, st)
 }
 
@@ -158,11 +156,11 @@ func (f *RemoteFile) chown(p *Process, uid, gid int) error {
 	return f.node.chown(p, uid, gid)
 }
 
-func (f *RemoteFile) utimes(p *Process, ts []syscall.Timespec) error {
+func (f *RemoteFile) utimes(p *Process, ts []Timespec) error {
 	return f.node.utimes(p, ts)
 }
 
-func (f *RemoteFile) statfs(p *Process, st *syscall.Statfs_t) error {
+func (f *RemoteFile) statfs(p *Process, st *Statfs) error {
 	return f.node.statfs(p, st)
 }
 
@@ -170,6 +168,6 @@ func (f *RemoteFile) flock(p *Process, op int) error {
 	return f.node.flock(p, op)
 }
 
-func (f *RemoteFile) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
+func (f *RemoteFile) recordLock(p *Process, cmd int, lk *Flock) error {
 	return f.node.recordLock(p, cmd, lk)
 }

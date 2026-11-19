@@ -17,24 +17,21 @@ var (
 	months   = []string{"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"}
 )
 
-const (
-	clockRealtime       = 0
-	clockMonotonic      = 1
-	clockProcessCputime = 2
-	clockThreadCputime  = 3
-	clockBoottime       = 7
-	timerAbstime        = 1
-)
+var hostClocks = map[uint32]uintptr{
+	clockRealtime:        hostClockRealtime,
+	clockMonotonic:       hostClockMonotonic,
+	clockProcessCputime:  hostClockProcessCputime,
+	clockThreadCputime:   hostClockProcessCputime,
+	clockMonotonicRaw:    hostClockMonotonicRaw,
+	clockRealtimeCoarse:  hostClockRealtimeCoarse,
+	clockMonotonicCoarse: hostClockMonotonicCoarse,
+	clockBoottime:        hostClockBoottime,
+}
 
 func hostClock(clock uint32) (uintptr, bool) {
-	switch {
-	case clock == clockThreadCputime:
-		return clockProcessCputime, true
-	case clock <= clockBoottime:
-		return uintptr(clock), true
-	}
+	host, ok := hostClocks[clock]
 
-	return 0, false
+	return host, ok
 }
 
 func clockGettime(clock uintptr) time.Duration {

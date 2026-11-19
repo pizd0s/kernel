@@ -6,11 +6,8 @@ import (
 	"encoding/binary"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
-
-const somaxconn = 4096
 
 type UnixSocket struct {
 	refs     atomic.Int32
@@ -146,12 +143,12 @@ func (s *UnixSocket) state() (*UnixListener, *PairEnd) {
 	return s.listener, s.conn
 }
 
-func (s *UnixSocket) stat(p *Process, st *syscall.Stat_t) error {
+func (s *UnixSocket) stat(p *Process, st *Stat) error {
 	if _, c := s.state(); c != nil {
 		return c.stat(p, st)
 	}
 
-	*st = syscall.Stat_t{Mode: syscall.S_IFSOCK | 0o777, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
+	*st = Stat{Mode: sIfsock | 0o777, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
 
 	return nil
 }
@@ -213,17 +210,17 @@ func (s *UnixSocket) wake(l *Hook) {
 }
 
 func (s *UnixSocket) flags() (int, error) {
-	fl := syscall.O_RDWR
+	fl := oRdwr
 
 	if s.nonblock.Load() {
-		fl |= syscall.O_NONBLOCK
+		fl |= oNonblock
 	}
 
 	return fl, nil
 }
 
 func (s *UnixSocket) setFlags(fl int) error {
-	s.nonblock.Store(fl&syscall.O_NONBLOCK != 0)
+	s.nonblock.Store(fl&oNonblock != 0)
 
 	if _, c := s.state(); c != nil {
 		return c.setFlags(fl)
@@ -240,7 +237,7 @@ func (s *UnixSocket) bind(p *Process, at, n uint32) error {
 	}
 
 	if l, c := s.state(); l != nil || c != nil {
-		return syscall.EINVAL
+		return eInval
 	}
 
 	l := &UnixListener{ino: pairInodes.Add(1), conns: newMsgChannel(1), kind: s.kind}
@@ -251,8 +248,8 @@ func (s *UnixSocket) bind(p *Process, at, n uint32) error {
 		return v.bindPath(p, path, 0o777&^p.umask, l)
 	})
 
-	if err == syscall.EEXIST {
-		err = syscall.EADDRINUSE
+	if err == eExist {
+		err = eAddrinuse
 	}
 
 	if err != nil {
@@ -273,7 +270,7 @@ func (s *UnixSocket) listen(backlog int) error {
 	l, c := s.state()
 
 	if l == nil || c != nil {
-		return syscall.EINVAL
+		return eInval
 	}
 
 	l.mu.Lock()
@@ -290,18 +287,18 @@ func (s *UnixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
 	l, _ := s.state()
 
 	if l == nil || !l.listens() {
-		return nil, nil, syscall.EINVAL
+		return nil, nil, eInval
 	}
 
 	for {
 		e := l.pop()
 
 		if e == nil && !l.listens() {
-			return nil, nil, syscall.EINVAL
+			return nil, nil, eInval
 		}
 
 		if e == nil && s.nonblock.Load() {
-			return nil, nil, syscall.EAGAIN
+			return nil, nil, eAgain
 		}
 
 		if e == nil {
@@ -333,9 +330,9 @@ func (s *UnixSocket) connect(p *Process, at, n uint32) error {
 	}
 
 	if l, c := s.state(); c != nil {
-		return syscall.EISCONN
+		return eIsconn
 	} else if l != nil {
-		return syscall.EINVAL
+		return eInval
 	}
 
 	var conn *PairEnd
@@ -374,7 +371,7 @@ func (s *UnixSocket) peername(p *Process) ([]byte, error) {
 	defer s.mu.Unlock()
 
 	if s.conn == nil {
-		return nil, syscall.ENOTCONN
+		return nil, eNotconn
 	}
 
 	return unixAddress([]byte(s.peer)), nil
@@ -387,10 +384,10 @@ func (s *UnixSocket) connection() (*PairEnd, error) {
 	case c != nil:
 		return c, nil
 	case l != nil && l.listens():
-		return nil, syscall.EINVAL
+		return nil, eInval
 	}
 
-	return nil, syscall.ENOTCONN
+	return nil, eNotconn
 }
 
 func (s *UnixSocket) socketKind() int {
@@ -499,9 +496,9 @@ func (s *UnixSocket) write(p *Process, b []byte, mode IoMode) (int, error) {
 }
 
 func (s *UnixSocket) pread(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.ESPIPE
+	return 0, eSpipe
 }
 
 func (s *UnixSocket) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.ESPIPE
+	return 0, eSpipe
 }

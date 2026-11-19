@@ -7,7 +7,6 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -16,15 +15,7 @@ var (
 	epollInodes atomic.Uint64
 )
 
-const (
-	epollCtlAdd    = 1
-	epollCtlDel    = 2
-	epollCtlMod    = 3
-	epollOneshot   = 1 << 30
-	epollEt        = 1 << 31
-	epollEventSize = 16
-	epollMaxEvents = 1 << 20
-)
+const epollMaxEvents = 1 << 20
 
 type Epoll struct {
 	mu      sync.Mutex
@@ -168,9 +159,9 @@ func (ep *Epoll) asCall() *CallEnd {
 	return nil
 }
 
-func (ep *Epoll) stat(p *Process, st *syscall.Stat_t) error {
-	*st = syscall.Stat_t{Ino: ep.ino, Mode: 0o600, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
-	st.Atim = syscall.NsecToTimespec(ep.made.UnixNano())
+func (ep *Epoll) stat(p *Process, st *Stat) error {
+	*st = Stat{Ino: ep.ino, Mode: 0o600, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
+	st.Atim = nsecToTimespec(ep.made.UnixNano())
 	st.Mtim, st.Ctim = st.Atim, st.Atim
 
 	return nil
@@ -243,7 +234,7 @@ func (ep *Epoll) mark(m *EpollMember) {
 }
 
 func (ep *Epoll) flags() (int, error) {
-	return syscall.O_RDWR, nil
+	return oRdwr, nil
 }
 
 func (ep *Epoll) setFlags(fl int) error {
@@ -251,19 +242,19 @@ func (ep *Epoll) setFlags(fl int) error {
 }
 
 func (ep *Epoll) read(p *Process, b []byte, mode IoMode) (int, error) {
-	return 0, syscall.EINVAL
+	return 0, eInval
 }
 
 func (ep *Epoll) write(p *Process, b []byte, mode IoMode) (int, error) {
-	return 0, syscall.EINVAL
+	return 0, eInval
 }
 
 func (ep *Epoll) pread(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.EINVAL
+	return 0, eInval
 }
 
 func (ep *Epoll) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.EINVAL
+	return 0, eInval
 }
 
 func (ep *Epoll) contains(inner *Epoll) bool {
@@ -294,7 +285,7 @@ func (ep *Epoll) ctl(op uint32, key EpollKey, events uint32, data uint64) error 
 		if m == nil {
 			ep.mu.Unlock()
 
-			return syscall.ENOENT
+			return eNoent
 		}
 
 		m.events, m.data, m.disabled = events, data, false
@@ -312,7 +303,7 @@ func (ep *Epoll) ctl(op uint32, key EpollKey, events uint32, data uint64) error 
 		if m == nil {
 			ep.mu.Unlock()
 
-			return syscall.ENOENT
+			return eNoent
 		}
 
 		ep.remove(m)
@@ -323,7 +314,7 @@ func (ep *Epoll) ctl(op uint32, key EpollKey, events uint32, data uint64) error 
 		return nil
 	}
 
-	return syscall.EINVAL
+	return eInval
 }
 
 func (ep *Epoll) remove(m *EpollMember) {
@@ -335,7 +326,7 @@ func (ep *Epoll) remove(m *EpollMember) {
 
 func (ep *Epoll) add(key EpollKey, events uint32, data uint64) error {
 	if inner := key.obj.asEpoll(); inner != nil && (inner == ep || inner.contains(ep)) {
-		return syscall.ELOOP
+		return eLoop
 	}
 
 	ep.mu.Lock()
@@ -343,7 +334,7 @@ func (ep *Epoll) add(key EpollKey, events uint32, data uint64) error {
 	if _, dup := ep.members[key]; dup {
 		ep.mu.Unlock()
 
-		return syscall.EEXIST
+		return eExist
 	}
 
 	ep.lastID++

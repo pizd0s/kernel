@@ -3,51 +3,15 @@
 package main
 
 import (
-	"syscall"
 	"time"
 	"unsafe"
 )
 
 const (
-	pollIn            = 0x1
-	pollPri           = 0x2
-	pollOut           = 0x4
-	pollErr           = 0x8
-	pollHup           = 0x10
-	pollNval          = 0x20
-	pollRdnorm        = 0x40
-	pollWrnorm        = 0x100
-	maxPollWaitMs     = 1 << 30
-	fGetlk            = 5
-	fSetlk            = 6
-	fSetlkw           = 7
-	fOfdGetlk         = 36
-	fOfdSetlk         = 37
-	fOfdSetlkw        = 38
-	fRdlck            = 0
-	fWrlck            = 1
-	fUnlck            = 2
-	tcgets            = 0x5401
-	tcsets            = 0x5402
-	tcsbrk            = 0x5409
-	tcxonc            = 0x540a
-	tcflsh            = 0x540b
-	tiocgpgrp         = 0x540f
-	tiocspgrp         = 0x5410
-	tiocgwinsz        = 0x5413
-	tiocswinsz        = 0x5414
-	fionread          = 0x541b
-	fionbio           = 0x5421
-	fionclex          = 0x5450
-	fioclex           = 0x5451
-	oPath             = 0o10000000
-	atFdcwd           = -100
-	atSymlinkNofollow = 0x100
-	atRemovedir       = 0x200
-	atEaccess         = 0x200
-	atSymlinkFollow   = 0x400
-	atEmptyPath       = 0x1000
-	sIfifo            = 0o10000
+	maxPollWaitMs = 1 << 30
+	fOfdGetlk     = 36
+	fOfdSetlk     = 37
+	fOfdSetlkw    = 38
 )
 
 type Object interface {
@@ -81,7 +45,7 @@ type Object interface {
 type File interface {
 	Object
 
-	stat(p *Process, st *syscall.Stat_t) error
+	stat(p *Process, st *Stat) error
 
 	flags() (int, error)
 	setFlags(fl int) error
@@ -112,7 +76,7 @@ type Dir interface {
 
 	readdir(p *Process, b []byte) (int, error)
 	openPath(p *Process, path string, flags int, mode uint32) (Object, error)
-	statPath(p *Process, path string, follow bool, st *syscall.Stat_t) error
+	statPath(p *Process, path string, follow bool, st *Stat) error
 	readlinkPath(p *Process, path string) (string, error)
 	mkdirPath(p *Process, path string, mode uint32) error
 
@@ -124,9 +88,9 @@ type Dir interface {
 	linkPath(p *Process, old string, to Dir, new string, follow bool) error
 	chmodPath(p *Process, path string, mode uint32, follow bool) error
 	chownPath(p *Process, path string, uid, gid int, follow bool) error
-	utimesPath(p *Process, path string, ts []syscall.Timespec, follow bool) error
+	utimesPath(p *Process, path string, ts []Timespec, follow bool) error
 	truncatePath(p *Process, path string, size int64) error
-	statfsPath(p *Process, path string, st *syscall.Statfs_t) error
+	statfsPath(p *Process, path string, st *Statfs) error
 
 	realpathOf(p *Process, path string) (string, error)
 
@@ -181,8 +145,8 @@ type Attrs interface {
 	sync(p *Process, data bool) error
 	chmod(p *Process, mode uint32) error
 	chown(p *Process, uid, gid int) error
-	utimes(p *Process, ts []syscall.Timespec) error
-	statfs(p *Process, st *syscall.Statfs_t) error
+	utimes(p *Process, ts []Timespec) error
+	statfs(p *Process, st *Statfs) error
 }
 
 type Socket interface {
@@ -213,7 +177,7 @@ type Ioctl interface {
 type Locker interface {
 	Object
 	flock(p *Process, op int) error
-	recordLock(p *Process, cmd int, lk *syscall.Flock_t) error
+	recordLock(p *Process, cmd int, lk *Flock) error
 }
 
 func closed(ch <-chan struct{}) bool {

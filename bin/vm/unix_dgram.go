@@ -7,7 +7,6 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
-	"syscall"
 )
 
 type UnixDgram struct {
@@ -142,7 +141,7 @@ func (s *UnixDgram) targetEnd() *PairEnd {
 	return s.target
 }
 
-func (s *UnixDgram) stat(p *Process, st *syscall.Stat_t) error {
+func (s *UnixDgram) stat(p *Process, st *Stat) error {
 	return s.inbox.stat(p, st)
 }
 
@@ -187,17 +186,17 @@ func (s *UnixDgram) wake(*Hook) {
 }
 
 func (s *UnixDgram) flags() (int, error) {
-	fl := syscall.O_RDWR
+	fl := oRdwr
 
 	if s.nonblock.Load() {
-		fl |= syscall.O_NONBLOCK
+		fl |= oNonblock
 	}
 
 	return fl, nil
 }
 
 func (s *UnixDgram) setFlags(fl int) error {
-	s.nonblock.Store(fl&syscall.O_NONBLOCK != 0)
+	s.nonblock.Store(fl&oNonblock != 0)
 
 	return nil
 }
@@ -216,15 +215,15 @@ func (s *UnixDgram) bind(p *Process, at, n uint32) error {
 	s.mu.Unlock()
 
 	if named {
-		return syscall.EINVAL
+		return eInval
 	}
 
 	err = p.onPath(atFdcwd, path, func(v Dir) error {
 		return v.bindPath(p, path, 0o777&^p.umask, s.mouth)
 	})
 
-	if err == syscall.EEXIST {
-		err = syscall.EADDRINUSE
+	if err == eExist {
+		err = eAddrinuse
 	}
 
 	if err == nil {
@@ -270,11 +269,11 @@ func (s *UnixDgram) connect(p *Process, at, n uint32) error {
 }
 
 func (s *UnixDgram) listen(backlog int) error {
-	return syscall.EOPNOTSUPP
+	return eOpnotsupp
 }
 
 func (s *UnixDgram) accept(p *Process, flags uint32) (Object, []byte, error) {
-	return nil, nil, syscall.EOPNOTSUPP
+	return nil, nil, eOpnotsupp
 }
 
 func (s *UnixDgram) sockname(p *Process) ([]byte, error) {
@@ -291,7 +290,7 @@ func (s *UnixDgram) peername(p *Process) ([]byte, error) {
 	defer s.mu.Unlock()
 
 	if s.target == nil {
-		return nil, syscall.ENOTCONN
+		return nil, eNotconn
 	}
 
 	return unixAddress([]byte(s.peer)), nil
@@ -315,11 +314,11 @@ func (s *UnixDgram) setsockopt(p *Process, level, name, at, n uint32) error {
 
 func (s *UnixDgram) send(p *Process, data []byte, files []Object, cred *Ucred, nonblock bool, path string) (int, error) {
 	if s.inbox.noWrite.Load() {
-		return 0, syscall.EPIPE
+		return 0, ePipe
 	}
 
 	if len(data) > packetMax {
-		return 0, syscall.EMSGSIZE
+		return 0, eMsgsize
 	}
 
 	var to *PairEnd
@@ -331,7 +330,7 @@ func (s *UnixDgram) send(p *Process, data []byte, files []Object, cred *Ucred, n
 			return 0, err
 		}
 	} else if to = s.targetEnd(); to == nil {
-		return 0, syscall.ENOTCONN
+		return 0, eNotconn
 	}
 
 	defer to.unref()
@@ -425,9 +424,9 @@ func (s *UnixDgram) write(p *Process, b []byte, mode IoMode) (int, error) {
 }
 
 func (s *UnixDgram) pread(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.ESPIPE
+	return 0, eSpipe
 }
 
 func (s *UnixDgram) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return 0, syscall.ESPIPE
+	return 0, eSpipe
 }

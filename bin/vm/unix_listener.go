@@ -5,7 +5,6 @@ package main
 import (
 	"sync"
 	"sync/atomic"
-	"syscall"
 )
 
 type UnixListener struct {
@@ -147,8 +146,8 @@ func (l *UnixListener) push(e *PairEnd) (queued, refused bool) {
 	return !full, false
 }
 
-func (l *UnixListener) stat(p *Process, st *syscall.Stat_t) error {
-	*st = syscall.Stat_t{Ino: l.ino, Mode: syscall.S_IFSOCK | 0o777, Nlink: 1, Blksize: 4096}
+func (l *UnixListener) stat(p *Process, st *Stat) error {
+	*st = Stat{Ino: l.ino, Mode: sIfsock | 0o777, Nlink: 1, Blksize: 4096}
 
 	return nil
 }
@@ -206,7 +205,7 @@ func (l *UnixListener) sides(events int16) (in, out bool) {
 }
 
 func (l *UnixListener) flags() (int, error) {
-	return syscall.O_RDWR, nil
+	return oRdwr, nil
 }
 
 func (l *UnixListener) setFlags(fl int) error {

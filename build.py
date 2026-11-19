@@ -1121,19 +1121,19 @@ for test in build.glob("$(S)/tst/test_*.py"):
     coverage_case("test_" + name, ["python3", test, *coverage_arguments], [test],
                   [node for node in tested if node not in (vm, aot_native, vm_chaos, aot_native_chaos)])
 
-# The sizes the kernel knows of the structures lib/c hands it, against
-# lib/c's headers as clang lays them out.
-abi_sizes_test = command(
-    name="test_abi_sizes",
-    inputs=["$(S)/tst/test_abi_sizes.py", "$(S)/bin/vm/sizes.go", "$(S)/lib/c/src/kernel.c", *LIBC_HEADERS],
-    outputs=["$(B)/tst/abi_sizes.stamp"],
+# The constants the kernel shares with lib/c, the sizes of the structures
+# lib/c hands it among them, against lib/c's headers as clang has them.
+libc_consts_test = command(
+    name="test_libc_consts",
+    inputs=["$(S)/tst/test_libc_consts.py", "$(S)/bin/vm/libc_consts.go", "$(S)/lib/c/src/kernel.c", *LIBC_HEADERS],
+    outputs=["$(B)/tst/libc_consts.stamp"],
     deps=[],
-    cmd=[["python3", "$(S)/tst/test_abi_sizes.py", CLANG, "$(S)"], touch("$(B)/tst/abi_sizes.stamp")],
+    cmd=[["python3", "$(S)/tst/test_libc_consts.py", CLANG, "$(S)"], touch("$(B)/tst/libc_consts.stamp")],
     env={"PYTHONDONTWRITEBYTECODE": "1"},
     descr="TS", color="green",
 )
-tests.append(abi_sizes_test)
-e2e_tests.append(abi_sizes_test)
+tests.append(libc_consts_test)
+e2e_tests.append(libc_consts_test)
 
 for name, runner, fixture in (("wat_updates", "run_updates.py", "update_branches.wat"),
                               ("wat_float_selects", "run_float_selects.py", "float_selects.wat"),

@@ -10,46 +10,9 @@ import (
 var pairInodes atomic.Uint64
 
 const (
-	afUnix          = 1
-	afInet          = 2
-	afInet6         = 10
-	sockNonblock    = 0o4000
-	sockCloexec     = 0o2000000
-	msgDontwait     = 0x40
-	msgNosignal     = 0x4000
-	msgCtrunc       = 0x8
-	msgCmsgCloexec  = 0x40000000
-	solSocket       = 1
-	soAcceptconn    = 30
-	scmRights       = 1
-	sunPathMax      = 108
-	sockaddrMax     = 128
-	guestCmsgHeader = 12
-	hostCmsgHeader  = 16
-	sockTypeMask    = 0xf
-	sockRaw         = 3
-	sockCall        = 7
-	sockStream      = 1
-	sockDgram       = 2
-	sockSeqpacket   = 5
-	packetMax       = 65536
-	queueMax        = 64
-	msgTrunc        = 0x20
-	msgPeek         = 0x2
-	msgWaitall      = 0x100
-	soType          = 3
-	soError         = 4
-	soSndbuf        = 7
-	soRcvbuf        = 8
-	soPasscred      = 16
-	soPeercred      = 17
-	soRcvtimeo      = 20
-	soSndtimeo      = 21
-	scmCredentials  = 2
-	ucredSize       = 12
-	shutRd          = 0
-	shutWr          = 1
-	shutRdwr        = 2
+	sockTypeMask = 0xf
+	packetMax    = 65536
+	queueMax     = 64
 )
 
 func unixAddress(path []byte) []byte {

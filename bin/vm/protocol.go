@@ -4,7 +4,6 @@ package main
 
 import (
 	"encoding/binary"
-	"syscall"
 )
 
 const (
@@ -24,8 +23,6 @@ const (
 	whenMtimeNow          = 4
 	whenAtimeKept         = 8
 	whenMtimeKept         = 16
-	utimeNow              = 1<<30 - 1
-	utimeOmit             = 1<<30 - 2
 	rOpen          uint32 = 96
 )
 
@@ -91,17 +88,17 @@ func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *PairEn
 
 		n, f = &h.node, h
 	default:
-		return nil, syscall.EINVAL
+		return nil, eInval
 	}
 
 	if what := kind &^ openedTells; ino != 0 && (what == openedFile || what == openedDir) {
 		n.locks, n.file = &p.k.locks, FileKey{dev, ino}
 	}
 
-	n.end, n.accmode, n.tells = end, flags&syscall.O_ACCMODE, kind&openedTells != 0
+	n.end, n.accmode, n.tells = end, flags&oAccmode, kind&openedTells != 0
 	n.refs.Store(1)
-	n.append.Store(flags&syscall.O_APPEND != 0)
-	n.nonblock.Store(flags&syscall.O_NONBLOCK != 0)
+	n.append.Store(flags&oAppend != 0)
+	n.nonblock.Store(flags&oNonblock != 0)
 
 	end.from.drain(n.deliver, n.hungUp)
 
@@ -113,14 +110,14 @@ func replyOf(pk *Packet, eof bool) error {
 		dropFiles(pk.files)
 		pk.files = nil
 
-		return syscall.EIO
+		return eIo
 	}
 
 	if binary.LittleEndian.Uint32(pk.data) == rErr {
 		dropFiles(pk.files)
 		pk.files = nil
 
-		return syscall.Errno(binary.LittleEndian.Uint32(pk.data[4:]))
+		return Errno(binary.LittleEndian.Uint32(pk.data[4:]))
 	}
 
 	pk.arg = binary.LittleEndian.Uint32(pk.data[4:])
@@ -129,43 +126,43 @@ func replyOf(pk *Packet, eof bool) error {
 	return nil
 }
 
-func decodeStat(b []byte, st *syscall.Stat_t) error {
+func decodeStat(b []byte, st *Stat) error {
 	if len(b) < remoteStat {
-		return syscall.EIO
+		return eIo
 	}
 
 	le := binary.LittleEndian
 
-	*st = syscall.Stat_t{}
+	*st = Stat{}
 	st.Ino, st.Size, st.Mode, st.Nlink = le.Uint64(b), int64(le.Uint64(b[8:])), le.Uint32(b[24:]), uint64(le.Uint32(b[28:]))
 	st.Uid, st.Gid, st.Blksize = le.Uint32(b[32:]), le.Uint32(b[36:]), 4096
 	st.Blocks = (st.Size + 511) / 512
-	st.Mtim = syscall.NsecToTimespec(int64(le.Uint64(b[16:])))
-	st.Atim = syscall.NsecToTimespec(int64(le.Uint64(b[40:])))
+	st.Mtim = nsecToTimespec(int64(le.Uint64(b[16:])))
+	st.Atim = nsecToTimespec(int64(le.Uint64(b[40:])))
 	st.Dev = le.Uint64(b[48:])
-	st.Ctim = syscall.NsecToTimespec(int64(le.Uint64(b[56:])))
+	st.Ctim = nsecToTimespec(int64(le.Uint64(b[56:])))
 
 	return nil
 }
 
-func decodeStatfs(b []byte, st *syscall.Statfs_t) error {
+func decodeStatfs(b []byte, st *Statfs) error {
 	if len(b) < remoteStatfs {
-		return syscall.EIO
+		return eIo
 	}
 
 	le := binary.LittleEndian
 	bsize := int64(le.Uint32(b[40:]))
 	dev := le.Uint64(b[32:])
 
-	*st = syscall.Statfs_t{Type: 0x70697a64, Bsize: bsize, Frsize: bsize, Blocks: le.Uint64(b), Bfree: le.Uint64(b[8:]),
+	*st = Statfs{Type: 0x70697a64, Bsize: bsize, Frsize: bsize, Blocks: le.Uint64(b), Bfree: le.Uint64(b[8:]),
 		Bavail: le.Uint64(b[8:]), Files: le.Uint64(b[16:]), Ffree: le.Uint64(b[24:]), Namelen: int64(le.Uint32(b[44:])),
 		Flags: int64(le.Uint32(b[48:]))}
-	st.Fsid.X__val[0], st.Fsid.X__val[1] = int32(uint32(dev)), int32(uint32(dev>>32))
+	st.Fsid[0], st.Fsid[1] = int32(uint32(dev)), int32(uint32(dev>>32))
 
 	return nil
 }
 
-func whens(ts []syscall.Timespec) (uint32, []byte) {
+func whens(ts []Timespec) (uint32, []byte) {
 	when := uint32(0)
 	body := make([]byte, 16)
 
