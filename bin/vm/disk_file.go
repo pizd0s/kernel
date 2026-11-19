@@ -100,10 +100,6 @@ func (f *DiskFile) asVFS() *RemoteDir {
 	return nil
 }
 
-func (f *DiskFile) asCall() *CallEnd {
-	return nil
-}
-
 func (f *DiskFile) size() (int64, error) {
 	var st syscall.Stat_t
 

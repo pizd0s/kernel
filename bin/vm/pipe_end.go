@@ -100,10 +100,6 @@ func (e *PipeEnd) asVFS() *RemoteDir {
 	return nil
 }
 
-func (e *PipeEnd) asCall() *CallEnd {
-	return nil
-}
-
 func (e *PipeEnd) sides(events int16) (in, out bool) {
 	in, out = e.reads, e.writes
 

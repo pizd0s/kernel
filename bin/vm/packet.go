@@ -5,6 +5,7 @@ package main
 const (
 	packetData = iota
 	packetEnd
+	packetLost
 )
 
 type Packet struct {

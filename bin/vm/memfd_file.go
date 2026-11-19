@@ -122,10 +122,6 @@ func (f *MemfdFile) asVFS() *RemoteDir {
 	return nil
 }
 
-func (f *MemfdFile) asCall() *CallEnd {
-	return nil
-}
-
 func (f *MemfdFile) stat(p *Process, st *Stat) error {
 	*st = Stat{Ino: f.ino, Mode: S_IFREG | 0o777, Nlink: 1, Size: int64(len(f.mem)),
 		Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}

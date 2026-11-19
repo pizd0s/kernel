@@ -39,7 +39,6 @@ type Object interface {
 	asListener() *UnixListener
 	asConsole() *ConsoleEnd
 	asVFS() *RemoteDir
-	asCall() *CallEnd
 }
 
 type File interface {

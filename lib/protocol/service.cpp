@@ -165,16 +165,16 @@ void unwatch(int epoll, Endpoint* e) {
     drop(epoll, e);
 }
 
-// An open file's CONNECT: a call pair, whose serving end is a connection
-// of the file's from now on and whose asking end the OK brings, on the
-// file's endpoint, the question's.
+// An open file's CONNECT: a pair, one end of which is a connection of the
+// file's from now on and the other the OK brings, on the file's endpoint,
+// the question's.
 static void connect(int epoll, Endpoint* e) {
     int pair[2];
-    if (socketpair(AF_UNIX, SOCK_CALL | SOCK_CLOEXEC, 0, pair) != 0) {
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         fail(e->fd, errno);
         return;
     }
-    Endpoint* c = watchFor(epoll, {pair[0], false, e->reads, e->writes, e->of}, EPOLLIN | EPOLLET);
+    Endpoint* c = watchFor(epoll, {pair[0], false, e->reads, e->writes, e->of}, EPOLLIN);
     c->file = e;
     c->after = e->first;
     e->first = c;

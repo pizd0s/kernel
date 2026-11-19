@@ -268,7 +268,7 @@ type Process struct {
 
 	unwound bool
 
-	asking    *CallEnd
+	asking    *PairEnd
 	cancelled bool
 
 	kept         [keptConnections]KeptConnection
@@ -2770,7 +2770,7 @@ func (p *Process) takeSignals() {
 	}
 }
 
-func (p *Process) ask(r *CallEnd) (*CallEnd, bool) {
+func (p *Process) ask(r *PairEnd) (*PairEnd, bool) {
 	outer, was := p.asking, p.cancelled
 
 	p.asking, p.cancelled = r, false
@@ -2778,7 +2778,7 @@ func (p *Process) ask(r *CallEnd) (*CallEnd, bool) {
 	return outer, was
 }
 
-func (p *Process) unask(outer *CallEnd, was bool) {
+func (p *Process) unask(outer *PairEnd, was bool) {
 	p.asking, p.cancelled = outer, was
 }
 
@@ -7292,10 +7292,6 @@ func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 
 	base := int(kind & sockTypeMask)
 
-	if base == SOCK_CALL {
-		return p.result(0, p.callPair(kind, at))
-	}
-
 	switch base {
 	case SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET:
 	case SOCK_RAW:
@@ -7410,31 +7406,6 @@ func (p *Process) libcGetsockopt(fd, level, name, at, lenAt uint32) uint32 {
 	}
 
 	return p.result(0, err)
-}
-
-func (p *Process) callPair(kind, at uint32) error {
-	serving, asking := newCall(kind&SOCK_NONBLOCK != 0)
-	cloexec := kind&SOCK_CLOEXEC != 0
-	x, err := p.install(serving, 0, cloexec)
-
-	if err != nil {
-		asking.unref()
-
-		return err
-	}
-
-	y, err := p.install(asking, 0, cloexec)
-
-	if err != nil {
-		p.closeFd(x)
-
-		return err
-	}
-
-	p.put32(at, uint32(x))
-	p.put32(at+4, uint32(y))
-
-	return nil
 }
 
 func (p *Process) libcSetsockopt(fd, level, name, at, n uint32) uint32 {
@@ -7590,10 +7561,6 @@ func (p *Process) rights(at, n uint32) ([]Object, *Ucred, error) {
 
 				if err != nil {
 					return nil, nil, err
-				}
-
-				if e := f.asCall(); e != nil {
-					f = e.pass()
 				}
 
 				files = append(files, f)

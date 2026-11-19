@@ -279,11 +279,8 @@ Endpoint* tools::listen(int fd, Role role, void* node, bool reads, bool writes) 
     }
     live = ep;
     ++endpointCount;
-    // A connection is watched for its edges, and received on without
-    // waiting (protocol.h): a file system keeps no request, so it has
-    // nothing to receive with one.
     epoll_event ev{};
-    ev.events = role == Role::Connection ? EPOLLIN | EPOLLET : EPOLLIN;
+    ev.events = EPOLLIN;
     ev.data.ptr = ep;
     if (epoll_ctl(watcher, EPOLL_CTL_ADD, fd, &ev) != 0) {
         fatal("%s: epoll_ctl: errno %d", program_invocation_short_name, errno);
@@ -345,12 +342,12 @@ static void closed(Endpoint* ep, Closing closing) {
     close(fd);
 }
 
-// An open file's CONNECT: a call pair, whose serving end is a connection
-// of the file's from now on and whose asking end the OK brings, on the
-// file's endpoint, the question's.
+// An open file's CONNECT: a pair, one end of which is a connection of the
+// file's from now on and the other the OK brings, on the file's endpoint,
+// the question's.
 static void connect(Endpoint* ep) {
     int pair[2];
-    if (socketpair(AF_UNIX, SOCK_CALL | SOCK_CLOEXEC, 0, pair) != 0) {
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         error(ep->fd, errno);
         return;
     }

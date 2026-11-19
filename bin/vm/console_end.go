@@ -116,10 +116,6 @@ func (c *ConsoleEnd) asVFS() *RemoteDir {
 	return nil
 }
 
-func (c *ConsoleEnd) asCall() *CallEnd {
-	return nil
-}
-
 func (c *ConsoleEnd) stat(p *Process, st *Stat) error {
 	*st = Stat{Ino: 1, Mode: S_IFCHR | 0o620, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
 

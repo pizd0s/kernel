@@ -131,8 +131,8 @@ using Expire = int (*)();
 // Before each wait, expire runs what is due and bounds the wait.
 //
 // An open file's endpoint takes CONNECT, which the loop answers itself: a
-// call pair, whose asking end goes with the OK and whose serving end is a
-// connection of the open file's. A request on a connection goes to handle
+// pair, one end of which goes with the OK and the other is a connection
+// of the open file's. A request on a connection goes to handle
 // with the open file's endpoint, and is answered on the connection, which
 // closes when who asked lets go of it, and with its open file.
 //

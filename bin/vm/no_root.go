@@ -105,10 +105,6 @@ func (r *NoRoot) asVFS() *RemoteDir {
 	return nil
 }
 
-func (r *NoRoot) asCall() *CallEnd {
-	return nil
-}
-
 func (r *NoRoot) poll(events int16) int16 {
 	return events & (POLLIN | POLLOUT | POLLRDNORM | POLLWRNORM)
 }

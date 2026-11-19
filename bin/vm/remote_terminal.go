@@ -105,10 +105,6 @@ func (t *RemoteTerminal) asVFS() *RemoteDir {
 	return nil
 }
 
-func (t *RemoteTerminal) asCall() *CallEnd {
-	return nil
-}
-
 func (t *RemoteTerminal) stat(p *Process, st *Stat) error {
 	return t.node.stat(p, st)
 }

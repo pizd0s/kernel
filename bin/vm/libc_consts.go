@@ -225,7 +225,6 @@ const (
 	sizeofSockaddrStorage          = 128
 	sizeofCmsghdr                  = 12
 	SOCK_RAW                       = 3
-	SOCK_CALL                      = 7
 	SOCK_STREAM                    = 1
 	SOCK_DGRAM                     = 2
 	SOCK_SEQPACKET                 = 5

@@ -227,9 +227,9 @@ namespace tools {
     // nowhere to answer, is answered on its channel, in order; a call
     // rootfs hands on brings the connection it came on, where it is
     // answered, and an open's open file goes there (openFile). An open
-    // file's endpoint takes CONNECT, which the loop answers: a call pair,
-    // whose asking end the OK brings and whose serving end is a connection
-    // of the file's, where its requests come and are answered. The
+    // file's endpoint takes CONNECT, which the loop answers: a pair, one
+    // end of which the OK brings and the other is a connection of the
+    // file's, where its requests come and are answered. The
     // descriptors of a request close after it, but for those the call set
     // to -1 and the connection it came on.
     void serve(FsCall fsCall, FileCall fileCall, Closing closing);

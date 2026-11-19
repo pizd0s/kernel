@@ -283,7 +283,7 @@ static bool request(int connection, Header& h) {
             }
             assert(h.op == opConnect && count < 8);
             int call[2];
-            assert(socketpair(AF_UNIX, SOCK_CALL | SOCK_CLOEXEC, 0, call) == 0);
+            assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, call) == 0);
             const Header ok{opOk, 0, 0, 0};
             sendWith(end, &ok, sizeof ok, call[1]);
             close(call[1]);

@@ -679,11 +679,8 @@ static Endpoint* listen(int fd, Role role) {
     }
     live = ep;
     ++endpointCount;
-    // A connection is watched for its edges (protocol.h): a turn receives
-    // without waiting, and rootfs keeps no request, so it has nothing to
-    // receive with one.
     epoll_event ev{};
-    ev.events = role == Role::Connection ? EPOLLIN | EPOLLET : EPOLLIN;
+    ev.events = EPOLLIN;
     ev.data.ptr = ep;
     if (epoll_ctl(watcher, EPOLL_CTL_ADD, fd, &ev) != 0) {
         fatal("rootfs: epoll_ctl: errno %d", errno);
@@ -706,12 +703,12 @@ static Endpoint* connectionAt(int fd) {
     return fd >= 0 && usize(fd) < connections.size() / sizeof(Endpoint*) ? connectionSlot(fd) : nullptr;
 }
 
-// A handle's CONNECT: a call pair, whose serving end is a connection of
-// the handle's from now on and whose asking end the OK brings, on the
-// handle's endpoint, the question's.
+// A handle's CONNECT: a pair, one end of which is a connection of the
+// handle's from now on and the other the OK brings, on the handle's
+// endpoint, the question's.
 static void connect(Endpoint* ep) {
     int pair[2];
-    if (socketpair(AF_UNIX, SOCK_CALL | SOCK_CLOEXEC, 0, pair) != 0) {
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         error(ep->fd, errno);
         return;
     }
@@ -1560,6 +1557,11 @@ static bool hand(const Place& p, const Header& h, u32 op, u32 arg, const void* a
     Endpoint* channel = p.m->fs->channel;
     if (!channel || sendPacket(channel->fd, parts, 4, extra >= 0 ? fds : fds + 1, extra >= 0 ? 2 : 1, MSG_DONTWAIT) < 0) {
         return error(fd, channel && errno == EAGAIN ? EAGAIN : EIO);
+    }
+    // The connection is the file system's now, who answers on it: ours
+    // closes with this call, and who asked connects again for its next.
+    if (Endpoint* c = connectionAt(fd)) {
+        closed(c);
     }
     return false;
 }

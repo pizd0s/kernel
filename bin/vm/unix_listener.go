@@ -98,10 +98,6 @@ func (l *UnixListener) asVFS() *RemoteDir {
 	return nil
 }
 
-func (l *UnixListener) asCall() *CallEnd {
-	return nil
-}
-
 func (l *UnixListener) shut() {
 	var dropped []*PairEnd
 

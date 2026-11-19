@@ -130,10 +130,6 @@ func (s *UnixSocket) asVFS() *RemoteDir {
 	return nil
 }
 
-func (s *UnixSocket) asCall() *CallEnd {
-	return nil
-}
-
 func (s *UnixSocket) state() (*UnixListener, *PairEnd) {
 	s.mu.Lock()
 

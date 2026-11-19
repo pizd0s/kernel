@@ -198,14 +198,14 @@ static int servedFile(int sv[2]) {
 }
 
 // Takes the FSTAT of the file whose endpoint end is: the connection who
-// asks wants first, a call pair of ours whose asking end the OK brings,
+// asks wants first, a pair of ours one end of which the OK brings,
 // then the FSTAT on it. The connection, where the answer goes: who asked
 // waits for it from now on.
 static int takeFstat(int end) {
     Header h;
     assert(recv(end, &h, sizeof h, 0) == ssize_t(sizeof h) && h.op == opConnect);
     int call[2];
-    assert(socketpair(AF_UNIX, SOCK_CALL | SOCK_CLOEXEC, 0, call) == 0);
+    assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, call) == 0);
     const Header ok{opOk, 0, 0, 0};
     alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))] = {};
     iovec iov{const_cast<Header*>(&ok), sizeof ok};

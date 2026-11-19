@@ -27,36 +27,26 @@
 //
 // A call on an open file goes on a connection to it, which who calls
 // asks for on the open file's endpoint: CONNECT, a question, answered
-// there, the questions' answers in their order. The server makes a call
-// pair for it, socketpair's SOCK_CALL (sys/socket.h), keeps the serving
-// end and answers with the asking end. A request is a call sent on the
-// connection, and its reply the answer that comes on it. A server may
-// hand a request on, its descriptors and the connection it came on with
-// it, to another, which answers on that: the call in hand is the other's
-// from then on, the one that handed it on out of the way, and the
-// connection stays its own for the calls after. A server that is gone is
-// EIO, and so is one a call was handed on to and that let go of it
-// unanswered.
+// there, the questions' answers in their order. The server makes a pair
+// for it, socketpair's SOCK_SEQPACKET, keeps one end and answers with the
+// other. A request is a packet sent on the connection, and its reply the
+// packet that comes back on it; who asks sends one request and waits for
+// its reply. A server may hand a request on, its descriptors and its end
+// of the connection it came on with it, to another, which answers there:
+// the end is whose answers, so the server that handed it on closes its
+// own, and who asked finds the connection closed after the reply and
+// connects again for its next call. A server that is gone is EIO: its
+// ends close with it, and who asked reads the end of the connection.
 //
 // A request may be followed on its connection by CANCEL from who asked,
 // whose caller took a signal: a packet as a request is, with no answer of
 // its own. A server that keeps the request, a READ or a WRITE that waits
 // as long as its file says, answers the request at once then, with the
-// count so far or ERR EINTR; one that does not keep it drops the CANCEL.
-// The CANCEL of a request handed on comes to who it was handed to. Who
-// asks keeps its connection for its next calls: a server sees one
-// connection of a process to an open file, and another only for a call
-// made while the first has one in hand.
-//
-// A server watches a connection for its edges, EPOLLET: a call, its
-// CANCEL and its asker's going are each told once, so a wait never asks
-// again a connection whose call it gave out. The server receives on it
-// without waiting, and an edge with nothing to receive is passed over.
-// The asker's going is never missed: a call nobody received yet goes
-// with its asker, and the receive finds the end; after the receive the
-// going is an edge of its own. A CANCEL that came with its call, before
-// a wait told of either, is one edge with it: a server that keeps a
-// request receives once more as it keeps it, without waiting.
+// count so far or ERR EINTR; one that does not keep it drops the CANCEL,
+// and so does one the CANCEL reaches after its reply. Who asks keeps its
+// connection for its next calls: a server sees one connection of a
+// process to an open file, and another only for a call made while the
+// first has one in hand.
 //
 // A packet is a Header and a body; descriptors ride with it (SCM_RIGHTS).
 //
@@ -172,8 +162,8 @@
 //     CANCEL                              of the request the server
 //                                         keeps while it waits
 //   on its endpoint:
-//     CONNECT                             OK, fds[0] the asking end of a
-//                                         call pair, a connection
+//     CONNECT                             OK, fds[0] the other end of a
+//                                         pair, a connection
 //   and from the server, on its end of an open file it made telling
 //   (openedTells), the file's readiness, which select, poll and epoll
 //   find: until the first, nothing is ready; the last counts.

@@ -59,21 +59,6 @@ struct ucred {
 #define SOCK_RAW 3
 #define SOCK_RDM 4
 #define SOCK_SEQPACKET 5
-/*
- * A call pair, the system's own: socketpair's alone. A call and its
- * answer go on it, one call at a time and nothing queued. The first end
- * serves and the second asks: the asking end sends a call, a packet with
- * its descriptors, the serving end receives it and sends its answer, a
- * packet too, which the asking end receives. A call sent before the
- * answer to the one before was received is EBUSY, an answer to no call
- * received EPIPE. The serving end receives after a call the CANCEL who
- * asked may send of it (lib/protocol/protocol.h), and reads the end once
- * the asking end is gone; the asking end reads the end when the call was
- * left unanswered, the server gone. A serving end sent with a packet is
- * the call in hand: who receives it answers that call alone, and when it
- * lets go of it unanswered who asked reads the end.
- */
-#define SOCK_CALL 7
 #define SOCK_NONBLOCK 04000
 #define SOCK_CLOEXEC 02000000
 

@@ -84,10 +84,6 @@ func (f *RemoteFile) asVFS() *RemoteDir {
 	return nil
 }
 
-func (f *RemoteFile) asCall() *CallEnd {
-	return nil
-}
-
 func (f *RemoteFile) stat(p *Process, st *Stat) error {
 	return f.node.stat(p, st)
 }

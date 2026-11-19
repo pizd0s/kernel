@@ -125,10 +125,6 @@ func (s *UnixDgram) asVFS() *RemoteDir {
 	return nil
 }
 
-func (s *UnixDgram) asCall() *CallEnd {
-	return nil
-}
-
 func (s *UnixDgram) targetEnd() *PairEnd {
 	s.mu.Lock()
 

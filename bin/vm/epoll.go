@@ -155,10 +155,6 @@ func (ep *Epoll) asVFS() *RemoteDir {
 	return nil
 }
 
-func (ep *Epoll) asCall() *CallEnd {
-	return nil
-}
-
 func (ep *Epoll) stat(p *Process, st *Stat) error {
 	*st = Stat{Ino: ep.ino, Mode: 0o600, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
 	st.Atim = nsecToTimespec(ep.made.UnixNano())

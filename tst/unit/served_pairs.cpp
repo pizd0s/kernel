@@ -220,7 +220,7 @@ static const char* errorName(int e) {
 }
 
 // The connection who calls asks for on end, an open file's endpoint or a
-// directory's: a call pair of ours, whose asking end the OK brings. Our
+// directory's: a pair of ours, one end of which the OK brings. Our
 // end of it, or -1 at the end of end.
 static int connection(int end) {
     Header asked;
@@ -229,7 +229,7 @@ static int connection(int end) {
     }
     assert(asked.op == opConnect);
     int call[2];
-    assert(socketpair(AF_UNIX, SOCK_CALL | SOCK_CLOEXEC, 0, call) == 0);
+    assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, call) == 0);
     const Header ok{opOk, 0, 0, 0};
     sendWith(end, &ok, sizeof ok, call[1]);
     close(call[1]);
