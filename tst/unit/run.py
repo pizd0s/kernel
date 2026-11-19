@@ -15,7 +15,7 @@ own, in a root of its own under /tmp instead, chroot's, which has /bin/check,
 the program, and /tmp, its working directory the root, for a program
 that makes /etc's files or execs itself as /bin/check. A program of WASI
 (freestanding: true) runs as a process of the kernel as well
-(bin/vm/kernel_wasi.go). all is build and run, as coverage runs a case
+(bin/vm/wasi.go). all is build and run, as coverage runs a case
 with its own vm and aot.
 
 Directives use trustme's //@ spelling. stdout/stderr are JSON strings;

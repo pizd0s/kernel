@@ -6,7 +6,7 @@
 // ends with the program, once it wrote out what the program left, its
 // status the program's: an exit's, or 128 and the signal that ended it.
 // rootfs runs the shell so on a console with a window, a host's terminal
-// (bin/vm/kernel_console.go).
+// (bin/vm/console.go).
 //
 //     console <path> <arg0> [arg...]
 

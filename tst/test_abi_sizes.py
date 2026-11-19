@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The sizes the kernel knows of the structures lib/c hands it
-(bin/vm/kernel_sizes.go) are lib/c's: clang lays each type out for wasm32
+(bin/vm/sizes.go) are lib/c's: clang lays each type out for wasm32
 with lib/c's headers. Every type whose size lib/c passes has one.
 
     test_abi_sizes.py <clang> <source root>
@@ -17,7 +17,7 @@ ALIASES = {"sigjmp_buf": "jmp_buf"}
 
 def main():
     clang, root = sys.argv[1], Path(sys.argv[2])
-    go = (root / "bin/vm/kernel_sizes.go").read_text()
+    go = (root / "bin/vm/sizes.go").read_text()
     known = {m.group(3).strip(): (m.group(1), int(m.group(2)))
              for m in re.finditer(r"^\t(sizeof\w+)\s*=\s*(\d+)\s*//\s*(.+)$", go, re.M)}
     sources = [root / "lib/c/src/kernel.c", root / "lib/c/include/setjmp.h", root / "lib/c/include/pty.h"]

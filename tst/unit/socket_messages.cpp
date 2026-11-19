@@ -39,7 +39,7 @@ int main() {
     assert(recv(pair[1], buffer, 4, MSG_WAITALL) == 4 && memcmp(buffer, "peek", 4) == 0);
     assert(recv(pair[1], buffer, 1, MSG_DONTWAIT) == -1 && errno == EAGAIN);
     assert(sockatmark(pair[0]) == 0);
-    // A file of a server is a socket of its protocol (kernel_remote.go): a
+    // A file of a server is a socket of its protocol (protocol.go): a
     // pipe is none.
     int ends[2];
     assert(pipe(ends) == 0 && recv(ends[0], buffer, 1, 0) == -1 && errno == ENOTSOCK);

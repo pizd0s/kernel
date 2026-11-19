@@ -3,7 +3,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -344,24 +343,6 @@ func (r *specRunner) moduleOf(a *specAction) *Instance {
 	}
 
 	return i
-}
-
-// specFunctionRef resolves a module's numeric function identity. An import
-// without an addressable adapter cannot be passed as a reference.
-func (i *Instance) specFunctionRef(index uint64) (uintptr, bool) {
-	m := i.obj.meta
-
-	if index >= uint64(m.functionCount) {
-		return 0, false
-	}
-
-	at := uint64(m.functions) + index*descBytes
-
-	if binary.LittleEndian.Uint64(i.block[at:]) == 0 {
-		return 0, false
-	}
-
-	return i.ctx() + uintptr(at), true
 }
 
 // specArg converts an argument; ok is false for one the loader cannot pass.

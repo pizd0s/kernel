@@ -21,7 +21,7 @@ type MemoryMeta struct {
 	profile uint32
 	sites   []ProfileSite
 	// shadow is the instance slot holding the shadow map's base: an asan
-	// object (kernel_asan.go), which has no tail.
+	// object (process.go), which has no tail.
 	shadow uint32
 }
 
@@ -32,7 +32,7 @@ type ProfileSite struct {
 }
 
 // siteKinds names the kinds of sites by the compiler's numbers (aot.cpp
-// siteCheck...): what each counts (tail_profile.go).
+// siteCheck...): what each counts (instance.go).
 var siteKinds = [...]string{"check", "guard", "fallback", "omitted", "loop", "entry", "fast_loop", "fast_entry"}
 
 const (

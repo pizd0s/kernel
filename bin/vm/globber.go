@@ -1,0 +1,251 @@
+//go:build linux && amd64
+
+package main
+
+import (
+	"bytes"
+	"encoding/binary"
+	"slices"
+	"strings"
+	"syscall"
+)
+
+// glob, as musl's: a pattern's components with wildcards match the names
+// of the directories the others lead to, by fnmatch; . and .. are names
+// too. A directory that cannot be read goes to the error function, through
+// the crt's __call_glob_error, and ends the search when it asks or with
+// GLOB_ERR.
+
+const (
+	globErr      = 0x01
+	globMark     = 0x02
+	globNosort   = 0x04
+	globDooffs   = 0x08
+	globNocheck  = 0x10
+	globAppend   = 0x20
+	globNoescape = 0x40
+	globPeriod   = 0x80
+	globTilde    = 0x1000
+	globTildeChk = 0x4000
+	globNospace  = 1
+	globAborted  = 2
+	globNomatch  = 3
+)
+
+type globber struct {
+	p       *Process
+	flags   uint32
+	errfunc uint32
+	found   []string
+	aborted bool
+}
+
+// magic tells whether a component has a wildcard.
+func (g *globber) magic(comp string) bool {
+	for i := 0; i < len(comp); i++ {
+		switch comp[i] {
+		case '\\':
+			if g.flags&globNoescape == 0 {
+				i++
+			}
+		case '*', '?', '[':
+			return true
+		}
+	}
+
+	return false
+}
+
+// literal is a component without wildcards, its escapes taken.
+func (g *globber) literal(comp string) string {
+	if g.flags&globNoescape != 0 {
+		return comp
+	}
+
+	var b strings.Builder
+
+	for i := 0; i < len(comp); i++ {
+		if comp[i] == '\\' && i+1 < len(comp) {
+			i++
+		}
+
+		b.WriteByte(comp[i])
+	}
+
+	return b.String()
+}
+
+// failed tells the error function of a directory that cannot be read and
+// whether the search goes on.
+func (g *globber) failed(dir string, err error) bool {
+	if g.errfunc != 0 {
+		p := g.p
+		path := p.newString(dir)
+
+		if path != 0 {
+			f, _ := p.inst.export("__call_glob_error")
+			stop := f.Interface().(func(uintptr, uint32, uint32, uint32) uint32)(p.inst.ctx(), g.errfunc, path, uint32(errnoOf(err)))
+			p.free(path)
+
+			if stop != 0 {
+				g.aborted = true
+			}
+		}
+	}
+
+	if g.flags&globErr != 0 {
+		g.aborted = true
+	}
+
+	return !g.aborted
+}
+
+// names are the entries of a directory, . and .. among them.
+func (g *globber) names(dir string) ([]string, error) {
+	path := dir
+
+	if path == "" {
+		path = "."
+	}
+
+	f, err := g.p.openPath(path, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer f.unref()
+	d := f.asDir()
+
+	if d == nil {
+		return nil, syscall.ENOTDIR
+	}
+
+	names := []string{".", ".."}
+	buf := make([]byte, 4096)
+
+	for {
+		n, err := d.readdir(g.p, buf)
+
+		if err != nil || n == 0 {
+			return names, err
+		}
+
+		for at := 0; at+19 <= n; {
+			reclen := int(binary.LittleEndian.Uint16(buf[at+16:]))
+			name := buf[at+19 : at+reclen]
+
+			if end := bytes.IndexByte(name, 0); end >= 0 {
+				name = name[:end]
+			}
+
+			if string(name) != "." && string(name) != ".." {
+				names = append(names, string(name))
+			}
+
+			at += reclen
+		}
+	}
+}
+
+func (g *globber) exists(path string) bool {
+	var st syscall.Stat_t
+
+	return g.p.statPath(path, false, &st) == nil
+}
+
+// walk matches the components left under dir, which ends with a slash or
+// is empty; a pattern ending with a slash matches directories, with it.
+func (g *globber) walk(dir string, comps []string) {
+	if g.aborted {
+		return
+	}
+
+	comp, rest := comps[0], comps[1:]
+
+	if comp == "" {
+		if len(rest) > 0 {
+			g.walk(dir+"/", rest)
+		} else if g.exists(dir + ".") {
+			g.found = append(g.found, dir)
+		}
+
+		return
+	}
+
+	if !g.magic(comp) {
+		name := dir + g.literal(comp)
+
+		if len(rest) == 0 {
+			if g.exists(name) {
+				g.found = append(g.found, name)
+			}
+
+			return
+		}
+
+		g.walk(name+"/", rest)
+
+		return
+	}
+
+	names, err := g.names(dir)
+
+	if err != nil && err != syscall.ENOENT && err != syscall.ENOTDIR && !g.failed(strings.TrimSuffix(dir, "/"), err) {
+		return
+	}
+
+	slices.Sort(names)
+	flags := 0
+
+	if g.flags&globPeriod == 0 {
+		flags |= fnmPeriod
+	}
+
+	if g.flags&globNoescape != 0 {
+		flags |= fnmNoescape
+	}
+
+	for _, name := range names {
+		if (name == "." || name == "..") && !strings.HasPrefix(comp, ".") {
+			continue
+		}
+
+		if !fnmatch([]byte(comp), []byte(name), flags, true) {
+			continue
+		}
+
+		if len(rest) == 0 {
+			g.found = append(g.found, dir+name)
+		} else {
+			g.walk(dir+name+"/", rest)
+		}
+	}
+}
+
+// tilde expands a leading ~ or ~user: false when GLOB_TILDE_CHECK finds no
+// such home.
+func (g *globber) tilde(pattern string) (string, bool) {
+	if g.flags&(globTilde|globTildeChk) == 0 || !strings.HasPrefix(pattern, "~") {
+		return pattern, true
+	}
+
+	user, rest, slash := strings.Cut(pattern[1:], "/")
+	home := ""
+
+	if user == "" {
+		home, _ = g.p.getenv("HOME")
+	} else if e := g.p.passwdBy(func(e *passwdEntry) bool { return e.name == user }); e != nil {
+		home = e.dir
+	}
+
+	if home == "" {
+		return pattern, g.flags&globTildeChk == 0
+	}
+
+	if !slash {
+		return home, true
+	}
+
+	return strings.TrimSuffix(home, "/") + "/" + rest, true
+}

@@ -3,7 +3,9 @@
 package main
 
 import (
+	"os"
 	"slices"
+	"strings"
 	"syscall"
 )
 
@@ -14,7 +16,7 @@ const imageDisk = "image"
 // runModule compiles a module and runs it as the first process, and
 // returns the exit code of vm: a program of the kernel, from its
 // executable (PZD1), or a WASI command, from an executable or a module,
-// which WASI's personality of the kernel runs (kernel_wasi.go). A module
+// which WASI's personality of the kernel runs (wasi.go). A module
 // is all vm runs: no object of vm's. --asan checks a program of the
 // kernel's heap, which a WASI command has none of. What follows a program
 // of the kernel in its file, the image of a system after rootfs, is its
@@ -116,4 +118,78 @@ func hostProgram(path string) (data []byte, exe bool, tail []byte, err error) {
 	}
 
 	return data, exe, pages[int64(len(data))-from:], nil
+}
+
+func importsKernel(obj *ElfObject) bool {
+	for _, imp := range obj.meta.imports {
+		if imp.module == "kernel" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// runKernel runs a program of the kernel as the first process, from the
+// module data at path, which compiled to obj with options, and returns
+// the exit code of vm: the process's, or 128 and the signal that ended it,
+// once the console has moved out what it was given. The process's
+// descriptors 0, 1 and 2 are the console's (console.go), the disks
+// those after them, in order, and DISKS in its environment their names, by
+// spaces. Its program has no path of the system's: the system has no
+// file of vm's.
+func runKernel(path string, argv []string, options CompileOptions, data []byte, obj *ElfObject, disks []disk, user cred) int {
+	k := newKernel(options, user)
+	p := throw2(k.newProcess(nil))
+	code, err := k.codeOf(p, data, path, obj)
+	throw(err)
+	cwd, pwd := p.firstCwd()
+	p.setCwd(cwd)
+	env := []string{"PWD=" + pwd}
+
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "PWD=") {
+			env = append(env, e)
+		}
+	}
+
+	for fd, f := range k.newConsole() {
+		if f != nil {
+			p.files.put(fd, f, false)
+		}
+	}
+
+	if len(disks) > 0 {
+		names := make([]string, len(disks))
+
+		for i, d := range disks {
+			names[i] = d.name
+
+			if d.mem != nil {
+				p.files.put(max(p.files.size(), 3), newMemfd(nil, d.mem, syscall.O_RDONLY), false)
+
+				continue
+			}
+
+			fd, err := syscall.Open(d.path, syscall.O_RDWR|syscall.O_CLOEXEC, 0)
+
+			if err != nil {
+				throwFmt("--disk %s: %v", d.path, err)
+			}
+
+			p.files.put(max(p.files.size(), 3), newDiskFile(fd), false)
+		}
+
+		env = append(env, "DISKS="+strings.Join(names, " "))
+	}
+
+	k.first = p
+	k.fg = p.pgid
+
+	go p.run(&execImage{code: code, argv: argv, envp: env})
+
+	status := <-k.exit
+	k.console.flush()
+
+	return status
 }

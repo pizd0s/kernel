@@ -3,16 +3,14 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
-	"errors"
+	"fmt"
 	"os"
-	"runtime"
-	"strings"
+	"os/signal"
+	"slices"
 	"sync"
-	"sync/atomic"
 	"syscall"
+	"time"
 )
 
 // The kernel runs programs linked against lib/c, whose system is the module
@@ -42,154 +40,21 @@ type Kernel struct {
 	lastPid int32
 	// codes are the modules compiled, by the digest of their content;
 	// options are what they are compiled with, `vm run --asan` among them:
-	// then the processes run with the shadow map (kernel_asan.go).
+	// then the processes run with the shadow map (process.go).
 	codes   map[[sha256.Size]byte]*codeEntry
 	options CompileOptions
 	// fifos are the pipes of the FIFOs of servers with an end open
-	// (kernel_fifo.go); locks the locks of flock and fcntl on the servers'
-	// files (kernel_lock.go).
+	// (fifo_name.go); locks the locks of flock and fcntl on the servers'
+	// files (lock_table.go).
 	fifos map[fileKey]*pipe
 	locks lockTable
 	// fg is the foreground process group of the console; cttys are the
-	// sessions' controlling terminals (kernel_terminal.go).
+	// sessions' controlling terminals (process.go).
 	fg        int32
 	cttys     map[int32]Terminal
 	first     *Process
 	exit      chan int
 	functions map[string]any
-}
-
-type Process struct {
-	k    *Kernel
-	pid  int32
-	ppid int32
-	pgid int32
-	sid  int32
-	// nice and policy are the scheduling of the process (kernel_identity.go),
-	// pdeathsig the signal of prctl it gets when its parent ends, all under
-	// the kernel's lock.
-	nice      int32
-	policy    int32
-	pdeathsig int
-	// comm, undumpable and noNewPrivs are prctl's.
-	comm       *string
-	undumpable bool
-	noNewPrivs bool
-	inst       *Instance
-	// image is what the instance runs: its code, arguments and environment.
-	image *execImage
-	files fdTable
-	// root is the directory absolute paths start at and ".." stops at;
-	// cwd is the working directory, which relative paths start at. Both
-	// are directories the process holds, not names (kernel_path.go).
-	root  Dir
-	cwd   Dir
-	umask uint32
-	// errnoAt and environAt are where the crt keeps errno and environ, tzAt
-	// tzname, timezone and daylight, herrnoAt h_errno; passwordAt is
-	// getpass's buffer.
-	errnoAt    uint32
-	environAt  uint32
-	tzAt       [3]uint32
-	herrnoAt   uint32
-	passwordAt uint32
-	// heap is what the kernel knows of the heap, static the block of the
-	// results libc keeps in static storage, env the environ array the kernel
-	// allocated last.
-	heap   *Heap
-	static uint32
-	env    uint32
-	seed   uint64
-	limits [rlimitCount]rlimit
-	cred   cred
-	// wasiRoot is the descriptor of a WASI command's preopened root, -1 for
-	// none (kernel_wasi.go); chaos is the rules of the points of failure of
-	// the process's tree, of a build for chaos only (chaos_on.go).
-	wasiRoot  int
-	chaos     *chaosRulesOf
-	regexes   map[uint32]*posixRegex
-	nextRegex uint32
-	// constants are strings of the heap the kernel returns and the program
-	// does not free: zone names for tm_zone, locale names and items;
-	// siginfo is the siginfo_t of handlers.
-	constants map[string]uint32
-	siginfo   uint32
-	// locale is the name of each category's locale, "" for C;
-	// envStrings are the strings of environ setenv made, mappings the
-	// lengths of mmap's blocks.
-	locale     [lcAll]string
-	zone       zoneCache
-	envStrings map[uint32]bool
-	mappings   map[uint32]mapping
-	// timers are the interval timers (kernel_time.go), the process's own.
-	timers [3]itimer
-	// jumps are the setjmps of the image by their jmp_buf, stackAt where
-	// the instance keeps __stack_pointer.
-	jumps   map[uint32]*jump
-	stackAt uint32
-	sig     signalState
-	// vfork is set while the process runs on its parent's frames, from vfork
-	// until it execs or ends (kernel_fork.go).
-	vfork *vforkFrame
-	// zombie tells an ended process its parent has not reaped, status its
-	// wait status; ppid, zombie and status are the kernel's lock's.
-	zombie bool
-	status int
-	// halted is set while the process is stopped; report is the wait status
-	// of a stop or continue its parent has not seen, under the same lock.
-	halted bool
-	report int
-	// childEvents counts the changes of the children, for a blocked wait.
-	childEvents atomic.Uint64
-	// token is the goroutine running the process's code, for Go to
-	// interrupt it, chasing set while a goroutine repeats that
-	// (kernel_signal.go).
-	token   atomic.Uintptr
-	chasing atomic.Bool
-	// events is the queue the process sleeps on (kernel_queue.go):
-	// whatever may change for a wait of its puts an event there; own are
-	// its events of its own, spare its subscriptions spare, receives and
-	// turns its spare waiters, for a packet and for a turn.
-	events   eventQueue
-	own      ownEvents
-	spare    *subscription
-	receives spareWaiters[received]
-	turns    spareWaiters[turn]
-	// unwound says the process's image ended, by its exit or an exec, and
-	// no handler of its runs until its next image starts.
-	unwound bool
-	// asking is the request the process has at a server now, by the end
-	// its reply comes on, nil for none; cancelled says a CANCEL went for
-	// it, as the process took a signal (takeSignals).
-	asking    *callEnd
-	cancelled bool
-	// kept are the connections to servers' open files the process keeps
-	// for its next calls on them, the last used first (kernel_remote.go);
-	// it keeps none once it ended, disconnected.
-	kept         [keptConnections]keptConnection
-	disconnected bool
-	// interruption is what the signals the process took in its waits said
-	// since its call began: none taken, some, or one whose handler did not
-	// ask to restart calls. A wait of the call that a signal ends asks it
-	// (interrupts): the call may have taken the signal in another of its
-	// waits, for a server's answer.
-	interruption uint64
-}
-
-// execImage is a program a process runs; panicked by exec, it unwinds the
-// old image.
-type execImage struct {
-	code *Code
-	argv []string
-	envp []string
-	// path is the guest's absolute path of the program's file, through its
-	// links, or empty when the file is outside the root.
-	path string
-}
-
-// procExit is the panic of a process that ends; status is a wait status.
-type procExit struct {
-	status int
 }
 
 // newKernel makes a kernel whose first process has a directory of the
@@ -209,17 +74,7 @@ func newKernel(options CompileOptions, user cred) *Kernel {
 	return k
 }
 
-// proc is the process of the instance ctx, as a call of the kernel's
-// begins: every call takes its process so, once, and what the signals
-// taken in the call before said (interruption) is not this call's.
-func proc(ctx uintptr) *Process {
-	p := instanceAt(ctx).proc
-	p.interruption = signalNone
-
-	return p
-}
-
-// Imports: the kernel's functions, and WASI's (kernel_wasi.go).
+// Imports: the kernel's functions, and WASI's (wasi.go).
 func (k *Kernel) function(imp *ImportMeta) any {
 	switch imp.module {
 	case "kernel":
@@ -231,18 +86,6 @@ func (k *Kernel) function(imp *ImportMeta) any {
 	return nil
 }
 
-// functionTable lists the kernel's functions by import name.
-
-func importsKernel(obj *ElfObject) bool {
-	for _, imp := range obj.meta.imports {
-		if imp.module == "kernel" {
-			return true
-		}
-	}
-
-	return false
-}
-
 // A disk is a file of the host the first process gets as a descriptor
 // (diskFile): read and written as it is, its name the first process's to
 // give. A disk of mem is no file's: the bytes that follow the program in
@@ -250,70 +93,6 @@ func importsKernel(obj *ElfObject) bool {
 type disk struct {
 	name, path string
 	mem        []byte
-}
-
-// runKernel runs a program of the kernel as the first process, from the
-// module data at path, which compiled to obj with options, and returns
-// the exit code of vm: the process's, or 128 and the signal that ended it,
-// once the console has moved out what it was given. The process's
-// descriptors 0, 1 and 2 are the console's (kernel_console.go), the disks
-// those after them, in order, and DISKS in its environment their names, by
-// spaces. Its program has no path of the system's: the system has no
-// file of vm's.
-func runKernel(path string, argv []string, options CompileOptions, data []byte, obj *ElfObject, disks []disk, user cred) int {
-	k := newKernel(options, user)
-	p := throw2(k.newProcess(nil))
-	code, err := k.codeOf(p, data, path, obj)
-	throw(err)
-	cwd, pwd := p.firstCwd()
-	p.setCwd(cwd)
-	env := []string{"PWD=" + pwd}
-
-	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "PWD=") {
-			env = append(env, e)
-		}
-	}
-
-	for fd, f := range k.newConsole() {
-		if f != nil {
-			p.files.put(fd, f, false)
-		}
-	}
-
-	if len(disks) > 0 {
-		names := make([]string, len(disks))
-
-		for i, d := range disks {
-			names[i] = d.name
-
-			if d.mem != nil {
-				p.files.put(max(p.files.size(), 3), newMemfd(nil, d.mem, syscall.O_RDONLY), false)
-
-				continue
-			}
-
-			fd, err := syscall.Open(d.path, syscall.O_RDWR|syscall.O_CLOEXEC, 0)
-
-			if err != nil {
-				throwFmt("--disk %s: %v", d.path, err)
-			}
-
-			p.files.put(max(p.files.size(), 3), newDiskFile(fd), false)
-		}
-
-		env = append(env, "DISKS="+strings.Join(names, " "))
-	}
-
-	k.first = p
-	k.fg = p.pgid
-
-	go p.run(&execImage{code: code, argv: argv, envp: env})
-
-	status := <-k.exit
-	k.console.flush()
-
-	return status
 }
 
 // newProcess makes a process: a child of parent, or the first, the leader
@@ -351,544 +130,939 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 	return p, nil
 }
 
-// firstCwd is the first process's working directory, held, and its path:
-// its root, which is none.
-func (p *Process) firstCwd() (Dir, string) {
-	p.root.ref()
+// code is the code of the executable a file holds: the error is ENOEXEC
+// when the file is no executable of a program of the kernel, EACCES when it
+// cannot be read at an offset.
+func (k *Kernel) code(p *Process, f Object, name string) (*Code, error) {
+	exe, ok, err := programData(p, f, false)
 
-	return p.root, "/"
-}
-
-// run runs the process's programs, one after another as it execs, then
-// ends it.
-func (p *Process) run(img *execImage) {
-	p.runFrom(img, nil, nil)
-}
-
-// runFrom is run with the first program already in i, entered by enter:
-// in a child of fork.
-func (p *Process) runFrom(img *execImage, i *Instance, enter func()) {
-	status := 0
-
-	if err := try(func() {
-		for img != nil {
-			p.image = img
-			img, status = p.runImage(img, i, enter)
-			i, enter = nil, nil
-
-			if img != nil {
-				p.execReset()
-			}
-		}
-	}); err != nil {
-		p.crash(err.message(), nil)
-		status = 1 << 8
+	if err != nil {
+		return nil, err
 	}
 
-	p.terminate(status)
+	if !ok {
+		return nil, fmt.Errorf("%s: no executable of PZD1: %w", name, syscall.ENOEXEC)
+	}
+
+	return k.codeOf(p, exe, name, nil)
 }
 
-func (p *Process) runImage(img *execImage, i *Instance, enter func()) (next *execImage, status int) {
-	if i == nil {
-		i = newInstance(img.code, p.k, runStack)
-		i.attach(p)
-		p.heap, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, 0, 0, 0, 0, 0
-		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0
-		p.regexes, p.constants, p.locale = map[uint32]*posixRegex{}, map[string]uint32{}, [lcAll]string{}
-		p.envStrings, p.mappings = map[uint32]bool{}, map[uint32]mapping{}
-		p.jumps, p.stackAt = map[uint32]*jump{}, 0
-		enter = func() {
-			p.chaosStart(img.envp)
-			p.wasiRoot = -1
+// programData is the executable a file begins with, read at offsets to
+// its length and no further, as exec reads a program (readProgram).
+// EACCES when it cannot be read at an offset.
+func programData(p *Process, f Object, module bool) (data []byte, ok bool, err error) {
+	file := f.asFile()
 
-			if isWASI(img.code.obj) {
-				p.wasiPreopen()
-			}
-
-			p.asanStart()
-			i.start()
-			p.asanInit()
-			i.startCommand()
-		}
+	if file == nil {
+		return nil, false, syscall.EACCES
 	}
 
-	p.setInstance(i)
-	p.image, p.unwound = img, false
-	funcs, ok := i.functionCode()
+	var st syscall.Stat_t
 
-	if ok {
-		p.token.Store(runtime.SetInterrupt(uintptr(funcs[0]), uintptr(funcs[1]), interruptStub()))
+	if err := file.stat(p, &st); err != nil {
+		return nil, false, err
 	}
 
-	defer func() {
-		runtime.SetInterrupt(0, 0, 0)
-		p.token.Store(0)
-		p.unwound = true
-		e := recover()
-		who := i.host.(*Process)
+	t := f.asTransfer()
 
-		// A trap's report is the trapping process's, a borrower's of vfork
-		// too, on its standard error before the borrowers end and their
-		// descriptors with them.
-		if t, ok := e.(*Trap); ok {
-			msg := t.Error()
+	if t == nil {
+		return nil, false, syscall.EACCES
+	}
 
-			if t.code == trapAsan {
-				msg = who.asanReport(t)
-			}
+	return readProgram(st.Size, func(b []byte, off int64) error { return readAt(p, t, b, off) }, module)
+}
 
-			who.crash(msg, t.stack)
+// readProgram is the executable a file of size bytes begins with, which
+// readAt reads at offsets to its length and no further, as exec reads a
+// program and vm run its first. A file that begins with none is not read
+// on; for vm run, module, it is read whole, a module of a WASI command,
+// and ok is false. ENOEXEC when it ends before its size.
+func readProgram(size int64, readAt func(b []byte, off int64) error, module bool) (data []byte, ok bool, err error) {
+	header := make([]byte, min(exeHeader, max(size, 0)))
+
+	if err := readAt(header, 0); err != nil {
+		return nil, false, err
+	}
+
+	length, err := exeLength(header, size)
+
+	if err != nil || length == 0 && !module {
+		return nil, false, err
+	}
+
+	if length > 0 {
+		size = int64(length)
+	}
+
+	data = make([]byte, size)
+	copy(data, header)
+
+	if err := readAt(data[len(header):], int64(len(header))); err != nil {
+		return nil, false, err
+	}
+
+	return data, length > 0, nil
+}
+
+// readAt fills b from a file at off: ENOEXEC when the file ends first.
+func readAt(p *Process, t Transfer, b []byte, off int64) error {
+	for at := 0; at < len(b); {
+		n, err := t.pread(p, b[at:], off+int64(at))
+
+		if err != nil {
+			return err
 		}
 
-		p.endBorrowers(i, e)
-
-		switch e := e.(type) {
-		case nil:
-		case *procExit:
-			status = e.status
-		case *execImage:
-			next = e
-		case *Trap:
-			status = trapSignal(e.code)
-		default:
-			panic(e)
+		if n == 0 {
+			return syscall.ENOEXEC
 		}
 
-		runtime.KeepAlive(i)
-		p.unmapAll()
-		p.setInstance(nil)
-		i.release()
-	}()
-
-	// A signal can arrive, and a timer fire, before this image has an
-	// interrupt token.
-	p.raiseInterrupt()
-
-	if p.interruptDue() {
-		p.chase()
+		at += n
 	}
 
-	enter()
-
-	return nil, 0
+	return nil
 }
 
-// trapSignal is the signal a trap ends a process with.
-func trapSignal(code uint32) int {
-	switch code {
-	case trapMemoryOOB, trapTableOOB, trapNullRef, trapUndefinedElem, trapUninitElem, trapAsan:
-		return int(syscall.SIGSEGV)
-	case trapIntOverflow, trapDivByZero, trapConversion:
-		return int(syscall.SIGFPE)
-	}
-
-	return int(syscall.SIGILL)
+// A codeEntry is the code of a module, or why it has none; done says
+// either is known, and waiting are the processes that wait for it, whom
+// the end of the compilation wakes, so a process that asks for a module
+// another is compiling waits for that compilation: both with the kernel's
+// lock.
+type codeEntry struct {
+	done    bool
+	waiting []*Process
+	code    *Code
+	err     error
 }
 
-// terminate ends the process with a wait status: its descriptors close, its
-// children go to the first process, it becomes a zombie its parent reaps,
-// or nothing when the parent ignores SIGCHLD, and the groups it joined to
-// its session may be orphaned (orphans); with the first process vm ends.
-func (p *Process) terminate(status int) {
-	p.unwound = true
-	p.stopTimers()
-	p.leaveSession(true)
-
-	for fd := range p.files.size() {
-		p.closeFd(fd)
-	}
-
-	p.disconnect()
-	p.root.unref()
-	p.cwd.unref()
-	p.sig.mu.Lock()
-	p.sig.dead = true
-	p.sig.mu.Unlock()
-	k := p.k
+// codeOf is the code of an executable, data, the part of a file to its
+// length: its module unpacked, compiled with the kernel's options and
+// linked to it once in the kernel's life for those bytes, which every
+// process that runs the module shares; what a file has past the length
+// is no part of them. obj is the module compiled already, or nil. A
+// failure is not kept: the next exec tries again.
+//
+// The compiler runs on a goroutine of its own, and the process p waits
+// for its end, taking its signals meanwhile as in any wait: in the frames
+// of the process's code, a compiler that ends in a panic, a module it
+// refuses, would leave the goroutine's instance its own (aot.cpp's entry
+// thunk restores it only on return).
+func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*Code, error) {
+	key := sha256.Sum256(data)
 	k.mu.Lock()
-	parent := k.procs[p.ppid]
-	adopted := false
+	e, found := k.codes[key]
 
-	var bereaved []*Process
-	var joined []int32
+	if !found {
+		e = &codeEntry{}
+		k.codes[key] = e
 
-	if parent != nil && parent.pgid != p.pgid && parent.sid == p.sid {
-		joined = append(joined, p.pgid)
-	}
+		go func() {
+			code, err := k.compile(data, name, obj)
+			k.mu.Lock()
+			e.code, e.err, e.done = code, err, true
+			waiting := e.waiting
+			e.waiting = nil
 
-	for _, q := range k.procs {
-		if q.ppid == p.pid {
-			q.ppid = k.first.pid
-			adopted = adopted || q.zombie
-
-			if q.pdeathsig != 0 && !q.zombie {
-				bereaved = append(bereaved, q)
+			if err != nil && k.codes[key] == e {
+				delete(k.codes, key)
 			}
 
-			if !q.zombie && q.pgid != p.pgid && q.sid == p.sid {
-				joined = append(joined, q.pgid)
+			k.mu.Unlock()
+
+			for _, w := range waiting {
+				w.post(&w.own.compiled)
 			}
-		}
+		}()
 	}
 
-	notify := parent != nil && !parent.discardsChildren()
-
-	if notify {
-		p.zombie, p.status = true, status
-	} else {
-		delete(k.procs, p.pid)
+	if !e.done {
+		e.waiting = append(e.waiting, p)
 	}
 
 	k.mu.Unlock()
-	k.orphans(joined)
+	p.wait(time.Time{}, func(*event) (bool, error) {
+		k.mu.Lock()
+		defer k.mu.Unlock()
 
-	if adopted && p != k.first {
-		k.first.childChanged(int(syscall.SIGCHLD))
-	}
+		return e.done, nil
+	})
 
-	for _, q := range bereaved {
-		q.send(q.pdeathsig)
-	}
-
-	if notify {
-		parent.childChanged(int(syscall.SIGCHLD))
-	}
-
-	if p == k.first {
-		k.exit <- hostCode(status)
-	}
+	return e.code, e.err
 }
 
-// discardsChildren tells that the process's ended children are not kept for
-// it: it ignores SIGCHLD, or asked so with SA_NOCLDWAIT.
-func (p *Process) discardsChildren() bool {
-	p.sig.mu.Lock()
-	defer p.sig.mu.Unlock()
+// compile compiles a module, unless obj is its object already, and links
+// it to the kernel: a program of lib/c's or a WASI command, whose imports
+// are the kernel's or WASI's (wasi.go); ENOEXEC, with why, for one
+// that imports anything else.
+func (k *Kernel) compile(data []byte, name string, obj *ElfObject) (*Code, error) {
+	if obj == nil {
+		var err error
 
-	act := p.sig.actions[syscall.SIGCHLD]
+		if obj, err = compileExecutable(data, k.options); err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+	}
 
-	return act.handler == sigIgn || act.flags&saNocldwait != 0
+	var c *Code
+
+	if e := try(func() {
+		c = link(name, obj, k)
+	}); e != nil {
+		return nil, fmt.Errorf("%s: %s: %w", name, e, syscall.ENOEXEC)
+	}
+
+	return c, nil
 }
 
-// childChanged tells the process that a child changed, with a signal or
-// none: its event of a child.
-func (p *Process) childChanged(sig int) {
-	p.childEvents.Add(1)
-
-	if sig != 0 {
-		p.send(sig)
-	}
-
-	p.post(&p.own.child)
-}
-
-// hostCode is vm's exit code for a wait status.
-func hostCode(status int) int {
-	if status&0x7f != 0 {
-		return 128 + status&0x7f
-	}
-
-	return status >> 8 & 0xff
-}
-
-// exitWith ends the process from inside one of its calls. A child of vfork
-// gives its parent's frames back.
-func (p *Process) exitWith(status int) {
-	if v := p.vfork; v != nil {
-		p.vfork = nil
-		p.terminate(status)
-		v.resume(p.pid)
-	}
-
-	panic(&procExit{status})
-}
-
-func (p *Process) libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt uint32) {
-	p.errnoAt, p.environAt = errnoAt, environAt
-	p.tzAt, p.herrnoAt = [3]uint32{tznameAt, timezoneAt, daylightAt}, herrnoAt
-	argv := p.stringArray(p.image.argv)
-	p.env = p.stringArray(p.image.envp)
-
-	if argv == 0 || p.env == 0 {
-		p.exitWith(int(syscall.SIGABRT))
-	}
-
-	p.put32(argcAt, uint32(len(p.image.argv)))
-	p.put32(argvAt, argv)
-	p.put32(environAt, p.env)
-}
-
-// libc__kernel_program writes the guest's path of the program to buf, as
-// getcwd writes the working directory's: what lib/c's dladdr names.
-func (p *Process) libc__kernel_program(buf, size uint32) uint32 {
-	path := p.image.path
-
-	if path == "" {
-		return p.pointer(0, syscall.ENOENT)
-	}
-
-	if uint32(len(path)) >= size {
-		return p.pointer(0, syscall.ERANGE)
-	}
-
-	p.putString(buf, path)
-
-	return p.pointer(buf, nil)
-}
-
-// stringArray copies strings to the heap as a null-terminated array of
-// pointers, or returns 0 when the heap is exhausted.
-func (p *Process) stringArray(list []string) uint32 {
-	arr := p.malloc(uint32(4 * (len(list) + 1)))
-
-	if arr == 0 {
-		return 0
-	}
-
-	for i, s := range list {
-		at := p.newString(s)
-
-		if at == 0 {
-			return 0
+// signalTargets are the processes kill sends to: one pid, a group (pid 0
+// is the sender's, -1 every process but the first and the sender).
+func (k *Kernel) signalTargets(from *Process, pid int32) []*Process {
+	return k.processes(func(q *Process) bool {
+		switch {
+		case pid > 0:
+			return q.pid == pid
+		case pid == 0:
+			return q.pgid == from.pgid
+		case pid == -1:
+			return q.pid != 1 && q != from
 		}
 
-		p.put32(arr+uint32(4*i), at)
+		return q.pgid == -pid
+	})
+}
+
+// processes are those that match.
+func (k *Kernel) processes(match func(*Process) bool) []*Process {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	var out []*Process
+
+	for _, q := range k.procs {
+		if match(q) {
+			out = append(out, q)
+		}
 	}
 
-	p.put32(arr+uint32(4*len(list)), 0)
-
-	return arr
+	return out
 }
 
-// newString copies a string to the heap, or returns 0.
-func (p *Process) newString(s string) uint32 {
-	at := p.malloc(uint32(len(s) + 1))
+// routeSignals takes the host's signals for the processes.
+func (k *Kernel) routeSignals() {
+	c := make(chan os.Signal, 16)
+	signal.Notify(c, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTSTP, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGHUP,
+		syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGCONT, syscall.SIGALRM)
 
-	if at != 0 {
-		b := p.span(at, uint32(len(s)+1))
-		copy(b, s)
-		b[len(s)] = 0
-	}
+	go func() {
+		for s := range c {
+			sig := int(s.(syscall.Signal))
 
-	return at
+			switch s {
+			case syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTSTP, syscall.SIGWINCH:
+				k.mu.Lock()
+				fg := k.fg
+				k.mu.Unlock()
+
+				for _, q := range k.processes(func(q *Process) bool { return q.pgid == fg }) {
+					q.send(sig)
+				}
+			default:
+				if k.first != nil {
+					k.first.send(sig)
+				}
+			}
+		}
+	}()
 }
 
-// memory
+// orphaned tells whether a process group is orphaned: no member has a
+// parent in another group of its session, which could continue it.
+func (k *Kernel) orphaned(pgid int32) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
 
-func (p *Process) mem() []byte {
-	return p.inst.mem
+	return k.orphanedLocked(pgid)
 }
 
-func oob() {
-	panic(newTrap(trapMemoryOOB, 1))
-}
-
-// span is n bytes of memory at at, which the shadow map of an asan object
-// must allow.
-func (p *Process) span(at, n uint32) []byte {
-	m := p.mem()
-
-	if uint64(at)+uint64(n) > uint64(len(m)) {
-		oob()
-	}
-
-	if p.inst.memory.shadow != nil {
-		p.asanCheck(at, n)
-	}
-
-	return m[at : at+n]
-}
-
-func (p *Process) u8(at uint32) byte {
-	return p.span(at, 1)[0]
-}
-
-func (p *Process) u16(at uint32) uint16 {
-	return binary.LittleEndian.Uint16(p.span(at, 2))
-}
-
-func (p *Process) u32(at uint32) uint32 {
-	return binary.LittleEndian.Uint32(p.span(at, 4))
-}
-
-func (p *Process) u64(at uint32) uint64 {
-	return binary.LittleEndian.Uint64(p.span(at, 8))
-}
-
-func (p *Process) put16(at uint32, v uint16) {
-	binary.LittleEndian.PutUint16(p.span(at, 2), v)
-}
-
-func (p *Process) put32(at, v uint32) {
-	binary.LittleEndian.PutUint32(p.span(at, 4), v)
-}
-
-func (p *Process) put64(at uint32, v uint64) {
-	binary.LittleEndian.PutUint64(p.span(at, 8), v)
-}
-
-// cstr is the string at at, without its terminator.
-func (p *Process) cstr(at uint32) []byte {
-	m := p.mem()
-
-	if uint64(at) >= uint64(len(m)) {
-		oob()
-	}
-
-	n := bytes.IndexByte(m[at:], 0)
-
-	if n < 0 {
-		oob()
-	}
-
-	if p.inst.memory.shadow != nil {
-		p.asanCheck(at, uint32(n)+1)
-	}
-
-	return m[at : at+uint32(n)]
-}
-
-func (p *Process) str(at uint32) string {
-	return string(p.cstr(at))
-}
-
-// strings reads a null-terminated array of string pointers.
-func (p *Process) strings(at uint32) []string {
-	var out []string
-
-	for ; ; at += 4 {
-		s := p.u32(at)
-
-		if s == 0 {
-			return out
+func (k *Kernel) orphanedLocked(pgid int32) bool {
+	for _, q := range k.procs {
+		if q.pgid != pgid || q.zombie {
+			continue
 		}
 
-		out = append(out, p.str(s))
-	}
-}
-
-// putString copies s and a terminator to at, which has room for them.
-func (p *Process) putString(at uint32, s string) {
-	b := p.span(at, uint32(len(s)+1))
-	copy(b, s)
-	b[len(s)] = 0
-}
-
-// constant is a string of the heap for results the program reads but
-// does not free; the process keeps one copy of each.
-func (p *Process) constant(s string) uint32 {
-	if at, ok := p.constants[s]; ok {
-		return at
+		if parent := k.procs[q.ppid]; parent != nil && parent.pgid != pgid && parent.sid == q.sid {
+			return false
+		}
 	}
 
-	at := p.newString(s)
-
-	if at == 0 {
-		p.exitWith(int(syscall.SIGABRT))
-	}
-
-	p.constants[s] = at
-
-	return at
+	return true
 }
 
-// errors
-
-// errnoOf unwraps a kernel error: syscall.Errno, an os/net wrapper of one,
-// or code's diagnostic wrapping ENOEXEC. Kernel helpers do not return other
-// errors; directory enumeration uses Readdirnames(-1), which has no EOF error.
-func errnoOf(err error) syscall.Errno {
-	var e syscall.Errno
-	errors.As(err, &e)
-
-	return e
-}
-
-func (p *Process) setErrno(e syscall.Errno) {
-	p.put32(p.errnoAt, uint32(e))
-}
-
-func (p *Process) errno() syscall.Errno {
-	return syscall.Errno(p.u32(p.errnoAt))
-}
-
-// result returns r, or -1 with errno set when err is not nil: a system
-// call returns through it. The process's signals are none of its
-// business: the interrupt word takes them on the way out of the import.
-func (p *Process) result(r int, err error) uint32 {
-	if err != nil {
-		p.setErrno(errnoOf(err))
-		r = -1
-	}
-
-	return uint32(r)
-}
-
-// result64 is result for a 64-bit return value.
-func (p *Process) result64(r int64, err error) uint64 {
-	if err != nil {
-		p.setErrno(errnoOf(err))
-		r = -1
-	}
-
-	return uint64(r)
-}
-
-// pointer returns a pointer result: 0 with errno set when err is not nil.
-func (p *Process) pointer(at uint32, err error) uint32 {
-	if err != nil {
-		p.setErrno(errnoOf(err))
-		at = 0
-	}
-
-	return at
-}
-
-// staticArea is the guest block of libc's static results, made at first
-// use: offsets staticDot.. below.
-const (
-	staticDot        = 0
-	staticSlash      = 2
-	staticEmpty      = 4
-	staticTm         = 8
-	staticCtime      = 56
-	staticStrerror   = 88
-	staticStrsignal  = 184
-	staticLconv      = 256
-	staticStrtok     = 312
-	staticPasswd     = 316
-	staticGroup      = 320
-	staticPwent      = 324
-	staticGrent      = 328
-	staticShell      = 332
-	staticLogIdent   = 336
-	staticLogOption  = 368
-	staticLogMask    = 372
-	staticShellIndex = 376
-	staticPass       = 380
-	staticRandom     = 384
-	staticRandomInit = 388
-	staticHostent    = 516
-	staticHostIndex  = 520
-	staticServent    = 524
-	staticProtoent   = 528
-	staticNtoa       = 532
-	staticCrypt      = 548
-	staticSize       = 560
-)
-
-func (p *Process) staticAt(off uint32) uint32 {
-	if p.static == 0 {
-		p.static = p.malloc(staticSize)
-
-		if p.static == 0 {
-			p.exitWith(int(syscall.SIGABRT))
+// orphans is what a process's going does to the groups it joined to its
+// session, its own and its children's, of a parent in another group of
+// it: one orphaned now, with a stopped process, which no one could
+// continue, hears SIGHUP and SIGCONT, as POSIX says.
+func (k *Kernel) orphans(groups []int32) {
+	for i, pgid := range groups {
+		if slices.Contains(groups[:i], pgid) {
+			continue
 		}
 
-		clear(p.span(p.static, staticSize))
-		p.putString(p.static+staticDot, ".")
-		p.putString(p.static+staticSlash, "/")
+		k.mu.Lock()
+		stopped := false
+
+		for _, q := range k.procs {
+			stopped = stopped || q.pgid == pgid && !q.zombie && q.halted
+		}
+
+		hangs := stopped && k.orphanedLocked(pgid)
+		k.mu.Unlock()
+
+		if hangs {
+			k.signalGroup(pgid, int(syscall.SIGHUP))
+			k.signalGroup(pgid, int(syscall.SIGCONT))
+		}
+	}
+}
+
+// signalGroup is the kernel's signal to a process group, which no
+// permission keeps out.
+func (k *Kernel) signalGroup(pgid int32, sig int) {
+	k.mu.Lock()
+
+	var targets []*Process
+
+	for _, q := range k.procs {
+		if q.pgid == pgid && !q.zombie {
+			targets = append(targets, q)
+		}
 	}
 
-	return p.static + off
+	k.mu.Unlock()
+
+	for _, q := range targets {
+		q.send(sig)
+	}
+}
+
+// newConsole makes the console of the descriptors vm has of 0, 1 and 2,
+// nil for one it has not, and starts its movers: the first process's 0 and
+// 1 write the standard output, its 2 the standard error, and all three
+// read the standard input.
+func (k *Kernel) newConsole() []Object {
+	c := &console{}
+	rawHostTerminal()
+	var pipes [3]*pipeEnd
+
+	for fd := range 3 {
+		var st syscall.Stat_t
+
+		if syscall.Fstat(fd, &st) != nil {
+			continue
+		}
+
+		pp := newPipe()
+		pp.readers, pp.writers = 1, 1
+		reader, writer := &pipeEnd{pipe: pp, reads: true}, &pipeEnd{pipe: pp, writes: true}
+		reader.refs.Store(1)
+		writer.refs.Store(1)
+		m := newMover()
+		c.movers = append(c.movers, m)
+
+		if fd == 0 {
+			pipes[fd] = reader
+			go m.fill(fd, writer)
+
+			continue
+		}
+
+		if fd == 2 {
+			c.err = pp
+		}
+
+		pipes[fd] = writer
+		m.pipe = pp
+		c.out.Add(1)
+		go m.drain(reader, fd, c)
+	}
+
+	k.console = c
+	files := make([]Object, 3)
+
+	for fd, out := range []*pipeEnd{pipes[1], pipes[1], pipes[2]} {
+		if pipes[fd] != nil {
+			files[fd] = newConsoleEnd(pipes[0], out)
+		}
+	}
+
+	for _, e := range pipes {
+		if e != nil {
+			e.unref()
+		}
+	}
+
+	return files
+}
+
+// report writes a report of the kernel's, a trap's, to the console's
+// standard error after what was written to it before: to vm's own when
+// there is none.
+func (k *Kernel) report(text string) {
+	if k.console == nil || k.console.err == nil || !newMover().put(k.console.err, []byte(text)) {
+		syscall.Write(2, []byte(text))
+	}
+}
+
+// foreground is the console's foreground process group, tcgetpgrp's.
+func (k *Kernel) foreground() int32 {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	return k.fg
+}
+
+// The system's names, uname's, the kernel's own: none of the host's. The
+// host and domain names are root's to set.
+type systemNames struct {
+	mu           sync.Mutex
+	host, domain string
+}
+
+// The kernel's functions by their names in lib/c: each takes the process
+// from ctx and calls the method that does the work.
+
+func (k *Kernel) functionTable() map[string]any {
+	return map[string]any{
+		"__kernel_start":         libc__kernel_start,
+		"__kernel_program":       libc__kernel_program,
+		"read":                   libcRead,
+		"write":                  libcWrite,
+		"readv":                  libcReadv,
+		"writev":                 libcWritev,
+		"preadv":                 libcPreadv,
+		"pwritev":                libcPwritev,
+		"pread":                  libcPread,
+		"pwrite":                 libcPwrite,
+		"copy_file_range":        libcCopy_file_range,
+		"fdatasync":              libcFdatasync,
+		"sync":                   libcSync,
+		"syncfs":                 libcSyncfs,
+		"flock":                  libcFlock,
+		"lockf":                  libcLockf,
+		"posix_fadvise":          libcPosix_fadvise,
+		"posix_fallocate":        libcPosix_fallocate,
+		"select":                 libcSelect,
+		"pselect":                libcPselect,
+		"lseek":                  libcLseek,
+		"close":                  libcClose,
+		"dup":                    libcDup,
+		"dup2":                   libcDup2,
+		"dup3":                   libcDup3,
+		"pipe":                   libcPipe,
+		"pipe2":                  libcPipe2,
+		"fcntl":                  libcFcntl,
+		"ioctl":                  libcIoctl,
+		"isatty":                 libcIsatty,
+		"tcgetattr":              libcTcgetattr,
+		"tcsetattr":              libcTcsetattr,
+		"cfmakeraw":              libcCfmakeraw,
+		"tcdrain":                libcTcdrain,
+		"tcsendbreak":            libcTcsendbreak,
+		"tcflow":                 libcTcflow,
+		"tcflush":                libcTcflush,
+		"tcgetsid":               libcTcgetsid,
+		"cfgetospeed":            libcCfgetospeed,
+		"cfgetispeed":            libcCfgetispeed,
+		"cfsetospeed":            libcCfsetospeed,
+		"cfsetspeed":             libcCfsetspeed,
+		"cfsetispeed":            libcCfsetispeed,
+		"poll":                   libcPoll,
+		"ppoll":                  libcPpoll,
+		"epoll_create":           libcEpoll_create,
+		"epoll_create1":          libcEpoll_create1,
+		"epoll_ctl":              libcEpoll_ctl,
+		"epoll_wait":             libcEpoll_wait,
+		"epoll_pwait":            libcEpoll_pwait,
+		"fsync":                  libcFsync,
+		"ftruncate":              libcFtruncate,
+		"fstat":                  libcFstat,
+		"fchmod":                 libcFchmod,
+		"fchown":                 libcFchown,
+		"futimes":                libcFutimes,
+		"futimens":               libcFutimens,
+		"open":                   libcOpen,
+		"openat":                 libcOpenat,
+		"stat":                   libcStat,
+		"lstat":                  libcLstat,
+		"fstatat":                libcFstatat,
+		"access":                 libcAccess,
+		"faccessat":              libcFaccessat,
+		"truncate":               libcTruncate,
+		"statvfs":                libcStatvfs,
+		"fstatvfs":               libcFstatvfs,
+		"fchdir":                 libcFchdir,
+		"chroot":                 libcChroot,
+		"chdir":                  libcChdir,
+		"getcwd":                 libcGetcwd,
+		"mkdir":                  libcMkdir,
+		"mkdirat":                libcMkdirat,
+		"rmdir":                  libcRmdir,
+		"unlink":                 libcUnlink,
+		"unlinkat":               libcUnlinkat,
+		"mount":                  libcMount,
+		"umount":                 libcUmount,
+		"umount2":                libcUmount2,
+		"remove":                 libcRemove,
+		"rename":                 libcRename,
+		"renameat":               libcRenameat,
+		"link":                   libcLink,
+		"linkat":                 libcLinkat,
+		"symlink":                libcSymlink,
+		"symlinkat":              libcSymlinkat,
+		"readlink":               libcReadlink,
+		"readlinkat":             libcReadlinkat,
+		"canonicalize_file_name": libcCanonicalize_file_name,
+		"get_current_dir_name":   libcGet_current_dir_name,
+		"creat":                  libcCreat,
+		"eaccess":                libcEaccess,
+		"euidaccess":             libcEuidaccess,
+		"statfs":                 libcStatfs,
+		"fstatfs":                libcFstatfs,
+		"acct":                   libcAcct,
+		"realpath":               libcRealpath,
+		"chmod":                  libcChmod,
+		"fchmodat":               libcFchmodat,
+		"chown":                  libcChown,
+		"lchown":                 libcLchown,
+		"fchownat":               libcFchownat,
+		"mknod":                  libcMknod,
+		"mknodat":                libcMknodat,
+		"mkfifo":                 libcMkfifo,
+		"mkfifoat":               libcMkfifoat,
+		"utimes":                 libcUtimes,
+		"lutimes":                libcLutimes,
+		"utime":                  libcUtime,
+		"utimensat":              libcUtimensat,
+		"opendir":                libcOpendir,
+		"fdopendir":              libcFdopendir,
+		"readdir":                libcReaddir,
+		"rewinddir":              libcRewinddir,
+		"closedir":               libcClosedir,
+		"dirfd":                  libcDirfd,
+		"readdir_r":              libcReaddir_r,
+		"telldir":                libcTelldir,
+		"seekdir":                libcSeekdir,
+		"alphasort":              libcAlphasort,
+		"versionsort":            libcVersionsort,
+		"mkstemp":                libcMkstemp,
+		"mkostemp":               libcMkostemp,
+		"mkstemps":               libcMkstemps,
+		"mkdtemp":                libcMkdtemp,
+		"mktemp":                 libcMktemp,
+		"malloc":                 libcMalloc,
+		"free":                   libcFree,
+		"calloc":                 libcCalloc,
+		"realloc":                libcRealloc,
+		"mallopt":                libcMallopt,
+		"getpagesize":            libcGetpagesize,
+		"mmap":                   libcMmap,
+		"memfd_create":           libcMemfd_create,
+		"munmap":                 libcMunmap,
+		"msync":                  libcMsync,
+		"madvise":                libcMadvise,
+		"mprotect":               libcMprotect,
+		"mlock":                  libcMlock,
+		"munlock":                libcMunlock,
+		"mlockall":               libcMlockall,
+		"munlockall":             libcMunlockall,
+		"memalign":               libcMemalign,
+		"aligned_alloc":          libcAligned_alloc,
+		"valloc":                 libcValloc,
+		"posix_memalign":         libcPosix_memalign,
+		"malloc_usable_size":     libcMalloc_usable_size,
+		"malloc_trim":            libcMalloc_trim,
+		"reallocarray":           libcReallocarray,
+		"strncmp":                libcStrncmp,
+		"strcasecmp":             libcStrcasecmp,
+		"strncasecmp":            libcStrncasecmp,
+		"strchr":                 libcStrchr,
+		"strchrnul":              libcStrchrnul,
+		"strrchr":                libcStrrchr,
+		"strcasestr":             libcStrcasestr,
+		"stpcpy":                 libcStpcpy,
+		"strncpy":                libcStrncpy,
+		"stpncpy":                libcStpncpy,
+		"strdup":                 libcStrdup,
+		"strndup":                libcStrndup,
+		"strtok_r":               libcStrtok_r,
+		"strsep":                 libcStrsep,
+		"strverscmp":             libcStrverscmp,
+		"abs":                    libcAbs,
+		"isalnum":                libcIsalnum,
+		"isalpha":                libcIsalpha,
+		"isascii":                libcIsascii,
+		"isblank":                libcIsblank,
+		"iscntrl":                libcIscntrl,
+		"isdigit":                libcIsdigit,
+		"isgraph":                libcIsgraph,
+		"islower":                libcIslower,
+		"isprint":                libcIsprint,
+		"ispunct":                libcIspunct,
+		"isspace":                libcIsspace,
+		"isupper":                libcIsupper,
+		"isxdigit":               libcIsxdigit,
+		"tolower":                libcTolower,
+		"toupper":                libcToupper,
+		"toascii":                libcToascii,
+		"memmem":                 libcMemmem,
+		"mempcpy":                libcMempcpy,
+		"strnlen":                libcStrnlen,
+		"strncat":                libcStrncat,
+		"strlcpy":                libcStrlcpy,
+		"strlcat":                libcStrlcat,
+		"strstr":                 libcStrstr,
+		"strpbrk":                libcStrpbrk,
+		"explicit_bzero":         libcExplicit_bzero,
+		"bcopy":                  libcBcopy,
+		"bzero":                  libcBzero,
+		"memcpy":                 libcMemcpy,
+		"memmove":                libcMemmove,
+		"memset":                 libcMemset,
+		"memcmp":                 libcMemcmp,
+		"bcmp":                   libcBcmp,
+		"memchr":                 libcMemchr,
+		"strlen":                 libcStrlen,
+		"strcpy":                 libcStrcpy,
+		"strcat":                 libcStrcat,
+		"strcmp":                 libcStrcmp,
+		"strspn":                 libcStrspn,
+		"strcspn":                libcStrcspn,
+		"strerror":               libcStrerror,
+		"strsignal":              libcStrsignal,
+		"dirname":                libcDirname,
+		"fnmatch":                libcFnmatch,
+		"memrchr":                libcMemrchr,
+		"rawmemchr":              libcRawmemchr,
+		"memccpy":                libcMemccpy,
+		"swab":                   libcSwab,
+		"strtok":                 libcStrtok,
+		"strcoll":                libcStrcoll,
+		"strxfrm":                libcStrxfrm,
+		"strerror_r":             libcStrerror_r,
+		"basename":               libcBasename,
+		"ffs":                    libcFfs,
+		"ffsl":                   libcFfsl,
+		"ffsll":                  libcFfsll,
+		"labs":                   libcLabs,
+		"llabs":                  libcLlabs,
+		"div":                    libcDiv,
+		"lldiv":                  libcLldiv,
+		"index":                  libcStrchr,
+		"rindex":                 libcStrrchr,
+		"ldiv":                   libcDiv,
+		"imaxdiv":                libcLldiv,
+		"imaxabs":                libcLlabs,
+		"time":                   libcTime,
+		"gettimeofday":           libcGettimeofday,
+		"clock_settime":          libcClock_settime,
+		"localtime":              libcLocaltime,
+		"localtime_r":            libcLocaltime_r,
+		"tzset":                  libcTzset,
+		"asctime":                libcAsctime,
+		"asctime_r":              libcAsctime_r,
+		"ctime_r":                libcCtime_r,
+		"difftime":               libcDifftime,
+		"timegm":                 libcTimegm,
+		"settimeofday":           libcSettimeofday,
+		"stime":                  libcStime,
+		"adjtime":                libcAdjtime,
+		"usleep":                 libcUsleep,
+		"ualarm":                 libcUalarm,
+		"gmtime":                 libcGmtime,
+		"gmtime_r":               libcGmtime_r,
+		"clock":                  libcClock,
+		"clock_getres":           libcClock_getres,
+		"clock_nanosleep":        libcClock_nanosleep,
+		"setitimer":              libcSetitimer,
+		"getitimer":              libcGetitimer,
+		"alarm":                  libcAlarm,
+		"mktime":                 libcMktime,
+		"ctime":                  libcCtime,
+		"strftime":               libcStrftime,
+		"strptime":               libcStrptime,
+		"times":                  libcTimes,
+		"sleep":                  libcSleep,
+		"clock_gettime":          libcClock_gettime,
+		"nanosleep":              libcNanosleep,
+		"regcomp":                libcRegcomp,
+		"regexec":                libcRegexec,
+		"regfree":                libcRegfree,
+		"regerror":               libcRegerror,
+		"signal":                 libcSignal,
+		"sigaction":              libcSigaction,
+		"sigprocmask":            libcSigprocmask,
+		"pthread_sigmask":        libcPthread_sigmask,
+		"sigfillset":             libcSigfillset,
+		"sigemptyset":            libcSigemptyset,
+		"sigaddset":              libcSigaddset,
+		"sigdelset":              libcSigdelset,
+		"sigismember":            libcSigismember,
+		"sigisemptyset":          libcSigisemptyset,
+		"sigorset":               libcSigorset,
+		"sigandset":              libcSigandset,
+		"sigpending":             libcSigpending,
+		"sigwait":                libcSigwait,
+		"sigwaitinfo":            libcSigwaitinfo,
+		"sigtimedwait":           libcSigtimedwait,
+		"sigaltstack":            libcSigaltstack,
+		"siginterrupt":           libcSiginterrupt,
+		"pause":                  libcPause,
+		"sigsuspend":             libcSigsuspend,
+		"raise":                  libcRaise,
+		"kill":                   libcKill,
+		"sigqueue":               libcSigqueue,
+		"killpg":                 libcKillpg,
+		"abort":                  libcAbort,
+		"bsd_signal":             libcSignal,
+		"getpid":                 libcGetpid,
+		"getppid":                libcGetppid,
+		"getpgrp":                libcGetpgrp,
+		"setpgid":                libcSetpgid,
+		"tcgetpgrp":              libcTcgetpgrp,
+		"tcsetpgrp":              libcTcsetpgrp,
+		"getuid":                 libcGetuid,
+		"geteuid":                libcGeteuid,
+		"getgid":                 libcGetgid,
+		"getegid":                libcGetegid,
+		"getgroups":              libcGetgroups,
+		"uname":                  libcUname,
+		"sysconf":                libcSysconf,
+		"umask":                  libcUmask,
+		"rand":                   libcRand,
+		"srand":                  libcSrand,
+		"getenv":                 libcGetenv,
+		"putenv":                 libcPutenv,
+		"setenv":                 libcSetenv,
+		"unsetenv":               libcUnsetenv,
+		"clearenv":               libcClearenv,
+		"execve":                 libcExecve,
+		"execvp":                 libcExecvp,
+		"execv":                  libcExecv,
+		"execvpe":                libcExecvpe,
+		"execle":                 libcExecle,
+		"fexecve":                libcFexecve,
+		"execl":                  libcExecl,
+		"execlp":                 libcExeclp,
+		"_exit":                  libc_exit,
+		"_Exit":                  libc_Exit,
+		"system":                 libcSystem,
+		"setjmp":                 libcSetjmp,
+		"sigsetjmp":              libcSigsetjmp,
+		"longjmp":                libcLongjmp,
+		"_setjmp":                libcSetjmp,
+		"_longjmp":               libcLongjmp,
+		"siglongjmp":             libcLongjmp,
+		"vfork":                  libcVfork,
+		"fork":                   libcFork,
+		"waitpid":                libcWaitpid,
+		"wait":                   libcWait,
+		"wait3":                  libcWait3,
+		"wait4":                  libcWait4,
+		"waitid":                 libcWaitid,
+		"setlocale":              libcSetlocale,
+		"localeconv":             libcLocaleconv,
+		"nl_langinfo":            libcNl_langinfo,
+		"towlower":               libcTowlower,
+		"towupper":               libcTowupper,
+		"wctype":                 libcWctype,
+		"iswctype":               libcIswctype,
+		"wctrans":                libcWctrans,
+		"towctrans":              libcTowctrans,
+		"iswalnum":               libcIswalnum,
+		"iswalpha":               libcIswalpha,
+		"iswblank":               libcIswblank,
+		"iswcntrl":               libcIswcntrl,
+		"iswdigit":               libcIswdigit,
+		"iswgraph":               libcIswgraph,
+		"iswlower":               libcIswlower,
+		"iswprint":               libcIswprint,
+		"iswpunct":               libcIswpunct,
+		"iswspace":               libcIswspace,
+		"iswupper":               libcIswupper,
+		"iswxdigit":              libcIswxdigit,
+		"wcslen":                 libcWcslen,
+		"wcsnlen":                libcWcsnlen,
+		"wcscpy":                 libcWcscpy,
+		"wcsncpy":                libcWcsncpy,
+		"wcscat":                 libcWcscat,
+		"wcscmp":                 libcWcscmp,
+		"wcsncmp":                libcWcsncmp,
+		"wcscoll":                libcWcscoll,
+		"wcsxfrm":                libcWcsxfrm,
+		"wcschr":                 libcWcschr,
+		"wcsrchr":                libcWcsrchr,
+		"wcsstr":                 libcWcsstr,
+		"wcspbrk":                libcWcspbrk,
+		"wcsspn":                 libcWcsspn,
+		"wcscspn":                libcWcscspn,
+		"wcstok":                 libcWcstok,
+		"wcsdup":                 libcWcsdup,
+		"wcsftime":               libcWcsftime,
+		"wmemchr":                libcWmemchr,
+		"wmemcmp":                libcWmemcmp,
+		"wmemcpy":                libcWmemcpy,
+		"wmemmove":               libcWmemmove,
+		"wmemset":                libcWmemset,
+		"wcwidth":                libcWcwidth,
+		"wcswidth":               libcWcswidth,
+		"setuid":                 libcSetuid,
+		"seteuid":                libcSeteuid,
+		"setreuid":               libcSetreuid,
+		"setresuid":              libcSetresuid,
+		"setgid":                 libcSetgid,
+		"setegid":                libcSetegid,
+		"setregid":               libcSetregid,
+		"setresgid":              libcSetresgid,
+		"getresuid":              libcGetresuid,
+		"getresgid":              libcGetresgid,
+		"setgroups":              libcSetgroups,
+		"initgroups":             libcInitgroups,
+		"setsid":                 libcSetsid,
+		"getsid":                 libcGetsid,
+		"getpgid":                libcGetpgid,
+		"setpgrp":                libcSetpgrp,
+		"nice":                   libcNice,
+		"getpriority":            libcGetpriority,
+		"setpriority":            libcSetpriority,
+		"sched_yield":            libcSched_yield,
+		"sched_get_priority_max": libcSched_get_priority_max,
+		"sched_get_priority_min": libcSched_get_priority_min,
+		"sched_getscheduler":     libcSched_getscheduler,
+		"sched_getparam":         libcSched_getparam,
+		"sched_setparam":         libcSched_setparam,
+		"sched_setscheduler":     libcSched_setscheduler,
+		"sched_rr_get_interval":  libcSched_rr_get_interval,
+		"openlog":                libcOpenlog,
+		"closelog":               libcCloselog,
+		"setlogmask":             libcSetlogmask,
+		"__kernel_syslog":        libc__kernel_syslog,
+		"sysinfo":                libcSysinfo,
+		"get_nprocs":             libcGet_nprocs,
+		"get_nprocs_conf":        libcGet_nprocs_conf,
+		"get_phys_pages":         libcGet_phys_pages,
+		"get_avphys_pages":       libcGet_avphys_pages,
+		"getloadavg":             libcGetloadavg,
+		"getrusage":              libcGetrusage,
+		"getrlimit":              libcGetrlimit,
+		"setrlimit":              libcSetrlimit,
+		"prlimit":                libcPrlimit,
+		"getdtablesize":          libcGetdtablesize,
+		"confstr":                libcConfstr,
+		"pathconf":               libcPathconf,
+		"fpathconf":              libcFpathconf,
+		"getlogin":               libcGetlogin,
+		"getlogin_r":             libcGetlogin_r,
+		"ctermid":                libcCtermid,
+		"ttyname":                libcTtyname,
+		"ttyname_r":              libcTtyname_r,
+		"getpwnam":               libcGetpwnam,
+		"getpwuid":               libcGetpwuid,
+		"getpwnam_r":             libcGetpwnam_r,
+		"getpwuid_r":             libcGetpwuid_r,
+		"getpwent":               libcGetpwent,
+		"setpwent":               libcSetpwent,
+		"endpwent":               libcEndpwent,
+		"getgrnam":               libcGetgrnam,
+		"getgrgid":               libcGetgrgid,
+		"getgrnam_r":             libcGetgrnam_r,
+		"getgrgid_r":             libcGetgrgid_r,
+		"getgrent":               libcGetgrent,
+		"setgrent":               libcSetgrent,
+		"endgrent":               libcEndgrent,
+		"getgrouplist":           libcGetgrouplist,
+		"posix_openpt":           libcPosix_openpt,
+		"grantpt":                libcGrantpt,
+		"unlockpt":               libcUnlockpt,
+		"ptsname":                libcPtsname,
+		"ptsname_r":              libcPtsname_r,
+		"openpty":                libcOpenpty,
+		"forkpty":                libcForkpty,
+		"glob":                   libcGlob,
+		"globfree":               libcGlobfree,
+		"random":                 libcRandom,
+		"srandom":                libcSrandom,
+		"initstate":              libcInitstate,
+		"setstate":               libcSetstate,
+		"rand_r":                 libcRand_r,
+		"secure_getenv":          libcSecure_getenv,
+		"getsubopt":              libcGetsubopt,
+		"daemon":                 libcDaemon,
+		"prctl":                  libcPrctl,
+		"getpass":                libcGetpass,
+		"vhangup":                libcVhangup,
+		"getusershell":           libcGetusershell,
+		"setusershell":           libcSetusershell,
+		"endusershell":           libcEndusershell,
+		"gethostname":            libcGethostname,
+		"getentropy":             libcGetentropy,
+		"getdomainname":          libcGetdomainname,
+		"sethostname":            libcSethostname,
+		"setdomainname":          libcSetdomainname,
+		"gethostid":              libcGethostid,
+		"sethostid":              libcSethostid,
+		"psignal":                libcPsignal,
+		"psiginfo":               libcPsiginfo,
+		"__assert_fail":          libc__assert_fail,
+		"socket":                 libcSocket,
+		"socketpair":             libcSocketpair,
+		"bind":                   libcBind,
+		"connect":                libcConnect,
+		"listen":                 libcListen,
+		"accept":                 libcAccept,
+		"accept4":                libcAccept4,
+		"getsockname":            libcGetsockname,
+		"getpeername":            libcGetpeername,
+		"getsockopt":             libcGetsockopt,
+		"setsockopt":             libcSetsockopt,
+		"send":                   libcSend,
+		"sendto":                 libcSendto,
+		"recv":                   libcRecv,
+		"recvfrom":               libcRecvfrom,
+		"sendmsg":                libcSendmsg,
+		"recvmsg":                libcRecvmsg,
+		"shutdown":               libcShutdown,
+		"sockatmark":             libcSockatmark,
+		"getaddrinfo":            libcGetaddrinfo,
+		"freeaddrinfo":           libcFreeaddrinfo,
+		"gai_strerror":           libcGai_strerror,
+		"getnameinfo":            libcGetnameinfo,
+		"gethostbyname":          libcGethostbyname,
+		"gethostbyname2":         libcGethostbyname2,
+		"gethostbyaddr":          libcGethostbyaddr,
+		"gethostent":             libcGethostent,
+		"sethostent":             libcSethostent,
+		"endhostent":             libcEndhostent,
+		"getservbyname":          libcGetservbyname,
+		"getservbyport":          libcGetservbyport,
+		"getprotobyname":         libcGetprotobyname,
+		"getprotobynumber":       libcGetprotobynumber,
+		"getnetbyname":           libcGetnetbyname,
+		"getnetbyaddr":           libcGetnetbyaddr,
+		"hstrerror":              libcHstrerror,
+		"herror":                 libcHerror,
+		"inet_aton":              libcInet_aton,
+		"inet_addr":              libcInet_addr,
+		"inet_network":           libcInet_network,
+		"inet_ntoa":              libcInet_ntoa,
+		"inet_pton":              libcInet_pton,
+		"inet_ntop":              libcInet_ntop,
+		"inet_makeaddr":          libcInet_makeaddr,
+		"inet_lnaof":             libcInet_lnaof,
+		"inet_netof":             libcInet_netof,
+		"if_nametoindex":         libcIf_nametoindex,
+		"if_indextoname":         libcIf_indextoname,
+		"if_nameindex":           libcIf_nameindex,
+		"if_freenameindex":       libcIf_freenameindex,
+		"crypt":                  libcCrypt,
+	}
 }

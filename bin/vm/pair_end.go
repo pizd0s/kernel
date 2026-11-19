@@ -1,0 +1,943 @@
+//go:build linux && amd64
+
+package main
+
+import (
+	"encoding/binary"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+)
+
+// A pair is the kernel's, of AF_UNIX sockets of a kind, SOCK_SEQPACKET,
+// SOCK_STREAM or SOCK_DGRAM: two channels of messages (msg_channel.go),
+// one each way, and an end of the pair reads one and writes the other. A
+// receive that blocks waits at the channel it reads, where the send gives
+// it its packet, a stream's read for its turn to look, and a send that
+// blocks at the one it writes, for room; a poll of an end subscribes to
+// both. A packet is bytes, the files sent with
+// them, SCM_RIGHTS, which the receiver's table takes, and the sender's
+// credentials, which go to a receiver that asks for them (SO_PASSCRED).
+// A read of a seqpacket or a datagram pair takes one packet, as much of
+// it as fits, its files only when a control buffer asks for them; a read
+// of a stream takes bytes, those of the packets queued as far as they
+// fit, a packet with files only first, the read ending with it, and what
+// of a packet does not fit is the next read's; a write of a stream goes
+// in packets of at most packetMax bytes, its files with the first. The
+// last close of an end ends the channel it wrote, EOF to the other end,
+// but for a datagram pair, which has no end of data, and finishes the one
+// it read, EPIPE to the other end's writes, ECONNREFUSED to a datagram
+// pair's. Seqpacket pairs carry the file protocol (protocol.go).
+
+// pairState is what both ends share: the inode and the kind.
+type pairState struct {
+	ino  uint64
+	made time.Time
+	kind int
+}
+
+type pairEnd struct {
+	shared *pairState
+	peer   *pairEnd
+	// to is what the end writes, from what it reads.
+	to, from *msgChannel
+	refs     atomic.Int32
+	nonblock atomic.Bool
+	// dead is set once the end closed its channels; noWrite and noRead
+	// are shutdown's.
+	dead    atomic.Bool
+	noWrite atomic.Bool
+	noRead  atomic.Bool
+	// front is a packet MSG_PEEK took out of the channel, or what of a
+	// packet a read of a stream left, the next read's; peeked says there is
+	// one, for a poll to ask without mu.
+	mu     sync.Mutex
+	front  *packet
+	peeked atomic.Bool
+	// options are the socket's options of the socket level.
+	options sockOptions
+	// dir is the end as a directory, once a process made it its working
+	// directory (directory), with mu.
+	dir *remoteDir
+}
+
+// newPair makes a seqpacket pair, newPairOf one of a kind, each end with
+// one reference.
+func newPair(nonblock bool) (*pairEnd, *pairEnd) {
+	return newPairOf(sockSeqpacket, nonblock)
+}
+
+func newPairOf(kind int, nonblock bool) (*pairEnd, *pairEnd) {
+	s := &pairState{ino: pairInodes.Add(1), made: time.Now(), kind: kind}
+	ab, ba := newMsgChannel(queueMax), newMsgChannel(queueMax)
+	a, b := &pairEnd{shared: s, to: ab, from: ba}, &pairEnd{shared: s, to: ba, from: ab}
+	a.peer, b.peer = b, a
+
+	for _, e := range []*pairEnd{a, b} {
+		e.refs.Store(1)
+		e.nonblock.Store(nonblock)
+	}
+
+	return a, b
+}
+
+func (e *pairEnd) ref() {
+	e.refs.Add(1)
+}
+
+// unref closes the end when its last reference goes: what it read is
+// finished, what was queued for it dropped, files and all; what it wrote
+// ends, which wakes the other end's queue: the end of its data, and EPIPE
+// to its writes.
+func (e *pairEnd) unref() {
+	if e.refs.Add(-1) != 0 {
+		return
+	}
+
+	e.from.finish()
+	e.mu.Lock()
+
+	if e.front != nil {
+		dropFiles(e.front.files)
+		e.front = nil
+		e.peeked.Store(false)
+	}
+
+	e.mu.Unlock()
+	e.dead.Store(true)
+	e.to.end()
+}
+
+// A pairEnd is a File, a Transfer and a Socket, and itself to a call that
+// wants one.
+func (e *pairEnd) asFile() File              { return e }
+func (e *pairEnd) asTransfer() Transfer      { return e }
+func (e *pairEnd) asSeeker() Seeker          { return nil }
+func (e *pairEnd) asDir() Dir                { return nil }
+func (e *pairEnd) asTerminal() Terminal      { return nil }
+func (e *pairEnd) asWindowed() Windowed      { return nil }
+func (e *pairEnd) asLink() Link              { return nil }
+func (e *pairEnd) asAttrs() Attrs            { return nil }
+func (e *pairEnd) asSocket() Socket          { return e }
+func (e *pairEnd) asIoctl() Ioctl            { return nil }
+func (e *pairEnd) asLocker() Locker          { return nil }
+func (e *pairEnd) asEpoll() *epoll           { return nil }
+func (e *pairEnd) asMemfd() *memfdFile       { return nil }
+func (e *pairEnd) asPair() *pairEnd          { return e }
+func (e *pairEnd) asListener() *unixListener { return nil }
+func (e *pairEnd) asConsole() *consoleEnd    { return nil }
+func (e *pairEnd) asVFS() *remoteDir         { return nil }
+func (e *pairEnd) asCall() *callEnd          { return nil }
+
+// subscribe makes to learn of what may make the end readable, for input,
+// and writable, for output; of both when neither is asked.
+func (e *pairEnd) subscribe(s *subscription, events int16) {
+	in, out := ioSides(events)
+
+	if in {
+		e.from.subscribe(&s.in, false)
+	}
+
+	if out {
+		e.to.subscribe(&s.out, true)
+	}
+}
+
+func (e *pairEnd) unsubscribe(s *subscription) {
+	e.from.unsubscribe(&s.in)
+	e.to.unsubscribe(&s.out)
+}
+
+func (e *pairEnd) stat(p *Process, st *syscall.Stat_t) error {
+	s := e.shared
+	*st = syscall.Stat_t{Ino: s.ino, Mode: syscall.S_IFSOCK | 0o777, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
+	st.Atim = syscall.NsecToTimespec(s.made.UnixNano())
+	st.Mtim, st.Ctim = st.Atim, st.Atim
+
+	return nil
+}
+
+// poll: the other end's going is the end of the data, a hangup, but for
+// a datagram pair, which writes to it fail at once.
+func (e *pairEnd) poll(events int16) int16 {
+	mask := int16(0)
+	dgram := e.shared.kind == sockDgram
+
+	if e.peeked.Load() || e.from.count() > 0 || e.noRead.Load() || !dgram && (e.peer.dead.Load() || e.peer.noWrite.Load()) {
+		mask |= pollIn | pollRdnorm
+	}
+
+	switch {
+	case e.peer.dead.Load() || e.to.gone():
+		mask |= pollOut | pollWrnorm
+
+		if !dgram {
+			mask |= pollHup
+		}
+	case e.to.room():
+		mask |= pollOut | pollWrnorm
+	}
+
+	return mask & (events | pollErr | pollHup)
+}
+
+// wait waits for events of the end as a poll does, for a receive that
+// only looks, until the timeout of to, SO_RCVTIMEO's: false when it
+// passed. A signal is EINTR, after the handlers, which restart the call
+// only without a timeout.
+func (e *pairEnd) wait(p *Process, events int16, to *atomic.Int64) (bool, error) {
+	timeout := -1
+
+	if ns := to.Load(); ns > 0 {
+		timeout = waitMs(time.Duration(ns))
+	}
+
+	ready, err := p.waitObject(e, events, timeout, timeout < 0)
+
+	return ready > 0, err
+}
+
+func (e *pairEnd) flags() (int, error) {
+	fl := syscall.O_RDWR
+
+	if e.nonblock.Load() {
+		fl |= syscall.O_NONBLOCK
+	}
+
+	return fl, nil
+}
+
+func (e *pairEnd) setFlags(fl int) error {
+	e.nonblock.Store(fl&syscall.O_NONBLOCK != 0)
+
+	return nil
+}
+
+// send queues a packet for the other end, blocking for room unless
+// nonblock. The packet takes references of its own to the files before
+// the other end can see it, and gives them back when it does not go; the
+// sender keeps its own. EPIPE comes without SIGPIPE, as Linux has it for
+// these.
+func (e *pairEnd) send(p *Process, data []byte, files []Object, mode ioMode) error {
+	if len(data) > packetMax {
+		return syscall.EMSGSIZE
+	}
+
+	return e.sendOwned(p, append([]byte(nil), data...), files, mode)
+}
+
+// sendOwned is send of data the caller gives away: the packet keeps it as
+// it is.
+func (e *pairEnd) sendOwned(p *Process, data []byte, files []Object, mode ioMode) error {
+	return e.sendCred(p, data, files, nil, mode)
+}
+
+// sendCred is sendOwned with the credentials the sender gave, SCM_CREDENTIALS',
+// or none: a receiver that asks for them gets the sender's own then.
+func (e *pairEnd) sendCred(p *Process, data []byte, files []Object, cred *ucred, mode ioMode) error {
+	if len(data) > packetMax {
+		return syscall.EMSGSIZE
+	}
+
+	if cred == nil && p != nil && e.peer.options.passcred.Load() {
+		cred = p.ucred()
+	}
+
+	for _, f := range files {
+		f.ref()
+	}
+
+	err := e.queue(p, packet{data: data, files: files, cred: cred}, mode)
+
+	if err != nil {
+		dropFiles(files)
+	} else {
+		armFiles(files)
+	}
+
+	return err
+}
+
+// sendStream writes spans to a stream pair, in packets of at most
+// packetMax bytes, the files and the credentials with the first, waiting
+// for room between them: what was queued before EAGAIN, a signal or the
+// timeout is the count. EPIPE is SIGPIPE too, unless quiet.
+func (e *pairEnd) sendStream(p *Process, spans [][]byte, files []Object, cred *ucred, mode ioMode) (int, error) {
+	sent := 0
+
+	for len(spans) > 0 {
+		chunk := make([]byte, 0, min(totalLength(spans), packetMax))
+
+		for len(spans) > 0 && len(chunk) < cap(chunk) {
+			c := min(len(spans[0]), cap(chunk)-len(chunk))
+			chunk = append(chunk, spans[0][:c]...)
+
+			if spans[0] = spans[0][c:]; len(spans[0]) == 0 {
+				spans = spans[1:]
+			}
+		}
+
+		if len(chunk) == 0 {
+			continue
+		}
+
+		if err := e.sendCred(p, chunk, files, cred, mode); err != nil {
+			if err == syscall.EPIPE && !mode.quiet {
+				p.sendSelf(int(syscall.SIGPIPE))
+			}
+
+			if sent > 0 {
+				return sent, nil
+			}
+
+			return 0, err
+		}
+
+		sent += len(chunk)
+		files, cred = nil, nil
+	}
+
+	return sent, nil
+}
+
+// totalLength is the bytes of spans.
+func totalLength(spans [][]byte) int {
+	n := 0
+
+	for _, b := range spans {
+		n += len(b)
+	}
+
+	return n
+}
+
+// kernelSend is a send for p of the kernel's making, a request to a
+// server: data given away, with files, quiet; p takes its signals as it
+// waits for room, and waits on. A nonblocking end is EAGAIN when full.
+func (e *pairEnd) kernelSend(p *Process, data []byte, files []Object) error {
+	if len(data) > packetMax {
+		return syscall.EMSGSIZE
+	}
+
+	for _, f := range files {
+		f.ref()
+	}
+
+	pk := packet{data: data, files: files}
+	err := e.kernelPut(p, &pk)
+
+	if err != nil {
+		dropFiles(files)
+	}
+
+	return err
+}
+
+func (e *pairEnd) kernelPut(p *Process, pk *packet) error {
+	for {
+		if e.noWrite.Load() {
+			return syscall.EPIPE
+		}
+
+		if full, err := e.to.put(pk); err != nil || !full {
+			return err
+		}
+
+		if e.nonblock.Load() {
+			return syscall.EAGAIN
+		}
+
+		e.to.writable(p, func() bool { return e.noWrite.Load() }, time.Time{}, waitsOn)
+	}
+}
+
+func (e *pairEnd) queue(p *Process, pk packet, mode ioMode) error {
+	return e.queueAs(p, pk, mode.nonblock || e.nonblock.Load(), &e.options.sndTimeout)
+}
+
+// queueAs is queue for a sender of the end's that is not the end itself,
+// a datagram socket of a name's (unix_dgram.go), with its own nonblock
+// and timeout.
+func (e *pairEnd) queueAs(p *Process, pk packet, nonblock bool, timeout *atomic.Int64) error {
+	for {
+		if e.noWrite.Load() {
+			return syscall.EPIPE
+		}
+
+		full, err := e.to.put(&pk)
+
+		if err == syscall.EPIPE && e.shared.kind == sockDgram {
+			return syscall.ECONNREFUSED
+		}
+
+		if err != nil || !full {
+			return err
+		}
+
+		if nonblock {
+			return syscall.EAGAIN
+		}
+
+		end, how := until(timeout)
+
+		if timedOut, err := e.to.writable(p, func() bool { return e.noWrite.Load() }, end, how); err != nil {
+			return err
+		} else if timedOut {
+			return syscall.EAGAIN
+		}
+	}
+}
+
+// seen tells whether a receive of the end that found no packet has
+// something else to see: a packet looked at, the end's own shutdown, and,
+// but for a datagram pair, the other end's going or its shutdown.
+func (e *pairEnd) seen() bool {
+	return e.peeked.Load() || e.noRead.Load() || e.shared.kind != sockDgram && (e.from.ended.Load() || e.peer.noWrite.Load())
+}
+
+// take is the next packet without waiting: the one peeked, else the
+// channel's; eof when the writer is gone, ok false when there is none
+// yet; a datagram pair's end of data is only its own shutdown. A take
+// that makes room in a full channel wakes the writer's queue.
+func (e *pairEnd) take(peek bool) (pk packet, eof, ok bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return e.takeLocked(peek)
+}
+
+func (e *pairEnd) takeLocked(peek bool) (pk packet, eof, ok bool) {
+	if e.front != nil {
+		pk = *e.front
+
+		if !peek {
+			e.front = nil
+			e.peeked.Store(false)
+		}
+
+		return pk, false, true
+	}
+
+	if e.noRead.Load() {
+		return packet{}, true, true
+	}
+
+	// The other end's shutdown before the channel, as the channel's end
+	// before its messages: what it wrote before it shut its writing down
+	// is queued by then.
+	dgram := e.shared.kind == sockDgram
+	shut := !dgram && e.peer.noWrite.Load()
+	pk, eof, ok, _ = e.from.take()
+
+	if eof && dgram {
+		return packet{}, false, false
+	}
+
+	if ok && !eof && peek {
+		// A copy of its own: pk itself stays off the heap for a take that
+		// does not peek.
+		kept := pk
+		e.front = &kept
+		e.peeked.Store(true)
+	}
+
+	if ok {
+		return pk, eof, true
+	}
+
+	// Nothing queued: the end of the data when the other end shut its
+	// writing down.
+	if shut {
+		return packet{}, true, true
+	}
+
+	return packet{}, false, false
+}
+
+// keepFront makes what of a packet a read of a stream did not take the
+// next read's, with the lock.
+func (e *pairEnd) keepFront(pk packet) {
+	e.front = &pk
+	e.peeked.Store(true)
+}
+
+// recv takes the next packet, or looks at it with peek: EOF is an empty
+// packet with eof set. With none there it waits for one, which the send
+// gives it, until the timeout of SO_RCVTIMEO; a look waits as a poll
+// does, for the end to be readable.
+func (e *pairEnd) recv(p *Process, mode ioMode, peek bool) (packet, bool, error) {
+	nonblock := mode.nonblock || e.nonblock.Load()
+
+	for {
+		pk, eof, ok := e.take(peek)
+
+		if ok {
+			return pk, eof, nil
+		}
+
+		if nonblock {
+			return packet{}, false, syscall.EAGAIN
+		}
+
+		if peek {
+			if ready, err := e.wait(p, pollIn, &e.options.rcvTimeout); err != nil {
+				return packet{}, false, err
+			} else if !ready {
+				return packet{}, false, syscall.EAGAIN
+			}
+
+			continue
+		}
+
+		end, how := until(&e.options.rcvTimeout)
+		pk, given, timedOut, err := e.from.receive(p, func() bool { return e.seen() }, end, how)
+
+		switch {
+		case err != nil:
+			return packet{}, false, err
+		case timedOut:
+			return packet{}, false, syscall.EAGAIN
+		case given:
+			return pk, false, nil
+		}
+	}
+}
+
+// receive reads into the guest's buffers: a packet, of a seqpacket or a
+// datagram pair, whose whole length is the count with MSG_TRUNC, or the
+// bytes of a stream (receiveStream). The files and the credentials it
+// came with go to a control buffer of room bytes at control when there
+// is one, else they are dropped. It returns the count, the control bytes
+// written, the flags of the message, MSG_TRUNC and MSG_CTRUNC, and the
+// sender's address: the path a datagram's sender is bound to, none of a
+// pair's.
+func (e *pairEnd) receive(p *Process, bufs [][]byte, flags uint32, control, room uint32) (int, uint32, uint32, []byte, error) {
+	if e.shared.kind == sockStream {
+		n, written, out, err := e.receiveStream(p, bufs, flags, control, room)
+
+		return n, written, out, nil, err
+	}
+
+	mode := ioMode{nonblock: flags&msgDontwait != 0}
+	pk, eof, err := e.recv(p, mode, flags&msgPeek != 0)
+
+	if err != nil || eof {
+		return 0, 0, 0, nil, err
+	}
+
+	n, out := 0, uint32(0)
+	data := pk.data
+
+	for _, b := range bufs {
+		c := copy(b, data)
+		data = data[c:]
+		n += c
+	}
+
+	if len(data) > 0 {
+		out |= msgTrunc
+	}
+
+	if flags&msgTrunc != 0 {
+		n = len(pk.data)
+	}
+
+	if flags&msgPeek != 0 {
+		return n, 0, out, pk.addr, nil
+	}
+
+	written, cut := e.putControl(p, pk, control, room, flags&msgCmsgCloexec != 0)
+
+	return n, written, out | cut, pk.addr, nil
+}
+
+// receiveStream reads a stream's bytes into bufs: what is queued, as
+// described at the pair, waiting only while there is none; with MSG_PEEK
+// they stay, the first packet's, and with MSG_WAITALL it goes on until
+// bufs are full or the data ends, a signal or the timeout ending it with
+// what it has.
+func (e *pairEnd) receiveStream(p *Process, bufs [][]byte, flags uint32, control, room uint32) (int, uint32, uint32, error) {
+	nonblock := flags&msgDontwait != 0 || e.nonblock.Load()
+	want := totalLength(bufs)
+	got := 0
+	var written, cut uint32
+
+	if want == 0 {
+		return 0, 0, 0, nil
+	}
+
+	for {
+		n, first, eof, ended := e.streamTake(advance(bufs, got), flags&msgPeek != 0)
+
+		if got == 0 && n > 0 && flags&msgPeek == 0 {
+			written, cut = e.putControl(p, first, control, room, flags&msgCmsgCloexec != 0)
+		} else {
+			dropFiles(first.files)
+		}
+
+		got += n
+
+		if eof || ended || got >= want || got > 0 && flags&msgWaitall == 0 || flags&msgPeek != 0 && got > 0 {
+			return got, written, cut, nil
+		}
+
+		if nonblock {
+			if got > 0 {
+				return got, written, cut, nil
+			}
+
+			return 0, 0, 0, syscall.EAGAIN
+		}
+
+		end, how := until(&e.options.rcvTimeout)
+		timedOut, err := e.from.readable(p, func() bool { return e.seen() }, end, how)
+
+		if err != nil || timedOut {
+			if got > 0 {
+				return got, written, cut, nil
+			}
+
+			if err == nil {
+				err = syscall.EAGAIN
+			}
+
+			return 0, 0, 0, err
+		}
+	}
+}
+
+// streamTake copies into bufs what the stream has queued, without
+// waiting: the bytes of the packets in turn, as far as they fit, but for
+// a packet with files, which only a read with nothing yet takes, ending
+// with it; what of a packet does not fit stays first, all of it with
+// peek, which looks at the first packet alone. It returns the bytes, the
+// first packet with its files and credentials, the read's, whether the
+// data ended, and whether the read ends there, after files.
+func (e *pairEnd) streamTake(bufs [][]byte, peek bool) (n int, first packet, eof, ended bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	room := totalLength(bufs)
+
+	for n < room {
+		pk, end, ok := e.takeLocked(peek)
+
+		if !ok {
+			return n, first, false, false
+		}
+
+		if end {
+			return n, first, n == 0, false
+		}
+
+		if n > 0 && len(pk.files) > 0 {
+			e.keepFront(pk)
+
+			return n, first, false, true
+		}
+
+		c := scatterInto(advance(bufs, n), pk.data)
+
+		if n == 0 {
+			first = packet{files: pk.files, cred: pk.cred}
+		}
+
+		n += c
+
+		if peek {
+			return n, packet{}, false, true
+		}
+
+		if c < len(pk.data) {
+			e.keepFront(packet{data: pk.data[c:], cred: pk.cred})
+		}
+
+		if len(pk.files) > 0 {
+			return n, first, false, true
+		}
+	}
+
+	return n, first, false, false
+}
+
+// advance is bufs without their first n bytes.
+func advance(bufs [][]byte, n int) [][]byte {
+	for len(bufs) > 0 && n >= len(bufs[0]) {
+		n -= len(bufs[0])
+		bufs = bufs[1:]
+	}
+
+	if n == 0 {
+		return bufs
+	}
+
+	return append([][]byte{bufs[0][n:]}, bufs[1:]...)
+}
+
+// scatterInto copies data into bufs in turn, as far as it fits.
+func scatterInto(bufs [][]byte, data []byte) int {
+	n := 0
+
+	for _, b := range bufs {
+		c := copy(b, data)
+		data = data[c:]
+		n += c
+
+		if len(data) == 0 {
+			break
+		}
+	}
+
+	return n
+}
+
+// putControl writes the control messages of a packet into the guest's
+// control buffer of room bytes at control: its files installed as the
+// process's descriptors, one SCM_RIGHTS, and then, for an end that asks
+// for them, its credentials, SCM_CREDENTIALS. What does not fit is dropped
+// with MSG_CTRUNC. It returns the bytes written and the flag.
+func (e *pairEnd) putControl(p *Process, pk packet, control, room uint32, cloexec bool) (uint32, uint32) {
+	written, cut := p.putRights(pk.files, control, room, cloexec)
+
+	if pk.cred == nil || !e.options.passcred.Load() {
+		return written, cut
+	}
+
+	size := guestCmsgHeader + uint32(ucredSize)
+
+	if room-written < size {
+		return written, cut | msgCtrunc
+	}
+
+	at := control + written
+	p.put32(at, size)
+	p.put32(at+4, solSocket)
+	p.put32(at+8, scmCredentials)
+	p.put32(at+12, pk.cred.pid)
+	p.put32(at+16, pk.cred.uid)
+	p.put32(at+20, pk.cred.gid)
+
+	return written + min(guestAlign(size), room-written), cut
+}
+
+func (e *pairEnd) read(p *Process, b []byte, mode ioMode) (int, error) {
+	if p.chaosFail("read") {
+		return 0, syscall.EIO
+	}
+
+	n, _, _, _, err := e.receive(p, [][]byte{b}, 0, 0, 0)
+
+	return n, err
+}
+
+func (e *pairEnd) write(p *Process, b []byte, mode ioMode) (int, error) {
+	if p.chaosFail("write") {
+		return 0, syscall.EIO
+	}
+
+	if e.shared.kind == sockStream {
+		return e.sendStream(p, [][]byte{b}, nil, nil, mode)
+	}
+
+	if err := e.send(p, b, nil, mode); err != nil {
+		return 0, err
+	}
+
+	return len(b), nil
+}
+
+func (e *pairEnd) pread(p *Process, b []byte, off int64) (int, error) {
+	return 0, syscall.ESPIPE
+}
+
+func (e *pairEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
+	return 0, syscall.ESPIPE
+}
+
+// The socket calls: a pair is connected and unnamed.
+
+func (e *pairEnd) bind(p *Process, at, n uint32) error {
+	return syscall.EINVAL
+}
+
+func (e *pairEnd) connect(p *Process, at, n uint32) error {
+	return syscall.EISCONN
+}
+
+func (e *pairEnd) listen(backlog int) error {
+	return syscall.EINVAL
+}
+
+func (e *pairEnd) accept(p *Process, flags uint32) (Object, []byte, error) {
+	return nil, nil, syscall.EINVAL
+}
+
+func (e *pairEnd) sockname(p *Process) ([]byte, error) {
+	return unixAddress(nil), nil
+}
+
+func (e *pairEnd) peername(p *Process) ([]byte, error) {
+	return unixAddress(nil), nil
+}
+
+func (e *pairEnd) socketKind() int {
+	return e.shared.kind
+}
+
+func (e *pairEnd) shutdown(how int) error {
+	if how < shutRd || how > shutRdwr {
+		return syscall.EINVAL
+	}
+
+	// No more reading ends the data for this end and the other end's
+	// writes; no more writing ends the data for the other end and this
+	// end's writes. The queues of both wake.
+	if how != shutWr {
+		e.noRead.Store(true)
+		e.from.edge(true, true)
+	}
+
+	if how != shutRd {
+		e.noWrite.Store(true)
+		e.to.edge(true, true)
+	}
+
+	return nil
+}
+
+func (e *pairEnd) getsockopt(p *Process, level, name, at, lenAt uint32) error {
+	return e.options.get(p, e.shared.kind, level, name, at, lenAt)
+}
+
+// setsockopt keeps SO_RCVTIMEO, SO_SNDTIMEO, SO_PASSCRED and the options of
+// soInts, as Linux checks them, and takes the other options of the socket
+// level as done.
+func (e *pairEnd) setsockopt(p *Process, level, name, at, n uint32) error {
+	return e.options.set(p, level, name, at, n)
+}
+
+func (e *pairEnd) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, error) {
+	if addr != 0 {
+		return 0, syscall.EISCONN
+	}
+
+	mode := ioMode{nonblock: flags&msgDontwait != 0, quiet: flags&msgNosignal != 0}
+
+	if e.shared.kind == sockStream {
+		return e.sendStream(p, [][]byte{p.span(buf, n)}, nil, nil, mode)
+	}
+
+	if err := e.send(p, p.span(buf, n), nil, mode); err != nil {
+		return 0, err
+	}
+
+	return int(n), nil
+}
+
+func (e *pairEnd) recvfrom(p *Process, buf, n, flags uint32) (int, []byte, error) {
+	got, _, _, from, err := e.receive(p, [][]byte{p.span(buf, n)}, flags, 0, 0)
+
+	return got, senderAddress(from), err
+}
+
+// senderAddress is the address recvfrom and recvmsg give of a sender bound
+// to path, and none, no byte of it, of one that is not, as Linux's.
+func senderAddress(path []byte) []byte {
+	if len(path) == 0 {
+		return nil
+	}
+
+	return unixAddress(path)
+}
+
+// sendmsg sends the guest's msghdr, read at once: the descriptors of its
+// SCM_RIGHTS as the packet's files, its iovecs gathered into the packet's
+// bytes. The descriptors are Linux's first: a bad one is EBADF even in a
+// message too long.
+func (e *pairEnd) sendmsg(p *Process, at, flags uint32) (int, error) {
+	h := p.span(at, sizeofMsghdr)
+
+	if binary.LittleEndian.Uint32(h) != 0 {
+		return 0, syscall.EISCONN
+	}
+
+	files, cred, err := p.rights(binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
+
+	if err != nil {
+		return 0, err
+	}
+
+	mode := ioMode{nonblock: flags&msgDontwait != 0, quiet: flags&msgNosignal != 0}
+
+	if e.shared.kind == sockStream {
+		spans, err := p.ioSpans(binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]))
+
+		if err != nil {
+			return 0, err
+		}
+
+		return e.sendStream(p, spans, files, cred, mode)
+	}
+
+	data, err := p.gather(binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]), packetMax)
+
+	if err != nil {
+		return 0, err
+	}
+
+	if err := e.sendCred(p, data, files, cred, mode); err != nil {
+		return 0, err
+	}
+
+	return len(data), nil
+}
+
+// recvmsg reads a packet into the guest's msghdr: the iovecs scattered,
+// the files into its control buffer, the flags into msg_flags, the
+// sender's address into msg_name.
+func (e *pairEnd) recvmsg(p *Process, at, flags uint32) (int, error) {
+	var few [4][]byte
+	spans, err := p.ioSpansIn(few[:0], p.u32(at+8), p.u32(at+12))
+
+	if err != nil {
+		return 0, err
+	}
+
+	n, written, out, from, err := e.receive(p, spans, flags, p.u32(at+16), p.u32(at+20))
+
+	if err != nil {
+		return 0, err
+	}
+
+	if name := p.u32(at); name != 0 {
+		addr := senderAddress(from)
+		copy(p.span(name, min(p.u32(at+4), uint32(len(addr)))), addr)
+		p.put32(at+4, uint32(len(addr)))
+	}
+
+	p.put32(at+20, written)
+	p.put32(at+24, out|flags&msgCmsgCloexec)
+
+	return n, nil
+}
+
+// directory is the end of a seqpacket pair as a directory, what a process
+// that makes it its working directory has: a handle of id 0, the root of
+// the server behind the pair, which the calls with a path go to as to
+// any handle (rootfs makes its children's root so). One for the end while
+// any holds it, with a reference for the caller.
+func (e *pairEnd) directory(p *Process) *remoteDir {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if d := e.dir; d != nil && d.node.revive() {
+		return d
+	}
+
+	e.ref()
+	f, _ := served(p, openedDir, syscall.O_RDONLY, 0, 0, 0, e)
+	e.dir = f.asVFS()
+
+	return e.dir
+}

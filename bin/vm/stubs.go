@@ -5,7 +5,7 @@ package main
 import "unsafe"
 
 // The addresses of the stubs of stubs_amd64.s, for the GOT and for the
-// calls of jump.go.
+// calls of instance.go.
 
 func morestackStub() uintptr
 

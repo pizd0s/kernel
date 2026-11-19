@@ -1125,7 +1125,7 @@ for test in build.glob("$(S)/tst/test_*.py"):
 # lib/c's headers as clang lays them out.
 abi_sizes_test = command(
     name="test_abi_sizes",
-    inputs=["$(S)/tst/test_abi_sizes.py", "$(S)/bin/vm/kernel_sizes.go", "$(S)/lib/c/src/kernel.c", *LIBC_HEADERS],
+    inputs=["$(S)/tst/test_abi_sizes.py", "$(S)/bin/vm/sizes.go", "$(S)/lib/c/src/kernel.c", *LIBC_HEADERS],
     outputs=["$(B)/tst/abi_sizes.stamp"],
     deps=[],
     cmd=[["python3", "$(S)/tst/test_abi_sizes.py", CLANG, "$(S)"], touch("$(B)/tst/abi_sizes.stamp")],

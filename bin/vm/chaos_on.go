@@ -92,34 +92,31 @@ type chaosRulesOf struct {
 	rules map[string]uint32
 }
 
-// chaosStart makes the process's rules of the environment its program
-// starts with, unless it has some: an invalid one ends it.
-func (p *Process) chaosStart(env []string) {
-	if p.chaos != nil {
-		return
-	}
+// chaosRulesIn is the rules the environment a program starts with names,
+// PIZDOS_CHAOS's, nil for none: an invalid one ends the process.
+func chaosRulesIn(env []string) *chaosRulesOf {
+	var c *chaosRulesOf
 
 	for _, e := range env {
 		if text, ok := strings.CutPrefix(e, "PIZDOS_CHAOS="); ok {
-			c := &chaosRulesOf{rules: map[string]uint32{}}
+			c = &chaosRulesOf{rules: map[string]uint32{}}
 
 			for _, rule := range chaosRules(text, processPoints) {
 				c.rules[rule.name] = rule.skip
 			}
-
-			p.chaos = c
 		}
 	}
+
+	return c
 }
 
-// chaosFail is a visit of a point of the process's: the one its rule
-// fails, after the visits it skips.
-func (p *Process) chaosFail(point string) bool {
-	if p == nil || p.chaos == nil {
+// fail is a visit of a point of the rules': the one its rule fails, after
+// the visits it skips. No rules fail none.
+func (c *chaosRulesOf) fail(point string) bool {
+	if c == nil {
 		return false
 	}
 
-	c := p.chaos
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

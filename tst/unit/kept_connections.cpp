@@ -3,7 +3,7 @@
 //@ stdout: "three calls: 1 connection, 3 FSTAT\nanother process's two: 2 connections, 5 FSTAT\na handler's call in a call: read EINTR, the handler's fstat 0, 3 connections, 6 FSTAT, 1 READ, 1 CANCEL\nthe call after: 3 connections, 7 FSTAT\nafter the server let go of them: fstat 0, 4 connections, 8 FSTAT\n"
 
 // A process keeps its connection to an open file of a server for its
-// next calls on it (bin/vm/kernel_remote.go): it connects once, CONNECT
+// next calls on it (bin/vm/remote_node.go): it connects once, CONNECT
 // on the open file's endpoint, and every call after goes on that
 // connection. Another process connects for itself. A call a handler
 // makes while a call of the process waits at the server goes on a

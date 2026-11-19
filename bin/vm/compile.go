@@ -31,7 +31,7 @@ type CompileOptions struct {
 	tailRanges  bool
 	tailProfile bool
 	// asan compiles every access with a check of the shadow map
-	// (kernel_asan.go) in place of the tail's checks.
+	// (process.go) in place of the tail's checks.
 	asan bool
 }
 

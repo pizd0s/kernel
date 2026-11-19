@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """AF_UNIX's SOCK_SEQPACKET sockets of the system are the kernel's, bound to
-paths of the VFS's (bin/vm/kernel_unix.go): bind makes a socket node of
+paths of the VFS's (bin/vm/unix_socket.go): bind makes a socket node of
 the path in its file system, which holds the socket's listener; connect
 walks the path to it and queues a connection, which accept takes. A name
 that is there is EADDRINUSE, a socket that does not listen or is closed

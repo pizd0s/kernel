@@ -119,7 +119,7 @@ func compileCommand(args []string) {
 // with its arguments. The first process has no root: it serves the VFS
 // the others have theirs from, rootfs, or needs none. argv0 is by default
 // the module's path. --asan compiles the programs with the checks of the
-// kernel's address sanitizer (kernel_asan.go). Each --disk gives a program
+// kernel's address sanitizer (process.go). Each --disk gives a program
 // of the kernel a file of the host as a disk (runKernel); what follows the
 // program in its own file is its disk named image (runModule). --user gives the
 // first process its user and group ids, the group the user's without one:

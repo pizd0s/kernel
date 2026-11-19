@@ -12,9 +12,11 @@ func setupVmChaos() {}
 // chaosRulesOf is the rules of a tree of processes, none in production.
 type chaosRulesOf struct{}
 
-func (p *Process) chaosStart([]string) {}
+func chaosRulesIn([]string) *chaosRulesOf {
+	return nil
+}
 
-func (p *Process) chaosFail(string) bool {
+func (*chaosRulesOf) fail(string) bool {
 	return false
 }
 

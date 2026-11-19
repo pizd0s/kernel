@@ -20,7 +20,7 @@ CASES = {
                         r"overflow\+0x[0-9a-f]+ +check\.c:51", r"main\+0x[0-9a-f]+ +check\.c:\d+"]),
     "after_free": (SEGV, [rf"asan: 1-byte load at {HEX}: in the freed 32-byte block at {HEX}", r"after_free\+0x[0-9a-f]+ +check\.c:60"]),
     "syscall_read": (ABRT, [rf"asan: access of a range at {HEX}: in the freed 16-byte block at {HEX}",
-                            r"\(\*Process\)\.span +kernel\.go:\d+", r"libcRead +libc\.go:\d+", r"read\+0x", r"syscall_read\+0x[0-9a-f]+ +check\.c:70"]),
+                            r"\(\*Process\)\.span +process\.go:\d+", r"libcRead +libc\.go:\d+", r"read\+0x", r"syscall_read\+0x[0-9a-f]+ +check\.c:70"]),
     # strlen and memcpy are lib/c's functions, which the code compiles
     # where they are called: the fault's line is the call's.
     "string": (SEGV, [rf"asan: access of a range at {HEX}: past the end of the 4-byte block at {HEX}", r"string\+0x[0-9a-f]+ +check\.c:77"]),

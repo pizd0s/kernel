@@ -56,7 +56,7 @@ const jumpSaved = 5
 const boundSlack = 1024
 
 // A profiled object's instance ends in the tail profile's counters, one of
-// 8 bytes for each site the object lists (tail_profile.go).
+// 8 bytes for each site the object lists (instance.go).
 const profileCounterBytes = 8
 
 // Each table is {entries, size, max}: entries is an array of descriptor

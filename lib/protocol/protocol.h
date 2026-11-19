@@ -2,7 +2,7 @@
 
 // The file protocol of the system: three interfaces on one wire.
 //
-//   The VFS's: the kernel's calls with a path (bin/vm/kernel_vfs.go),
+//   The VFS's: the kernel's calls with a path (bin/vm/remote_dir.go),
 //   on a handle of rootfs's (bin/rootfs). rootfs is the VFS: it alone
 //   walks a path, follows symbolic links, knows the mounts and where ".."
 //   goes, and makes the last step of a call as Linux makes it.

@@ -39,7 +39,7 @@ const (
 	trapStack         = 9
 	trapTableOOB      = 10
 	trapNullRef       = 11
-	// trapAsan is an access the shadow map refused (kernel_asan.go): the
+	// trapAsan is an access the shadow map refused (process.go): the
 	// trap carries the access's address, width and kind.
 	trapAsan = 12
 )
