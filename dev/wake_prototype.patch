@@ -1,0 +1,896 @@
+A prototype, not applied: the kernel's sleep and wake without a Go
+channel, and the call pair without its packet copies. It is against
+f5a47e3: git apply dev/wake_prototype.patch.
+
+What is in it:
+
+- lib/goruntime/seat.go: a seat, a word that who rings and who sleeps
+  compare and swap, in place of the bell channel of a process's queue of
+  events; a sleep runs the goroutine the sleeper just woke at once when
+  the scheduler has nothing else to do.
+- A quiet wake on a call pair: who answered or asked sleeps next, so no
+  other thread is woken for who it woke. The bet is lost, and a thread is
+  woken, when the P has another goroutine queued already or the waker
+  made 8 calls of the kernel's without a sleep (owe, kernel.go). The
+  worst case, by reasoning and not measured: a server that computes in
+  its own code right after its answer keeps its client waiting until
+  Go preempts it, 10 ms, with CPUs free.
+- A direct switch in a call of the kernel's to a server (asked,
+  kernel_remote.go): the asker's thread runs the server at once, with no
+  turn in the scheduler's queues. Alone, with the answer woken as any
+  goroutine is, it is slower on several CPUs: a thread is woken and put
+  to sleep by futex every call.
+- The call pair itself: there and ended are values of the phase, a
+  packet is never copied whole, a short call's bytes lie in the pair, a
+  spare waiter's flag is reset with no atomic store, and the wait for an
+  answer has a short path.
+
+Measured on one machine with synthetic loops only (medians of 5, ns,
+no CPU pinning), f5a47e3 -> with the patch: a byte there and back over a
+call pair 408 -> 258, with the serving side in epoll_wait 543 -> 346,
+over pipes 582 -> 441, over a seqpacket pair 628 -> 505; fstat of an
+open file 785 -> 630, pread 1030 -> 835. The tests passed with it
+(test_clang not run). How it behaves under a real load is not known.
+
+W2O_HAND=0 and W2O_QUIET=0 are switches of the prototype's, to be gone
+from anything that lands. Tracing falls back to gopark.
+
+diff --git a/bin/vm/kernel.go b/bin/vm/kernel.go
+index d4a2c7f..6e5f076 100644
+--- a/bin/vm/kernel.go
++++ b/bin/vm/kernel.go
+@@ -154,7 +154,10 @@ type Process struct {
+ 	own      ownEvents
+ 	spare    *subscription
+ 	receives spareWaiters[received]
+-	turns    spareWaiters[turn]
++	// owes says the process woke another quietly and has not slept since
++	// (owe).
++	owes  uint8
++	turns spareWaiters[turn]
+ 	// unwound says the process's image ended, by its exit or an exec, and
+ 	// no handler of its runs until its next image starts.
+ 	unwound bool
+@@ -216,9 +219,27 @@ func proc(ctx uintptr) *Process {
+ 	p := instanceAt(ctx).proc
+ 	p.interruption = signalNone
+ 
++	if p.owes != 0 {
++		p.owe()
++	}
++
+ 	return p
+ }
+ 
++// owe is a call of a process that woke another quietly, on the bet that
++// it sleeps soon: a few calls after may be before that sleep, as a
++// server's that lets go of a request's files; then the bet is lost, and a
++// thread is woken for who waits to run.
++func (p *Process) owe() {
++	if p.owes--; p.owes == 0 {
++		runtime.Wakep()
++	}
++}
++
++// owed is how many calls a process that woke another quietly makes
++// before a thread is woken for it.
++const owed = 8
++
+ // Imports: the kernel's functions, and WASI's (kernel_wasi.go).
+ func (k *Kernel) function(imp *ImportMeta) any {
+ 	switch imp.module {
+@@ -324,7 +345,7 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
+ 
+ 	k.lastPid++
+ 	p := &Process{k: k, pid: k.lastPid, umask: 0o022, regexes: map[uint32]*posixRegex{}, seed: 0,
+-		events: eventQueue{bell: make(chan struct{}, 1)}}
++		events: eventQueue{}}
+ 	p.own.signal.kind, p.own.continued.kind = eventSignal, eventContinued
+ 	p.own.child.kind, p.own.compiled.kind = eventChild, eventCompiled
+ 	p.own.signal.run = (*Process).takeSignals
+diff --git a/bin/vm/kernel_call.go b/bin/vm/kernel_call.go
+index b59af98..e249097 100644
+--- a/bin/vm/kernel_call.go
++++ b/bin/vm/kernel_call.go
+@@ -4,6 +4,7 @@ package main
+ 
+ import (
+ 	"encoding/binary"
++	"runtime"
+ 	"sync"
+ 	"sync/atomic"
+ 	"syscall"
+@@ -36,17 +37,18 @@ import (
+ // that dies with a call handed to it fails that call alone.
+ type call struct {
+ 	mu sync.Mutex
+-	// phase is where the call in hand is: none, sent, or received and not
+-	// answered yet. seq counts the calls sent.
++	// phase is where the call in hand is: none, sent, received and not
++	// answered yet, answered with the answer not taken yet, or ended with
++	// none, which the asking end reads once. seq counts the calls sent.
+ 	phase atomic.Uint32
+ 	seq   uint64
+-	// request is the call until the serving end receives it; answer the
+-	// answer until the asking end does, there says there is one, ended
+-	// that the call in hand ended with none.
+-	request packet
+-	answer  packet
+-	there   atomic.Bool
+-	ended   atomic.Bool
++	// request is the call's bytes until the serving end receives it, and
++	// sent its files; answer and brought are the answer's until the asking
++	// end does.
++	request []byte
++	sent    []Object
++	answer  []byte
++	brought []Object
+ 	// said is what the asking end said: callCancel while a CANCEL of the
+ 	// call in hand is there to receive, callLeft once it is gone. uid and
+ 	// gid are the CANCEL's, the caller's.
+@@ -69,15 +71,18 @@ type call struct {
+ 	servers subscribers
+ 	askers  subscribers
+ 	ino     atomic.Uint64
+-	// small is where a short answer's bytes are kept: none is allocated
+-	// then.
++	// small is where a short answer's bytes are kept, asked a short
++	// call's: none is allocated then.
+ 	small [96]byte
++	asked [96]byte
+ }
+ 
+ const (
+ 	callNone = iota
+ 	callSent
+ 	callReceived
++	callAnswered
++	callEnded
+ )
+ 
+ const (
+@@ -129,9 +134,13 @@ func (e *callEnd) unref() {
+ 	case !e.serves:
+ 		c.mu.Lock()
+ 		c.said.Or(callLeft)
+-		files := append(c.request.files, c.answer.files...)
+-		c.request, c.answer = packet{}, packet{}
+-		c.there.Store(false)
++		files := append(c.sent, c.brought...)
++		c.request, c.sent, c.answer, c.brought = nil, nil, nil, nil
++
++		if c.phase.Load() == callAnswered {
++			c.phase.Store(callNone)
++		}
++
+ 		c.serving.wake(turn{})
+ 		c.servers.tell()
+ 		c.mu.Unlock()
+@@ -171,14 +180,20 @@ func (e *callEnd) unref() {
+ // nobody received goes, files and all, and who waits for the answer reads
+ // the end.
+ func (c *call) end() {
+-	dropFiles(c.request.files)
+-	c.request = packet{}
+-	c.phase.Store(callNone)
+-	c.said.And(^uint32(callCancel))
+-	c.ended.Store(true)
++	dropFiles(c.sent)
++	c.request, c.sent = nil, nil
++	c.phase.Store(callEnded)
++	c.unsay()
+ 	c.give()
+ }
+ 
++// unsay takes back a CANCEL nobody received, with the lock.
++func (c *call) unsay() {
++	if c.said.Load()&callCancel != 0 {
++		c.said.And(^uint32(callCancel))
++	}
++}
++
+ // give gives those who wait at the asking end what a receive finds there
+ // now, with the lock: the first the answer, or the end of a call that
+ // ended with none; all of them the end, once the server is gone with no
+@@ -188,10 +203,10 @@ func (c *call) give() {
+ 		return
+ 	}
+ 
+-	if c.there.Load() || c.ended.Load() {
+-		var got received
+-		_, got.eof = c.found(&got.pk, false)
+-		c.asking.pop().wake(got)
++	if phase := c.phase.Load(); phase == callAnswered || phase == callEnded {
++		w := c.asking.pop()
++		_, w.answer.eof = c.found(&w.answer.pk, false)
++		w.give()
+ 	}
+ 
+ 	if !c.served.Load() && c.phase.Load() == callNone {
+@@ -204,23 +219,23 @@ func (c *call) give() {
+ // eof, once; or the end, with the server gone and no call in hand. ok
+ // false when there is nothing yet. With peek nothing is taken.
+ func (c *call) found(pk *packet, peek bool) (ok, eof bool) {
+-	switch {
+-	case c.ended.Load():
++	switch phase := c.phase.Load(); {
++	case phase == callEnded:
+ 		if !peek {
+-			c.ended.Store(false)
++			c.phase.Store(callNone)
+ 		}
+ 
+ 		return true, true
+-	case c.there.Load():
+-		*pk = c.answer
++	case phase == callAnswered:
++		pk.data, pk.files = c.answer, c.brought
+ 
+ 		if !peek {
+-			c.answer = packet{}
+-			c.there.Store(false)
++			c.answer, c.brought = nil, nil
++			c.phase.Store(callNone)
+ 		}
+ 
+ 		return true, false
+-	case !c.served.Load() && c.phase.Load() == callNone:
++	case phase == callNone && !c.served.Load():
+ 		return true, true
+ 	}
+ 
+@@ -272,32 +287,41 @@ func armFiles(files []Object) {
+ 	}
+ }
+ 
+-// ask sends a call: data given away, with the files, which stay the
++// ask sends a call: the bytes gather gives, which may put a short call's
++// where the pair keeps them, asked, with the files, which stay the
+ // caller's. w is the waiter of who waits for the answer from now on, a
+ // call of the kernel's to a server, nil for a call nobody waits for yet.
+-// EPIPE when the server is gone, EBUSY with a call in hand or its answer
+-// not taken.
+-func (e *callEnd) ask(w *waiter[received], data []byte, files []Object) error {
++// It is the count of the bytes; EPIPE when the server is gone, EBUSY with
++// a call in hand or its answer not taken.
++func (e *callEnd) ask(w *waiter[received], gather func(small []byte) ([]byte, error), files []Object) (int, error) {
+ 	c := e.c
+ 	c.mu.Lock()
+ 
+ 	if !c.served.Load() {
+ 		c.mu.Unlock()
+ 
+-		return syscall.EPIPE
++		return 0, syscall.EPIPE
+ 	}
+ 
+-	if c.phase.Load() != callNone || c.there.Load() || c.ended.Load() {
++	if c.phase.Load() != callNone {
++		c.mu.Unlock()
++
++		return 0, syscall.EBUSY
++	}
++
++	data, err := gather(c.asked[:])
++
++	if err != nil {
+ 		c.mu.Unlock()
+ 
+-		return syscall.EBUSY
++		return 0, err
+ 	}
+ 
+ 	for _, f := range files {
+ 		f.ref()
+ 	}
+ 
+-	c.request = packet{data: data, files: files}
++	c.request, c.sent = data, files
+ 	c.seq++
+ 	c.handed = 0
+ 	c.phase.Store(callSent)
+@@ -310,7 +334,7 @@ func (e *callEnd) ask(w *waiter[received], data []byte, files []Object) error {
+ 	c.servers.tell()
+ 	c.mu.Unlock()
+ 
+-	return nil
++	return len(data), nil
+ }
+ 
+ // idle tells whether the pair takes a call now: none in hand, no answer
+@@ -318,7 +342,7 @@ func (e *callEnd) ask(w *waiter[received], data []byte, files []Object) error {
+ func (e *callEnd) idle() bool {
+ 	c := e.c
+ 
+-	return c.served.Load() && c.phase.Load() == callNone && !c.there.Load() && !c.ended.Load()
++	return c.served.Load() && c.phase.Load() == callNone
+ }
+ 
+ // forget takes back the waiter of a wait for the answer that is over:
+@@ -334,7 +358,7 @@ func (e *callEnd) forget(w *waiter[received]) bool {
+ // leave is the end of a wait for the answer with w, a waiter of p's:
+ // taken back unless it was answered, it is the process's spare again.
+ func (e *callEnd) leave(p *Process, w *waiter[received]) {
+-	if !w.done.Load() {
++	if !w.answered() {
+ 		e.forget(w)
+ 	}
+ 
+@@ -347,7 +371,7 @@ func (e *callEnd) cancel(p *Process) {
+ 	c := e.c
+ 	c.mu.Lock()
+ 
+-	if c.phase.Load() != callNone {
++	if phase := c.phase.Load(); phase == callSent || phase == callReceived {
+ 		c.uid, c.gid = p.cred.euid(), p.cred.egid()
+ 		c.said.Or(callCancel)
+ 	}
+@@ -385,14 +409,15 @@ func (e *callEnd) reply(gather func(small []byte) ([]byte, error), files []Objec
+ 		f.ref()
+ 	}
+ 
+-	c.phase.Store(callNone)
+-	c.said.And(^uint32(callCancel))
++	c.unsay()
+ 
+ 	if w := c.asking.pop(); w != nil {
+-		w.wake(received{pk: packet{data: data, files: files}})
++		c.phase.Store(callNone)
++		w.answer.pk.data, w.answer.pk.files = data, files
++		w.give()
+ 	} else {
+-		c.answer = packet{data: data, files: files}
+-		c.there.Store(true)
++		c.answer, c.brought = data, files
++		c.phase.Store(callAnswered)
+ 	}
+ 
+ 	c.askers.tell()
+@@ -428,11 +453,11 @@ func (e *callEnd) heard(pk *packet, peek bool) (ok, eof bool) {
+ 
+ 	if !e.passed && c.phase.Load() == callSent {
+ 		if pk != nil {
+-			*pk = c.request
++			pk.data, pk.files = c.request, c.sent
+ 		}
+ 
+ 		if !peek {
+-			c.request = packet{}
++			c.request, c.sent = nil, nil
+ 			c.phase.Store(callReceived)
+ 		}
+ 
+@@ -449,7 +474,7 @@ func (e *callEnd) heard(pk *packet, peek bool) (ok, eof bool) {
+ 		}
+ 
+ 		if !peek {
+-			c.said.And(^uint32(callCancel))
++			c.unsay()
+ 		}
+ 
+ 		return true, false
+@@ -492,7 +517,7 @@ func (e *callEnd) poll(events int16) int16 {
+ 	mask := int16(0)
+ 
+ 	if !e.serves {
+-		if c.there.Load() || c.ended.Load() {
++		if phase := c.phase.Load(); phase == callAnswered || phase == callEnded {
+ 			mask |= pollIn | pollRdnorm
+ 		}
+ 
+@@ -575,18 +600,26 @@ func (e *callEnd) setFlags(fl int) error {
+ 
+ // put sends a packet of the end's, the bytes gather gives: a serving
+ // end's is its answer, an asking end's a call of the holder's own.
+-func (e *callEnd) put(gather func(small []byte) ([]byte, error), files []Object) (int, error) {
+-	if e.serves {
+-		return e.reply(gather, files)
++func (e *callEnd) put(p *Process, gather func(small []byte) ([]byte, error), files []Object) (int, error) {
++	// Who it wakes runs next on its thread, and no other is woken for
++	// it: an end of a call pair that sent waits next, for the answer or
++	// the next call (owe).
++	runtime.Wakes(wakesQuiet)
++	n, err := e.send(gather, files)
++
++	if runtime.Wakes(runtime.WakesAny) {
++		p.owes = owed
+ 	}
+ 
+-	data, err := gather(nil)
++	return n, err
++}
+ 
+-	if err != nil {
+-		return 0, err
++func (e *callEnd) send(gather func(small []byte) ([]byte, error), files []Object) (int, error) {
++	if e.serves {
++		return e.reply(gather, files)
+ 	}
+ 
+-	return len(data), e.ask(nil, data, files)
++	return e.ask(nil, gather, files)
+ }
+ 
+ // called is what a serving end's receive takes, ok: the call or what the
+@@ -608,7 +641,7 @@ func (e *callEnd) called(p *Process, pk *packet, peek, wait bool) (ok, eof bool,
+ 	c.mu.Unlock()
+ 
+ 	defer func() {
+-		if !w.done.Load() {
++		if !w.answered() {
+ 			c.mu.Lock()
+ 			c.serving.remove(w)
+ 			c.mu.Unlock()
+@@ -648,7 +681,7 @@ func (e *callEnd) answered(p *Process, pk *packet, peek, wait bool) (ok, eof boo
+ 		return false, false, err
+ 	}
+ 
+-	*pk = w.answer.pk
++	pk.data, pk.files = w.answer.pk.data, w.answer.pk.files
+ 
+ 	return true, w.answer.eof, nil
+ }
+@@ -738,7 +771,7 @@ func (e *callEnd) write(p *Process, b []byte, mode ioMode) (int, error) {
+ 		return 0, syscall.EMSGSIZE
+ 	}
+ 
+-	return e.put(func(small []byte) ([]byte, error) {
++	return e.put(p, func(small []byte) ([]byte, error) {
+ 		if len(b) <= len(small) {
+ 			return small[:copy(small, b)], nil
+ 		}
+@@ -814,7 +847,7 @@ func (e *callEnd) sendmsg(p *Process, at, flags uint32) (int, error) {
+ 		return 0, err
+ 	}
+ 
+-	n, err := e.put(func(small []byte) ([]byte, error) {
++	n, err := e.put(p, func(small []byte) ([]byte, error) {
+ 		return p.gatherIn(small, binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]), packetMax)
+ 	}, files)
+ 
+diff --git a/bin/vm/kernel_queue.go b/bin/vm/kernel_queue.go
+index 9d84c1c..bd2b578 100644
+--- a/bin/vm/kernel_queue.go
++++ b/bin/vm/kernel_queue.go
+@@ -3,6 +3,7 @@
+ package main
+ 
+ import (
++	"runtime"
+ 	"sync"
+ 	"sync/atomic"
+ 	"syscall"
+@@ -169,7 +170,7 @@ type turn struct{}
+ type waiter[T any] struct {
+ 	prev, next *waiter[T]
+ 	in         *waiters[T]
+-	done       atomic.Bool
++	done       uint32
+ 	answer     T
+ 	to         *Process
+ 	spare      *waiter[T]
+@@ -180,10 +181,20 @@ type waiter[T any] struct {
+ // waiter.
+ func (w *waiter[T]) wake(v T) {
+ 	w.answer = v
+-	w.done.Store(true)
++	w.give()
++}
++
++// give is wake with the answer written where the waiter keeps it.
++func (w *waiter[T]) give() {
++	atomic.StoreUint32(&w.done, 1)
+ 	w.to.ring()
+ }
+ 
++// answered tells whether the waiter has its answer.
++func (w *waiter[T]) answered() bool {
++	return atomic.LoadUint32(&w.done) != 0
++}
++
+ // waiters are the waiters of an object for one thing, the oldest first,
+ // under the object's lock.
+ type waiters[T any] struct {
+@@ -261,7 +272,8 @@ func (s *spareWaiters[T]) get(p *Process) *waiter[T] {
+ 		s.first, w.spare = w.spare, nil
+ 	}
+ 
+-	w.done.Store(false)
++	// No object keeps it: nobody else sees it until one does.
++	w.done = 0
+ 
+ 	return w
+ }
+@@ -305,7 +317,7 @@ type event struct {
+ type eventQueue struct {
+ 	mu          sync.Mutex
+ 	first, last *event
+-	bell        chan struct{}
++	seat        runtime.Seat
+ 	// count is how many events are queued, for a next to find none
+ 	// without the lock: a post rings the bell after, so one missed so is
+ 	// found on the ring.
+@@ -344,10 +356,7 @@ func (p *Process) post(e *event) {
+ // ring rings the process's bell: a wait of its that sleeps looks at the
+ // queue, and with nothing there asks its predicate. It never blocks.
+ func (p *Process) ring() {
+-	select {
+-	case p.events.bell <- struct{}{}:
+-	default:
+-	}
++	p.events.seat.Ring()
+ }
+ 
+ // unlink takes an event out of the queue, with the lock.
+@@ -472,7 +481,8 @@ func (p *Process) wait(end time.Time, done func(e *event) (bool, error)) (timedO
+ 				return true, nil
+ 			}
+ 
+-			<-p.events.bell
++			p.owes = 0
++			p.events.seat.Sleep()
+ 			rung = true
+ 
+ 			continue
+@@ -483,6 +493,7 @@ func (p *Process) wait(end time.Time, done func(e *event) (bool, error)) (timedO
+ 
+ 			continue
+ 		case e.run != nil:
++			runtime.Wakes(runtime.WakesAny)
+ 			e.run(p)
+ 		}
+ 
+@@ -509,9 +520,22 @@ const (
+ // deadline, end, zero for none: timedOut then; a signal ends it as how
+ // says. The waiter is at its object still after either, for the caller
+ // to take back.
+-func (p *Process) await(done *atomic.Bool, end time.Time, how signalled) (timedOut bool, err error) {
++func (p *Process) await(done *uint32, end time.Time, how signalled) (timedOut bool, err error) {
++	// The wait of most calls, with no deadline, no event in the queue and
++	// no signal taken before: the answer, or a sleep until a ring.
++	if end.IsZero() && (how == waitsOn || p.interruption == signalNone) {
++		for p.events.count.Load() == 0 {
++			if atomic.LoadUint32(done) != 0 {
++				return false, nil
++			}
++
++			p.owes = 0
++			p.events.seat.Sleep()
++		}
++	}
++
+ 	return p.wait(end, func(*event) (bool, error) {
+-		if done.Load() {
++		if atomic.LoadUint32(done) != 0 {
+ 			return true, nil
+ 		}
+ 
+@@ -545,7 +569,7 @@ func attend[T any](p *Process, spare *spareWaiters[T], mu *sync.Mutex, l *waiter
+ 	mu.Unlock()
+ 
+ 	defer func() {
+-		if !w.done.Load() {
++		if !w.answered() {
+ 			mu.Lock()
+ 			l.remove(w)
+ 			mu.Unlock()
+diff --git a/bin/vm/kernel_remote.go b/bin/vm/kernel_remote.go
+index 8b36bce..607fffa 100644
+--- a/bin/vm/kernel_remote.go
++++ b/bin/vm/kernel_remote.go
+@@ -4,6 +4,8 @@ package main
+ 
+ import (
+ 	"encoding/binary"
++	"os"
++	"runtime"
+ 	"strings"
+ 	"sync"
+ 	"sync/atomic"
+@@ -856,7 +858,10 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
+ 	w := p.receives.get(p)
+ 	defer c.leave(p, w)
+ 
+-	if err := c.ask(w, data, files); err != nil {
++	runtime.Wakes(wakesAsked)
++	defer runtime.Wakes(runtime.WakesAny)
++
++	if _, err := c.ask(w, func([]byte) ([]byte, error) { return data, nil }, files); err != nil {
+ 		return packet{}, false, syscall.EIO // the server is gone
+ 	}
+ 
+@@ -901,7 +906,10 @@ func (n *remoteNode) asked(p *Process, op uint32, data []byte, files []Object) (
+ 	w := p.receives.get(p)
+ 	defer c.leave(p, w)
+ 
+-	if err := c.ask(w, data, files); err != nil {
++	runtime.Wakes(wakesAsked)
++	defer runtime.Wakes(runtime.WakesAny)
++
++	if _, err := c.ask(w, func([]byte) ([]byte, error) { return data, nil }, files); err != nil {
+ 		return packet{}, syscall.EIO // the server is gone
+ 	}
+ 
+@@ -1641,3 +1649,21 @@ func (r *noRoot) bindPath(p *Process, path string, mode uint32, held Object) err
+ func (r *noRoot) connectPath(p *Process, path string) (Object, error) {
+ 	return nil, syscall.EOPNOTSUPP
+ }
++
++// Switches of the prototype's: W2O_HAND=0 turns the hand-over of a call
++// of the kernel's off, W2O_QUIET=0 the quiet wakes of a call pair.
++var wakesAsked = func() uint8 {
++	if os.Getenv("W2O_HAND") == "0" {
++		return runtime.WakesAny
++	}
++
++	return runtime.WakesKept
++}()
++
++var wakesQuiet = func() uint8 {
++	if os.Getenv("W2O_QUIET") == "0" {
++		return runtime.WakesAny
++	}
++
++	return runtime.WakesQuiet
++}()
+diff --git a/lib/goruntime/edits.py b/lib/goruntime/edits.py
+index 48176d3..39eaaaf 100644
+--- a/lib/goruntime/edits.py
++++ b/lib/goruntime/edits.py
+@@ -7,7 +7,7 @@ with them as an overlay.
+ EDITS = [
+     ("runtime2.go",
+      "\tvalgrindStackID uintptr\n}\n",
+-     "\tvalgrindStackID uintptr\n\n\t// interrupt and instance are vm's (interrupt.go).\n\tinterrupt gInterrupt\n\tinstance  uintptr\n}\n"),
++     "\tvalgrindStackID uintptr\n\n\t// interrupt and instance are vm's (interrupt.go), seat is too (seat.go).\n\tinterrupt gInterrupt\n\tinstance  uintptr\n\tseat      gSeat\n}\n"),
+     ("signal_unix.go",
+      "\t// Check if this G wants to be preempted and is safe to\n\t// preempt.\n\tif wantAsyncPreempt(gp) {\n",
+      "\t// Check if this G wants to be preempted and is safe to\n\t// preempt; an interruption goes first.\n\tif interruptG(gp, ctxt) {\n\t} else if wantAsyncPreempt(gp) {\n"),
+diff --git a/lib/goruntime/seat.go b/lib/goruntime/seat.go
+new file mode 100644
+index 0000000..50118d0
+--- /dev/null
++++ b/lib/goruntime/seat.go
+@@ -0,0 +1,242 @@
++// Seats, for vm's kernel (bin/vm): where a goroutine sleeps for a wait of
++// its process and is rung awake, with none of a channel's queue and lock;
++// and a switch to another goroutine at once: one that wakes a sleeper and
++// sleeps right after hands its thread over to it, as a call of L4's does
++// its caller's, and the sleeper runs with no turn in the scheduler's
++// queues.
++
++package runtime
++
++import (
++	"internal/runtime/atomic"
++	"unsafe"
++)
++
++// A Seat is one goroutine's: nothing (0), rung while its goroutine was
++// awake (seatRung), or the goroutine asleep there. Its goroutine alone
++// sleeps there; any rings it.
++type Seat struct {
++	v atomic.Uintptr
++}
++
++const seatRung = 1
++
++// How the calling goroutine wakes the sleepers it rings: each made
++// runnable as any goroutine is, another thread woken for it (WakesAny);
++// each made runnable to run next on the caller's thread, with no other
++// woken, as the caller sleeps soon (WakesQuiet); or the first one kept,
++// to run in the caller's place at once when it sleeps, and the rest
++// quiet (WakesKept).
++const (
++	WakesAny = iota
++	WakesQuiet
++	WakesKept
++)
++
++// gSeat is a goroutine's way of waking, and the sleeper it keeps.
++type gSeat struct {
++	wakes     uint8
++	quieted   bool
++	successor guintptr
++}
++
++// Ring rings the seat: its goroutine wakes if it sleeps there, as the
++// caller wakes (Wakes), and its next Sleep returns at once otherwise.
++func (s *Seat) Ring() {
++	for {
++		v := s.v.Load()
++
++		switch {
++		case v == 0:
++			if s.v.CompareAndSwap(0, seatRung) {
++				return
++			}
++		case v == seatRung:
++			// A write the caller made for the sleeper to find is seen
++			// by whoever takes the ring from now on.
++			if s.v.CompareAndSwap(seatRung, seatRung) {
++				return
++			}
++		default:
++			if s.v.CompareAndSwap(v, 0) {
++				gp := getg()
++
++				switch {
++				case gp.seat.wakes == WakesAny || gp != gp.m.curg:
++					goready((*g)(unsafe.Pointer(v)), 1)
++				case gp.seat.wakes == WakesKept && gp.seat.successor == 0:
++					gp.seat.successor = guintptr(v)
++				default:
++					systemstack(func() {
++						next := (*g)(unsafe.Pointer(v))
++						mp := acquirem()
++						pp := mp.p.ptr()
++
++						// One that waits to run on this P already
++						// says the caller sleeps not so soon: a thread
++						// is woken for them.
++						alone := pp.runnext == 0 && runqempty(pp)
++						casgstatus(next, _Gwaiting, _Grunnable)
++						runqput(pp, next, true)
++
++						if alone {
++							gp.seat.quieted = true
++						} else {
++							wakep()
++						}
++
++						releasem(mp)
++					})
++				}
++
++				return
++			}
++		}
++	}
++}
++
++// Wakes sets how the calling goroutine wakes from now on, and tells
++// whether it woke any quietly since it was last asked. One that keeps no
++// more makes a sleeper it kept runnable.
++func Wakes(how uint8) (quieted bool) {
++	gp := getg()
++	gp.seat.wakes = how
++	quieted = gp.seat.quieted
++	gp.seat.quieted = false
++
++	if how != WakesKept && gp.seat.successor != 0 {
++		next := gp.seat.successor.ptr()
++		gp.seat.successor = 0
++		goready(next, 1)
++	}
++
++	return quieted
++}
++
++// Wakep wakes a thread for what the caller's P has to run, if one idles:
++// the caller woke quietly and sleeps not.
++func Wakep() {
++	mp := acquirem()
++	pp := mp.p.ptr()
++	waits := pp.runnext != 0 || !runqempty(pp)
++	releasem(mp)
++
++	if waits {
++		wakep()
++	}
++}
++
++// Sleep is the calling goroutine asleep at its seat until it is rung; a
++// ring that came since its last Sleep is taken at once. A sleeper it
++// kept runs at once in its place, on its thread.
++func (s *Seat) Sleep() {
++	gp := getg()
++
++	if gp.seat.successor != 0 {
++		mp := acquirem()
++		mp.waitlock = unsafe.Pointer(s)
++		gp.waitreason = waitReasonCoroutine
++		releasem(mp)
++		mcall(seatSwitch)
++
++		return
++	}
++
++	if s.v.Load() == seatRung {
++		s.v.Store(0)
++
++		return
++	}
++
++	if traceEnabled() {
++		gopark(seatPark, unsafe.Pointer(s), waitReasonCoroutine, traceBlockGeneric, 1)
++
++		return
++	}
++
++	mp := acquirem()
++	mp.waitlock = unsafe.Pointer(s)
++	gp.waitreason = waitReasonCoroutine
++	releasem(mp)
++	mcall(seatSleep)
++}
++
++// seatSleep parks gp at its seat, as park_m does, and runs the goroutine
++// that is next on its P at once, the one gp woke, when nothing else asks
++// for the scheduler: a stop of the world, a call at a safe point, a
++// timer of the P's, the collector's work.
++func seatSleep(gp *g) {
++	mp := getg().m
++	s := (*Seat)(mp.waitlock)
++	mp.waitlock = nil
++	pp := mp.p.ptr()
++	casgstatus(gp, _Grunning, _Gwaiting)
++	dropg()
++
++	if !seatPark(gp, unsafe.Pointer(s)) {
++		casgstatus(gp, _Gwaiting, _Grunnable)
++		execute(gp, true)
++	}
++
++	if next := pp.runnext; next != 0 && !sched.gcwaiting.Load() && pp.runSafePointFn == 0 && pp.timers.wakeTime() == 0 && gcBlackenEnabled == 0 && pp.runnext.cas(next, 0) {
++		execute(next.ptr(), true)
++	}
++
++	schedule()
++}
++
++// seatPark puts the goroutine that parks in its seat, unless it was rung
++// meanwhile: it runs on then, the ring taken.
++func seatPark(gp *g, s unsafe.Pointer) bool {
++	seat := (*Seat)(s)
++
++	if seat.v.CompareAndSwap(0, uintptr(unsafe.Pointer(gp))) {
++		return true
++	}
++
++	seat.v.Store(0)
++
++	return false
++}
++
++// seatSwitch puts gp to sleep at its seat and runs the sleeper it kept,
++// on the same thread and P, as coroswitch_m runs a coroutine: with none
++// of the scheduler's queues. A gp rung meanwhile stays runnable, behind
++// the sleeper.
++func seatSwitch(gp *g) {
++	mp := getg().m
++	s := (*Seat)(mp.waitlock)
++	mp.waitlock = nil
++	next := gp.seat.successor.ptr()
++	gp.seat.successor = 0
++	gp.seat.wakes = WakesAny
++	pp := mp.p.ptr()
++
++	if !gp.atomicstatus.CompareAndSwap(_Grunning, _Gwaiting) {
++		casgstatus(gp, _Grunning, _Gwaiting)
++	}
++
++	setMNoWB(&gp.m, nil)
++
++	if !s.v.CompareAndSwap(0, uintptr(unsafe.Pointer(gp))) {
++		s.v.Store(0)
++		casgstatus(gp, _Gwaiting, _Grunnable)
++		runqput(pp, gp, false)
++	}
++
++	setGNoWB(&mp.curg, next)
++	setMNoWB(&next.m, mp)
++
++	if goroutineProfile.active {
++		tryRecordGoroutineProfile(next, nil, osyield)
++	}
++
++	if !next.atomicstatus.CompareAndSwap(_Gwaiting, _Grunning) {
++		casgstatus(next, _Gwaiting, _Grunnable)
++		casgstatus(next, _Grunnable, _Grunning)
++	}
++
++	next.preempt = false
++	next.stackguard0 = next.stack.lo + stackGuard
++	gogo(&next.sched)
++}
