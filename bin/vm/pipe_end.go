@@ -9,31 +9,27 @@ import (
 	"unsafe"
 )
 
-// pipeEnd is one end of a pipe, an open file: the reader, the writer, or
-// both, a FIFO's opened O_RDWR.
-type pipeEnd struct {
-	pipe     *pipe
+type PipeEnd struct {
+	pipe     *Pipe
 	reads    bool
 	writes   bool
 	refs     atomic.Int32
 	nonblock atomic.Bool
 }
 
-func (e *pipeEnd) ref() {
+func (e *PipeEnd) ref() {
 	e.refs.Add(1)
 }
 
-// unref closes the end when its last reference goes: the last reader
-// finishes the channel, so a writer learns of it, the last writer closes
-// it, so a reader sees the end of the data. A FIFO's pipe with no end left
-// leaves the kernel's table.
-func (e *pipeEnd) unref() {
+func (e *PipeEnd) unref() {
 	if e.refs.Add(-1) != 0 {
 		return
 	}
 
 	pp := e.pipe
+
 	pp.mu.Lock()
+
 	ch := pp.ch
 
 	if e.writes {
@@ -56,6 +52,7 @@ func (e *pipeEnd) unref() {
 	}
 
 	gone := pp.readers == 0 && pp.writers == 0
+
 	pp.mu.Unlock()
 
 	if gone && pp.name != nil {
@@ -63,29 +60,79 @@ func (e *pipeEnd) unref() {
 	}
 }
 
-// A pipeEnd is a File, a Transfer and an Ioctl.
-func (e *pipeEnd) asFile() File              { return e }
-func (e *pipeEnd) asTransfer() Transfer      { return e }
-func (e *pipeEnd) asSeeker() Seeker          { return nil }
-func (e *pipeEnd) asDir() Dir                { return nil }
-func (e *pipeEnd) asTerminal() Terminal      { return nil }
-func (e *pipeEnd) asWindowed() Windowed      { return nil }
-func (e *pipeEnd) asLink() Link              { return nil }
-func (e *pipeEnd) asAttrs() Attrs            { return nil }
-func (e *pipeEnd) asSocket() Socket          { return nil }
-func (e *pipeEnd) asIoctl() Ioctl            { return e }
-func (e *pipeEnd) asLocker() Locker          { return nil }
-func (e *pipeEnd) asEpoll() *epoll           { return nil }
-func (e *pipeEnd) asMemfd() *memfdFile       { return nil }
-func (e *pipeEnd) asPair() *pairEnd          { return nil }
-func (e *pipeEnd) asListener() *unixListener { return nil }
-func (e *pipeEnd) asConsole() *consoleEnd    { return nil }
-func (e *pipeEnd) asVFS() *remoteDir         { return nil }
-func (e *pipeEnd) asCall() *callEnd          { return nil }
+func (e *PipeEnd) asFile() File {
+	return e
+}
 
-// sides are what of the end a wait for events is on: its reading, its
-// writing, or both, of an end that does both and is asked neither.
-func (e *pipeEnd) sides(events int16) (in, out bool) {
+func (e *PipeEnd) asTransfer() Transfer {
+	return e
+}
+
+func (e *PipeEnd) asSeeker() Seeker {
+	return nil
+}
+
+func (e *PipeEnd) asDir() Dir {
+	return nil
+}
+
+func (e *PipeEnd) asTerminal() Terminal {
+	return nil
+}
+
+func (e *PipeEnd) asWindowed() Windowed {
+	return nil
+}
+
+func (e *PipeEnd) asLink() Link {
+	return nil
+}
+
+func (e *PipeEnd) asAttrs() Attrs {
+	return nil
+}
+
+func (e *PipeEnd) asSocket() Socket {
+	return nil
+}
+
+func (e *PipeEnd) asIoctl() Ioctl {
+	return e
+}
+
+func (e *PipeEnd) asLocker() Locker {
+	return nil
+}
+
+func (e *PipeEnd) asEpoll() *Epoll {
+	return nil
+}
+
+func (e *PipeEnd) asMemfd() *MemfdFile {
+	return nil
+}
+
+func (e *PipeEnd) asPair() *PairEnd {
+	return nil
+}
+
+func (e *PipeEnd) asListener() *UnixListener {
+	return nil
+}
+
+func (e *PipeEnd) asConsole() *ConsoleEnd {
+	return nil
+}
+
+func (e *PipeEnd) asVFS() *RemoteDir {
+	return nil
+}
+
+func (e *PipeEnd) asCall() *CallEnd {
+	return nil
+}
+
+func (e *PipeEnd) sides(events int16) (in, out bool) {
 	in, out = e.reads, e.writes
 
 	if in && out && events&(pollIn|pollRdnorm|pollOut|pollWrnorm) != 0 {
@@ -95,13 +142,12 @@ func (e *pipeEnd) sides(events int16) (in, out bool) {
 	return in, out
 }
 
-// subscribe makes to learn of what fills the pipe, for the end's reading,
-// and of what drains it, for its writing: on the pipe's channel, which a
-// FIFO's that starts again gives on (renew), under the pipe's lock.
-func (e *pipeEnd) subscribe(s *subscription, events int16) {
+func (e *PipeEnd) subscribe(s *Subscription, events int16) {
 	pp := e.pipe
 	in, out := e.sides(events)
+
 	pp.mu.Lock()
+
 	defer pp.mu.Unlock()
 
 	if in {
@@ -113,18 +159,20 @@ func (e *pipeEnd) subscribe(s *subscription, events int16) {
 	}
 }
 
-func (e *pipeEnd) unsubscribe(s *subscription) {
+func (e *PipeEnd) unsubscribe(s *Subscription) {
 	pp := e.pipe
+
 	pp.mu.Lock()
+
 	defer pp.mu.Unlock()
+
 	pp.ch.unsubscribe(&s.in)
 	pp.ch.unsubscribe(&s.out)
 }
 
-// stat is a FIFO's: the ends of a pipe share an inode of the kernel's, the
-// ends of a FIFO's pipe the FIFO's.
-func (e *pipeEnd) stat(p *Process, st *syscall.Stat_t) error {
+func (e *PipeEnd) stat(p *Process, st *syscall.Stat_t) error {
 	pp := e.pipe
+
 	*st = syscall.Stat_t{Ino: pp.ino, Mode: syscall.S_IFIFO | 0o600, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: pipeChunk}
 
 	if n := pp.name; n != nil {
@@ -137,11 +185,15 @@ func (e *pipeEnd) stat(p *Process, st *syscall.Stat_t) error {
 	return nil
 }
 
-func (e *pipeEnd) poll(events int16) int16 {
+func (e *PipeEnd) poll(events int16) int16 {
 	pp := e.pipe
+
 	pp.mu.Lock()
+
 	ch, front, readers, writers := pp.ch, len(pp.front), pp.readers, pp.writers
+
 	pp.mu.Unlock()
+
 	queued := ch.count()
 	mask := int16(0)
 
@@ -168,7 +220,7 @@ func (e *pipeEnd) poll(events int16) int16 {
 	return mask & (events | pollErr | pollHup)
 }
 
-func (e *pipeEnd) flags() (int, error) {
+func (e *PipeEnd) flags() (int, error) {
 	fl := syscall.O_RDWR
 
 	if !e.writes {
@@ -184,14 +236,13 @@ func (e *pipeEnd) flags() (int, error) {
 	return fl, nil
 }
 
-func (e *pipeEnd) setFlags(fl int) error {
+func (e *PipeEnd) setFlags(fl int) error {
 	e.nonblock.Store(fl&syscall.O_NONBLOCK != 0)
 
 	return nil
 }
 
-// ioctl knows FIONREAD, the bytes to read.
-func (e *pipeEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
+func (e *PipeEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
 	if req != fionread || !e.reads {
 		return syscall.ENOTTY
 	}
@@ -201,7 +252,7 @@ func (e *pipeEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
 	return nil
 }
 
-func (e *pipeEnd) read(p *Process, b []byte, mode ioMode) (int, error) {
+func (e *PipeEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
 		return 0, syscall.EIO
 	}
@@ -235,10 +286,7 @@ func (e *pipeEnd) read(p *Process, b []byte, mode ioMode) (int, error) {
 	}
 }
 
-// write queues b as packets of at most pipeChunk bytes, each whole or not
-// at all, waiting for room between them; what was queued before a signal
-// or EAGAIN is the count.
-func (e *pipeEnd) write(p *Process, b []byte, mode ioMode) (int, error) {
+func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 	if p.chaosFail("write") {
 		return 0, syscall.EIO
 	}
@@ -252,11 +300,10 @@ func (e *pipeEnd) write(p *Process, b []byte, mode ioMode) (int, error) {
 
 	for total < len(b) {
 		chunk := b[total:min(len(b), total+pipeChunk)]
-		pk := packet{data: append([]byte(nil), chunk...)}
+		pk := Packet{data: append([]byte(nil), chunk...)}
 
-		// Under the pipe's lock, as take is, so the bytes FIONREAD counts
-		// are those queued.
 		pp.mu.Lock()
+
 		full, err := pp.ch.put(&pk)
 		finished, sent := err != nil, err == nil && !full
 
@@ -304,10 +351,10 @@ func (e *pipeEnd) write(p *Process, b []byte, mode ioMode) (int, error) {
 	return total, nil
 }
 
-func (e *pipeEnd) pread(p *Process, b []byte, off int64) (int, error) {
+func (e *PipeEnd) pread(p *Process, b []byte, off int64) (int, error) {
 	return 0, syscall.ESPIPE
 }
 
-func (e *pipeEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
+func (e *PipeEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return 0, syscall.ESPIPE
 }

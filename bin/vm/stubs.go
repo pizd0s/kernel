@@ -4,9 +4,6 @@ package main
 
 import "unsafe"
 
-// The addresses of the stubs of stubs_amd64.s, for the GOT and for the
-// calls of instance.go.
-
 func morestackStub() uintptr
 
 func interruptStub() uintptr
@@ -19,13 +16,8 @@ func resumeStub() uintptr
 
 func resumeReturnStub() uintptr
 
-// asanRangeStub is w2o.asan_range, which an asan object calls as it calls
-// a function of lib/str, with the host address of a range of the shadow
-// map and its length: how many bytes from its start are accessible.
 func asanRangeStub() uintptr
 
-// moveMemory copies src to the start of dst, which holds it, through
-// lib/str's memmove: the copy the code's memcpy makes.
 func moveMemory(dst, src []byte) {
 	if len(src) > len(dst) {
 		throwFmt("a copy of %d bytes into %d", len(src), len(dst))
@@ -38,16 +30,9 @@ func moveMemory(dst, src []byte) {
 	strMove(strFunction(symStr+"memmove"), unsafe.Pointer(&dst[0]), unsafe.Pointer(&src[0]), uintptr(len(src)))
 }
 
-// strCall0 calls fn, a function of lib/str, with no arguments, as the
-// module's functions call each other; it returns what fn leaves in AX.
 func strCall0(fn uintptr) uintptr
 
-// strCall3 calls fn, a function of lib/str, with a, b and c in AX, CX and
-// DX, as strCall0 calls one.
 func strCall3(fn, a, b, c uintptr) uintptr
 
-// strMove calls fn, lib/str's memmove, with dst, src and n in AX, CX and
-// DX.
-//
 //go:noescape
 func strMove(fn uintptr, dst, src unsafe.Pointer, n uintptr)

@@ -4,9 +4,13 @@ import "fmt"
 
 type Exception struct{ cause error }
 
-func (e *Exception) Error() string { return e.message() }
+func (e *Exception) Error() string {
+	return e.error()
+}
 
-func (e *Exception) message() string { return e.cause.Error() }
+func (e *Exception) error() string {
+	return e.cause.Error()
+}
 
 func throw(err error) {
 	if err != nil {
@@ -24,8 +28,6 @@ func throwFmt(format string, args ...any) {
 	throw(fmt.Errorf(format, args...))
 }
 
-// try runs cb and returns the Exception it threw, letting any other panic
-// propagate.
 func try(cb func()) (caught *Exception) {
 	defer func() {
 		if e := recover(); e != nil {

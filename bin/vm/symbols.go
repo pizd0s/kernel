@@ -5,25 +5,8 @@ import (
 	"strings"
 )
 
-// Symbols of an object. A function's import or export carries its wasm
-// type in its name, so an ordinary linker can match them and a loader needs
-// nothing else:
-//
-//	w2o.import.<module>.<name>.<params>.<results>  a Go function the code calls
-//	w2o.export.<name>.<params>.<results>           a thunk Go calls
-//	w2o.init                                       the thunk that starts an instance
-//
-// Names are spelled by symbolPart, types by a letter each: i i32, I i64,
-// f f32, F f64, v v128, r funcref, e externref. The code also calls, through
-// the GOT, the Go functions w2o.trap, w2o.memory_grow and w2o.table_grow,
-// the loader's stubs w2o.morestack, which stack checks call, and
-// w2o.interrupt_call, which a return from an import calls and Go's runtime
-// injects (stubs_amd64.s), and lib/str's functions str.memcpy,
-// str.memmove and str.memset (str.go), which the bulk memory instructions
-// and the imports of lib/c's memcpy, memmove and memset call with host
-// addresses after checking the ranges themselves: the destination, the
-// source or byte and the length in AX, CX and DX, as the module's
-// functions call each other.
+var typeLetters = map[ValType]byte{I32: 'i', I64: 'I', F32: 'f', F64: 'F', V128: 'v', FuncRef: 'r', ExternRef: 'e'}
+
 const (
 	symInit          = "w2o.init"
 	symMorestackStub = "w2o.morestack"
@@ -37,8 +20,6 @@ const (
 	symInterruptCall = "w2o.interrupt_call"
 	symStr           = "str."
 )
-
-var typeLetters = map[ValType]byte{I32: 'i', I64: 'I', F32: 'f', F64: 'F', V128: 'v', FuncRef: 'r', ExternRef: 'e'}
 
 func parseTypes(s string) ([]ValType, bool) {
 	ts := make([]ValType, len(s))
@@ -87,8 +68,6 @@ func parseSymbolPart(s string) (string, bool) {
 	return string(b), true
 }
 
-// parseFuncSymbol takes an import or export symbol apart: its names, then
-// its type; ok is false for another symbol.
 func parseFuncSymbol(sym, prefix string, names int) ([]string, *FuncType, bool) {
 	if !strings.HasPrefix(sym, prefix) {
 		return nil, nil, false

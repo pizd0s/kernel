@@ -2,22 +2,22 @@
 
 package main
 
-// The compiler inlines these away in production builds, as in monorepo/ay.
 func chaosFail(string) bool {
 	return false
 }
 
-func setupVmChaos() {}
+func setupVmChaos() {
+}
 
-// chaosRulesOf is the rules of a tree of processes, none in production.
-type chaosRulesOf struct{}
+type ChaosRulesOf struct{}
 
-func chaosRulesIn([]string) *chaosRulesOf {
+func chaosRulesIn([]string) *ChaosRulesOf {
 	return nil
 }
 
-func (*chaosRulesOf) fail(string) bool {
+func (*ChaosRulesOf) fail(string) bool {
 	return false
 }
 
-func setupCompilerChaos(*Instance) {}
+func setupCompilerChaos(*Instance) {
+}

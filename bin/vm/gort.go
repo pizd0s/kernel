@@ -11,18 +11,16 @@ import (
 	"unsafe"
 )
 
-// Loaded code becomes Go code to the runtime as a module of its own,
-// linked after the program's: a moduledata in Go 1.25's layout
-// (runtime/symtab.go) with a function, a name and pc tables for every code
-// region. Stack maps say no frame holds a pointer: values are wasm values,
-// and the instance stays alive in its Go caller. The stack pointer table is
-// exact at every instruction and there is no unsafe-point table, so Go may
-// preempt the code anywhere by a signal, as it does its own; but for the
-// resume stub of fork, which writes below its stack pointer, and the
-// morestack stub, which must find g.stackguard0 as it compares it: they
-// are marked assembly, which Go never preempts.
+var (
+	//go:linkname lastModule runtime.lastmoduledatap
+	lastModule    *GoModule
+	hostModule    = lastModule
+	registrations = make(chan Registration)
+)
 
-type goPCHeader struct {
+const funcFlagAsm = 4
+
+type GoPCHeader struct {
 	magic                                                            uint32
 	pad1, pad2, minLC, ptrSize                                       uint8
 	nfunc                                                            int
@@ -31,23 +29,21 @@ type goPCHeader struct {
 	funcnameOffset, cuOffset, filetabOffset, pctabOffset, pclnOffset uintptr
 }
 
-type goFuncTab struct {
+type GoFuncTab struct {
 	entry, offset uint32
 }
 
-type goBitVector struct {
+type GoBitVector struct {
 	n    int32
 	data *byte
 }
 
-// goModule is runtime.moduledata; slices of runtime types are slices of
-// bytes here, of the same size.
-type goModule struct {
-	header                                                     *goPCHeader
+type GoModule struct {
+	header                                                     *GoPCHeader
 	names                                                      []byte
 	cutab                                                      []uint32
 	files, pctab, pcln                                         []byte
-	ftab                                                       []goFuncTab
+	ftab                                                       []GoFuncTab
 	findfunctab, minpc, maxpc                                  uintptr
 	text, etext, noptrdata, enoptrdata, data, edata, bss, ebss uintptr
 	noptrbss, enoptrbss, covctrs, ecovctrs, end, gcdata, gcbss uintptr
@@ -61,42 +57,32 @@ type goModule struct {
 	modulehashes                                               []byte
 	hasmain                                                    uint8
 	bad                                                        bool
-	gcdatamask, gcbssmask                                      goBitVector
+	gcdatamask, gcbssmask                                      GoBitVector
 	typemap                                                    map[int32]unsafe.Pointer
-	next                                                       *goModule
+	next                                                       *GoModule
 }
 
-//go:linkname lastModule runtime.lastmoduledatap
-var lastModule *goModule
-
-// hostModule is the program's own module, where runtime symbols are.
-var hostModule = lastModule
-
-// goImage keeps a registered module and what it points to: Go never drops
-// a module, and profiles keep PCs.
-type goImage struct {
-	module   goModule
-	header   goPCHeader
+type GoImage struct {
+	module   GoModule
+	header   GoPCHeader
 	stackMap []byte
 	buckets  []byte
 }
 
-type registration struct {
-	image *goImage
+type Registration struct {
+	image *GoImage
 	done  chan struct{}
 }
 
-var registrations = make(chan registration)
-
-// The module list has one writer: this goroutine. The runtime reads it
-// without locks, so a module is complete before it is linked in.
 func init() {
 	go func() {
-		var images []*goImage
+		var images []*GoImage
 
 		for r := range registrations {
 			images = append(images, r.image)
+
 			m := &r.image.module
+
 			atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&lastModule.next)), unsafe.Pointer(m))
 			lastModule = m
 			close(r.done)
@@ -114,10 +100,9 @@ func checkGo() {
 	}
 }
 
-// resumeReturnRange bounds the linker-defined continuation in the host
-// module's sorted function table. The final sentinel bounds its last entry.
 func resumeReturnRange() (lo, hi uintptr) {
 	checkGo()
+
 	m := hostModule
 	pc := resumeReturnStub() - m.text
 	k := sort.Search(len(m.ftab), func(k int) bool { return uintptr(m.ftab[k].entry) > pc })
@@ -133,19 +118,15 @@ func append32(dst []byte, values ...uint32) []byte {
 	return dst
 }
 
-// appendValue adds a value from pc on to a pc-value table in the making,
-// unless the value before it is the same.
-func appendValue(values []spEntry, pc, value int32) []spEntry {
+func appendValue(values []SpEntry, pc, value int32) []SpEntry {
 	if values[len(values)-1].delta == value {
 		return values
 	}
 
-	return append(values, spEntry{pc, value})
+	return append(values, SpEntry{pc, value})
 }
 
-// pcTable appends a pc-value table: the values from their offsets on, up
-// to size; neighbours differ, as the encoding requires.
-func (m *goModule) pcTable(values []spEntry, size uint32) uint32 {
+func (m *GoModule) pcTable(values []SpEntry, size uint32) uint32 {
 	offset := uint32(len(m.pctab))
 	previous := int32(-1)
 
@@ -161,8 +142,10 @@ func (m *goModule) pcTable(values []spEntry, size uint32) uint32 {
 		}
 
 		delta := v.delta - previous
+
 		m.pctab = binary.AppendUvarint(m.pctab, uint64(uint32(delta<<1)^uint32(delta>>31)))
 		m.pctab = binary.AppendUvarint(m.pctab, uint64(end-v.pc))
+
 		previous = v.delta
 	}
 
@@ -171,27 +154,19 @@ func (m *goModule) pcTable(values []spEntry, size uint32) uint32 {
 	return offset
 }
 
-// funcFlagAsm is Go's abi.FuncFlagAsm: the function is assembly, where Go
-// never preempts asynchronously.
-const funcFlagAsm = 4
-
-// registerCode tells Go about the regions of code at base; code registered
-// as assembly is never preempted asynchronously. The source lines, when the
-// object has them (Meta lines), become the functions' file and line tables:
-// a region without any keeps the object's name for its file and its index
-// for its line.
-func registerCode(name string, base uintptr, size uintptr, regions []Region, assembly bool, files []string, lines []lineEntry) {
+func registerCode(name string, base uintptr, size uintptr, regions []Region, assembly bool, files []string, lines []LineEntry) {
 	checkGo()
 
 	if len(regions) == 0 {
 		return
 	}
 
-	// A stack map of one entry with no bits: for locals and arguments.
-	img := &goImage{stackMap: append32(nil, 1, 0)}
+	img := &GoImage{stackMap: append32(nil, 1, 0)}
 	m := &img.module
 	end := regions[len(regions)-1].end
-	img.header = goPCHeader{magic: 0xfffffff1, minLC: 1, ptrSize: 8, nfunc: len(regions), nfiles: uint(1 + len(files)), textStart: base}
+
+	img.header = GoPCHeader{magic: 0xfffffff1, minLC: 1, ptrSize: 8, nfunc: len(regions), nfiles: uint(1 + len(files)), textStart: base}
+
 	m.header = &img.header
 	m.text, m.minpc, m.maxpc, m.etext = base, base, base+uintptr(end), base+size
 	m.modulename = name
@@ -212,10 +187,8 @@ func registerCode(name string, base uintptr, size uintptr, regions []Region, ass
 			throwFmt("invalid code region %s", r.name)
 		}
 
-		fileValues, lineValues := []spEntry{{0, 0}}, []spEntry{{0, int32(index + 1)}}
+		fileValues, lineValues := []SpEntry{{0, 0}}, []SpEntry{{0, int32(index + 1)}}
 
-		// The region's entries: the first one holds from the region's start,
-		// and neighbours of one value merge, as the tables require.
 		for k := sort.Search(len(lines), func(k int) bool { return lines[k].pc >= r.start }); k < len(lines) && lines[k].pc < r.end; k++ {
 			e := lines[k]
 			pc := int32(e.pc - r.start)
@@ -224,7 +197,7 @@ func registerCode(name string, base uintptr, size uintptr, regions []Region, ass
 				fileValues = appendValue(fileValues, pc, int32(e.file+1))
 				lineValues = appendValue(lineValues, pc, int32(e.line))
 			} else {
-				fileValues, lineValues = []spEntry{{0, int32(e.file + 1)}}, []spEntry{{0, int32(e.line)}}
+				fileValues, lineValues = []SpEntry{{0, int32(e.file + 1)}}, []SpEntry{{0, int32(e.line)}}
 			}
 		}
 
@@ -234,20 +207,20 @@ func registerCode(name string, base uintptr, size uintptr, regions []Region, ass
 		if assembly {
 			flag = funcFlagAsm
 		}
+
 		pcsp := m.pcTable(r.sp, size)
 		pcfile := m.pcTable(fileValues, size)
 		pcln := m.pcTable(lineValues, size)
-		m.ftab = append(m.ftab, goFuncTab{r.start, uint32(len(m.pcln))})
-		// _func: entry, name, args, deferreturn, pcsp, pcfile, pcln,
-		// npcdata, cu, start line, funcID 0, flag 0, pad, two funcdata;
-		// then the funcdata offsets in gofunc, both the stack map.
+
+		m.ftab = append(m.ftab, GoFuncTab{r.start, uint32(len(m.pcln))})
 		m.pcln = append32(m.pcln, r.start, uint32(len(m.names)), 0, 0, pcsp, pcfile, pcln, 0, 0, line, 2<<24|flag<<8, 0, 0)
 		m.names = append(m.names, r.name...)
 		m.names = append(m.names, 0)
 	}
 
-	m.ftab = append(m.ftab, goFuncTab{end, 0})
+	m.ftab = append(m.ftab, GoFuncTab{end, 0})
 	img.buckets = make([]byte, (uintptr(end)+4095)/4096*20)
+
 	function := 0
 
 	for bucket := 0; bucket < len(img.buckets)/20; bucket++ {
@@ -261,7 +234,9 @@ func registerCode(name string, base uintptr, size uintptr, regions []Region, ass
 	m.findfunctab = uintptr(unsafe.Pointer(unsafe.SliceData(img.buckets)))
 	perfOut.code(name, base, regions, files, lines)
 	noteCode(name, base, base+size)
-	r := registration{img, make(chan struct{})}
+
+	r := Registration{img, make(chan struct{})}
+
 	registrations <- r
 	<-r.done
 }

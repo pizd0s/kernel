@@ -10,21 +10,14 @@ import (
 	"unicode/utf8"
 )
 
-// POSIX regular expressions, basic and extended with GNU's escapes,
-// translated to Go's syntax and matched leftmost-longest. Back-references
-// have no translation: such a pattern fails to compile. A compiled
-// expression is the process's; regex_t holds its number.
-
 const (
 	regExtended = 1
 	regIcase    = 2
 	regNewline  = 4
 	regNosub    = 8
-
 	regNotbol   = 1
 	regNoteol   = 2
 	regStartend = 4
-
 	regNomatch  = 1
 	regBadpat   = 2
 	regEcollate = 3
@@ -38,27 +31,21 @@ const (
 	regBadrpt   = 13
 )
 
-type posixRegex struct {
+type PosixRegex struct {
 	pattern []byte
 	flags   uint32
 	nsub    int
-	// variants are compiled by their anchors: bit 0 when ^ cannot match,
-	// bit 1 when $ cannot.
+
 	variants [4]*regexp.Regexp
 }
 
-// variant is the expression with REG_NOTBOL and REG_NOTEOL applied.
-func (r *posixRegex) variant(eflags uint32) *regexp.Regexp {
+func (r *PosixRegex) variant(eflags uint32) *regexp.Regexp {
 	v := eflags & (regNotbol | regNoteol)
 
 	if r.variants[v] == nil {
 		src, _, _ := translateRegex(r.pattern, r.flags, v&regNotbol != 0, v&regNoteol != 0)
 
 		if r.flags&regNewline != 0 && v != 0 {
-			// Consume the synthetic boundary characters outside a capture of
-			// the user's expression. Multiline anchors still see real newlines,
-			// while ^/$ cannot see the artificial string boundaries. Keeping
-			// the match in a capture also preserves byte offsets after UTF-8.
 			src = "(" + src + ")"
 
 			if v&regNotbol != 0 {
@@ -71,6 +58,7 @@ func (r *posixRegex) variant(eflags uint32) *regexp.Regexp {
 		}
 
 		re := regexp.MustCompile(src)
+
 		re.Longest()
 		r.variants[v] = re
 	}
@@ -78,9 +66,7 @@ func (r *posixRegex) variant(eflags uint32) *regexp.Regexp {
 	return r.variants[v]
 }
 
-// regexWriter builds the translation: atom is where the last atom starts
-// in out, so a repetition of a repetition can wrap it.
-type regexWriter struct {
+type RegexWriter struct {
 	out      strings.Builder
 	atom     int
 	repeated bool
@@ -88,15 +74,16 @@ type regexWriter struct {
 	nsub     int
 }
 
-func (w *regexWriter) atomic(s string) {
+func (w *RegexWriter) atomic(s string) {
 	w.atom = w.out.Len()
 	w.repeated = false
 	w.out.WriteString(s)
 }
 
-func (w *regexWriter) repeat(op string) {
+func (w *RegexWriter) repeat(op string) {
 	if w.repeated {
 		s := w.out.String()
+
 		w.out.Reset()
 		w.out.WriteString(s[:w.atom] + "(?:" + s[w.atom:] + ")")
 	}
@@ -109,12 +96,10 @@ func quoteByte(c byte) string {
 	return regexp.QuoteMeta(string([]byte{c}))
 }
 
-// translateRegex returns Go's syntax for a POSIX pattern and its number of
-// groups, or a REG_ error code.
 func translateRegex(pat []byte, flags uint32, bolNever, eolNever bool) (string, int, uint32) {
 	ere := flags&regExtended != 0
 	newline := flags&regNewline != 0
-	w := &regexWriter{}
+	w := &RegexWriter{}
 
 	switch {
 	case newline:
@@ -128,14 +113,14 @@ func translateRegex(pat []byte, flags uint32, bolNever, eolNever bool) (string, 
 	}
 
 	w.atom = w.out.Len()
-	// start tells that no atom precedes: a repetition is literal there and
-	// a basic ^ an anchor.
+
 	start := true
 	never := `[^\x00-\x{10FFFF}]`
 
 	for i := 0; i < len(pat); i++ {
 		c := pat[i]
 		wasStart := start
+
 		start = false
 
 		switch {
@@ -145,6 +130,7 @@ func translateRegex(pat []byte, flags uint32, bolNever, eolNever bool) (string, 
 			}
 
 			i++
+
 			e := pat[i]
 
 			switch {
@@ -291,7 +277,6 @@ func translateRegex(pat []byte, flags uint32, bolNever, eolNever bool) (string, 
 	return w.out.String(), w.nsub, 0
 }
 
-// parseInterval checks the m, m, or m,n of an interval.
 func parseInterval(s string) (string, bool) {
 	lo, hi, comma := s, "", false
 
@@ -322,11 +307,11 @@ func parseInterval(s string) (string, bool) {
 	return "{" + lo + "," + hi + "}", true
 }
 
-// translateBracket translates the bracket expression pat starts with and
-// returns its length.
 func translateBracket(pat []byte, newline bool) (string, int, uint32) {
 	var out strings.Builder
+
 	i := 1
+
 	out.WriteString("[")
 
 	if i < len(pat) && pat[i] == '^' {

@@ -21,6 +21,7 @@ func main() {
 
 	if e := try(func() {
 		setupVmChaos()
+
 		args := os.Args[1:]
 
 		if len(args) > 0 && args[0] == "run" {
@@ -54,10 +55,12 @@ func main() {
 
 func compileCommand(args []string) {
 	var input, output string
+
 	verbose, asan := false, false
 
 	for len(args) > 0 {
 		arg := args[0]
+
 		args = args[1:]
 
 		switch arg {
@@ -92,10 +95,12 @@ func compileCommand(args []string) {
 	destination := throw2(os.CreateTemp(filepath.Dir(output), ".vm-*"))
 
 	defer destination.Close()
+
 	defer os.Remove(destination.Name())
 
 	if path := os.Getenv("W2X_PROFILE"); path != "" {
 		f := throw2(os.Create(path))
+
 		throw(pprof.StartCPUProfile(f))
 
 		defer pprof.StopCPUProfile()
@@ -103,8 +108,11 @@ func compileCommand(args []string) {
 
 	options := programOptions(asan)
 	start := time.Now()
-	compileStreams(source, destination, options)
+
+	compileStreams(source, destination.Write, options)
+
 	elapsed := time.Since(start)
+
 	throw(destination.Chmod(0o644))
 	throw(destination.Close())
 	throw(os.Rename(destination.Name(), output))
@@ -114,20 +122,11 @@ func compileCommand(args []string) {
 	}
 }
 
-// runCommand runs module.wasm, a program of the kernel, or a WASI command,
-// compiled as it starts: the options come first, then -- and the module
-// with its arguments. The first process has no root: it serves the VFS
-// the others have theirs from, rootfs, or needs none. argv0 is by default
-// the module's path. --asan compiles the programs with the checks of the
-// kernel's address sanitizer (process.go). Each --disk gives a program
-// of the kernel a file of the host as a disk (runKernel); what follows the
-// program in its own file is its disk named image (runModule). --user gives the
-// first process its user and group ids, the group the user's without one:
-// it is root without it.
 func runCommand(args []string) int {
 	argv0, asan := "", false
-	var disks []disk
-	var user cred
+
+	var disks []Disk
+	var user Cred
 
 	for len(args) > 0 && args[0] != "--" {
 		switch {
@@ -141,7 +140,7 @@ func runCommand(args []string) int {
 				usage()
 			}
 
-			user = cred{uids: [3]uint32{uid, uid, uid}, gids: [3]uint32{gid, gid, gid}}
+			user = Cred{uids: [3]uint32{uid, uid, uid}, gids: [3]uint32{gid, gid, gid}}
 			args = args[2:]
 		case len(args) > 1 && args[0] == "-a":
 			argv0 = args[1]
@@ -153,7 +152,7 @@ func runCommand(args []string) int {
 				usage()
 			}
 
-			disks = append(disks, disk{name: name, path: path})
+			disks = append(disks, Disk{name: name, path: path})
 			args = args[2:]
 		default:
 			usage()
@@ -175,7 +174,6 @@ func runCommand(args []string) int {
 	return runModule(args[0], argv, asan, disks, user)
 }
 
-// parseUser reads --user's uid[:gid], decimal ids short of -1.
 func parseUser(text string) (uid, gid uint32, ok bool) {
 	u, g, both := strings.Cut(text, ":")
 

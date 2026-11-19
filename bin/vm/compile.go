@@ -16,22 +16,32 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// The native bootstrap compiles aot.wasm to this object in build.py.
-// No wasm decoder, optimizer or code generator lives in the Go host.
-//
-//go:embed aot.aot
-var compilerBlob []byte
+var (
+	//go:embed aot.aot
+	compilerBlob []byte
+	wasmHeader   = []byte("\x00asm\x01\x00\x00\x00")
+	exeMagic     = []byte("PZD1")
+)
 
 var compilerCode = sync.OnceValue(func() *Code {
 	return link("aot", readObject(compilerBlob), CompilerImports{})
 })
 
+var unpacker = sync.OnceValue(func() *zstd.Decoder {
+	return throw2(zstd.NewReader(nil, zstd.WithDecoderMaxMemory(unpackLimit)))
+})
+
+const (
+	maxObjectHint = 16 << 30
+	exeHeader     = 8
+	unpackLimit   = 1 << 30
+)
+
 type CompileOptions struct {
 	memoryTail  bool
 	tailRanges  bool
 	tailProfile bool
-	// asan compiles every access with a check of the shadow map
-	// (process.go) in place of the tail's checks.
+
 	asan bool
 }
 
@@ -57,13 +67,11 @@ type CompilerImports struct{ FunctionImports }
 
 type CompilerIO struct {
 	input      io.Reader
-	output     io.Writer
+	output     func(p []byte) (int, error)
 	diagnostic bytes.Buffer
 }
 
 func (CompilerImports) function(imp *ImportMeta) any {
-	// compilerBlob is fixed at build time: its only imports are these three
-	// wasi_snapshot_preview1 functions, declared by aot.cpp.
 	switch imp.name {
 	case "fd_read":
 		return compilerRead
@@ -74,9 +82,6 @@ func (CompilerImports) function(imp *ImportMeta) any {
 	return compilerExit
 }
 
-// The private compiler bridge serves aot.cpp's read and writeAll only.
-// Both pass one valid iovec and a valid done pointer; reads use fd 0 and
-// writes fd 1/2. Its single uint32-sized buffer also bounds the byte count.
 func compilerTransfer(ctx uintptr, fd, iovs, done uint32, write bool) uint32 {
 	m := guest(ctx)
 	host := instanceAt(ctx).host.(*CompilerIO)
@@ -84,20 +89,21 @@ func compilerTransfer(ctx uintptr, fd, iovs, done uint32, write bool) uint32 {
 	at := binary.LittleEndian.Uint32(table)
 	size := binary.LittleEndian.Uint32(table[4:])
 	b := span(m, at, uint64(size))
+
 	var n int
 	var err error
 
 	if write {
-		var out io.Writer = host.output
+		out := host.output
 
 		if fd == 2 {
-			out = &host.diagnostic
+			out = host.diagnostic.Write
 		}
 
 		if chaosFail("compile-write") {
 			err = io.ErrShortWrite
 		} else {
-			n, err = out.Write(b)
+			n, err = out(b)
 		}
 	} else {
 		if chaosFail("compile-read") {
@@ -126,12 +132,11 @@ func compilerWrite(ctx uintptr, fd, iovs, count, done uint32) uint32 {
 
 func compilerExit(ctx uintptr, code uint32) {
 	diagnostic := strings.TrimSpace(instanceAt(ctx).host.(*CompilerIO).diagnostic.String())
+
 	throwFmt("aot exited with code %d: %s", code, diagnostic)
 }
 
-// Each invocation owns its instance and linear memory. The linked machine
-// code is shared, and its WASI imports reach the invocation through ctx.
-func compileStreams(input io.Reader, output io.Writer, options CompileOptions) {
+func compileStreams(input io.Reader, output func(p []byte) (int, error), options CompileOptions) {
 	imports := CompilerImports{}
 	i := newInstance(compilerCode(), imports, runStack)
 
@@ -140,6 +145,7 @@ func compileStreams(input io.Reader, output io.Writer, options CompileOptions) {
 	i.attach(&CompilerIO{input: input, output: output})
 	i.start()
 	setupCompilerChaos(i)
+
 	flags := uint32(0)
 
 	if options.memoryTail {
@@ -160,27 +166,20 @@ func compileStreams(input io.Reader, output io.Writer, options CompileOptions) {
 
 	if flags == 3 {
 		entry, _ := i.export("compile")
+
 		entry.Interface().(func(uintptr))(i.ctx())
 	} else {
 		entry, _ := i.export("compileOptions")
+
 		entry.Interface().(func(uintptr, uint32))(i.ctx(), flags)
 	}
 }
 
-// objectWriter takes the object the compiler writes into one slice of
-// its size. The compiler writes the ELF header first, and it says where
-// the section headers are, which come last: the size is known before the
-// sections, and the slice is never grown nor copied. readObject keeps
-// parts of it, the code cache the object: a slice grown by doubling kept
-// up to as much again of nothing with it.
-type objectWriter struct {
+type ObjectWriter struct {
 	b []byte
 }
 
-// maxObjectHint bounds the size a header may ask for at once.
-const maxObjectHint = 16 << 30
-
-func (w *objectWriter) Write(p []byte) (int, error) {
+func (w *ObjectWriter) write(p []byte) (int, error) {
 	if w.b == nil {
 		w.b = make([]byte, 0, objectSize(p))
 	}
@@ -190,8 +189,6 @@ func (w *objectWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// objectSize is the size an object's ELF header says: the end of its
-// section headers; 0 for what is no such header.
 func objectSize(header []byte) int {
 	if len(header) < 64 || !bytes.HasPrefix(header, []byte("\x7fELF\x02\x01")) {
 		return 0
@@ -207,11 +204,9 @@ func objectSize(header []byte) int {
 	return int(size)
 }
 
-// compileModuleWithOptions is the object of a module, in a slice of its
-// own size: a header that said another costs a copy.
 func compileModuleWithOptions(data []byte, options CompileOptions) []byte {
-	var out objectWriter
-	compileStreams(bytes.NewReader(data), &out, options)
+	var out ObjectWriter
+	compileStreams(bytes.NewReader(data), out.write, options)
 
 	if len(out.b) != cap(out.b) {
 		return bytes.Clone(out.b)
@@ -220,8 +215,6 @@ func compileModuleWithOptions(data []byte, options CompileOptions) []byte {
 	return out.b
 }
 
-// programOptions are the options a program is compiled with: the
-// environment's, or with asan only the checks of the shadow map.
 func programOptions(asan bool) CompileOptions {
 	if asan {
 		return CompileOptions{asan: true}
@@ -230,31 +223,6 @@ func programOptions(asan bool) CompileOptions {
 	return compileOptions()
 }
 
-// wasmHeader begins a WebAssembly module, of version 1.
-var wasmHeader = []byte("\x00asm\x01\x00\x00\x00")
-
-// An executable of a program of the kernel (dev/exe.py) begins with
-// exeMagic and its length, header included, a 32-bit little-endian number;
-// the module compressed by zstd fills the rest of that length. What
-// follows is the program's own, which the kernel never reads: python's
-// standard library, a zip at the end of its file, and after the first
-// process's program its disk named image (runModule), a system's.
-var exeMagic = []byte("PZD1")
-
-const exeHeader = 8
-
-// unpackLimit bounds what a compressed module unpacks to, 1 GiB, four
-// times llvm's module: a small file does not take the host's memory.
-const unpackLimit = 1 << 30
-
-// unpacker decodes whole frames, every call on the caller's goroutine.
-var unpacker = sync.OnceValue(func() *zstd.Decoder {
-	return throw2(zstd.NewReader(nil, zstd.WithDecoderMaxMemory(unpackLimit)))
-})
-
-// exeLength is the length of the executable a file of size bytes begins
-// with, header its first bytes: 0 for a file that begins with none,
-// ENOEXEC, with why, for a length past the file or none past the header.
 func exeLength(header []byte, size int64) (int, error) {
 	if len(header) < exeHeader || !bytes.HasPrefix(header, exeMagic) {
 		return 0, nil
@@ -269,8 +237,6 @@ func exeLength(header []byte, size int64) (int, error) {
 	return int(length), nil
 }
 
-// unpack is the module of an executable: its zstd frames unpacked, which
-// end where it does; ENOEXEC, with why, when they do not unpack.
 func unpack(exe []byte) ([]byte, error) {
 	module, err := unpacker().DecodeAll(exe[exeHeader:], nil)
 
@@ -281,8 +247,6 @@ func unpack(exe []byte) ([]byte, error) {
 	return module, nil
 }
 
-// compileExecutable compiles the module of an executable to its object, as
-// compileModule does, ENOEXEC with why for frames that do not unpack.
 func compileExecutable(exe []byte, options CompileOptions) (*ElfObject, error) {
 	module, err := unpack(exe)
 
@@ -293,9 +257,6 @@ func compileExecutable(exe []byte, options CompileOptions) (*ElfObject, error) {
 	return compileModule(module, options)
 }
 
-// compileModule compiles a module to its object: ENOEXEC for what is no
-// module, or a module the compiler refuses, with its diagnostic, or traps
-// on.
 func compileModule(data []byte, options CompileOptions) (obj *ElfObject, err error) {
 	if !bytes.HasPrefix(data, wasmHeader) {
 		return nil, syscall.ENOEXEC

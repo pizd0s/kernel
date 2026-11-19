@@ -2,59 +2,51 @@
 
 package main
 
-// The structures lib/c hands the kernel come with their sizes: each after
-// its pointer, and the size of one an import returns last (lib/c's
-// src/kernel.c). The size is the structure's version. A layout only grows
-// at its end, so the kernel can serve every size it has known of a
-// structure. These are the sizes it knows, one of each so far: the layouts
-// its code reads and writes. tst/test_abi_sizes.py checks them against
-// lib/c's headers. A struct sockaddr has its length in every call.
 const (
-	sizeofAddrinfo    = 32  // struct addrinfo
-	sizeofDirent      = 280 // struct dirent
-	sizeofEpollEvent  = 16  // struct epoll_event
-	sizeofFdSet       = 128 // fd_set
-	sizeofFlock       = 32  // struct flock
-	sizeofGlob        = 36  // glob_t
-	sizeofGroup       = 16  // struct group
-	sizeofHostent     = 20  // struct hostent
-	sizeofIfNameindex = 8   // struct if_nameindex
-	sizeofInAddr      = 4   // struct in_addr
-	sizeofIovec       = 8   // struct iovec
-	sizeofItimerval   = 32  // struct itimerval
-	sizeofJmpBuf      = 80  // jmp_buf
-	sizeofLconv       = 56  // struct lconv
-	sizeofMsghdr      = 28  // struct msghdr
-	sizeofNetent      = 16  // struct netent
-	sizeofPasswd      = 28  // struct passwd
-	sizeofPollfd      = 8   // struct pollfd
-	sizeofProtoent    = 12  // struct protoent
-	sizeofRegex       = 32  // regex_t
-	sizeofRegmatch    = 8   // regmatch_t
-	sizeofRlimit      = 16  // struct rlimit
-	sizeofRusage      = 88  // struct rusage
-	sizeofSchedParam  = 4   // struct sched_param
-	sizeofServent     = 16  // struct servent
-	sizeofSigaction   = 24  // struct sigaction
-	sizeofSiginfo     = 36  // siginfo_t
-	sizeofSigset      = 8   // sigset_t
-	sizeofStack       = 12  // stack_t
-	sizeofStat        = 112 // struct stat
-	sizeofStatfs      = 88  // struct statfs
-	sizeofStatvfs     = 72  // struct statvfs
-	sizeofSysinfo     = 312 // struct sysinfo
-	sizeofTermios     = 60  // struct termios
-	sizeofTimespec    = 16  // struct timespec
-	sizeofTimeval     = 16  // struct timeval
-	sizeofTimezone    = 8   // struct timezone
-	sizeofTm          = 44  // struct tm
-	sizeofTms         = 32  // struct tms
-	sizeofUtimbuf     = 16  // struct utimbuf
-	sizeofUtsname     = 390 // struct utsname
-	sizeofWinsize     = 8   // struct winsize
+	sizeofAddrinfo    = 32
+	sizeofDirent      = 280
+	sizeofEpollEvent  = 16
+	sizeofFdSet       = 128
+	sizeofFlock       = 32
+	sizeofGlob        = 36
+	sizeofGroup       = 16
+	sizeofHostent     = 20
+	sizeofIfNameindex = 8
+	sizeofInAddr      = 4
+	sizeofIovec       = 8
+	sizeofItimerval   = 32
+	sizeofJmpBuf      = 80
+	sizeofLconv       = 56
+	sizeofMsghdr      = 28
+	sizeofNetent      = 16
+	sizeofPasswd      = 28
+	sizeofPollfd      = 8
+	sizeofProtoent    = 12
+	sizeofRegex       = 32
+	sizeofRegmatch    = 8
+	sizeofRlimit      = 16
+	sizeofRusage      = 88
+	sizeofSchedParam  = 4
+	sizeofServent     = 16
+	sizeofSigaction   = 24
+	sizeofSiginfo     = 36
+	sizeofSigset      = 8
+	sizeofStack       = 12
+	sizeofStat        = 112
+	sizeofStatfs      = 88
+	sizeofStatvfs     = 72
+	sizeofSysinfo     = 312
+	sizeofTermios     = 60
+	sizeofTimespec    = 16
+	sizeofTimeval     = 16
+	sizeofTimezone    = 8
+	sizeofTm          = 44
+	sizeofTms         = 32
+	sizeofUtimbuf     = 16
+	sizeofUtsname     = 390
+	sizeofWinsize     = 8
 )
 
-// fcntlSize is the size of the structure a command of fcntl passes, or 0.
 func fcntlSize(cmd uint32) uint32 {
 	switch cmd {
 	case fGetlk, fSetlk, fSetlkw:
@@ -64,7 +56,6 @@ func fcntlSize(cmd uint32) uint32 {
 	return 0
 }
 
-// ioctlSize is the size of the structure a request of ioctl passes, or 0.
 func ioctlSize(req uint32) uint32 {
 	switch req {
 	case tcgets, tcsets, tcsets + 1, tcsets + 2:

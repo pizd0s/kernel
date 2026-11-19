@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// numericHost parses a numeric address as musl does: IPv4 by inet_aton,
-// IPv6 with a scope of a number or an interface.
+var interfaces = []string{"lo"}
+
 func numericHost(s string) (netip.Addr, uint32, bool) {
 	if a, ok := inetAton(s); ok {
 		return netip.AddrFrom4(a), 0, true
@@ -38,31 +38,33 @@ func numericHost(s string) (netip.Addr, uint32, bool) {
 	return addr, scope, true
 }
 
-// sockaddr is the bytes of an address's struct sockaddr_in or _in6.
 func sockaddr(addr netip.Addr, port int, scope uint32) []byte {
 	if addr.Is4() {
 		b := make([]byte, 16)
+
 		binary.LittleEndian.PutUint16(b, afInet)
 		binary.BigEndian.PutUint16(b[2:], uint16(port))
+
 		a := addr.As4()
+
 		copy(b[4:], a[:])
 
 		return b
 	}
 
 	b := make([]byte, 28)
+
 	binary.LittleEndian.PutUint16(b, afInet6)
 	binary.BigEndian.PutUint16(b[2:], uint16(port))
+
 	a := addr.As16()
+
 	copy(b[8:], a[:])
 	binary.LittleEndian.PutUint32(b[24:], scope)
 
 	return b
 }
 
-// strtoulPart is strtoul's number of base 0 that a part of an address
-// is: hexadecimal after 0x, octal after 0, decimal else. A value outside
-// the 32-bit address range is invalid.
 func strtoulPart(s string) (uint64, bool) {
 	base, digits := uint64(10), s
 
@@ -101,10 +103,9 @@ func strtoulPart(s string) (uint64, bool) {
 	return v, true
 }
 
-// inetAton is musl's: one to four numbers of strtoul's bases, the last
-// filling the bytes left.
 func inetAton(s string) ([4]byte, bool) {
 	var parts [4]uint64
+
 	n := 0
 
 	for {
@@ -135,6 +136,7 @@ func inetAton(s string) ([4]byte, bool) {
 	}
 
 	var out [4]byte
+
 	last := parts[n-1]
 	room := 4 - (n - 1)
 
@@ -157,11 +159,6 @@ func inetAton(s string) ([4]byte, bool) {
 	return out, true
 }
 
-// The system's network interfaces: it has no network, and the loopback
-// interface alone, lo, of index 1, as Linux always has.
-var interfaces = []string{"lo"}
-
-// interfaceIndex is the index of the interface of a name, 0 for none.
 func interfaceIndex(name string) uint32 {
 	for i, n := range interfaces {
 		if n == name {

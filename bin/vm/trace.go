@@ -10,44 +10,30 @@ import (
 	"sync"
 )
 
-// The trace of a crash runs through the module's code and the Go code it
-// called as one stack: the loader registered the code's functions with Go
-// (gort.go), so Go's unwinder walks their frames as it walks its own and
-// names them as the object does, f<index>:<name>. A trace keeps the frames
-// from the fault down to the module's entry: the kernel's functions above
-// the module's where an import was called, then the module's own. The
-// loader's thunks, adapters and stubs (w2o.*) are left out, and so is the
-// harness above the module's entry.
+var loaded struct {
+	sync.Mutex
+	ranges []CodeRange
+}
 
-// traceDepth is how many frames a trace captures, tracePrinted how many a
-// report shows: the top and the bottom around a gap.
 const (
 	traceDepth   = 1024
 	tracePrinted = 64
 )
 
-// loaded is the registered code (registerCode): what tells a frame of the
-// module from one of Go.
-var loaded struct {
-	sync.Mutex
-	ranges []codeRange
-}
-
-type codeRange struct {
+type CodeRange struct {
 	base, end uintptr
 	name      string
 }
 
-// noteCode records registered code for the traces.
 func noteCode(name string, base, end uintptr) {
 	loaded.Lock()
-	loaded.ranges = append(loaded.ranges, codeRange{base, end, name})
+	loaded.ranges = append(loaded.ranges, CodeRange{base, end, name})
 	loaded.Unlock()
 }
 
-// codeAt is the registered code pc is in, if any.
-func codeAt(pc uintptr) (codeRange, bool) {
+func codeAt(pc uintptr) (CodeRange, bool) {
 	loaded.Lock()
+
 	defer loaded.Unlock()
 
 	for _, r := range loaded.ranges {
@@ -56,20 +42,15 @@ func codeAt(pc uintptr) (codeRange, bool) {
 		}
 	}
 
-	return codeRange{}, false
+	return CodeRange{}, false
 }
 
-// callers captures the stack from the caller's caller up, less skip frames
-// above it.
 func callers(skip int) []uintptr {
 	pcs := make([]uintptr, traceDepth)
 
 	return pcs[:runtime.Callers(skip+2, pcs)]
 }
 
-// traceLines formats a captured stack, a frame a line: a function of the
-// module with the offset of its instruction, a Go function with its file and
-// line, aligned.
 func traceLines(pcs []uintptr) []string {
 	type frame struct {
 		name, place string
@@ -77,6 +58,7 @@ func traceLines(pcs []uintptr) []string {
 	}
 
 	var frames []frame
+
 	it := runtime.CallersFrames(pcs)
 
 	for {
@@ -84,8 +66,6 @@ func traceLines(pcs []uintptr) []string {
 
 		if f.PC != 0 {
 			if code, ok := codeAt(f.PC); ok {
-				// A function of the module: with its source line when the
-				// object has them, else its file is the object's name.
 				if !strings.HasPrefix(f.Function, "w2o.") {
 					fr := frame{name: fmt.Sprintf("%s+%#x", moduleFunction(f.Function), f.PC-f.Entry), module: true}
 
@@ -126,6 +106,7 @@ func traceLines(pcs []uintptr) []string {
 	}
 
 	var lines []string
+
 	emit := func(f frame) {
 		if f.place == "" {
 			lines = append(lines, f.name)
@@ -157,10 +138,6 @@ func traceLines(pcs []uintptr) []string {
 	return lines
 }
 
-// goFunction is a Go function's name without its package: the kernel's
-// functions are all of one. CallersFrames supplies package-qualified Go
-// names; registered module names take the moduleFunction path instead.
-// An unknown frame has an empty name, which the slice also preserves.
 func goFunction(name string) string {
 	start := strings.LastIndexByte(name, '/') + 1
 	dot := strings.IndexByte(name[start:], '.') + 1
@@ -168,9 +145,6 @@ func goFunction(name string) string {
 	return name[start+dot:]
 }
 
-// moduleFunction is the name of a function of the module from the name the
-// object registered: f<index>:<name>, or f<index> alone for a function the
-// module did not name.
 func moduleFunction(registered string) string {
 	if _, name, ok := strings.Cut(registered, ":"); ok {
 		return name

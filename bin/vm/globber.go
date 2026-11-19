@@ -10,12 +10,6 @@ import (
 	"syscall"
 )
 
-// glob, as musl's: a pattern's components with wildcards match the names
-// of the directories the others lead to, by fnmatch; . and .. are names
-// too. A directory that cannot be read goes to the error function, through
-// the crt's __call_glob_error, and ends the search when it asks or with
-// GLOB_ERR.
-
 const (
 	globErr      = 0x01
 	globMark     = 0x02
@@ -32,7 +26,7 @@ const (
 	globNomatch  = 3
 )
 
-type globber struct {
+type Globber struct {
 	p       *Process
 	flags   uint32
 	errfunc uint32
@@ -40,8 +34,7 @@ type globber struct {
 	aborted bool
 }
 
-// magic tells whether a component has a wildcard.
-func (g *globber) magic(comp string) bool {
+func (g *Globber) magic(comp string) bool {
 	for i := 0; i < len(comp); i++ {
 		switch comp[i] {
 		case '\\':
@@ -56,8 +49,7 @@ func (g *globber) magic(comp string) bool {
 	return false
 }
 
-// literal is a component without wildcards, its escapes taken.
-func (g *globber) literal(comp string) string {
+func (g *Globber) literal(comp string) string {
 	if g.flags&globNoescape != 0 {
 		return comp
 	}
@@ -75,9 +67,7 @@ func (g *globber) literal(comp string) string {
 	return b.String()
 }
 
-// failed tells the error function of a directory that cannot be read and
-// whether the search goes on.
-func (g *globber) failed(dir string, err error) bool {
+func (g *Globber) failed(dir string, err error) bool {
 	if g.errfunc != 0 {
 		p := g.p
 		path := p.newString(dir)
@@ -85,6 +75,7 @@ func (g *globber) failed(dir string, err error) bool {
 		if path != 0 {
 			f, _ := p.inst.export("__call_glob_error")
 			stop := f.Interface().(func(uintptr, uint32, uint32, uint32) uint32)(p.inst.ctx(), g.errfunc, path, uint32(errnoOf(err)))
+
 			p.free(path)
 
 			if stop != 0 {
@@ -100,8 +91,7 @@ func (g *globber) failed(dir string, err error) bool {
 	return !g.aborted
 }
 
-// names are the entries of a directory, . and .. among them.
-func (g *globber) names(dir string) ([]string, error) {
+func (g *Globber) names(dir string) ([]string, error) {
 	path := dir
 
 	if path == "" {
@@ -115,6 +105,7 @@ func (g *globber) names(dir string) ([]string, error) {
 	}
 
 	defer f.unref()
+
 	d := f.asDir()
 
 	if d == nil {
@@ -148,15 +139,13 @@ func (g *globber) names(dir string) ([]string, error) {
 	}
 }
 
-func (g *globber) exists(path string) bool {
+func (g *Globber) exists(path string) bool {
 	var st syscall.Stat_t
 
 	return g.p.statPath(path, false, &st) == nil
 }
 
-// walk matches the components left under dir, which ends with a slash or
-// is empty; a pattern ending with a slash matches directories, with it.
-func (g *globber) walk(dir string, comps []string) {
+func (g *Globber) walk(dir string, comps []string) {
 	if g.aborted {
 		return
 	}
@@ -196,6 +185,7 @@ func (g *globber) walk(dir string, comps []string) {
 	}
 
 	slices.Sort(names)
+
 	flags := 0
 
 	if g.flags&globPeriod == 0 {
@@ -223,9 +213,7 @@ func (g *globber) walk(dir string, comps []string) {
 	}
 }
 
-// tilde expands a leading ~ or ~user: false when GLOB_TILDE_CHECK finds no
-// such home.
-func (g *globber) tilde(pattern string) (string, bool) {
+func (g *Globber) tilde(pattern string) (string, bool) {
 	if g.flags&(globTilde|globTildeChk) == 0 || !strings.HasPrefix(pattern, "~") {
 		return pattern, true
 	}
@@ -235,7 +223,7 @@ func (g *globber) tilde(pattern string) (string, bool) {
 
 	if user == "" {
 		home, _ = g.p.getenv("HOME")
-	} else if e := g.p.passwdBy(func(e *passwdEntry) bool { return e.name == user }); e != nil {
+	} else if e := g.p.passwdBy(func(e *PasswdEntry) bool { return e.name == user }); e != nil {
 		home = e.dir
 	}
 

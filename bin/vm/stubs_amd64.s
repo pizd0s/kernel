@@ -241,7 +241,7 @@ fail:
 	RET
 
 // w2oFrames is what fork calls first, func(request uintptr) with AX, on a
-// framesRequest (instance.go): it walks the frame pointers from the jump
+// FramesRequest (instance.go): it walks the frame pointers from the jump
 // frame's caller up while each returns into a function of the module, to
 // the frame that returns into the entry thunk or the resume stub's
 // continuation, and copies those frames, from the caller's stack pointer
@@ -313,7 +313,7 @@ fail:
 	RET
 
 // w2oResume is what a child of fork enters by, func(request uintptr)
-// uint64 with AX, on a resumeRequest (instance.go): it grows the stack until
+// uint64 with AX, on a ResumeRequest (instance.go): it grows the stack until
 // the frames fit, then w2oResumePlace, with a frame of its own, places the
 // frames below its stack pointer, links them to its frame and returns from
 // the call of the jump frame with 0, the instance's base set so that the

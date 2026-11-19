@@ -10,55 +10,39 @@ import (
 	"time"
 )
 
-// The flags of an io.
 const (
-	ioAppend   = 1
-	ioNonblock = 2
+	ioAppend        = 1
+	ioNonblock      = 2
+	keptConnections = 8
 )
 
-// remoteNode is what the kernel keeps of an open file of a server: the
-// end of its pair, its flags and position, and what its server told of
-// it. Each kind of open file of a server, remoteFile, remoteTerminal
-// (remote_terminal.go), remoteDir and remotePath, has one and answers its
-// calls with it, each call by a method of its own; a node is no object.
-type remoteNode struct {
-	end  *pairEnd
+type RemoteNode struct {
+	end  *PairEnd
 	refs atomic.Int32
-	// connecting are who asked the server for a connection and has no
-	// answer yet, the first to ask first, with mu; gone is set once the
-	// server's end closed. watchers are the subscriptions of a file whose
-	// server tells its readiness.
+
 	mu         sync.Mutex
-	connecting []*connector
+	connecting []*Connector
 	gone       bool
-	watchers   subscribers
-	// accmode is the O_ACCMODE it was opened with, append its O_APPEND,
-	// which F_SETFL sets as well as O_NONBLOCK.
+	watchers   Subscribers
+
 	accmode  int
 	append   atomic.Bool
 	nonblock atomic.Bool
-	// pos is the position of read, write and seek; after the position of
-	// the last entry readdir gave.
+
 	pos   int64
 	after uint64
-	// tells is set for a file whose server tells its readiness, READY on
-	// its endpoint; ready is what the last said, and a terminal's
-	// foreground group and TOSTOP.
+
 	tells      bool
 	ready      atomic.Int32
 	foreground atomic.Int32
 	tostop     atomic.Bool
-	// locks is where the locks of flock and fcntl on the file are kept,
-	// by file, what names it there (lock_table.go): none of a file its
-	// server made with no ino. locked is set once it asked for a lock.
-	locks  *lockTable
-	file   fileKey
+
+	locks  *LockTable
+	file   FileKey
 	locked atomic.Bool
 }
 
-// revive takes a reference to a node that still has one: false for one
-// whose last went.
-func (n *remoteNode) revive() bool {
+func (n *RemoteNode) revive() bool {
 	for {
 		r := n.refs.Load()
 
@@ -72,11 +56,11 @@ func (n *remoteNode) revive() bool {
 	}
 }
 
-func (n *remoteNode) ref() {
+func (n *RemoteNode) ref() {
 	n.refs.Add(1)
 }
 
-func (n *remoteNode) unref() {
+func (n *RemoteNode) unref() {
 	if n.refs.Add(-1) == 0 {
 		if n.locked.Load() {
 			n.locks.forget(n)
@@ -86,9 +70,7 @@ func (n *remoteNode) unref() {
 	}
 }
 
-// A file whose server tells its readiness wakes its subscriptions as a
-// READY comes; any other is ready whenever asked.
-func (n *remoteNode) subscribe(s *subscription, events int16) {
+func (n *RemoteNode) subscribe(s *Subscription, events int16) {
 	if n.tells {
 		n.mu.Lock()
 		n.watchers.add(&s.in)
@@ -96,7 +78,7 @@ func (n *remoteNode) subscribe(s *subscription, events int16) {
 	}
 }
 
-func (n *remoteNode) unsubscribe(s *subscription) {
+func (n *RemoteNode) unsubscribe(s *Subscription) {
 	if n.tells {
 		n.mu.Lock()
 		n.watchers.remove(&s.in)
@@ -104,7 +86,7 @@ func (n *remoteNode) unsubscribe(s *subscription) {
 	}
 }
 
-func (n *remoteNode) poll(events int16) int16 {
+func (n *RemoteNode) poll(events int16) int16 {
 	if !n.tells {
 		return events & (pollIn | pollOut | pollRdnorm | pollWrnorm)
 	}
@@ -112,25 +94,15 @@ func (n *remoteNode) poll(events int16) int16 {
 	return n.readiness() & (events | pollErr | pollHup)
 }
 
-// readiness is what the server said last of the file, the READY that came
-// on its endpoint; a server gone is a hangup and an error.
-func (n *remoteNode) readiness() int16 {
+func (n *RemoteNode) readiness() int16 {
 	return int16(n.ready.Load())
 }
 
-// A connector is the place of a process that asked a server to connect,
-// among those of the open file in the order of the questions, as the
-// answers come: w is the waiter the answer is given to, none once the
-// process waits no more, and its answer goes.
-type connector struct {
-	w *waiter[received]
+type Connector struct {
+	w *Waiter[Received]
 }
 
-// deliver takes what the server sends on its endpoint of the open file:
-// READY, the file's readiness now, which wakes who watches it; and the
-// answer to a CONNECT, the first's of those that wait, as the answers
-// come in the order of the questions.
-func (n *remoteNode) deliver(pk *packet) {
+func (n *RemoteNode) deliver(pk *Packet) {
 	if len(pk.data) < remoteHeader {
 		dropFiles(pk.files)
 
@@ -168,8 +140,10 @@ func (n *remoteNode) deliver(pk *packet) {
 		}
 
 		c := n.connecting[0]
+
 		n.connecting[0] = nil
 		n.connecting = n.connecting[1:]
+
 		w := c.w
 
 		if w == nil {
@@ -179,7 +153,7 @@ func (n *remoteNode) deliver(pk *packet) {
 		}
 
 		c.w = nil
-		w.wake(received{pk: *pk})
+		w.wake(Received{pk: *pk})
 		n.mu.Unlock()
 
 		return
@@ -188,19 +162,19 @@ func (n *remoteNode) deliver(pk *packet) {
 	dropFiles(pk.files)
 }
 
-// hungUp hears that the server's end closed: the file hangs up, and who
-// waits for a connection reads the end.
-func (n *remoteNode) hungUp() {
+func (n *RemoteNode) hungUp() {
 	n.ready.Store(int32(pollHup | pollErr))
 	n.mu.Lock()
 	n.gone = true
+
 	waiting := n.connecting
+
 	n.connecting = nil
 
 	for _, c := range waiting {
 		if w := c.w; w != nil {
 			c.w = nil
-			w.wake(received{eof: true})
+			w.wake(Received{eof: true})
 		}
 	}
 
@@ -208,19 +182,15 @@ func (n *remoteNode) hungUp() {
 	n.mu.Unlock()
 }
 
-// connect is a connection of p's to the open file: CONNECT on its
-// endpoint, a question the server answers there with the asking end of a
-// call pair it made. The process takes its signals as it waits, and waits
-// on. A server that is gone is EIO.
-func (n *remoteNode) connect(p *Process) (*callEnd, error) {
+func (n *RemoteNode) connect(p *Process) (*CallEnd, error) {
 	data := make([]byte, remoteHeader)
-	p.head(data, rConnect, 0)
-	pk := packet{data: data}
-	w := p.receives.get(p)
-	place := &connector{w: w}
 
-	// However the wait ends, the place has no waiter after it: an answer
-	// that comes then goes.
+	p.head(data, rConnect, 0)
+
+	pk := Packet{data: data}
+	w := p.receives.get(p)
+	place := &Connector{w: w}
+
 	defer func() {
 		n.mu.Lock()
 		place.w = nil
@@ -228,9 +198,6 @@ func (n *remoteNode) connect(p *Process) (*callEnd, error) {
 		p.receives.put(w)
 	}()
 
-	// The question and its place among those that wait, as one: the
-	// answers come in the questions' order. A full endpoint is waited
-	// for, for room.
 	for {
 		n.mu.Lock()
 
@@ -260,6 +227,7 @@ func (n *remoteNode) connect(p *Process) (*callEnd, error) {
 	}
 
 	p.await(&w.done, time.Time{}, waitsOn)
+
 	got := w.answer
 
 	if err := replyOf(&got.pk, got.eof); err != nil {
@@ -271,6 +239,7 @@ func (n *remoteNode) connect(p *Process) (*callEnd, error) {
 	}
 
 	dropFiles(got.pk.files[1:])
+
 	c := got.pk.files[0].asCall()
 
 	if c == nil || c.serves {
@@ -282,7 +251,7 @@ func (n *remoteNode) connect(p *Process) (*callEnd, error) {
 	return c, nil
 }
 
-func (n *remoteNode) flags() (int, error) {
+func (n *RemoteNode) flags() (int, error) {
 	fl := n.accmode
 
 	if n.append.Load() {
@@ -296,38 +265,30 @@ func (n *remoteNode) flags() (int, error) {
 	return fl, nil
 }
 
-func (n *remoteNode) setFlags(fl int) error {
+func (n *RemoteNode) setFlags(fl int) error {
 	n.nonblock.Store(fl&syscall.O_NONBLOCK != 0)
 	n.append.Store(fl&syscall.O_APPEND != 0)
 
 	return nil
 }
 
-// The connections a process keeps: as many as its calls go round among.
-const keptConnections = 8
-
-// A keptConnection is a connection of a process's to an open file, node
-// its.
-type keptConnection struct {
-	node *remoteNode
-	c    *callEnd
+type KeptConnection struct {
+	node *RemoteNode
+	c    *CallEnd
 }
 
-// connected is a connection of p's to the open file for a call: the one
-// the process kept, which is the call's alone until it gives it back, or
-// a new one.
-func (n *remoteNode) connected(p *Process) (*callEnd, error) {
+func (n *RemoteNode) connected(p *Process) (*CallEnd, error) {
 	for i := range p.kept {
 		if k := &p.kept[i]; k.node == n {
 			c := k.c
+
 			copy(p.kept[i:], p.kept[i+1:])
-			p.kept[keptConnections-1] = keptConnection{}
+			p.kept[keptConnections-1] = KeptConnection{}
 
 			if c.idle() {
 				return c, nil
 			}
 
-			// The server let go of it.
 			c.unref()
 
 			break
@@ -337,12 +298,7 @@ func (n *remoteNode) connected(p *Process) (*callEnd, error) {
 	return n.connect(p)
 }
 
-// keep gives the connection of a call that is done back to the process,
-// for its next call on the open file, when it takes one: a call left
-// unanswered, or a server gone, leaves none to keep. The connection the
-// process used longest ago goes for it, and another kept to the same open
-// file meanwhile, a handler's.
-func (n *remoteNode) keep(p *Process, c *callEnd) {
+func (n *RemoteNode) keep(p *Process, c *CallEnd) {
 	if !c.idle() || p.disconnected {
 		c.unref()
 
@@ -364,45 +320,41 @@ func (n *remoteNode) keep(p *Process, c *callEnd) {
 	}
 
 	copy(p.kept[1:last+1], p.kept[:last])
-	p.kept[0] = keptConnection{n, c}
+	p.kept[0] = KeptConnection{n, c}
 }
 
-// waiting is a READ or a WRITE, which may wait at its server as long as
-// the file says. A signal the process takes meanwhile sends CANCEL for
-// it (takeSignals), and the server's word comes after all the same: the
-// count so far, or EINTR. restart says the request was cancelled so and
-// no handler the call ran asked not to restart calls: the caller makes
-// the call again. A call such a handler interrupted already asks nothing
-// more: EINTR. The reply brings no files.
-func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Object) (pk packet, restart bool, err error) {
+func (n *RemoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Object) (pk Packet, restart bool, err error) {
 	if p.interrupts(true) {
-		return packet{}, false, syscall.EINTR
+		return Packet{}, false, syscall.EINTR
 	}
 
 	c, err := n.connected(p)
 
 	if err != nil {
-		return packet{}, false, err
+		return Packet{}, false, err
 	}
 
 	defer n.keep(p, c)
 
 	if p.interrupts(true) {
-		return packet{}, false, syscall.EINTR
+		return Packet{}, false, syscall.EINTR
 	}
 
 	data := make([]byte, remoteHeader+len(body))
+
 	p.head(data, op, arg)
 	copy(data[remoteHeader:], body)
 
 	w := p.receives.get(p)
+
 	defer c.leave(p, w)
 
 	if err := c.ask(w, data, files); err != nil {
-		return packet{}, false, syscall.EIO // the server is gone
+		return Packet{}, false, syscall.EIO
 	}
 
 	outer, was := p.ask(c)
+
 	defer p.unask(outer, was)
 
 	p.await(&w.done, time.Time{}, waitsOn)
@@ -414,47 +366,42 @@ func (n *remoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 	return pk, p.cancelled && !p.interrupts(true), err
 }
 
-// call is a call on the node: the request sent on a connection to it,
-// the reply's packet. files go with the request and stay the caller's.
-// Only an OPEN's reply brings a file, the open file's endpoint, and a
-// CONNECT's, the listener, which the packet keeps; the files of any other
-// reply, or the rest of theirs, go here.
-func (n *remoteNode) call(p *Process, op, arg uint32, body []byte, files []Object) (packet, error) {
+func (n *RemoteNode) call(p *Process, op, arg uint32, body []byte, files []Object) (Packet, error) {
 	data := make([]byte, remoteHeader+len(body))
+
 	p.head(data, op, arg)
 	copy(data[remoteHeader:], body)
 
 	return n.asked(p, op, data, files)
 }
 
-// asked is call with the request made already, its header and its body
-// in data, which the packet keeps.
-func (n *remoteNode) asked(p *Process, op uint32, data []byte, files []Object) (packet, error) {
+func (n *RemoteNode) asked(p *Process, op uint32, data []byte, files []Object) (Packet, error) {
 	c, err := n.connected(p)
 
 	if err != nil {
-		return packet{}, err
+		return Packet{}, err
 	}
 
 	defer n.keep(p, c)
 
-	// The answer is given to the waiter as the server sends it: the
-	// process takes its signals as it waits, and waits on.
 	w := p.receives.get(p)
+
 	defer c.leave(p, w)
 
 	if err := c.ask(w, data, files); err != nil {
-		return packet{}, syscall.EIO // the server is gone
+		return Packet{}, syscall.EIO
 	}
 
 	outer, was := p.ask(c)
+
 	defer p.unask(outer, was)
 
 	p.await(&w.done, time.Time{}, waitsOn)
+
 	pk := w.answer.pk
 
 	if err := replyOf(&pk, w.answer.eof); err != nil {
-		return packet{}, err
+		return Packet{}, err
 	}
 
 	if (op == vOpen || op == vConnect || op == rOpen) && len(pk.files) > 0 {
@@ -468,27 +415,24 @@ func (n *remoteNode) asked(p *Process, op uint32, data []byte, files []Object) (
 	return pk, nil
 }
 
-// on is a call on the node that brings no file: the reply's packet.
-func (n *remoteNode) on(p *Process, op, arg uint32, body []byte) (packet, error) {
+func (n *RemoteNode) on(p *Process, op, arg uint32, body []byte) (Packet, error) {
 	return n.call(p, op, arg, body, nil)
 }
 
-// The attributes of an open file of a server, what its Attrs role asks.
-
-func (n *remoteNode) simple(p *Process, op, arg uint32, body []byte) error {
+func (n *RemoteNode) simple(p *Process, op, arg uint32, body []byte) error {
 	_, err := n.on(p, op, arg, body)
 
 	return err
 }
 
-func (n *remoteNode) truncate(p *Process, size int64) error {
+func (n *RemoteNode) truncate(p *Process, size int64) error {
 	var body [8]byte
 	binary.LittleEndian.PutUint64(body[:], uint64(size))
 
 	return n.simple(p, rFtruncate, 0, body[:])
 }
 
-func (n *remoteNode) sync(p *Process, data bool) error {
+func (n *RemoteNode) sync(p *Process, data bool) error {
 	arg := uint32(0)
 
 	if data {
@@ -498,11 +442,11 @@ func (n *remoteNode) sync(p *Process, data bool) error {
 	return n.simple(p, rFsync, arg, nil)
 }
 
-func (n *remoteNode) chmod(p *Process, mode uint32) error {
+func (n *RemoteNode) chmod(p *Process, mode uint32) error {
 	return n.simple(p, rFchmod, mode, nil)
 }
 
-func (n *remoteNode) chown(p *Process, uid, gid int) error {
+func (n *RemoteNode) chown(p *Process, uid, gid int) error {
 	var body [8]byte
 	binary.LittleEndian.PutUint32(body[:], uint32(uid))
 	binary.LittleEndian.PutUint32(body[4:], uint32(gid))
@@ -510,13 +454,13 @@ func (n *remoteNode) chown(p *Process, uid, gid int) error {
 	return n.simple(p, rFchown, 0, body[:])
 }
 
-func (n *remoteNode) utimes(p *Process, ts []syscall.Timespec) error {
+func (n *RemoteNode) utimes(p *Process, ts []syscall.Timespec) error {
 	when, body := whens(ts)
 
 	return n.simple(p, rFutimes, when, body)
 }
 
-func (n *remoteNode) stat(p *Process, st *syscall.Stat_t) error {
+func (n *RemoteNode) stat(p *Process, st *syscall.Stat_t) error {
 	pk, err := n.on(p, rFstat, 0, nil)
 
 	if err != nil {
@@ -526,7 +470,7 @@ func (n *remoteNode) stat(p *Process, st *syscall.Stat_t) error {
 	return decodeStat(pk.data, st)
 }
 
-func (n *remoteNode) statfs(p *Process, st *syscall.Statfs_t) error {
+func (n *RemoteNode) statfs(p *Process, st *syscall.Statfs_t) error {
 	pk, err := n.on(p, rFstatfs, 0, nil)
 
 	if err != nil {
@@ -536,14 +480,7 @@ func (n *remoteNode) statfs(p *Process, st *syscall.Statfs_t) error {
 	return decodeStatfs(pk.data, st)
 }
 
-// The locks of an open file of a server, what its Locker role asks, are
-// the kernel's (lock_table.go): a file its server made with no ino has
-// none, EINVAL.
-
-// flock is flock's lock of the open file, shared, exclusive or none: one
-// another open file's is in the way of is EAGAIN with LOCK_NB, and waited
-// for without.
-func (n *remoteNode) flock(p *Process, op int) error {
+func (n *RemoteNode) flock(p *Process, op int) error {
 	if n.locks == nil {
 		return syscall.EINVAL
 	}
@@ -554,16 +491,13 @@ func (n *remoteNode) flock(p *Process, op int) error {
 
 		return nil
 	case syscall.LOCK_SH, syscall.LOCK_EX:
-		return n.locks.lock(p, &fileLock{owner: n, write: kind == syscall.LOCK_EX}, op&syscall.LOCK_NB == 0)
+		return n.locks.lock(p, &FileLock{owner: n, write: kind == syscall.LOCK_EX}, op&syscall.LOCK_NB == 0)
 	}
 
 	return syscall.EINVAL
 }
 
-// waits is a call its server may keep for as long as it takes, a
-// terminal's drain: a signal the process takes cancels it, and it is made
-// again when the handlers ask for that.
-func (n *remoteNode) waits(p *Process, op, arg uint32, body []byte) error {
+func (n *RemoteNode) waits(p *Process, op, arg uint32, body []byte) error {
 	for {
 		_, restart, err := n.waiting(p, op, arg, body, nil)
 
@@ -575,15 +509,7 @@ func (n *remoteNode) waits(p *Process, op, arg uint32, body []byte) error {
 	}
 }
 
-// recordLock is fcntl's lock on the bytes a struct flock says, from the
-// start, the position or the end, before the start for a negative length,
-// to the end and past for none: F_OFD_SETLK sets it in place of what the
-// open file held of the bytes, EAGAIN for another open file's in the way,
-// F_OFD_SETLKW waits for it, F_UNLCK lets the bytes go, and F_OFD_GETLK
-// tells the lock in the way, from the start, F_UNLCK for none. A lock to
-// read is set on a file open to read, one to write on a file open to
-// write, as POSIX has it: EBADF else.
-func (n *remoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
+func (n *RemoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
 	if n.locks == nil {
 		return syscall.EINVAL
 	}
@@ -614,7 +540,7 @@ func (n *remoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error 
 		return syscall.EINVAL
 	}
 
-	want := &fileLock{owner: n, ranged: true, write: lk.Type == fWrlck, start: uint64(start), stop: lockPast}
+	want := &FileLock{owner: n, ranged: true, write: lk.Type == fWrlck, start: uint64(start), stop: lockPast}
 
 	if length != 0 && want.start <= lockPast-uint64(length) {
 		want.stop = want.start + uint64(length)
@@ -625,6 +551,7 @@ func (n *remoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error 
 		return syscall.EBADF
 	case cmd == fOfdGetlk:
 		lk.Whence, lk.Pid = 0, -1
+
 		way, found := n.locks.way(want)
 
 		if !found {
@@ -653,27 +580,20 @@ func (n *remoteNode) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error 
 	return n.locks.lock(p, want, cmd == fOfdSetlkw)
 }
 
-// The reads and writes of an open file of a server, a file's or a
-// terminal's.
-
-// readAt reads into b, the process's memory, at off: the READ brings a
-// memfd of b.
-func (n *remoteNode) readAt(p *Process, b []byte, off int64) (int, error) {
+func (n *RemoteNode) readAt(p *Process, b []byte, off int64) (int, error) {
 	if off < 0 || len(b) == 0 {
 		return n.readInto(p, nil, 0, 0, off)
 	}
 
 	w := window(p, b, syscall.O_WRONLY)
 	count, err := n.readInto(p, w, 0, len(b), off)
+
 	w.unref()
 
 	return count, err
 }
 
-// readInto reads size bytes at off into the memfd w, from its byte woff
-// on: the READ brings w, and the server writes the bytes there itself. A
-// count past size is the server's lie: EIO.
-func (n *remoteNode) readInto(p *Process, w *memfdFile, woff uint32, size int, off int64) (int, error) {
+func (n *RemoteNode) readInto(p *Process, w *MemfdFile, woff uint32, size int, off int64) (int, error) {
 	if off < 0 {
 		return 0, syscall.EINVAL
 	}
@@ -703,7 +623,6 @@ func (n *remoteNode) readInto(p *Process, w *memfdFile, woff uint32, size int, o
 	}
 }
 
-// ioBody is a READ's or a WRITE's body, an io.
 func ioBody(off int64, woff, flags uint32) [16]byte {
 	var b [16]byte
 	binary.LittleEndian.PutUint64(b[:], uint64(off))
@@ -713,8 +632,7 @@ func ioBody(off int64, woff, flags uint32) [16]byte {
 	return b
 }
 
-// ioFlags are the flags of the file's reads and writes, O_NONBLOCK's.
-func (n *remoteNode) ioFlags() uint32 {
+func (n *RemoteNode) ioFlags() uint32 {
 	if n.nonblock.Load() {
 		return ioNonblock
 	}
@@ -722,32 +640,26 @@ func (n *remoteNode) ioFlags() uint32 {
 	return 0
 }
 
-func (n *remoteNode) writeAt(p *Process, b []byte, off int64) (int, error) {
+func (n *RemoteNode) writeAt(p *Process, b []byte, off int64) (int, error) {
 	count, _, err := n.put(p, b, off, false)
 
 	return count, err
 }
 
-// put writes b, the process's memory, at off, or atEnd at the end the
-// file has when the server takes the write: the WRITE brings a memfd of b.
-func (n *remoteNode) put(p *Process, b []byte, off int64, atEnd bool) (int, int64, error) {
+func (n *RemoteNode) put(p *Process, b []byte, off int64, atEnd bool) (int, int64, error) {
 	if off < 0 || len(b) == 0 {
 		return n.writeFrom(p, nil, 0, 0, off, atEnd)
 	}
 
 	w := window(p, b, syscall.O_RDONLY)
 	count, at, err := n.writeFrom(p, w, 0, len(b), off, atEnd)
+
 	w.unref()
 
 	return count, at, err
 }
 
-// writeFrom writes size bytes of the memfd w, from its byte woff on, at
-// off, or atEnd at the end the file has when the server takes the write:
-// the WRITE brings w, and the server reads the bytes from there itself.
-// The count and where they went; a count past size is the server's lie:
-// EIO.
-func (n *remoteNode) writeFrom(p *Process, w *memfdFile, woff uint32, size int, off int64, atEnd bool) (int, int64, error) {
+func (n *RemoteNode) writeFrom(p *Process, w *MemfdFile, woff uint32, size int, off int64, atEnd bool) (int, int64, error) {
 	if off < 0 {
 		return 0, 0, syscall.EINVAL
 	}
@@ -783,22 +695,19 @@ func (n *remoteNode) writeFrom(p *Process, w *memfdFile, woff uint32, size int, 
 	}
 }
 
-func (n *remoteNode) read(p *Process, b []byte, mode ioMode) (int, error) {
+func (n *RemoteNode) read(p *Process, b []byte, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
 		return 0, syscall.EIO
 	}
 
 	count, err := n.readAt(p, b, atomic.LoadInt64(&n.pos))
+
 	atomic.AddInt64(&n.pos, int64(count))
 
 	return count, err
 }
 
-// write writes at the position, or with O_APPEND at the end, which the
-// server finds as it writes and says; the position is after what was
-// written. Only an append's place is the server's to say: a server that
-// handed the WRITE on, moved, answers with where it went on its device.
-func (n *remoteNode) write(p *Process, b []byte, mode ioMode) (int, error) {
+func (n *RemoteNode) write(p *Process, b []byte, mode IoMode) (int, error) {
 	if p.chaosFail("write") {
 		return 0, syscall.EIO
 	}
@@ -818,7 +727,7 @@ func (n *remoteNode) write(p *Process, b []byte, mode ioMode) (int, error) {
 	return count, err
 }
 
-func (n *remoteNode) seek(p *Process, off int64, whence int) (int64, error) {
+func (n *RemoteNode) seek(p *Process, off int64, whence int) (int64, error) {
 	base := int64(0)
 
 	switch whence {
@@ -846,10 +755,9 @@ func (n *remoteNode) seek(p *Process, off int64, whence int) (int64, error) {
 	return base + off, nil
 }
 
-// vfs is a call of the VFS's on the handle id, the node's: the root's id,
-// then the body, the files with it; the reply's packet.
-func (n *remoteNode) vfs(p *Process, id uint64, op, arg uint32, body []byte, files ...Object) (packet, error) {
+func (n *RemoteNode) vfs(p *Process, id uint64, op, arg uint32, body []byte, files ...Object) (Packet, error) {
 	data := make([]byte, remoteHeader+8+len(body))
+
 	p.head(data, op, arg)
 	binary.LittleEndian.PutUint64(data[remoteHeader:], p.rootID(id))
 	copy(data[remoteHeader+8:], body)
@@ -857,38 +765,37 @@ func (n *remoteNode) vfs(p *Process, id uint64, op, arg uint32, body []byte, fil
 	return n.asked(p, op, data, files)
 }
 
-// readWindow reads size bytes of the server's file at from, or at its
-// position, which moves, into the memfd w from its byte woff on.
-func (n *remoteNode) readWindow(p *Process, w *memfdFile, woff uint32, size int, from *int64) (int, error) {
+func (n *RemoteNode) readWindow(p *Process, w *MemfdFile, woff uint32, size int, from *int64) (int, error) {
 	if from != nil {
 		count, err := n.readInto(p, w, woff, size, *from)
+
 		*from += int64(count)
 
 		return count, err
 	}
 
 	count, err := n.readInto(p, w, woff, size, atomic.LoadInt64(&n.pos))
+
 	atomic.AddInt64(&n.pos, int64(count))
 
 	return count, err
 }
 
-// writeWindow writes size bytes of the memfd w, from its byte woff on,
-// into the server's file at to, or at its position, which moves. A file
-// open to append is EBADF, as Linux has it.
-func (n *remoteNode) writeWindow(p *Process, w *memfdFile, woff uint32, size int, to *int64) (int, error) {
+func (n *RemoteNode) writeWindow(p *Process, w *MemfdFile, woff uint32, size int, to *int64) (int, error) {
 	if n.append.Load() {
 		return 0, syscall.EBADF
 	}
 
 	if to != nil {
 		count, _, err := n.writeFrom(p, w, woff, size, *to, false)
+
 		*to += int64(count)
 
 		return count, err
 	}
 
 	count, _, err := n.writeFrom(p, w, woff, size, atomic.LoadInt64(&n.pos), false)
+
 	atomic.AddInt64(&n.pos, int64(count))
 
 	return count, err

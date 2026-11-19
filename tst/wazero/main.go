@@ -1,14 +1,3 @@
-// Runs a WASI command under wazero and reports how long wazero took to
-// compile it and how long it ran:
-//
-//	wazero [-interpreter] [-compile] [-reserve] module.wasm [args...]
-//
-// The command sees the host's root directory, environment and working
-// directory, as under `vm run`. -interpreter runs the module
-// in wazero's interpreter instead of compiling it; -compile only compiles
-// it, so the module may import anything; -reserve gives memory its maximum
-// capacity up front, so growth never copies it. The last line on stderr is
-// "wazero: compile <seconds> run <seconds>"; the exit code is the command's.
 package main
 
 import (
@@ -32,15 +21,15 @@ func usage() {
 	throwFmt("usage: wazero [-interpreter] [-compile] [-reserve] [-aot] module.wasm [args...]")
 }
 
-// compileAot exercises compile() through WASI stdin/stdout. Rewinding the
-// host reader lets repeated calls reuse one compiler instance without
-// placing either input or output in an extra guest-memory blob.
 func compileAot(ctx context.Context, runtime wazero.Runtime, compiled wazero.CompiledModule, args []string, repeat int) {
 	input := throw2(io.ReadAll(os.Stdin))
 	reader := bytes.NewReader(input)
+
 	var output bytes.Buffer
+
 	config := moduleConfig(args).WithStartFunctions().WithStdin(reader).WithStdout(&output)
 	module := throw2(runtime.InstantiateModule(ctx, compiled, config))
+
 	var expected []byte
 
 	for i := 0; i < repeat; i++ {
@@ -56,6 +45,7 @@ func compileAot(ctx context.Context, runtime wazero.Runtime, compiled wazero.Com
 	}
 
 	pages, _ := module.Memory().Grow(0)
+
 	fmt.Fprintf(os.Stderr, "wazero: aot memory %.3f MiB\n", float64(pages)/16)
 	throw2(os.Stdout.Write(expected))
 }
@@ -64,7 +54,6 @@ func report(compile time.Duration, run time.Duration) {
 	fmt.Fprintf(os.Stderr, "wazero: compile %.3f run %.3f\n", compile.Seconds(), run.Seconds())
 }
 
-// The command's exit code: proc_exit ends a WASI command with an ExitError.
 func exitCode(err error) int {
 	var exit *sys.ExitError
 
@@ -163,6 +152,7 @@ func run(args []string) int {
 	} else {
 		_, err = runtime.InstantiateModule(ctx, compiled, moduleConfig(args))
 	}
+
 	elapsed := time.Since(start)
 	code := 0
 

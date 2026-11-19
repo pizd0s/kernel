@@ -6,53 +6,7 @@ import (
 	"sort"
 )
 
-// The widths of wide characters on a terminal, musl 1.2.5's: its tables of
-// nonspacing and wide characters below U+20000 as ranges.
-
-type runeRange struct {
-	lo, hi uint32
-}
-
-func inRanges(list []runeRange, c uint32) bool {
-	i := sort.Search(len(list), func(i int) bool { return list[i].hi >= c })
-
-	return i < len(list) && list[i].lo <= c
-}
-
-func wcwidth(c uint32) int32 {
-	switch {
-	case c < 0xff:
-		if (c+1)&0x7f >= 0x21 {
-			return 1
-		}
-
-		if c != 0 {
-			return -1
-		}
-
-		return 0
-	case c&0xfffeffff < 0xfffe:
-		if inRanges(zeroWidth, c) {
-			return 0
-		}
-
-		if inRanges(wideChars, c) {
-			return 2
-		}
-
-		return 1
-	case c&0xfffe == 0xfffe:
-		return -1
-	case c-0x20000 < 0x20000:
-		return 2
-	case c == 0xe0001 || c-0xe0020 < 0x5f || c-0xe0100 < 0xef:
-		return 0
-	}
-
-	return 1
-}
-
-var zeroWidth = []runeRange{
+var zeroWidth = []RuneRange{
 	{0x300, 0x36f}, {0x483, 0x489}, {0x591, 0x5bd}, {0x5bf, 0x5bf}, {0x5c1, 0x5c2}, {0x5c4, 0x5c5},
 	{0x5c7, 0x5c7}, {0x600, 0x605}, {0x610, 0x61a}, {0x61c, 0x61c}, {0x64b, 0x65f}, {0x670, 0x670},
 	{0x6d6, 0x6dd}, {0x6df, 0x6e4}, {0x6e7, 0x6e8}, {0x6ea, 0x6ed}, {0x70f, 0x70f}, {0x711, 0x711},
@@ -114,7 +68,7 @@ var zeroWidth = []runeRange{
 	{0x1e2ec, 0x1e2ef}, {0x1e8d0, 0x1e8d6}, {0x1e944, 0x1e94a},
 }
 
-var wideChars = []runeRange{
+var wideChars = []RuneRange{
 	{0x1100, 0x115f}, {0x231a, 0x231b}, {0x2329, 0x232a}, {0x23e9, 0x23ec}, {0x23f0, 0x23f0}, {0x23f3, 0x23f3},
 	{0x25fd, 0x25fe}, {0x2614, 0x2615}, {0x2648, 0x2653}, {0x267f, 0x267f}, {0x2693, 0x2693}, {0x26a1, 0x26a1},
 	{0x26aa, 0x26ab}, {0x26bd, 0x26be}, {0x26c4, 0x26c5}, {0x26ce, 0x26ce}, {0x26d4, 0x26d4}, {0x26ea, 0x26ea},
@@ -136,4 +90,47 @@ var wideChars = []runeRange{
 	{0x1f7e0, 0x1f7eb}, {0x1f90d, 0x1f971}, {0x1f973, 0x1f976}, {0x1f97a, 0x1f9a2}, {0x1f9a5, 0x1f9aa},
 	{0x1f9ae, 0x1f9ca}, {0x1f9cd, 0x1f9ff}, {0x1fa70, 0x1fa73}, {0x1fa78, 0x1fa7a}, {0x1fa80, 0x1fa82},
 	{0x1fa90, 0x1fa95},
+}
+
+type RuneRange struct {
+	lo, hi uint32
+}
+
+func inRanges(list []RuneRange, c uint32) bool {
+	i := sort.Search(len(list), func(i int) bool { return list[i].hi >= c })
+
+	return i < len(list) && list[i].lo <= c
+}
+
+func wcwidth(c uint32) int32 {
+	switch {
+	case c < 0xff:
+		if (c+1)&0x7f >= 0x21 {
+			return 1
+		}
+
+		if c != 0 {
+			return -1
+		}
+
+		return 0
+	case c&0xfffeffff < 0xfffe:
+		if inRanges(zeroWidth, c) {
+			return 0
+		}
+
+		if inRanges(wideChars, c) {
+			return 2
+		}
+
+		return 1
+	case c&0xfffe == 0xfffe:
+		return -1
+	case c-0x20000 < 0x20000:
+		return 2
+	case c == 0xe0001 || c-0xe0020 < 0x5f || c-0xe0100 < 0xef:
+		return 0
+	}
+
+	return 1
 }

@@ -16,39 +16,6 @@ import (
 	"unsafe"
 )
 
-// specCommand runs one test of the WebAssembly spec testsuite as wast2json
-// writes it, `vm spec test.json`: every binary module is compiled and
-// loaded in this process, linked with the spectest module and registered
-// modules. An instantiation or an assertion on an action is a check; what
-// cannot be compiled, linked or expressed is skipped, as are validation
-// assertions. It prints every failure, then "RESULT passed failed skipped"
-// and what was not compiled.
-
-type specValue struct {
-	Type  string          `json:"type"`
-	Value json.RawMessage `json:"value"`
-}
-
-type specAction struct {
-	Type   string      `json:"type"`
-	Module string      `json:"module"`
-	Field  string      `json:"field"`
-	Args   []specValue `json:"args"`
-}
-
-type specCmd struct {
-	Type       string      `json:"type"`
-	Line       int         `json:"line"`
-	Filename   string      `json:"filename"`
-	Name       string      `json:"name"`
-	As         string      `json:"as"`
-	Action     *specAction `json:"action"`
-	Expected   []specValue `json:"expected"`
-	Text       string      `json:"text"`
-	ModuleType string      `json:"module_type"`
-}
-
-// The trap messages of the testsuite, by the code of the trap.
 var specTraps = []struct {
 	prefix string
 	code   uint32
@@ -60,18 +27,52 @@ var specTraps = []struct {
 	{"call stack exhausted", trapStack}, {"out of bounds table access", trapTableOOB},
 }
 
+var spectestFunctions = map[string]any{
+	"print":         func(ctx uintptr) {},
+	"print_i32":     func(ctx uintptr, x uint32) {},
+	"print_i64":     func(ctx uintptr, x uint64) {},
+	"print_f32":     func(ctx uintptr, x float32) {},
+	"print_f64":     func(ctx uintptr, x float64) {},
+	"print_i32_f32": func(ctx uintptr, x uint32, y float32) {},
+	"print_f64_f64": func(ctx uintptr, x, y float64) {},
+}
+
 const specStack = 8 << 20
 
-type specRunner struct {
+type SpecValue struct {
+	Type  string          `json:"type"`
+	Value json.RawMessage `json:"value"`
+}
+
+type SpecAction struct {
+	Type   string      `json:"type"`
+	Module string      `json:"module"`
+	Field  string      `json:"field"`
+	Args   []SpecValue `json:"args"`
+}
+
+type SpecCmd struct {
+	Type       string      `json:"type"`
+	Line       int         `json:"line"`
+	Filename   string      `json:"filename"`
+	Name       string      `json:"name"`
+	As         string      `json:"as"`
+	Action     *SpecAction `json:"action"`
+	Expected   []SpecValue `json:"expected"`
+	Text       string      `json:"text"`
+	ModuleType string      `json:"module_type"`
+}
+
+type SpecRunner struct {
 	dir        string
 	current    *Instance
 	named      map[string]*Instance
 	registered map[string]*Instance
-	// instances of modules that compiled and linked
+
 	live                    map[*Instance]bool
 	passed, failed, skipped int
 	unsupported             map[string]bool
-	// the spectest module's table and globals
+
 	testTable   []uintptr
 	testHeader  *[2]uint64
 	testGlobals map[string]*uint64
@@ -83,11 +84,13 @@ func specCommand(args []string) int {
 	}
 
 	var file struct {
-		Commands []specCmd `json:"commands"`
+		Commands []SpecCmd `json:"commands"`
 	}
 
 	throw(json.Unmarshal(throw2(os.ReadFile(args[0])), &file))
-	r := &specRunner{dir: filepath.Dir(args[0]), named: map[string]*Instance{}, registered: map[string]*Instance{}, live: map[*Instance]bool{}, unsupported: map[string]bool{}}
+
+	r := &SpecRunner{dir: filepath.Dir(args[0]), named: map[string]*Instance{}, registered: map[string]*Instance{}, live: map[*Instance]bool{}, unsupported: map[string]bool{}}
+
 	r.spectest()
 
 	for i := range file.Commands {
@@ -112,27 +115,26 @@ func specCommand(args []string) int {
 	return 0
 }
 
-func (r *specRunner) fail(line int, format string, args ...any) {
+func (r *SpecRunner) fail(line int, format string, args ...any) {
 	r.failed++
 	fmt.Printf("FAIL line %d: %s\n", line, fmt.Sprintf(format, args...))
 }
 
-// spectest is the module the testsuite imports from: print functions that
-// do nothing, globals of 666, a table of 10 to 20 elements. Its memory is
-// not: no module imports a memory (aot.cpp).
-func (r *specRunner) spectest() {
+func (r *SpecRunner) spectest() {
 	r.testTable = make([]uintptr, 21)
 	r.testHeader = &[2]uint64{uint64(uintptr(unsafe.Pointer(&r.testTable[0]))), 10 | 20<<32}
+
 	cell := func(bits uint64) *uint64 {
 		return &bits
 	}
+
 	r.testGlobals = map[string]*uint64{
 		"global_i32": cell(666), "global_i64": cell(666),
 		"global_f32": cell(uint64(math.Float32bits(666.6))), "global_f64": cell(math.Float64bits(666.6)),
 	}
 }
 
-func (r *specRunner) exporter(module string) *Instance {
+func (r *SpecRunner) exporter(module string) *Instance {
 	return r.registered[module]
 }
 
@@ -150,20 +152,7 @@ func sameTypes(a, b []ValType) bool {
 	return reflect.DeepEqual(append([]ValType{}, a...), append([]ValType{}, b...))
 }
 
-// spectest's functions print nothing.
-var spectestFunctions = map[string]any{
-	"print":         func(ctx uintptr) {},
-	"print_i32":     func(ctx uintptr, x uint32) {},
-	"print_i64":     func(ctx uintptr, x uint64) {},
-	"print_f32":     func(ctx uintptr, x float32) {},
-	"print_f64":     func(ctx uintptr, x float64) {},
-	"print_i32_f32": func(ctx uintptr, x uint32, y float32) {},
-	"print_f64_f64": func(ctx uintptr, x, y float64) {},
-}
-
-// function binds an import of another module to that module's export
-// thunk with its instance, which the thunk takes as an import takes it.
-func (r *specRunner) function(imp *ImportMeta) any {
+func (r *SpecRunner) function(imp *ImportMeta) any {
 	if imp.module == "spectest" {
 		return spectestFunctions[imp.name]
 	}
@@ -183,7 +172,6 @@ func (r *specRunner) function(imp *ImportMeta) any {
 	return bindContext(src.symbol(e.sym), src.ctx())
 }
 
-// globalAddr is where an instance keeps the value of one of its globals.
 func globalAddr(i *Instance, index uint32) uintptr {
 	g := i.obj.meta.globals[index]
 	at := i.ctx() + uintptr(g.offset)
@@ -195,7 +183,7 @@ func globalAddr(i *Instance, index uint32) uintptr {
 	return at
 }
 
-func (r *specRunner) global(imp *ImportMeta) uintptr {
+func (r *SpecRunner) global(imp *ImportMeta) uintptr {
 	if imp.module == "spectest" {
 		if g := r.testGlobals[imp.name]; g != nil {
 			return uintptr(unsafe.Pointer(g))
@@ -219,7 +207,7 @@ func (r *specRunner) global(imp *ImportMeta) uintptr {
 	return globalAddr(src, e.index)
 }
 
-func (r *specRunner) table(imp *ImportMeta) uintptr {
+func (r *SpecRunner) table(imp *ImportMeta) uintptr {
 	if imp.module == "spectest" && imp.name == "table" {
 		return uintptr(unsafe.Pointer(r.testHeader))
 	}
@@ -239,23 +227,20 @@ func (r *specRunner) table(imp *ImportMeta) uintptr {
 	return src.ctx() + uintptr(src.obj.meta.tables[e.index].offset)
 }
 
-// Spec assertions always select exact Wasm bounds in the embedded compiler.
 func specCompile(data []byte) []byte {
 	return compileModuleWithOptions(data, CompileOptions{})
 }
 
-// load compiles and instantiates a module file, or returns nil, skipped.
-func (r *specRunner) load(filename string) *Instance {
+func (r *SpecRunner) load(filename string) *Instance {
 	var i *Instance
 
 	if e := try(func() {
 		data := throw2(os.ReadFile(filepath.Join(r.dir, filename)))
-		// Spec assertions require exact Wasm bounds, independently of
-		// the ordinary compiler's padded memory semantics.
 		obj := readObject(specCompile(data))
+
 		i = instantiate(filename, obj, r, specStack)
 	}); e != nil {
-		r.unsupported[e.message()] = true
+		r.unsupported[e.error()] = true
 
 		return nil
 	}
@@ -263,7 +248,7 @@ func (r *specRunner) load(filename string) *Instance {
 	return i
 }
 
-func (r *specRunner) command(c *specCmd) {
+func (r *SpecRunner) command(c *SpecCmd) {
 	switch c.Type {
 	case "module":
 		r.current = nil
@@ -331,7 +316,7 @@ func (r *specRunner) command(c *specCmd) {
 	}
 }
 
-func (r *specRunner) moduleOf(a *specAction) *Instance {
+func (r *SpecRunner) moduleOf(a *SpecAction) *Instance {
 	i := r.current
 
 	if a.Module != "" {
@@ -345,8 +330,7 @@ func (r *specRunner) moduleOf(a *specAction) *Instance {
 	return i
 }
 
-// specArg converts an argument; ok is false for one the loader cannot pass.
-func specArg(i *Instance, v specValue) (reflect.Value, bool) {
+func specArg(i *Instance, v SpecValue) (reflect.Value, bool) {
 	var s string
 
 	if json.Unmarshal(v.Value, &s) != nil {
@@ -393,9 +377,7 @@ func specArg(i *Instance, v specValue) (reflect.Value, bool) {
 	return reflect.Value{}, false
 }
 
-// invoke prepares an action: a call of an export or a read of a global,
-// returning the values it produces; ok is false when it cannot be run.
-func (r *specRunner) invoke(a *specAction) (func() []reflect.Value, bool) {
+func (r *SpecRunner) invoke(a *SpecAction) (func() []reflect.Value, bool) {
 	if a == nil {
 		return nil, false
 	}
@@ -442,8 +424,6 @@ func (r *specRunner) invoke(a *specAction) (func() []reflect.Value, bool) {
 	}
 
 	for k, v := range a.Args {
-		// Both reference kinds use uintptr at the Go boundary, so reflection
-		// alone cannot distinguish an opaque externref from a function.
 		if e.params[k] == FuncRef && v.Type != "funcref" || e.params[k] == ExternRef && v.Type != "externref" {
 			return nil, false
 		}
@@ -459,6 +439,7 @@ func (r *specRunner) invoke(a *specAction) (func() []reflect.Value, bool) {
 
 	return func() []reflect.Value {
 		out := f.Call(args)
+
 		runtime.KeepAlive(i)
 
 		return out
@@ -480,8 +461,7 @@ func specBits(t ValType, bits uint64) reflect.Value {
 	return reflect.ValueOf(bits)
 }
 
-// matches compares a result with an expected value, NaN patterns included.
-func matches(i *Instance, got reflect.Value, want specValue) (bool, string) {
+func matches(i *Instance, got reflect.Value, want SpecValue) (bool, string) {
 	var bits uint64
 
 	switch x := got.Interface().(type) {
@@ -498,10 +478,10 @@ func matches(i *Instance, got reflect.Value, want specValue) (bool, string) {
 	}
 
 	shown := fmt.Sprintf("%s %#x", want.Type, bits)
+
 	var s string
 
 	if len(want.Value) == 0 {
-		// a non-null reference of the type
 		return bits != 0, shown
 	}
 
@@ -541,7 +521,7 @@ func matches(i *Instance, got reflect.Value, want specValue) (bool, string) {
 	return bits == x, shown
 }
 
-func (r *specRunner) assertReturn(c *specCmd) {
+func (r *SpecRunner) assertReturn(c *SpecCmd) {
 	run, ok := r.invoke(c.Action)
 
 	if !ok {
@@ -585,7 +565,7 @@ func (r *specRunner) assertReturn(c *specCmd) {
 	r.passed++
 }
 
-func (r *specRunner) assertTrap(c *specCmd) {
+func (r *SpecRunner) assertTrap(c *SpecCmd) {
 	if c.Action == nil {
 		r.skipped++
 

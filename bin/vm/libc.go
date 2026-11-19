@@ -2,10 +2,6 @@
 
 package main
 
-// The kernel's functions as lib/c imports them, by their names there
-// (Kernel.functionTable): each takes the process from ctx and calls the
-// method that does the work.
-
 func libc__kernel_start(ctx uintptr, errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt uint32) {
 	proc(ctx).libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt)
 }
@@ -24,6 +20,7 @@ func libcWrite(ctx uintptr, fd, buf, n uint32) uint32 {
 
 func libcReadv(ctx uintptr, fd, iovs, iovsSize, count uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("readv", iovsSize, sizeofIovec)
 
 	return p.libcReadv(fd, iovs, count)
@@ -31,6 +28,7 @@ func libcReadv(ctx uintptr, fd, iovs, iovsSize, count uint32) uint32 {
 
 func libcWritev(ctx uintptr, fd, iovs, iovsSize, count uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("writev", iovsSize, sizeofIovec)
 
 	return p.libcWritev(fd, iovs, count)
@@ -38,6 +36,7 @@ func libcWritev(ctx uintptr, fd, iovs, iovsSize, count uint32) uint32 {
 
 func libcPreadv(ctx uintptr, fd, iovs, iovsSize, count uint32, off uint64) uint32 {
 	p := proc(ctx)
+
 	p.sized("preadv", iovsSize, sizeofIovec)
 
 	return p.libcPreadv(fd, iovs, count, off)
@@ -45,6 +44,7 @@ func libcPreadv(ctx uintptr, fd, iovs, iovsSize, count uint32, off uint64) uint3
 
 func libcPwritev(ctx uintptr, fd, iovs, iovsSize, count uint32, off uint64) uint32 {
 	p := proc(ctx)
+
 	p.sized("pwritev", iovsSize, sizeofIovec)
 
 	return p.libcPwritev(fd, iovs, count, off)
@@ -92,6 +92,7 @@ func libcPosix_fallocate(ctx uintptr, fd uint32, off, n uint64) uint32 {
 
 func libcSelect(ctx uintptr, n, r, rSize, w, wSize, e, eSize, tv, tvSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("select", rSize, sizeofFdSet, wSize, sizeofFdSet, eSize, sizeofFdSet, tvSize, sizeofTimeval)
 
 	return p.libcSelect(n, r, w, e, tv)
@@ -99,6 +100,7 @@ func libcSelect(ctx uintptr, n, r, rSize, w, wSize, e, eSize, tv, tvSize uint32)
 
 func libcPselect(ctx uintptr, n, r, rSize, w, wSize, e, eSize, ts, tsSize, mask, maskSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("pselect", rSize, sizeofFdSet, wSize, sizeofFdSet, eSize, sizeofFdSet, tsSize, sizeofTimespec, maskSize, sizeofSigset)
 
 	return p.libcPselect(n, r, w, e, ts, mask)
@@ -154,6 +156,7 @@ func libcTcgetsid(ctx uintptr, fd uint32) uint32 {
 
 func libcCfgetospeed(ctx uintptr, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("cfgetospeed", atSize, sizeofTermios)
 
 	return p.libcCfgetospeed(at)
@@ -161,6 +164,7 @@ func libcCfgetospeed(ctx uintptr, at, atSize uint32) uint32 {
 
 func libcCfgetispeed(ctx uintptr, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("cfgetispeed", atSize, sizeofTermios)
 
 	return p.libcCfgetispeed(at)
@@ -168,6 +172,7 @@ func libcCfgetispeed(ctx uintptr, at, atSize uint32) uint32 {
 
 func libcCfsetospeed(ctx uintptr, at, atSize, speed uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("cfsetospeed", atSize, sizeofTermios)
 
 	return p.libcCfsetospeed(at, speed)
@@ -175,6 +180,7 @@ func libcCfsetospeed(ctx uintptr, at, atSize, speed uint32) uint32 {
 
 func libcCfsetspeed(ctx uintptr, at, atSize, speed uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("cfsetspeed", atSize, sizeofTermios)
 
 	return p.libcCfsetspeed(at, speed)
@@ -182,6 +188,7 @@ func libcCfsetspeed(ctx uintptr, at, atSize, speed uint32) uint32 {
 
 func libcCfsetispeed(ctx uintptr, at, atSize, speed uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("cfsetispeed", atSize, sizeofTermios)
 
 	return p.libcCfsetispeed(at, speed)
@@ -197,6 +204,7 @@ func libcFtruncate(ctx uintptr, fd uint32, size uint64) uint32 {
 
 func libcFstat(ctx uintptr, fd, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("fstat", atSize, sizeofStat)
 
 	return p.libcFstat(fd, at)
@@ -212,6 +220,7 @@ func libcFchown(ctx uintptr, fd, uid, gid uint32) uint32 {
 
 func libcFutimes(ctx uintptr, fd, times, timesSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("futimes", timesSize, sizeofTimeval)
 
 	return p.libcFutimes(fd, times)
@@ -219,6 +228,7 @@ func libcFutimes(ctx uintptr, fd, times, timesSize uint32) uint32 {
 
 func libcFutimens(ctx uintptr, fd, times, timesSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("futimens", timesSize, sizeofTimespec)
 
 	return p.libcFutimens(fd, times)
@@ -226,6 +236,7 @@ func libcFutimens(ctx uintptr, fd, times, timesSize uint32) uint32 {
 
 func libcFcntl(ctx uintptr, fd, cmd, va, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("fcntl", size, fcntlSize(cmd))
 
 	return p.libcFcntl(fd, cmd, va)
@@ -233,6 +244,7 @@ func libcFcntl(ctx uintptr, fd, cmd, va, size uint32) uint32 {
 
 func libcIoctl(ctx uintptr, fd, req, va, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("ioctl", size, ioctlSize(req))
 
 	return p.libcIoctl(fd, req, va)
@@ -244,6 +256,7 @@ func libcIsatty(ctx uintptr, fd uint32) uint32 {
 
 func libcTcgetattr(ctx uintptr, fd, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("tcgetattr", atSize, sizeofTermios)
 
 	return p.libcTcgetattr(fd, at)
@@ -251,6 +264,7 @@ func libcTcgetattr(ctx uintptr, fd, at, atSize uint32) uint32 {
 
 func libcTcsetattr(ctx uintptr, fd, action, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("tcsetattr", atSize, sizeofTermios)
 
 	return p.libcTcsetattr(fd, action, at)
@@ -258,6 +272,7 @@ func libcTcsetattr(ctx uintptr, fd, action, at, atSize uint32) uint32 {
 
 func libcCfmakeraw(ctx uintptr, at, atSize uint32) {
 	p := proc(ctx)
+
 	p.sized("cfmakeraw", atSize, sizeofTermios)
 
 	p.libcCfmakeraw(at)
@@ -265,6 +280,7 @@ func libcCfmakeraw(ctx uintptr, at, atSize uint32) {
 
 func libcPoll(ctx uintptr, at, atSize, n, timeout uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("poll", atSize, sizeofPollfd)
 
 	return p.libcPoll(at, n, timeout)
@@ -272,6 +288,7 @@ func libcPoll(ctx uintptr, at, atSize, n, timeout uint32) uint32 {
 
 func libcPpoll(ctx uintptr, at, atSize, n, ts, tsSize, mask, maskSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("ppoll", atSize, sizeofPollfd, tsSize, sizeofTimespec, maskSize, sizeofSigset)
 
 	return p.libcPpoll(at, n, ts, mask)
@@ -287,6 +304,7 @@ func libcOpenat(ctx uintptr, dirfd, path, flags, va uint32) uint32 {
 
 func libcStat(ctx uintptr, path, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("stat", atSize, sizeofStat)
 
 	return p.libcStat(path, at)
@@ -294,6 +312,7 @@ func libcStat(ctx uintptr, path, at, atSize uint32) uint32 {
 
 func libcLstat(ctx uintptr, path, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("lstat", atSize, sizeofStat)
 
 	return p.libcLstat(path, at)
@@ -301,6 +320,7 @@ func libcLstat(ctx uintptr, path, at, atSize uint32) uint32 {
 
 func libcFstatat(ctx uintptr, dirfd, path, at, atSize, flags uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("fstatat", atSize, sizeofStat)
 
 	return p.libcFstatat(dirfd, path, at, flags)
@@ -320,6 +340,7 @@ func libcTruncate(ctx uintptr, path uint32, size uint64) uint32 {
 
 func libcStatvfs(ctx uintptr, path, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("statvfs", atSize, sizeofStatvfs)
 
 	return p.libcStatvfs(path, at)
@@ -327,6 +348,7 @@ func libcStatvfs(ctx uintptr, path, at, atSize uint32) uint32 {
 
 func libcFstatvfs(ctx uintptr, fd, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("fstatvfs", atSize, sizeofStatvfs)
 
 	return p.libcFstatvfs(fd, at)
@@ -438,6 +460,7 @@ func libcEuidaccess(ctx uintptr, path, mode uint32) uint32 {
 
 func libcStatfs(ctx uintptr, path, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("statfs", atSize, sizeofStatfs)
 
 	return p.libcStatfs(path, at)
@@ -445,6 +468,7 @@ func libcStatfs(ctx uintptr, path, at, atSize uint32) uint32 {
 
 func libcFstatfs(ctx uintptr, fd, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("fstatfs", atSize, sizeofStatfs)
 
 	return p.libcFstatfs(fd, at)
@@ -496,6 +520,7 @@ func libcMkfifoat(ctx uintptr, dirfd, path, mode uint32) uint32 {
 
 func libcUtimes(ctx uintptr, path, times, timesSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("utimes", timesSize, sizeofTimeval)
 
 	return p.libcUtimes(path, times)
@@ -503,6 +528,7 @@ func libcUtimes(ctx uintptr, path, times, timesSize uint32) uint32 {
 
 func libcLutimes(ctx uintptr, path, times, timesSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("lutimes", timesSize, sizeofTimeval)
 
 	return p.libcLutimes(path, times)
@@ -510,6 +536,7 @@ func libcLutimes(ctx uintptr, path, times, timesSize uint32) uint32 {
 
 func libcUtime(ctx uintptr, path, times, timesSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("utime", timesSize, sizeofUtimbuf)
 
 	return p.libcUtime(path, times)
@@ -517,6 +544,7 @@ func libcUtime(ctx uintptr, path, times, timesSize uint32) uint32 {
 
 func libcUtimensat(ctx uintptr, dirfd, path, times, timesSize, flags uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("utimensat", timesSize, sizeofTimespec)
 
 	return p.libcUtimensat(dirfd, path, times, flags)
@@ -528,6 +556,7 @@ func libcDirfd(ctx uintptr, dir uint32) uint32 {
 
 func libcReaddir_r(ctx uintptr, dir, entry, entrySize, result, resultSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("readdir_r", entrySize, sizeofDirent, resultSize, sizeofDirent)
 
 	return p.libcReaddir_r(dir, entry, result)
@@ -543,6 +572,7 @@ func libcSeekdir(ctx uintptr, dir, at uint32) {
 
 func libcAlphasort(ctx uintptr, a, aSize, b, bSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("alphasort", aSize, sizeofDirent, bSize, sizeofDirent)
 
 	return p.libcAlphasort(a, b)
@@ -550,6 +580,7 @@ func libcAlphasort(ctx uintptr, a, aSize, b, bSize uint32) uint32 {
 
 func libcVersionsort(ctx uintptr, a, aSize, b, bSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("versionsort", aSize, sizeofDirent, bSize, sizeofDirent)
 
 	return p.libcVersionsort(a, b)
@@ -589,6 +620,7 @@ func libcRewinddir(ctx uintptr, dir uint32) {
 
 func libcReaddir(ctx uintptr, dir, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("readdir", size, sizeofDirent)
 
 	return p.libcReaddir(dir)
@@ -840,6 +872,7 @@ func libcTime(ctx uintptr, at uint32) uint64 {
 
 func libcGettimeofday(ctx uintptr, tv, tvSize, tz uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("gettimeofday", tvSize, sizeofTimeval)
 
 	return p.libcGettimeofday(tv, tz)
@@ -847,6 +880,7 @@ func libcGettimeofday(ctx uintptr, tv, tvSize, tz uint32) uint32 {
 
 func libcClock_settime(ctx uintptr, clock, ts, tsSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("clock_settime", tsSize, sizeofTimespec)
 
 	return p.libcClock_settime(clock, ts)
@@ -854,6 +888,7 @@ func libcClock_settime(ctx uintptr, clock, ts, tsSize uint32) uint32 {
 
 func libcLocaltime(ctx uintptr, t, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("localtime", size, sizeofTm)
 
 	return p.libcLocaltime(t)
@@ -861,6 +896,7 @@ func libcLocaltime(ctx uintptr, t, size uint32) uint32 {
 
 func libcLocaltime_r(ctx uintptr, t, at, atSize, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("localtime_r", atSize, sizeofTm, size, sizeofTm)
 
 	return p.libcLocaltime_r(t, at)
@@ -872,6 +908,7 @@ func libcTzset(ctx uintptr) {
 
 func libcAsctime(ctx uintptr, tm, tmSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("asctime", tmSize, sizeofTm)
 
 	return p.libcAsctime(tm)
@@ -879,6 +916,7 @@ func libcAsctime(ctx uintptr, tm, tmSize uint32) uint32 {
 
 func libcAsctime_r(ctx uintptr, tm, tmSize, buf uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("asctime_r", tmSize, sizeofTm)
 
 	return p.libcAsctime_r(tm, buf)
@@ -894,6 +932,7 @@ func libcDifftime(ctx uintptr, t1, t0 uint64) float64 {
 
 func libcTimegm(ctx uintptr, at, atSize uint32) uint64 {
 	p := proc(ctx)
+
 	p.sized("timegm", atSize, sizeofTm)
 
 	return p.libcTimegm(at)
@@ -901,6 +940,7 @@ func libcTimegm(ctx uintptr, at, atSize uint32) uint64 {
 
 func libcSettimeofday(ctx uintptr, tv, tvSize, tz, tzSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("settimeofday", tvSize, sizeofTimeval, tzSize, sizeofTimezone)
 
 	return p.libcSettimeofday(tv, tz)
@@ -912,6 +952,7 @@ func libcStime(ctx uintptr, t uint32) uint32 {
 
 func libcAdjtime(ctx uintptr, delta, deltaSize, old, oldSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("adjtime", deltaSize, sizeofTimeval, oldSize, sizeofTimeval)
 
 	return p.libcAdjtime(delta, old)
@@ -927,6 +968,7 @@ func libcUalarm(ctx uintptr, value, interval uint32) uint32 {
 
 func libcGmtime(ctx uintptr, t, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("gmtime", size, sizeofTm)
 
 	return p.libcGmtime(t)
@@ -934,6 +976,7 @@ func libcGmtime(ctx uintptr, t, size uint32) uint32 {
 
 func libcGmtime_r(ctx uintptr, t, at, atSize, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("gmtime_r", atSize, sizeofTm, size, sizeofTm)
 
 	return p.libcGmtime_r(t, at)
@@ -945,6 +988,7 @@ func libcClock(ctx uintptr) uint64 {
 
 func libcClock_getres(ctx uintptr, clock, res, resSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("clock_getres", resSize, sizeofTimespec)
 
 	return p.libcClock_getres(clock, res)
@@ -952,6 +996,7 @@ func libcClock_getres(ctx uintptr, clock, res, resSize uint32) uint32 {
 
 func libcClock_nanosleep(ctx uintptr, clock, flags, req, reqSize, rem, remSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("clock_nanosleep", reqSize, sizeofTimespec, remSize, sizeofTimespec)
 
 	return p.libcClock_nanosleep(clock, flags, req, rem)
@@ -959,6 +1004,7 @@ func libcClock_nanosleep(ctx uintptr, clock, flags, req, reqSize, rem, remSize u
 
 func libcSetitimer(ctx uintptr, which, value, valueSize, old, oldSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("setitimer", valueSize, sizeofItimerval, oldSize, sizeofItimerval)
 
 	return p.libcSetitimer(which, value, old)
@@ -966,6 +1012,7 @@ func libcSetitimer(ctx uintptr, which, value, valueSize, old, oldSize uint32) ui
 
 func libcGetitimer(ctx uintptr, which, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getitimer", atSize, sizeofItimerval)
 
 	return p.libcGetitimer(which, at)
@@ -977,6 +1024,7 @@ func libcAlarm(ctx uintptr, seconds uint32) uint32 {
 
 func libcMktime(ctx uintptr, at, atSize uint32) uint64 {
 	p := proc(ctx)
+
 	p.sized("mktime", atSize, sizeofTm)
 
 	return p.libcMktime(at)
@@ -988,6 +1036,7 @@ func libcCtime(ctx uintptr, t uint32) uint32 {
 
 func libcStrftime(ctx uintptr, s, max, format, tm, tmSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("strftime", tmSize, sizeofTm)
 
 	return p.libcStrftime(s, max, format, tm)
@@ -995,6 +1044,7 @@ func libcStrftime(ctx uintptr, s, max, format, tm, tmSize uint32) uint32 {
 
 func libcStrptime(ctx uintptr, s, format, tm, tmSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("strptime", tmSize, sizeofTm)
 
 	return p.libcStrptime(s, format, tm)
@@ -1002,6 +1052,7 @@ func libcStrptime(ctx uintptr, s, format, tm, tmSize uint32) uint32 {
 
 func libcTimes(ctx uintptr, at, atSize uint32) uint64 {
 	p := proc(ctx)
+
 	p.sized("times", atSize, sizeofTms)
 
 	return p.libcTimes(at)
@@ -1013,6 +1064,7 @@ func libcSleep(ctx uintptr, seconds uint32) uint32 {
 
 func libcClock_gettime(ctx uintptr, clock, ts, tsSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("clock_gettime", tsSize, sizeofTimespec)
 
 	return p.libcClock_gettime(clock, ts)
@@ -1020,6 +1072,7 @@ func libcClock_gettime(ctx uintptr, clock, ts, tsSize uint32) uint32 {
 
 func libcNanosleep(ctx uintptr, req, reqSize, rem, remSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("nanosleep", reqSize, sizeofTimespec, remSize, sizeofTimespec)
 
 	return p.libcNanosleep(req, rem)
@@ -1027,6 +1080,7 @@ func libcNanosleep(ctx uintptr, req, reqSize, rem, remSize uint32) uint32 {
 
 func libcRegcomp(ctx uintptr, preg, pregSize, pattern, flags uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("regcomp", pregSize, sizeofRegex)
 
 	return p.libcRegcomp(preg, pattern, flags)
@@ -1034,6 +1088,7 @@ func libcRegcomp(ctx uintptr, preg, pregSize, pattern, flags uint32) uint32 {
 
 func libcRegexec(ctx uintptr, preg, pregSize, s, nmatch, pmatch, pmatchSize, eflags uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("regexec", pregSize, sizeofRegex, pmatchSize, sizeofRegmatch)
 
 	return p.libcRegexec(preg, s, nmatch, pmatch, eflags)
@@ -1041,6 +1096,7 @@ func libcRegexec(ctx uintptr, preg, pregSize, s, nmatch, pmatch, pmatchSize, efl
 
 func libcRegfree(ctx uintptr, preg, pregSize uint32) {
 	p := proc(ctx)
+
 	p.sized("regfree", pregSize, sizeofRegex)
 
 	p.libcRegfree(preg)
@@ -1048,6 +1104,7 @@ func libcRegfree(ctx uintptr, preg, pregSize uint32) {
 
 func libcRegerror(ctx uintptr, code, preg, pregSize, buf, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("regerror", pregSize, sizeofRegex)
 
 	return p.libcRegerror(code, preg, buf, size)
@@ -1059,6 +1116,7 @@ func libcSignal(ctx uintptr, sig, handler uint32) uint32 {
 
 func libcSigaction(ctx uintptr, sig, act, actSize, old, oldSize, infoSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigaction", actSize, sizeofSigaction, oldSize, sizeofSigaction, infoSize, sizeofSiginfo)
 
 	return p.libcSigaction(sig, act, old)
@@ -1066,6 +1124,7 @@ func libcSigaction(ctx uintptr, sig, act, actSize, old, oldSize, infoSize uint32
 
 func libcSigprocmask(ctx uintptr, how, set, setSize, old, oldSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigprocmask", setSize, sizeofSigset, oldSize, sizeofSigset)
 
 	return p.libcSigprocmask(how, set, old)
@@ -1073,6 +1132,7 @@ func libcSigprocmask(ctx uintptr, how, set, setSize, old, oldSize uint32) uint32
 
 func libcPthread_sigmask(ctx uintptr, how, set, setSize, old, oldSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("pthread_sigmask", setSize, sizeofSigset, oldSize, sizeofSigset)
 
 	return p.libcPthread_sigmask(how, set, old)
@@ -1080,6 +1140,7 @@ func libcPthread_sigmask(ctx uintptr, how, set, setSize, old, oldSize uint32) ui
 
 func libcSigfillset(ctx uintptr, set, setSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigfillset", setSize, sizeofSigset)
 
 	return p.libcSigfillset(set)
@@ -1087,6 +1148,7 @@ func libcSigfillset(ctx uintptr, set, setSize uint32) uint32 {
 
 func libcSigemptyset(ctx uintptr, set, setSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigemptyset", setSize, sizeofSigset)
 
 	return p.libcSigemptyset(set)
@@ -1094,6 +1156,7 @@ func libcSigemptyset(ctx uintptr, set, setSize uint32) uint32 {
 
 func libcSigaddset(ctx uintptr, set, setSize, sig uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigaddset", setSize, sizeofSigset)
 
 	return p.libcSigaddset(set, sig)
@@ -1101,6 +1164,7 @@ func libcSigaddset(ctx uintptr, set, setSize, sig uint32) uint32 {
 
 func libcSigdelset(ctx uintptr, set, setSize, sig uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigdelset", setSize, sizeofSigset)
 
 	return p.libcSigdelset(set, sig)
@@ -1108,6 +1172,7 @@ func libcSigdelset(ctx uintptr, set, setSize, sig uint32) uint32 {
 
 func libcSigismember(ctx uintptr, set, setSize, sig uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigismember", setSize, sizeofSigset)
 
 	return p.libcSigismember(set, sig)
@@ -1115,6 +1180,7 @@ func libcSigismember(ctx uintptr, set, setSize, sig uint32) uint32 {
 
 func libcSigisemptyset(ctx uintptr, set, setSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigisemptyset", setSize, sizeofSigset)
 
 	return p.libcSigisemptyset(set)
@@ -1122,6 +1188,7 @@ func libcSigisemptyset(ctx uintptr, set, setSize uint32) uint32 {
 
 func libcSigorset(ctx uintptr, d, dSize, a, aSize, b, bSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigorset", dSize, sizeofSigset, aSize, sizeofSigset, bSize, sizeofSigset)
 
 	return p.libcSigorset(d, a, b)
@@ -1129,6 +1196,7 @@ func libcSigorset(ctx uintptr, d, dSize, a, aSize, b, bSize uint32) uint32 {
 
 func libcSigandset(ctx uintptr, d, dSize, a, aSize, b, bSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigandset", dSize, sizeofSigset, aSize, sizeofSigset, bSize, sizeofSigset)
 
 	return p.libcSigandset(d, a, b)
@@ -1136,6 +1204,7 @@ func libcSigandset(ctx uintptr, d, dSize, a, aSize, b, bSize uint32) uint32 {
 
 func libcSigpending(ctx uintptr, set, setSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigpending", setSize, sizeofSigset)
 
 	return p.libcSigpending(set)
@@ -1143,6 +1212,7 @@ func libcSigpending(ctx uintptr, set, setSize uint32) uint32 {
 
 func libcSigwait(ctx uintptr, set, setSize, at uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigwait", setSize, sizeofSigset)
 
 	return p.libcSigwait(set, at)
@@ -1150,6 +1220,7 @@ func libcSigwait(ctx uintptr, set, setSize, at uint32) uint32 {
 
 func libcSigwaitinfo(ctx uintptr, set, setSize, info, infoSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigwaitinfo", setSize, sizeofSigset, infoSize, sizeofSiginfo)
 
 	return p.libcSigwaitinfo(set, info)
@@ -1157,6 +1228,7 @@ func libcSigwaitinfo(ctx uintptr, set, setSize, info, infoSize uint32) uint32 {
 
 func libcSigtimedwait(ctx uintptr, set, setSize, info, infoSize, timeout, timeoutSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigtimedwait", setSize, sizeofSigset, infoSize, sizeofSiginfo, timeoutSize, sizeofTimespec)
 
 	return p.libcSigtimedwait(set, info, timeout)
@@ -1164,6 +1236,7 @@ func libcSigtimedwait(ctx uintptr, set, setSize, info, infoSize, timeout, timeou
 
 func libcSigaltstack(ctx uintptr, ss, ssSize, old, oldSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigaltstack", ssSize, sizeofStack, oldSize, sizeofStack)
 
 	return p.libcSigaltstack(ss, old)
@@ -1179,6 +1252,7 @@ func libcPause(ctx uintptr) uint32 {
 
 func libcSigsuspend(ctx uintptr, set, setSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigsuspend", setSize, sizeofSigset)
 
 	return p.libcSigsuspend(set)
@@ -1238,6 +1312,7 @@ func libcGetgroups(ctx uintptr, n, list uint32) uint32 {
 
 func libcUname(ctx uintptr, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("uname", atSize, sizeofUtsname)
 
 	return p.libcUname(at)
@@ -1337,6 +1412,7 @@ func libcTcsetpgrp(ctx uintptr, fd, pgrp uint32) uint32 {
 
 func libcSetjmp(ctx uintptr, buf, bufSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("setjmp", bufSize, sizeofJmpBuf)
 
 	return p.libcSetjmp(buf)
@@ -1344,6 +1420,7 @@ func libcSetjmp(ctx uintptr, buf, bufSize uint32) uint32 {
 
 func libcSigsetjmp(ctx uintptr, buf, bufSize, saveMask uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sigsetjmp", bufSize, sizeofJmpBuf)
 
 	return p.libcSigsetjmp(buf, saveMask)
@@ -1351,6 +1428,7 @@ func libcSigsetjmp(ctx uintptr, buf, bufSize, saveMask uint32) uint32 {
 
 func libcLongjmp(ctx uintptr, buf, bufSize, val uint32) {
 	p := proc(ctx)
+
 	p.sized("longjmp", bufSize, sizeofJmpBuf)
 
 	p.libcLongjmp(buf, val)
@@ -1374,6 +1452,7 @@ func libcWait(ctx uintptr, status uint32) uint32 {
 
 func libcWait3(ctx uintptr, status, options, usage, usageSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("wait3", usageSize, sizeofRusage)
 
 	return p.libcWait3(status, options, usage)
@@ -1381,6 +1460,7 @@ func libcWait3(ctx uintptr, status, options, usage, usageSize uint32) uint32 {
 
 func libcWait4(ctx uintptr, pid, status, options, usage, usageSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("wait4", usageSize, sizeofRusage)
 
 	return p.libcWait4(pid, status, options, usage)
@@ -1388,6 +1468,7 @@ func libcWait4(ctx uintptr, pid, status, options, usage, usageSize uint32) uint3
 
 func libcWaitid(ctx uintptr, idtype, id, info, infoSize, options uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("waitid", infoSize, sizeofSiginfo)
 
 	return p.libcWaitid(idtype, id, info, options)
@@ -1399,6 +1480,7 @@ func libcSetlocale(ctx uintptr, cat, name uint32) uint32 {
 
 func libcLocaleconv(ctx uintptr, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("localeconv", size, sizeofLconv)
 
 	return p.libcLocaleconv()
@@ -1550,6 +1632,7 @@ func libcWcsdup(ctx uintptr, s uint32) uint32 {
 
 func libcWcsftime(ctx uintptr, s, max, format, tm, tmSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("wcsftime", tmSize, sizeofTm)
 
 	return p.libcWcsftime(s, max, format, tm)
@@ -1677,6 +1760,7 @@ func libcSched_getscheduler(ctx uintptr, pid uint32) uint32 {
 
 func libcSched_getparam(ctx uintptr, pid, param, paramSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sched_getparam", paramSize, sizeofSchedParam)
 
 	return p.libcSched_getparam(pid, param)
@@ -1684,6 +1768,7 @@ func libcSched_getparam(ctx uintptr, pid, param, paramSize uint32) uint32 {
 
 func libcSched_setparam(ctx uintptr, pid, param, paramSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sched_setparam", paramSize, sizeofSchedParam)
 
 	return p.libcSched_setparam(pid, param)
@@ -1691,6 +1776,7 @@ func libcSched_setparam(ctx uintptr, pid, param, paramSize uint32) uint32 {
 
 func libcSched_setscheduler(ctx uintptr, pid, policy, param, paramSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sched_setscheduler", paramSize, sizeofSchedParam)
 
 	return p.libcSched_setscheduler(pid, policy, param)
@@ -1698,6 +1784,7 @@ func libcSched_setscheduler(ctx uintptr, pid, policy, param, paramSize uint32) u
 
 func libcSched_rr_get_interval(ctx uintptr, pid, ts, tsSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sched_rr_get_interval", tsSize, sizeofTimespec)
 
 	return p.libcSched_rr_get_interval(pid, ts)
@@ -1721,6 +1808,7 @@ func libc__kernel_syslog(ctx uintptr, priority, message uint32) {
 
 func libcSysinfo(ctx uintptr, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sysinfo", atSize, sizeofSysinfo)
 
 	return p.libcSysinfo(at)
@@ -1748,6 +1836,7 @@ func libcGetloadavg(ctx uintptr, at, n uint32) uint32 {
 
 func libcGetrusage(ctx uintptr, who, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getrusage", atSize, sizeofRusage)
 
 	return p.libcGetrusage(who, at)
@@ -1755,6 +1844,7 @@ func libcGetrusage(ctx uintptr, who, at, atSize uint32) uint32 {
 
 func libcGetrlimit(ctx uintptr, res, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getrlimit", atSize, sizeofRlimit)
 
 	return p.libcGetrlimit(res, at)
@@ -1762,6 +1852,7 @@ func libcGetrlimit(ctx uintptr, res, at, atSize uint32) uint32 {
 
 func libcSetrlimit(ctx uintptr, res, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("setrlimit", atSize, sizeofRlimit)
 
 	return p.libcSetrlimit(res, at)
@@ -1769,6 +1860,7 @@ func libcSetrlimit(ctx uintptr, res, at, atSize uint32) uint32 {
 
 func libcPrlimit(ctx uintptr, pid, res, set, setSize, old, oldSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("prlimit", setSize, sizeofRlimit, oldSize, sizeofRlimit)
 
 	return p.libcPrlimit(pid, res, set, old)
@@ -1812,6 +1904,7 @@ func libcTtyname_r(ctx uintptr, fd, buf, n uint32) uint32 {
 
 func libcGetpwnam(ctx uintptr, name, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getpwnam", size, sizeofPasswd)
 
 	return p.libcGetpwnam(name)
@@ -1819,6 +1912,7 @@ func libcGetpwnam(ctx uintptr, name, size uint32) uint32 {
 
 func libcGetpwuid(ctx uintptr, uid, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getpwuid", size, sizeofPasswd)
 
 	return p.libcGetpwuid(uid)
@@ -1826,6 +1920,7 @@ func libcGetpwuid(ctx uintptr, uid, size uint32) uint32 {
 
 func libcGetpwnam_r(ctx uintptr, name, pwd, pwdSize, buf, size, result, resultSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getpwnam_r", pwdSize, sizeofPasswd, resultSize, sizeofPasswd)
 
 	return p.libcGetpwnam_r(name, pwd, buf, size, result)
@@ -1833,6 +1928,7 @@ func libcGetpwnam_r(ctx uintptr, name, pwd, pwdSize, buf, size, result, resultSi
 
 func libcGetpwuid_r(ctx uintptr, uid, pwd, pwdSize, buf, size, result, resultSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getpwuid_r", pwdSize, sizeofPasswd, resultSize, sizeofPasswd)
 
 	return p.libcGetpwuid_r(uid, pwd, buf, size, result)
@@ -1840,6 +1936,7 @@ func libcGetpwuid_r(ctx uintptr, uid, pwd, pwdSize, buf, size, result, resultSiz
 
 func libcGetpwent(ctx uintptr, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getpwent", size, sizeofPasswd)
 
 	return p.libcGetpwent()
@@ -1855,6 +1952,7 @@ func libcEndpwent(ctx uintptr) {
 
 func libcGetgrnam(ctx uintptr, name, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getgrnam", size, sizeofGroup)
 
 	return p.libcGetgrnam(name)
@@ -1862,6 +1960,7 @@ func libcGetgrnam(ctx uintptr, name, size uint32) uint32 {
 
 func libcGetgrgid(ctx uintptr, gid, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getgrgid", size, sizeofGroup)
 
 	return p.libcGetgrgid(gid)
@@ -1869,6 +1968,7 @@ func libcGetgrgid(ctx uintptr, gid, size uint32) uint32 {
 
 func libcGetgrnam_r(ctx uintptr, name, grp, grpSize, buf, size, result, resultSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getgrnam_r", grpSize, sizeofGroup, resultSize, sizeofGroup)
 
 	return p.libcGetgrnam_r(name, grp, buf, size, result)
@@ -1876,6 +1976,7 @@ func libcGetgrnam_r(ctx uintptr, name, grp, grpSize, buf, size, result, resultSi
 
 func libcGetgrgid_r(ctx uintptr, gid, grp, grpSize, buf, size, result, resultSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getgrgid_r", grpSize, sizeofGroup, resultSize, sizeofGroup)
 
 	return p.libcGetgrgid_r(gid, grp, buf, size, result)
@@ -1883,6 +1984,7 @@ func libcGetgrgid_r(ctx uintptr, gid, grp, grpSize, buf, size, result, resultSiz
 
 func libcGetgrent(ctx uintptr, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getgrent", size, sizeofGroup)
 
 	return p.libcGetgrent()
@@ -1922,6 +2024,7 @@ func libcPtsname_r(ctx uintptr, fd, buf, size uint32) uint32 {
 
 func libcOpenpty(ctx uintptr, amaster, aslave, name, termp, termpSize, winp, winpSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("openpty", termpSize, sizeofTermios, winpSize, sizeofWinsize)
 
 	return p.libcOpenpty(amaster, aslave, name, termp, winp)
@@ -1929,6 +2032,7 @@ func libcOpenpty(ctx uintptr, amaster, aslave, name, termp, termpSize, winp, win
 
 func libcForkpty(ctx uintptr, amaster, name, termp, termpSize, winp, winpSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("forkpty", termpSize, sizeofTermios, winpSize, sizeofWinsize)
 
 	return p.libcForkpty(amaster, name, termp, winp)
@@ -1936,6 +2040,7 @@ func libcForkpty(ctx uintptr, amaster, name, termp, termpSize, winp, winpSize ui
 
 func libcGlob(ctx uintptr, pattern, flags, errfunc, out, outSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("glob", outSize, sizeofGlob)
 
 	return p.libcGlob(pattern, flags, errfunc, out)
@@ -1943,6 +2048,7 @@ func libcGlob(ctx uintptr, pattern, flags, errfunc, out, outSize uint32) uint32 
 
 func libcGlobfree(ctx uintptr, out, outSize uint32) {
 	p := proc(ctx)
+
 	p.sized("globfree", outSize, sizeofGlob)
 
 	p.libcGlobfree(out)
@@ -2038,6 +2144,7 @@ func libcPsignal(ctx uintptr, sig, s uint32) {
 
 func libcPsiginfo(ctx uintptr, info, infoSize, s uint32) {
 	p := proc(ctx)
+
 	p.sized("psiginfo", infoSize, sizeofSiginfo)
 
 	p.libcPsiginfo(info, s)
@@ -2109,6 +2216,7 @@ func libcRecvfrom(ctx uintptr, fd, buf, n, flags, addr, lenAt uint32) uint32 {
 
 func libcSendmsg(ctx uintptr, fd, msg, msgSize, iovSize, flags uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("sendmsg", msgSize, sizeofMsghdr, iovSize, sizeofIovec)
 
 	return p.libcSendmsg(fd, msg, flags)
@@ -2116,6 +2224,7 @@ func libcSendmsg(ctx uintptr, fd, msg, msgSize, iovSize, flags uint32) uint32 {
 
 func libcRecvmsg(ctx uintptr, fd, msg, msgSize, iovSize, flags uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("recvmsg", msgSize, sizeofMsghdr, iovSize, sizeofIovec)
 
 	return p.libcRecvmsg(fd, msg, flags)
@@ -2131,6 +2240,7 @@ func libcSockatmark(ctx uintptr, fd uint32) uint32 {
 
 func libcGetaddrinfo(ctx uintptr, node, service, hints, hintsSize, res, resSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getaddrinfo", hintsSize, sizeofAddrinfo, resSize, sizeofAddrinfo)
 
 	return p.libcGetaddrinfo(node, service, hints, res)
@@ -2138,6 +2248,7 @@ func libcGetaddrinfo(ctx uintptr, node, service, hints, hintsSize, res, resSize 
 
 func libcFreeaddrinfo(ctx uintptr, res, resSize uint32) {
 	p := proc(ctx)
+
 	p.sized("freeaddrinfo", resSize, sizeofAddrinfo)
 
 	p.libcFreeaddrinfo(res)
@@ -2153,6 +2264,7 @@ func libcGetnameinfo(ctx uintptr, sa, salen, host, hostlen, serv, servlen, flags
 
 func libcGethostbyname(ctx uintptr, name, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("gethostbyname", size, sizeofHostent)
 
 	return p.libcGethostbyname(name)
@@ -2160,6 +2272,7 @@ func libcGethostbyname(ctx uintptr, name, size uint32) uint32 {
 
 func libcGethostbyname2(ctx uintptr, name, family, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("gethostbyname2", size, sizeofHostent)
 
 	return p.libcGethostbyname2(name, family)
@@ -2167,6 +2280,7 @@ func libcGethostbyname2(ctx uintptr, name, family, size uint32) uint32 {
 
 func libcGethostbyaddr(ctx uintptr, addr, n, family, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("gethostbyaddr", size, sizeofHostent)
 
 	return p.libcGethostbyaddr(addr, n, family)
@@ -2174,6 +2288,7 @@ func libcGethostbyaddr(ctx uintptr, addr, n, family, size uint32) uint32 {
 
 func libcGethostent(ctx uintptr, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("gethostent", size, sizeofHostent)
 
 	return p.libcGethostent()
@@ -2189,6 +2304,7 @@ func libcEndhostent(ctx uintptr) {
 
 func libcGetservbyname(ctx uintptr, name, proto, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getservbyname", size, sizeofServent)
 
 	return p.libcGetservbyname(name, proto)
@@ -2196,6 +2312,7 @@ func libcGetservbyname(ctx uintptr, name, proto, size uint32) uint32 {
 
 func libcGetservbyport(ctx uintptr, port, proto, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getservbyport", size, sizeofServent)
 
 	return p.libcGetservbyport(port, proto)
@@ -2203,6 +2320,7 @@ func libcGetservbyport(ctx uintptr, port, proto, size uint32) uint32 {
 
 func libcGetprotobyname(ctx uintptr, name, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getprotobyname", size, sizeofProtoent)
 
 	return p.libcGetprotobyname(name)
@@ -2210,6 +2328,7 @@ func libcGetprotobyname(ctx uintptr, name, size uint32) uint32 {
 
 func libcGetprotobynumber(ctx uintptr, number, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getprotobynumber", size, sizeofProtoent)
 
 	return p.libcGetprotobynumber(number)
@@ -2217,6 +2336,7 @@ func libcGetprotobynumber(ctx uintptr, number, size uint32) uint32 {
 
 func libcGetnetbyname(ctx uintptr, name, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getnetbyname", size, sizeofNetent)
 
 	return p.libcGetnetbyname(name)
@@ -2224,6 +2344,7 @@ func libcGetnetbyname(ctx uintptr, name, size uint32) uint32 {
 
 func libcGetnetbyaddr(ctx uintptr, net, family, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("getnetbyaddr", size, sizeofNetent)
 
 	return p.libcGetnetbyaddr(net, family)
@@ -2239,6 +2360,7 @@ func libcHerror(ctx uintptr, s uint32) {
 
 func libcInet_aton(ctx uintptr, s, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("inet_aton", atSize, sizeofInAddr)
 
 	return p.libcInet_aton(s, at)
@@ -2286,6 +2408,7 @@ func libcIf_indextoname(ctx uintptr, index, buf uint32) uint32 {
 
 func libcIf_nameindex(ctx uintptr, size uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("if_nameindex", size, sizeofIfNameindex)
 
 	return p.libcIf_nameindex()
@@ -2293,6 +2416,7 @@ func libcIf_nameindex(ctx uintptr, size uint32) uint32 {
 
 func libcIf_freenameindex(ctx uintptr, block, blockSize uint32) {
 	p := proc(ctx)
+
 	p.sized("if_freenameindex", blockSize, sizeofIfNameindex)
 
 	p.libcIf_freenameindex(block)
@@ -2312,6 +2436,7 @@ func libcEpoll_create1(ctx uintptr, flags uint32) uint32 {
 
 func libcEpoll_ctl(ctx uintptr, epfd, op, fd, at, atSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("epoll_ctl", atSize, sizeofEpollEvent)
 
 	return p.libcEpoll_ctl(epfd, op, fd, at)
@@ -2319,6 +2444,7 @@ func libcEpoll_ctl(ctx uintptr, epfd, op, fd, at, atSize uint32) uint32 {
 
 func libcEpoll_wait(ctx uintptr, epfd, at, atSize, max, timeout uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("epoll_wait", atSize, sizeofEpollEvent)
 
 	return p.libcEpoll_wait(epfd, at, max, timeout)
@@ -2326,6 +2452,7 @@ func libcEpoll_wait(ctx uintptr, epfd, at, atSize, max, timeout uint32) uint32 {
 
 func libcEpoll_pwait(ctx uintptr, epfd, at, atSize, max, timeout, mask, maskSize uint32) uint32 {
 	p := proc(ctx)
+
 	p.sized("epoll_pwait", atSize, sizeofEpollEvent, maskSize, sizeofSigset)
 
 	return p.libcEpoll_pwait(epfd, at, max, timeout, mask)

@@ -13,43 +13,24 @@ import (
 	"time"
 )
 
-// The kernel runs programs linked against lib/c, whose system is the module
-// "kernel" (lib/c/include declares its functions). A process is a goroutine
-// running an instance; the kernel keeps its pid, descriptors, working
-// directory, signals and children. Paths resolve inside the root directory
-// `vm run` is given. A program is a WebAssembly module, which the kernel
-// compiles itself, once in its life for a content (Kernel.codeOf): exec
-// runs modules and scripts, nothing else.
-//
-// A function of the kernel finds its process through the instance. Pointers
-// are offsets in the process's memory: one out of it traps, as the guest's
-// own access would. A system call sets errno and returns through result,
-// which delivers pending signals.
-
 type Kernel struct {
 	FunctionImports
-	// root is the first process's root, none: rootfs, the VFS, serves the
-	// roots of the others; user is its credentials, `vm run --user`'s.
+
 	root    Dir
-	user    cred
-	console *console
-	// names are uname's.
-	names   systemNames
+	user    Cred
+	console *Console
+
+	names   SystemNames
 	mu      sync.Mutex
 	procs   map[int32]*Process
 	lastPid int32
-	// codes are the modules compiled, by the digest of their content;
-	// options are what they are compiled with, `vm run --asan` among them:
-	// then the processes run with the shadow map (process.go).
-	codes   map[[sha256.Size]byte]*codeEntry
+
+	codes   map[[sha256.Size]byte]*CodeEntry
 	options CompileOptions
-	// fifos are the pipes of the FIFOs of servers with an end open
-	// (fifo_name.go); locks the locks of flock and fcntl on the servers'
-	// files (lock_table.go).
-	fifos map[fileKey]*pipe
-	locks lockTable
-	// fg is the foreground process group of the console; cttys are the
-	// sessions' controlling terminals (process.go).
+
+	fifos map[FileKey]*Pipe
+	locks LockTable
+
 	fg        int32
 	cttys     map[int32]Terminal
 	first     *Process
@@ -57,24 +38,20 @@ type Kernel struct {
 	functions map[string]any
 }
 
-// newKernel makes a kernel whose first process has a directory of the
-// host for its root, or with no root at all when root is empty: then it
-// is a server, or a program of none. Its programs compile with options.
-func newKernel(options CompileOptions, user cred) *Kernel {
-	k := &Kernel{procs: map[int32]*Process{}, codes: map[[sha256.Size]byte]*codeEntry{}, options: options, fifos: map[fileKey]*pipe{},
+func newKernel(options CompileOptions, user Cred) *Kernel {
+	k := &Kernel{procs: map[int32]*Process{}, codes: map[[sha256.Size]byte]*CodeEntry{}, options: options, fifos: map[FileKey]*Pipe{},
 		exit: make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]Terminal{}}
-	k.locks.files = map[fileKey]*lockedFile{}
-	k.names.host, k.names.domain = "pizdos", "(none)"
 
+	k.locks.files = map[FileKey]*LockedFile{}
+	k.names.host, k.names.domain = "pizdos", "(none)"
 	k.functions = k.functionTable()
-	// The kernel applies the processes' umasks itself.
+
 	syscall.Umask(0)
 	k.routeSignals()
 
 	return k
 }
 
-// Imports: the kernel's functions, and WASI's (wasi.go).
 func (k *Kernel) function(imp *ImportMeta) any {
 	switch imp.module {
 	case "kernel":
@@ -86,24 +63,21 @@ func (k *Kernel) function(imp *ImportMeta) any {
 	return nil
 }
 
-// A disk is a file of the host the first process gets as a descriptor
-// (diskFile): read and written as it is, its name the first process's to
-// give. A disk of mem is no file's: the bytes that follow the program in
-// its file (hostProgram), a memfd of them, read only.
-type disk struct {
+type Disk struct {
 	name, path string
 	mem        []byte
 }
 
-// newProcess makes a process: a child of parent, or the first, the leader
-// of its group and session.
 func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 	k.mu.Lock()
+
 	defer k.mu.Unlock()
 
 	k.lastPid++
-	p := &Process{k: k, pid: k.lastPid, umask: 0o022, regexes: map[uint32]*posixRegex{}, seed: 0,
-		events: eventQueue{bell: make(chan struct{}, 1)}}
+
+	p := &Process{k: k, pid: k.lastPid, umask: 0o022, regexes: map[uint32]*PosixRegex{}, seed: 0,
+		events: EventQueue{bell: make(chan struct{}, 1)}}
+
 	p.own.signal.kind, p.own.continued.kind = eventSignal, eventContinued
 	p.own.child.kind, p.own.compiled.kind = eventChild, eventCompiled
 	p.own.signal.run = (*Process).takeSignals
@@ -130,9 +104,6 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 	return p, nil
 }
 
-// code is the code of the executable a file holds: the error is ENOEXEC
-// when the file is no executable of a program of the kernel, EACCES when it
-// cannot be read at an offset.
 func (k *Kernel) code(p *Process, f Object, name string) (*Code, error) {
 	exe, ok, err := programData(p, f, false)
 
@@ -147,9 +118,6 @@ func (k *Kernel) code(p *Process, f Object, name string) (*Code, error) {
 	return k.codeOf(p, exe, name, nil)
 }
 
-// programData is the executable a file begins with, read at offsets to
-// its length and no further, as exec reads a program (readProgram).
-// EACCES when it cannot be read at an offset.
 func programData(p *Process, f Object, module bool) (data []byte, ok bool, err error) {
 	file := f.asFile()
 
@@ -172,11 +140,6 @@ func programData(p *Process, f Object, module bool) (data []byte, ok bool, err e
 	return readProgram(st.Size, func(b []byte, off int64) error { return readAt(p, t, b, off) }, module)
 }
 
-// readProgram is the executable a file of size bytes begins with, which
-// readAt reads at offsets to its length and no further, as exec reads a
-// program and vm run its first. A file that begins with none is not read
-// on; for vm run, module, it is read whole, a module of a WASI command,
-// and ok is false. ENOEXEC when it ends before its size.
 func readProgram(size int64, readAt func(b []byte, off int64) error, module bool) (data []byte, ok bool, err error) {
 	header := make([]byte, min(exeHeader, max(size, 0)))
 
@@ -204,7 +167,6 @@ func readProgram(size int64, readAt func(b []byte, off int64) error, module bool
 	return data, length > 0, nil
 }
 
-// readAt fills b from a file at off: ENOEXEC when the file ends first.
 func readAt(p *Process, t Transfer, b []byte, off int64) error {
 	for at := 0; at < len(b); {
 		n, err := t.pread(p, b[at:], off+int64(at))
@@ -223,44 +185,32 @@ func readAt(p *Process, t Transfer, b []byte, off int64) error {
 	return nil
 }
 
-// A codeEntry is the code of a module, or why it has none; done says
-// either is known, and waiting are the processes that wait for it, whom
-// the end of the compilation wakes, so a process that asks for a module
-// another is compiling waits for that compilation: both with the kernel's
-// lock.
-type codeEntry struct {
+type CodeEntry struct {
 	done    bool
 	waiting []*Process
 	code    *Code
 	err     error
 }
 
-// codeOf is the code of an executable, data, the part of a file to its
-// length: its module unpacked, compiled with the kernel's options and
-// linked to it once in the kernel's life for those bytes, which every
-// process that runs the module shares; what a file has past the length
-// is no part of them. obj is the module compiled already, or nil. A
-// failure is not kept: the next exec tries again.
-//
-// The compiler runs on a goroutine of its own, and the process p waits
-// for its end, taking its signals meanwhile as in any wait: in the frames
-// of the process's code, a compiler that ends in a panic, a module it
-// refuses, would leave the goroutine's instance its own (aot.cpp's entry
-// thunk restores it only on return).
 func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*Code, error) {
 	key := sha256.Sum256(data)
+
 	k.mu.Lock()
+
 	e, found := k.codes[key]
 
 	if !found {
-		e = &codeEntry{}
+		e = &CodeEntry{}
 		k.codes[key] = e
 
 		go func() {
 			code, err := k.compile(data, name, obj)
+
 			k.mu.Lock()
 			e.code, e.err, e.done = code, err, true
+
 			waiting := e.waiting
+
 			e.waiting = nil
 
 			if err != nil && k.codes[key] == e {
@@ -280,8 +230,10 @@ func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*
 	}
 
 	k.mu.Unlock()
-	p.wait(time.Time{}, func(*event) (bool, error) {
+
+	p.wait(time.Time{}, func(*Event) (bool, error) {
 		k.mu.Lock()
+
 		defer k.mu.Unlock()
 
 		return e.done, nil
@@ -290,10 +242,6 @@ func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*
 	return e.code, e.err
 }
 
-// compile compiles a module, unless obj is its object already, and links
-// it to the kernel: a program of lib/c's or a WASI command, whose imports
-// are the kernel's or WASI's (wasi.go); ENOEXEC, with why, for one
-// that imports anything else.
 func (k *Kernel) compile(data []byte, name string, obj *ElfObject) (*Code, error) {
 	if obj == nil {
 		var err error
@@ -314,8 +262,6 @@ func (k *Kernel) compile(data []byte, name string, obj *ElfObject) (*Code, error
 	return c, nil
 }
 
-// signalTargets are the processes kill sends to: one pid, a group (pid 0
-// is the sender's, -1 every process but the first and the sender).
 func (k *Kernel) signalTargets(from *Process, pid int32) []*Process {
 	return k.processes(func(q *Process) bool {
 		switch {
@@ -331,9 +277,9 @@ func (k *Kernel) signalTargets(from *Process, pid int32) []*Process {
 	})
 }
 
-// processes are those that match.
 func (k *Kernel) processes(match func(*Process) bool) []*Process {
 	k.mu.Lock()
+
 	defer k.mu.Unlock()
 
 	var out []*Process
@@ -347,9 +293,9 @@ func (k *Kernel) processes(match func(*Process) bool) []*Process {
 	return out
 }
 
-// routeSignals takes the host's signals for the processes.
 func (k *Kernel) routeSignals() {
 	c := make(chan os.Signal, 16)
+
 	signal.Notify(c, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTSTP, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGHUP,
 		syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGCONT, syscall.SIGALRM)
 
@@ -360,7 +306,9 @@ func (k *Kernel) routeSignals() {
 			switch s {
 			case syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTSTP, syscall.SIGWINCH:
 				k.mu.Lock()
+
 				fg := k.fg
+
 				k.mu.Unlock()
 
 				for _, q := range k.processes(func(q *Process) bool { return q.pgid == fg }) {
@@ -375,10 +323,9 @@ func (k *Kernel) routeSignals() {
 	}()
 }
 
-// orphaned tells whether a process group is orphaned: no member has a
-// parent in another group of its session, which could continue it.
 func (k *Kernel) orphaned(pgid int32) bool {
 	k.mu.Lock()
+
 	defer k.mu.Unlock()
 
 	return k.orphanedLocked(pgid)
@@ -398,10 +345,6 @@ func (k *Kernel) orphanedLocked(pgid int32) bool {
 	return true
 }
 
-// orphans is what a process's going does to the groups it joined to its
-// session, its own and its children's, of a parent in another group of
-// it: one orphaned now, with a stopped process, which no one could
-// continue, hears SIGHUP and SIGCONT, as POSIX says.
 func (k *Kernel) orphans(groups []int32) {
 	for i, pgid := range groups {
 		if slices.Contains(groups[:i], pgid) {
@@ -409,6 +352,7 @@ func (k *Kernel) orphans(groups []int32) {
 		}
 
 		k.mu.Lock()
+
 		stopped := false
 
 		for _, q := range k.procs {
@@ -416,6 +360,7 @@ func (k *Kernel) orphans(groups []int32) {
 		}
 
 		hangs := stopped && k.orphanedLocked(pgid)
+
 		k.mu.Unlock()
 
 		if hangs {
@@ -425,8 +370,6 @@ func (k *Kernel) orphans(groups []int32) {
 	}
 }
 
-// signalGroup is the kernel's signal to a process group, which no
-// permission keeps out.
 func (k *Kernel) signalGroup(pgid int32, sig int) {
 	k.mu.Lock()
 
@@ -445,14 +388,11 @@ func (k *Kernel) signalGroup(pgid int32, sig int) {
 	}
 }
 
-// newConsole makes the console of the descriptors vm has of 0, 1 and 2,
-// nil for one it has not, and starts its movers: the first process's 0 and
-// 1 write the standard output, its 2 the standard error, and all three
-// read the standard input.
 func (k *Kernel) newConsole() []Object {
-	c := &console{}
+	c := &Console{}
+
 	rawHostTerminal()
-	var pipes [3]*pipeEnd
+	var pipes [3]*PipeEnd
 
 	for fd := range 3 {
 		var st syscall.Stat_t
@@ -462,11 +402,16 @@ func (k *Kernel) newConsole() []Object {
 		}
 
 		pp := newPipe()
+
 		pp.readers, pp.writers = 1, 1
-		reader, writer := &pipeEnd{pipe: pp, reads: true}, &pipeEnd{pipe: pp, writes: true}
+
+		reader, writer := &PipeEnd{pipe: pp, reads: true}, &PipeEnd{pipe: pp, writes: true}
+
 		reader.refs.Store(1)
 		writer.refs.Store(1)
+
 		m := newMover()
+
 		c.movers = append(c.movers, m)
 
 		if fd == 0 {
@@ -487,9 +432,10 @@ func (k *Kernel) newConsole() []Object {
 	}
 
 	k.console = c
+
 	files := make([]Object, 3)
 
-	for fd, out := range []*pipeEnd{pipes[1], pipes[1], pipes[2]} {
+	for fd, out := range []*PipeEnd{pipes[1], pipes[1], pipes[2]} {
 		if pipes[fd] != nil {
 			files[fd] = newConsoleEnd(pipes[0], out)
 		}
@@ -504,32 +450,24 @@ func (k *Kernel) newConsole() []Object {
 	return files
 }
 
-// report writes a report of the kernel's, a trap's, to the console's
-// standard error after what was written to it before: to vm's own when
-// there is none.
 func (k *Kernel) report(text string) {
 	if k.console == nil || k.console.err == nil || !newMover().put(k.console.err, []byte(text)) {
 		syscall.Write(2, []byte(text))
 	}
 }
 
-// foreground is the console's foreground process group, tcgetpgrp's.
 func (k *Kernel) foreground() int32 {
 	k.mu.Lock()
+
 	defer k.mu.Unlock()
 
 	return k.fg
 }
 
-// The system's names, uname's, the kernel's own: none of the host's. The
-// host and domain names are root's to set.
-type systemNames struct {
+type SystemNames struct {
 	mu           sync.Mutex
 	host, domain string
 }
-
-// The kernel's functions by their names in lib/c: each takes the process
-// from ctx and calls the method that does the work.
 
 func (k *Kernel) functionTable() map[string]any {
 	return map[string]any{

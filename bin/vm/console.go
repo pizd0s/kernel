@@ -10,65 +10,40 @@ import (
 	"unsafe"
 )
 
-// The console is vm's standard input, output and error, the first
-// process's descriptors 0, 1 and 2: with the disks, all the system has of
-// the host's. Each is a pipe of the kernel's (pipe.go), whose far
-// end a goroutine of vm's, a mover, has: one moves what vm's standard
-// input gives into its pipe, the others move what is written to theirs
-// out to vm's standard output and error, as it comes. So a process waits
-// on the console as on any pipe, a signal ends its wait, and no terminal's
-// discipline is between: the bytes are as they come. A trap's report goes
-// out with what the process wrote before it. The console has a foreground
-// process group, the first process's at first, which tcsetpgrp sets: the
-// signals the host makes for vm go to it (routeSignals).
-//
-// When vm's standard input is a terminal of the host's, vm makes it raw
-// while it runs, as a terminal emulator does, and gives it back as it was
-// when it ends: every key comes as its bytes, and the system's own
-// terminal (bin/tools/console.cpp) is the discipline. The console has the
-// window of that terminal then, TIOCGWINSZ's, which SIGWINCH says changed.
-type console struct {
-	// out are the movers of output, which flush waits for; err is the
-	// pipe of the standard error, for the reports of traps.
-	out sync.WaitGroup
-	err *pipe
-	// stop says the system has ended: a mover of output stops once its
-	// pipe is empty.
-	stop   atomic.Bool
-	movers []*mover
+var hostTerminal struct {
+	mu    sync.Mutex
+	saved *syscall.Termios
 }
 
-// mover is a goroutine of vm's that moves the console's bytes: a waker
-// whose wake is a token on ready, which it sleeps on for its pipe. busy
-// says an output's mover holds bytes it has not yet written out, pipe is
-// its pipe.
-type mover struct {
+type Console struct {
+	out sync.WaitGroup
+	err *Pipe
+
+	stop   atomic.Bool
+	movers []*Mover
+}
+
+type Mover struct {
 	ready chan struct{}
 	busy  atomic.Bool
-	pipe  *pipe
-	// sub is the mover's subscription to the pipe it moves through.
-	sub subscription
+	pipe  *Pipe
+
+	sub Subscription
 }
 
-func newMover() *mover {
-	m := &mover{ready: make(chan struct{}, 1)}
+func newMover() *Mover {
+	m := &Mover{ready: make(chan struct{}, 1)}
+
 	m.sub.init(m, 0)
 
 	return m
 }
 
-func (m *mover) wake(*hook) {
+func (m *Mover) wake(*Hook) {
 	select {
 	case m.ready <- struct{}{}:
 	default:
 	}
-}
-
-// The host's terminal of vm's standard input, as it was before vm made it
-// raw; nil when it is none.
-var hostTerminal struct {
-	mu    sync.Mutex
-	saved *syscall.Termios
 }
 
 func termiosOf(fd int, req uintptr, t *syscall.Termios) error {
@@ -79,8 +54,6 @@ func termiosOf(fd int, req uintptr, t *syscall.Termios) error {
 	return nil
 }
 
-// rawHostTerminal makes vm's standard input raw, as cfmakeraw does, when
-// it is a terminal.
 func rawHostTerminal() {
 	var t syscall.Termios
 
@@ -89,6 +62,7 @@ func rawHostTerminal() {
 	}
 
 	saved := t
+
 	t.Iflag &^= syscall.IGNBRK | syscall.BRKINT | syscall.PARMRK | syscall.ISTRIP | syscall.INLCR | syscall.IGNCR | syscall.ICRNL | syscall.IXON
 	t.Oflag &^= syscall.OPOST
 	t.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.ISIG | syscall.IEXTEN
@@ -103,10 +77,9 @@ func rawHostTerminal() {
 	}
 }
 
-// restoreHostTerminal gives the host's terminal back as it was, before vm
-// ends.
 func restoreHostTerminal() {
 	hostTerminal.mu.Lock()
+
 	defer hostTerminal.mu.Unlock()
 
 	if hostTerminal.saved != nil {
@@ -115,8 +88,6 @@ func restoreHostTerminal() {
 	}
 }
 
-// hostWindow is the size of the window of the host's terminal, a struct
-// winsize: ENOTTY when vm's standard input is no terminal.
 func hostWindow() ([sizeofWinsize]byte, error) {
 	var w [sizeofWinsize]byte
 
@@ -127,9 +98,7 @@ func hostWindow() ([sizeofWinsize]byte, error) {
 	return w, nil
 }
 
-// fill moves what vm's descriptor host gives into the pipe of w until
-// host ends, or the pipe's readers have gone: then the pipe's data ends.
-func (m *mover) fill(host int, w *pipeEnd) {
+func (m *Mover) fill(host int, w *PipeEnd) {
 	defer w.unref()
 
 	buf := make([]byte, pipeChunk)
@@ -147,13 +116,12 @@ func (m *mover) fill(host int, w *pipeEnd) {
 	}
 }
 
-// put queues b in pp as one packet, of at most pipeChunk bytes, waiting
-// for room: false when its readers have gone.
-func (m *mover) put(pp *pipe, b []byte) bool {
-	pk := packet{data: append([]byte(nil), b...)}
+func (m *Mover) put(pp *Pipe, b []byte) bool {
+	pk := Packet{data: append([]byte(nil), b...)}
 
 	for {
 		pp.mu.Lock()
+
 		ch := pp.ch
 		full, err := ch.put(&pk)
 
@@ -180,22 +148,21 @@ func (m *mover) put(pp *pipe, b []byte) bool {
 	}
 }
 
-// drain moves what is written to the pipe of r out to vm's descriptor
-// host until its writers have gone, or the system has ended and the pipe
-// is empty, or host takes no more: then the pipe's readers go, and a
-// write to it is EPIPE.
-func (m *mover) drain(r *pipeEnd, host int, c *console) {
+func (m *Mover) drain(r *PipeEnd, host int, c *Console) {
 	defer c.out.Done()
+
 	defer r.unref()
 
 	buf := make([]byte, 65536)
 
 	for {
 		m.busy.Store(true)
+
 		n, eof, ok := r.pipe.take(buf)
 
 		if ok && n > 0 {
 			written := writeAll(host, buf[:n])
+
 			m.busy.Store(false)
 
 			if !written {
@@ -212,6 +179,7 @@ func (m *mover) drain(r *pipeEnd, host int, c *console) {
 		}
 
 		ch := r.pipe.channel()
+
 		ch.subscribe(&m.sub.in, false)
 
 		if ch.count() == 0 && !ch.ended.Load() && !c.stop.Load() {
@@ -222,8 +190,6 @@ func (m *mover) drain(r *pipeEnd, host int, c *console) {
 	}
 }
 
-// writeAll writes b whole to vm's descriptor host: false when it takes no
-// more.
 func writeAll(host int, b []byte) bool {
 	for len(b) > 0 {
 		n, err := syscall.Write(host, b)
@@ -242,10 +208,7 @@ func writeAll(host int, b []byte) bool {
 	return true
 }
 
-// flush waits, once the system has ended, for the movers of output to
-// have moved what is queued: what the processes left of the system write
-// from then on does not go out.
-func (c *console) flush() {
+func (c *Console) flush() {
 	c.stop.Store(true)
 
 	for _, m := range c.movers {
@@ -265,11 +228,7 @@ func (c *console) flush() {
 	}
 }
 
-// settle waits, for a second at most, until what was written to the
-// console is out: before vm stops with the first process, as the host's
-// shell gets the terminal back, what it wrote before has gone to vm's
-// standard output and error.
-func (c *console) settle() {
+func (c *Console) settle() {
 	end := time.Now().Add(time.Second)
 
 	for time.Now().Before(end) {

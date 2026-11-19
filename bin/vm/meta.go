@@ -2,37 +2,6 @@ package main
 
 import "encoding/binary"
 
-// Meta is what a loader knows of a module. An object tells it in ordinary
-// ELF (elf.go): functions are symbols, imports and exports of functions
-// symbols with their types (symbols.go), stack pointer tables .eh_frame.
-// The rest has no word in ELF and is the descriptor of a note, owner
-// "wasm2o", type 1: the instance's size, the memory, tables and globals,
-// the imports and exports of those. Its integers are unsigned LEB128; a
-// string or a list is its length, then its bytes or elements, in the order
-// of the fields below.
-
-type MemoryMeta struct {
-	// min and max are in pages of 64 KiB.
-	min, max uint64
-	tail     uint64 // accessible bytes beyond memory.size; zero for strict objects
-	tailEnd  uint32 // instance slot holding the accessible end
-	// profile is the instance slot of the tail profile's first counter and
-	// sites what each one counts: a profiled object's only.
-	profile uint32
-	sites   []ProfileSite
-	// shadow is the instance slot holding the shadow map's base: an asan
-	// object (process.go), which has no tail.
-	shadow uint32
-}
-
-// ProfileSite is a counter of the tail profile: of function's code, of kind
-// (siteKinds), at the wasm instruction at offset in the module, 0 for none.
-type ProfileSite struct {
-	function, kind, offset uint32
-}
-
-// siteKinds names the kinds of sites by the compiler's numbers (aot.cpp
-// siteCheck...): what each counts (instance.go).
 var siteKinds = [...]string{"check", "guard", "fallback", "omitted", "loop", "entry", "fast_loop", "fast_entry"}
 
 const (
@@ -42,7 +11,21 @@ const (
 	siteOmitted
 )
 
-// asan tells an object compiled with --asan.
+type MemoryMeta struct {
+	min, max uint64
+	tail     uint64
+	tailEnd  uint32
+
+	profile uint32
+	sites   []ProfileSite
+
+	shadow uint32
+}
+
+type ProfileSite struct {
+	function, kind, offset uint32
+}
+
 func (m *Meta) asan() bool {
 	return m.memory != nil && m.memory.shadow != 0
 }
@@ -56,7 +39,7 @@ type TableMeta struct {
 type GlobalMeta struct {
 	offset uint32
 	typ    ValType
-	// An imported global's slot holds the address of its value.
+
 	mutable, imported bool
 }
 
@@ -64,8 +47,7 @@ type ImportMeta struct {
 	kind   byte
 	module string
 	name   string
-	// index is the entity in its index space; a function's adapter calls
-	// the Go function value of sym, with the type that follows.
+
 	index   uint32
 	sym     string
 	params  []ValType
@@ -76,25 +58,19 @@ type ExportMeta struct {
 	kind  byte
 	name  string
 	index uint32
-	// sym is a function's thunk, Go calls it as func(instance uintptr,
-	// params...) (results...).
+
 	sym     string
 	params  []ValType
 	results []ValType
 }
 
-// Region is code with one entry: a function, an adapter, a thunk, a stub.
 type Region struct {
 	name       string
 	start, end uint32
-	sp         []spEntry
+	sp         []SpEntry
 }
 
-// lineEntry says that from pc of the text on the code is of line of the
-// file, an index of Meta's files: the module's DWARF line table, carried
-// over (aot.cpp objCodeLines) into Go's tables (registerCode), so a trace
-// names the source line of a frame of the module.
-type lineEntry struct {
+type LineEntry struct {
 	pc, file, line uint32
 }
 
@@ -105,24 +81,21 @@ type Meta struct {
 	globals      []GlobalMeta
 	imports      []ImportMeta
 	exports      []ExportMeta
-	// init is the thunk that fills the instance, applies the segments and
-	// calls the start function.
+
 	init    string
 	regions []Region
-	// files and lines are the source lines of the text, in order of pc;
-	// empty for a module without a DWARF line table.
+
 	files []string
-	lines []lineEntry
-	// functions is the first descriptor in the instance; numeric spec
-	// funcrefs name entries of this array, rather than host addresses.
+	lines []LineEntry
+
 	functions, functionCount uint32
 }
 
-type metaReader struct {
+type MetaReader struct {
 	data []byte
 }
 
-func (r *metaReader) u() uint64 {
+func (r *MetaReader) u() uint64 {
 	x, n := binary.Uvarint(r.data)
 
 	if n <= 0 {
@@ -134,7 +107,7 @@ func (r *metaReader) u() uint64 {
 	return x
 }
 
-func (r *metaReader) u32() uint32 {
+func (r *MetaReader) u32() uint32 {
 	x := r.u()
 
 	if x > 1<<32-1 {
@@ -144,12 +117,11 @@ func (r *metaReader) u32() uint32 {
 	return uint32(x)
 }
 
-func (r *metaReader) flag() bool {
+func (r *MetaReader) flag() bool {
 	return r.u() != 0
 }
 
-// count reads a list's length, at most one element per remaining byte.
-func (r *metaReader) count() int {
+func (r *MetaReader) count() int {
 	n := r.u()
 
 	if n > uint64(len(r.data)) {
@@ -159,16 +131,17 @@ func (r *metaReader) count() int {
 	return int(n)
 }
 
-func (r *metaReader) str() string {
+func (r *MetaReader) str() string {
 	n := r.count()
 	s := string(r.data[:n])
+
 	r.data = r.data[n:]
 
 	return s
 }
 
 func decodeNote(data []byte) *Meta {
-	r := &metaReader{data: data}
+	r := &MetaReader{data: data}
 	m := &Meta{instanceSize: r.u32()}
 
 	if uint64(m.instanceSize) > instanceDistance-boundSlack {
@@ -203,9 +176,6 @@ func decodeNote(data []byte) *Meta {
 		m.exports[i] = ExportMeta{kind: byte(r.u()), name: r.str(), index: r.u32()}
 	}
 
-	// What follows is optional, by its flags: the accessible tail and its
-	// slot, the tail's profile counters, the shadow map's slot, the source
-	// lines, function descriptors.
 	flags := r.u()
 
 	if flags&7 != 0 && m.memory == nil {
@@ -253,12 +223,13 @@ func decodeNote(data []byte) *Meta {
 			m.files[i] = r.str()
 		}
 
-		m.lines = make([]lineEntry, r.count())
+		m.lines = make([]LineEntry, r.count())
+
 		pc := uint32(0)
 
 		for i := range m.lines {
 			pc += r.u32()
-			m.lines[i] = lineEntry{pc: pc, file: r.u32(), line: r.u32()}
+			m.lines[i] = LineEntry{pc: pc, file: r.u32(), line: r.u32()}
 
 			if uint64(m.lines[i].file) >= uint64(len(m.files)) || i > 0 && pc == m.lines[i-1].pc {
 				throwFmt("invalid line table")

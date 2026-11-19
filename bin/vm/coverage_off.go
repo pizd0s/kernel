@@ -2,4 +2,5 @@
 
 package main
 
-func compilerCoverage(*Instance) {}
+func compilerCoverage(*Instance) {
+}

@@ -7,21 +7,18 @@ import (
 	"slices"
 )
 
-// fdTable is a process's descriptors by number: a slot each, by value,
-// and the numbers in use, in a tree (fdTree) that gives the lowest free
-// one, which open and the rest take, as POSIX has it.
-type fdTable struct {
+const fullWord = ^uint64(0)
+
+type FdTable struct {
 	slots []Descriptor
-	used  fdTree
+	used  FdTree
 }
 
-// size is past the last slot: the numbers to look at for the open ones.
-func (t *fdTable) size() int {
+func (t *FdTable) size() int {
 	return len(t.slots)
 }
 
-// at is the descriptor of a number, ok false for none.
-func (t *fdTable) at(fd int) (Descriptor, bool) {
+func (t *FdTable) at(fd int) (Descriptor, bool) {
 	if fd < 0 || fd >= len(t.slots) || t.slots[fd].obj == nil {
 		return Descriptor{}, false
 	}
@@ -29,8 +26,7 @@ func (t *fdTable) at(fd int) (Descriptor, bool) {
 	return t.slots[fd], true
 }
 
-// put makes a free number refer to obj, which takes the reference.
-func (t *fdTable) put(fd int, obj Object, cloexec bool) {
+func (t *FdTable) put(fd int, obj Object, cloexec bool) {
 	if fd >= len(t.slots) {
 		t.slots = append(t.slots, make([]Descriptor, fd+1-len(t.slots))...)
 	}
@@ -39,42 +35,33 @@ func (t *fdTable) put(fd int, obj Object, cloexec bool) {
 	t.used.set(fd)
 }
 
-// take frees a number and gives what it referred to, nil for nothing.
-func (t *fdTable) take(fd int) Object {
+func (t *FdTable) take(fd int) Object {
 	if fd < 0 || fd >= len(t.slots) || t.slots[fd].obj == nil {
 		return nil
 	}
 
 	obj := t.slots[fd].obj
+
 	t.slots[fd] = Descriptor{}
 	t.used.clear(fd)
 
 	return obj
 }
 
-// lowest is the lowest free number from min.
-func (t *fdTable) lowest(min int) int {
+func (t *FdTable) lowest(min int) int {
 	return t.used.lowestFree(min)
 }
 
-// fdTree is the numbers in use: a tree of bitmaps 64 ways wide, in flat
-// arrays. levels[0] has a bit for each number, set while it is in use;
-// each level above has a bit for each word of the one below, set while
-// that word is full; the top level is one word. The lowest free number
-// from some is a walk up from its word to the first one with room, and
-// down that one's free side.
-type fdTree struct {
+type FdTree struct {
 	levels [][]uint64
 }
 
-const fullWord = ^uint64(0)
-
-// set marks a number in use.
-func (t *fdTree) set(n int) {
+func (t *FdTree) set(n int) {
 	t.grow(n)
 
 	for _, words := range t.levels {
 		w := n >> 6
+
 		words[w] |= 1 << uint(n&63)
 
 		if words[w] != fullWord {
@@ -85,8 +72,7 @@ func (t *fdTree) set(n int) {
 	}
 }
 
-// clear marks a number free.
-func (t *fdTree) clear(n int) {
+func (t *FdTree) clear(n int) {
 	for _, words := range t.levels {
 		w := n >> 6
 
@@ -95,6 +81,7 @@ func (t *fdTree) clear(n int) {
 		}
 
 		full := words[w] == fullWord
+
 		words[w] &^= 1 << uint(n&63)
 
 		if !full {
@@ -105,13 +92,9 @@ func (t *fdTree) clear(n int) {
 	}
 }
 
-// lowestFree is the lowest number from min not in use: past the tree
-// every number is free.
-func (t *fdTree) lowestFree(min int) int {
+func (t *FdTree) lowestFree(min int) int {
 	pos, level := min, 0
 
-	// Up: the first bit not set from pos in its word, else the next word,
-	// a bit of the level above.
 	for {
 		if level == len(t.levels) || pos>>6 >= len(t.levels[level]) {
 			return pos << (6 * level)
@@ -129,8 +112,6 @@ func (t *fdTree) lowestFree(min int) int {
 		pos, level = w+1, level+1
 	}
 
-	// Down: the first word with room below a bit not set, its first free
-	// bit; a word past the level is free from its first number.
 	for level > 0 {
 		level--
 
@@ -144,9 +125,7 @@ func (t *fdTree) lowestFree(min int) int {
 	return pos
 }
 
-// grow makes room for a number: the bottom twice as long at least, the
-// levels above it made again from it, as they must tell its full words.
-func (t *fdTree) grow(n int) {
+func (t *FdTree) grow(n int) {
 	words := n>>6 + 1
 
 	if len(t.levels) > 0 && len(t.levels[0]) >= words {
@@ -160,6 +139,7 @@ func (t *fdTree) grow(n int) {
 	}
 
 	grown := make([]uint64, max(words, 2*len(bottom), 1))
+
 	copy(grown, bottom)
 	t.levels = append(t.levels[:0], grown)
 
@@ -177,9 +157,8 @@ func (t *fdTree) grow(n int) {
 	}
 }
 
-// clone is a copy, a child's of fork.
-func (t *fdTree) clone() fdTree {
-	c := fdTree{levels: make([][]uint64, len(t.levels))}
+func (t *FdTree) clone() FdTree {
+	c := FdTree{levels: make([][]uint64, len(t.levels))}
 
 	for i, words := range t.levels {
 		c.levels[i] = slices.Clone(words)

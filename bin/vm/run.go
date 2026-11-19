@@ -9,19 +9,9 @@ import (
 	"syscall"
 )
 
-// imageDisk is the name of the disk a system is on: what follows a
-// program of the kernel in its file, where --disk gives no other.
 const imageDisk = "image"
 
-// runModule compiles a module and runs it as the first process, and
-// returns the exit code of vm: a program of the kernel, from its
-// executable (PZD1), or a WASI command, from an executable or a module,
-// which WASI's personality of the kernel runs (wasi.go). A module
-// is all vm runs: no object of vm's. --asan checks a program of the
-// kernel's heap, which a WASI command has none of. What follows a program
-// of the kernel in its file, the image of a system after rootfs, is its
-// first disk, named image, unless --disk gives one of that name.
-func runModule(path string, argv []string, asan bool, disks []disk, user cred) int {
+func runModule(path string, argv []string, asan bool, disks []Disk, user Cred) int {
 	data, exe, tail, err := hostProgram(path)
 
 	if err != nil {
@@ -29,6 +19,7 @@ func runModule(path string, argv []string, asan bool, disks []disk, user cred) i
 	}
 
 	options := programOptions(asan)
+
 	var obj *ElfObject
 
 	if exe {
@@ -55,19 +46,15 @@ func runModule(path string, argv []string, asan bool, disks []disk, user cred) i
 		throwFmt("--asan runs programs of the kernel")
 	}
 
-	given := slices.ContainsFunc(disks, func(d disk) bool { return d.name == imageDisk })
+	given := slices.ContainsFunc(disks, func(d Disk) bool { return d.name == imageDisk })
 
 	if kernel && len(tail) > 0 && !given {
-		disks = append([]disk{{name: imageDisk, mem: tail}}, disks...)
+		disks = append([]Disk{{name: imageDisk, mem: tail}}, disks...)
 	}
 
 	return runKernel(path, argv, options, data, obj, disks, user)
 }
 
-// hostProgram reads the program vm runs, a file of the host, as exec reads
-// one (readProgram): fstat and pread are all vm's calls on it, and mmap
-// of what follows an executable in it, tail: the file's own pages mapped
-// to read, never copied, the file's while it is as long.
 func hostProgram(path string) (data []byte, exe bool, tail []byte, err error) {
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
 
@@ -109,7 +96,6 @@ func hostProgram(path string) (data []byte, exe bool, tail []byte, err error) {
 		return data, exe, nil, err
 	}
 
-	// A mapping begins at a page of the file.
 	from := int64(len(data)) &^ int64(syscall.Getpagesize()-1)
 	pages, err := syscall.Mmap(fd, from, int(st.Size-from), syscall.PROT_READ, syscall.MAP_PRIVATE)
 
@@ -130,21 +116,17 @@ func importsKernel(obj *ElfObject) bool {
 	return false
 }
 
-// runKernel runs a program of the kernel as the first process, from the
-// module data at path, which compiled to obj with options, and returns
-// the exit code of vm: the process's, or 128 and the signal that ended it,
-// once the console has moved out what it was given. The process's
-// descriptors 0, 1 and 2 are the console's (console.go), the disks
-// those after them, in order, and DISKS in its environment their names, by
-// spaces. Its program has no path of the system's: the system has no
-// file of vm's.
-func runKernel(path string, argv []string, options CompileOptions, data []byte, obj *ElfObject, disks []disk, user cred) int {
+func runKernel(path string, argv []string, options CompileOptions, data []byte, obj *ElfObject, disks []Disk, user Cred) int {
 	k := newKernel(options, user)
 	p := throw2(k.newProcess(nil))
 	code, err := k.codeOf(p, data, path, obj)
+
 	throw(err)
+
 	cwd, pwd := p.firstCwd()
+
 	p.setCwd(cwd)
+
 	env := []string{"PWD=" + pwd}
 
 	for _, e := range os.Environ() {
@@ -186,9 +168,10 @@ func runKernel(path string, argv []string, options CompileOptions, data []byte, 
 	k.first = p
 	k.fg = p.pgid
 
-	go p.run(&execImage{code: code, argv: argv, envp: env})
+	go p.run(&ExecImage{code: code, argv: argv, envp: env})
 
 	status := <-k.exit
+
 	k.console.flush()
 
 	return status

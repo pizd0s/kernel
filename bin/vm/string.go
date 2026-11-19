@@ -9,8 +9,13 @@ import (
 	"syscall"
 )
 
-// String and character functions of the C locale. They are not system
-// calls: they leave errno and pending signals alone.
+const (
+	fnmPathname   = 0x1
+	fnmNoescape   = 0x2
+	fnmPeriod     = 0x4
+	fnmLeadingDir = 0x8
+	fnmCasefold   = 0x10
+)
 
 func lower(c byte) byte {
 	if c >= 'A' && c <= 'Z' {
@@ -34,13 +39,10 @@ func isDigit(c byte) bool {
 	return c >= '0' && c <= '9'
 }
 
-// cmp is a C comparison result.
 func cmp(a, b int) uint32 {
 	return uint32(int32(a - b))
 }
 
-// divide is C's division of two ints: as wasm's, it traps by zero and on
-// overflow.
 func divide(a, b, minimum int64) (int64, int64) {
 	if b == 0 {
 		panic(newTrap(trapDivByZero, 0))
@@ -105,8 +107,6 @@ func signalMessage(sig int) string {
 	return capitalize(s)
 }
 
-// strverscmp is glibc's: digit runs compare as numbers, those with leading
-// zeros as fractions.
 func strverscmp(a, b []byte) int {
 	const (
 		sN = 0
@@ -116,13 +116,16 @@ func strverscmp(a, b []byte) int {
 		rC = 2
 		rL = 3
 	)
+
 	next := [...]int{sN, sI, sZ, sN, sI, sI, sN, sF, sF, sN, sF, sZ}
+
 	result := [...]int{
 		rC, rC, rC, rC, rL, rC, rC, rC, rC,
 		rC, -1, -1, 1, rL, rL, 1, rL, rL,
 		rC, rC, rC, rC, rC, rC, rC, rC, rC,
 		rC, 1, 1, -1, rC, rC, -1, rC, rC,
 	}
+
 	at := func(s []byte, i int) byte {
 		if i < len(s) {
 			return s[i]
@@ -130,6 +133,7 @@ func strverscmp(a, b []byte) int {
 
 		return 0
 	}
+
 	kind := func(c byte) int {
 		if c == '0' {
 			return 2
@@ -141,6 +145,7 @@ func strverscmp(a, b []byte) int {
 
 		return 0
 	}
+
 	i := 0
 	c1, c2 := at(a, 0), at(b, 0)
 	state := sN + kind(c1)
@@ -180,16 +185,6 @@ func strverscmp(a, b []byte) int {
 	}
 }
 
-const (
-	fnmPathname   = 0x1
-	fnmNoescape   = 0x2
-	fnmPeriod     = 0x4
-	fnmLeadingDir = 0x8
-	fnmCasefold   = 0x10
-)
-
-// fnmatch matches a string against a shell pattern; start tells that s
-// begins where a leading period must be matched explicitly.
 func fnmatch(pat, s []byte, flags int, start bool) bool {
 	hidden := func() bool {
 		return start && flags&fnmPeriod != 0 && len(s) > 0 && s[0] == '.'
@@ -247,6 +242,7 @@ func fnmatch(pat, s []byte, flags int, start bool) bool {
 			c = s[0]
 		default:
 			lit := pat[0]
+
 			pat = pat[1:]
 
 			if lit == '\\' && flags&fnmNoescape == 0 && len(pat) > 0 {
@@ -267,9 +263,6 @@ func fnmatch(pat, s []byte, flags int, start bool) bool {
 	return len(s) == 0 || flags&fnmLeadingDir != 0 && s[0] == '/'
 }
 
-// bracket matches a byte against the bracket expression pat starts with:
-// it returns the expression's length, 0 when it is not one, and whether
-// it matched.
 func bracket(pat []byte, c byte, flags int) (int, bool) {
 	i := 1
 	negate := false
@@ -316,6 +309,7 @@ func bracket(pat []byte, c byte, flags int) (int, bool) {
 		}
 
 		i++
+
 		hi := lo
 
 		if i+1 < len(pat) && pat[i] == '-' && pat[i+1] != ']' {
@@ -344,7 +338,6 @@ func upper(c byte) byte {
 	return c
 }
 
-// inClass tells whether a byte is in a character class of the C locale.
 func inClass(class string, c byte) bool {
 	switch class {
 	case "alnum":

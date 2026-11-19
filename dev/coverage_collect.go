@@ -13,18 +13,15 @@ import (
 	"sync"
 )
 
-// Staged into the VM package by the coverage targets only. The metadata is
-// immutable; one cumulative counter file per process avoids retaining a copy
-// of the function records for every compilation in the spec suite.
-type CompilerProfile struct {
-	path   string
-	counts []byte
-}
-
 var compilerProfiles = struct {
 	sync.Mutex
 	profiles map[string]*CompilerProfile
 }{profiles: make(map[string]*CompilerProfile)}
+
+type CompilerProfile struct {
+	path   string
+	counts []byte
+}
 
 func compilerCoverage(i *Instance) {
 	directory := os.Getenv("PIZDOS_WASM_COVERDIR")
@@ -36,6 +33,7 @@ func compilerCoverage(i *Instance) {
 
 	entry, _ := i.export("__coverage_info")
 	info := entry.Interface().(func(uintptr, uint32) uint32)
+
 	var layout [11]uint32
 
 	for k := range layout {
@@ -60,9 +58,11 @@ func compilerCoverage(i *Instance) {
 		Data   []byte     `json:"data"`
 		Names  []byte     `json:"names"`
 	}{layout, sections[0], sections[2]}))
+
 	hash := sha256.Sum256(metadata)
 	stem := hex.EncodeToString(hash[:])
 	key := filepath.Join(directory, stem)
+
 	compilerProfiles.Lock()
 
 	defer compilerProfiles.Unlock()
@@ -71,7 +71,9 @@ func compilerCoverage(i *Instance) {
 
 	if profile == nil {
 		throw(os.WriteFile(key+".json", metadata, 0o600))
+
 		file := throw2(os.CreateTemp(directory, fmt.Sprintf("%s-%d-*.counts", stem, os.Getpid())))
+
 		throw(file.Close())
 		profile = &CompilerProfile{path: file.Name(), counts: make([]byte, len(sections[1]))}
 		compilerProfiles.profiles[key] = profile
@@ -83,6 +85,7 @@ func compilerCoverage(i *Instance) {
 
 	for offset := 0; offset < len(profile.counts); offset += 8 {
 		count := binary.LittleEndian.Uint64(profile.counts[offset:])
+
 		count += binary.LittleEndian.Uint64(sections[1][offset:])
 		binary.LittleEndian.PutUint64(profile.counts[offset:], count)
 	}

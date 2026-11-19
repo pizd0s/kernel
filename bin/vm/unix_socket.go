@@ -10,43 +10,27 @@ import (
 	"time"
 )
 
-// AF_UNIX's sockets are the kernel's own, as its socketpairs are
-// (pair_end.go): SOCK_STREAM and SOCK_SEQPACKET ones here, SOCK_DGRAM
-// ones unixDgram. bind names a socket with a path of the VFS's: the file
-// system of the path's directory makes a socket node there, which holds
-// what the socket's name stands for (BIND, remote_dir.go), the listener
-// of a socket of a connection. connect walks a path to such a node and
-// takes what its file system gives back (CONNECT): one end of a new pair
-// of the socket's kind goes into the listener's queue, accept takes it
-// from there, and the other is the connecting socket's from then on. A
-// listener whose socket closed, or that does not listen, refuses:
-// ECONNREFUSED; one of another kind, or a datagram socket's name, is
-// EPROTOTYPE. An abstract name is none of the VFS's: EOPNOTSUPP.
-type unixSocket struct {
+const somaxconn = 4096
+
+type UnixSocket struct {
 	refs     atomic.Int32
 	nonblock atomic.Bool
 	kind     int
 	mu       sync.Mutex
 	name     string
-	listener *unixListener
-	conn     *pairEnd
+	listener *UnixListener
+	conn     *PairEnd
 	peer     string
-	// readers and writers are the subscriptions to the socket, which its
-	// inner subscription, to its listener or its connection as it has one,
-	// wakes as that changes (wake).
-	readers, writers subscribers
-	inner            subscription
-	// The options are the socket's until it is connected, and its
-	// connection's then, which gets them, as a connection accept takes
-	// gets the listening socket's.
-	options sockOptions
+
+	readers, writers Subscribers
+	inner            Subscription
+
+	options SockOptions
 }
 
-// somaxconn is the most connections a listener holds, Linux's default.
-const somaxconn = 4096
+func newUnixSocket(kind int, nonblock bool) *UnixSocket {
+	s := &UnixSocket{kind: kind}
 
-func newUnixSocket(kind int, nonblock bool) *unixSocket {
-	s := &unixSocket{kind: kind}
 	s.refs.Store(1)
 	s.nonblock.Store(nonblock)
 	s.inner.init(s, 0)
@@ -54,19 +38,19 @@ func newUnixSocket(kind int, nonblock bool) *unixSocket {
 	return s
 }
 
-func (s *unixSocket) ref() {
+func (s *UnixSocket) ref() {
 	s.refs.Add(1)
 }
 
-// unref closes the socket with its last reference: a listener refuses
-// from then on, and the connections it holds are reset.
-func (s *unixSocket) unref() {
+func (s *UnixSocket) unref() {
 	if s.refs.Add(-1) != 0 {
 		return
 	}
 
 	s.mu.Lock()
+
 	l, c := s.listener, s.conn
+
 	s.listener, s.conn = nil, nil
 	s.mu.Unlock()
 
@@ -82,34 +66,87 @@ func (s *unixSocket) unref() {
 	}
 }
 
-// A unixSocket is a File, a Transfer and a Socket.
-func (s *unixSocket) asFile() File              { return s }
-func (s *unixSocket) asTransfer() Transfer      { return s }
-func (s *unixSocket) asSeeker() Seeker          { return nil }
-func (s *unixSocket) asDir() Dir                { return nil }
-func (s *unixSocket) asTerminal() Terminal      { return nil }
-func (s *unixSocket) asWindowed() Windowed      { return nil }
-func (s *unixSocket) asLink() Link              { return nil }
-func (s *unixSocket) asAttrs() Attrs            { return nil }
-func (s *unixSocket) asSocket() Socket          { return s }
-func (s *unixSocket) asIoctl() Ioctl            { return nil }
-func (s *unixSocket) asLocker() Locker          { return nil }
-func (s *unixSocket) asEpoll() *epoll           { return nil }
-func (s *unixSocket) asMemfd() *memfdFile       { return nil }
-func (s *unixSocket) asPair() *pairEnd          { return nil }
-func (s *unixSocket) asListener() *unixListener { return nil }
-func (s *unixSocket) asConsole() *consoleEnd    { return nil }
-func (s *unixSocket) asVFS() *remoteDir         { return nil }
-func (s *unixSocket) asCall() *callEnd          { return nil }
+func (s *UnixSocket) asFile() File {
+	return s
+}
 
-func (s *unixSocket) state() (*unixListener, *pairEnd) {
+func (s *UnixSocket) asTransfer() Transfer {
+	return s
+}
+
+func (s *UnixSocket) asSeeker() Seeker {
+	return nil
+}
+
+func (s *UnixSocket) asDir() Dir {
+	return nil
+}
+
+func (s *UnixSocket) asTerminal() Terminal {
+	return nil
+}
+
+func (s *UnixSocket) asWindowed() Windowed {
+	return nil
+}
+
+func (s *UnixSocket) asLink() Link {
+	return nil
+}
+
+func (s *UnixSocket) asAttrs() Attrs {
+	return nil
+}
+
+func (s *UnixSocket) asSocket() Socket {
+	return s
+}
+
+func (s *UnixSocket) asIoctl() Ioctl {
+	return nil
+}
+
+func (s *UnixSocket) asLocker() Locker {
+	return nil
+}
+
+func (s *UnixSocket) asEpoll() *Epoll {
+	return nil
+}
+
+func (s *UnixSocket) asMemfd() *MemfdFile {
+	return nil
+}
+
+func (s *UnixSocket) asPair() *PairEnd {
+	return nil
+}
+
+func (s *UnixSocket) asListener() *UnixListener {
+	return nil
+}
+
+func (s *UnixSocket) asConsole() *ConsoleEnd {
+	return nil
+}
+
+func (s *UnixSocket) asVFS() *RemoteDir {
+	return nil
+}
+
+func (s *UnixSocket) asCall() *CallEnd {
+	return nil
+}
+
+func (s *UnixSocket) state() (*UnixListener, *PairEnd) {
 	s.mu.Lock()
+
 	defer s.mu.Unlock()
 
 	return s.listener, s.conn
 }
 
-func (s *unixSocket) stat(p *Process, st *syscall.Stat_t) error {
+func (s *UnixSocket) stat(p *Process, st *syscall.Stat_t) error {
 	if _, c := s.state(); c != nil {
 		return c.stat(p, st)
 	}
@@ -119,7 +156,7 @@ func (s *unixSocket) stat(p *Process, st *syscall.Stat_t) error {
 	return nil
 }
 
-func (s *unixSocket) poll(events int16) int16 {
+func (s *UnixSocket) poll(events int16) int16 {
 	l, c := s.state()
 
 	switch {
@@ -132,9 +169,7 @@ func (s *unixSocket) poll(events int16) int16 {
 	return 0
 }
 
-// subscribe is to the socket's own lists, which its listener or its
-// connection wakes through its inner subscription (wake).
-func (s *unixSocket) subscribe(sub *subscription, events int16) {
+func (s *UnixSocket) subscribe(sub *Subscription, events int16) {
 	in, out := ioSides(events)
 
 	s.mu.Lock()
@@ -150,17 +185,14 @@ func (s *unixSocket) subscribe(sub *subscription, events int16) {
 	s.mu.Unlock()
 }
 
-func (s *unixSocket) unsubscribe(sub *subscription) {
+func (s *UnixSocket) unsubscribe(sub *Subscription) {
 	s.mu.Lock()
 	s.readers.remove(&sub.in)
 	s.writers.remove(&sub.out)
 	s.mu.Unlock()
 }
 
-// attach gives the socket's inner subscription to what it now is, its
-// listener or its connection, and wakes the socket's subscriptions: it
-// may be ready now.
-func (s *unixSocket) attach(to Object) {
+func (s *UnixSocket) attach(to Object) {
 	to.subscribe(&s.inner, pollIn|pollOut)
 	s.mu.Lock()
 	s.readers.tell()
@@ -168,10 +200,7 @@ func (s *unixSocket) attach(to Object) {
 	s.mu.Unlock()
 }
 
-// wake is the socket as the waker of its inner subscription: a change of
-// its listener's or its connection's goes on to its subscriptions, of
-// reading or of writing as it came.
-func (s *unixSocket) wake(l *hook) {
+func (s *UnixSocket) wake(l *Hook) {
 	s.mu.Lock()
 
 	if l == &s.inner.in {
@@ -183,7 +212,7 @@ func (s *unixSocket) wake(l *hook) {
 	s.mu.Unlock()
 }
 
-func (s *unixSocket) flags() (int, error) {
+func (s *UnixSocket) flags() (int, error) {
 	fl := syscall.O_RDWR
 
 	if s.nonblock.Load() {
@@ -193,7 +222,7 @@ func (s *unixSocket) flags() (int, error) {
 	return fl, nil
 }
 
-func (s *unixSocket) setFlags(fl int) error {
+func (s *UnixSocket) setFlags(fl int) error {
 	s.nonblock.Store(fl&syscall.O_NONBLOCK != 0)
 
 	if _, c := s.state(); c != nil {
@@ -203,9 +232,7 @@ func (s *unixSocket) setFlags(fl int) error {
 	return nil
 }
 
-// bind names the socket with a path of the VFS's, its file system's socket
-// node of the mode umask leaves: one that is there is EADDRINUSE.
-func (s *unixSocket) bind(p *Process, at, n uint32) error {
+func (s *UnixSocket) bind(p *Process, at, n uint32) error {
 	path, err := p.unixSocketPath(at, n)
 
 	if err != nil {
@@ -216,8 +243,10 @@ func (s *unixSocket) bind(p *Process, at, n uint32) error {
 		return syscall.EINVAL
 	}
 
-	l := &unixListener{ino: pairInodes.Add(1), conns: newMsgChannel(1), kind: s.kind}
+	l := &UnixListener{ino: pairInodes.Add(1), conns: newMsgChannel(1), kind: s.kind}
+
 	l.refs.Store(1)
+
 	err = p.onPath(atFdcwd, path, func(v Dir) error {
 		return v.bindPath(p, path, 0o777&^p.umask, l)
 	})
@@ -240,7 +269,7 @@ func (s *unixSocket) bind(p *Process, at, n uint32) error {
 	return nil
 }
 
-func (s *unixSocket) listen(backlog int) error {
+func (s *UnixSocket) listen(backlog int) error {
 	l, c := s.state()
 
 	if l == nil || c != nil {
@@ -257,8 +286,7 @@ func (s *unixSocket) listen(backlog int) error {
 	return nil
 }
 
-// accept takes the connection that came first: the far end of its pair.
-func (s *unixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
+func (s *UnixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
 	l, _ := s.state()
 
 	if l == nil || !l.listens() {
@@ -277,7 +305,6 @@ func (s *unixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
 		}
 
 		if e == nil {
-			// The connection that comes is given to the accept that waits.
 			pk, given, _, err := l.conns.receive(p, func() bool { return !l.listens() }, time.Time{}, restarts)
 
 			if err != nil {
@@ -298,8 +325,7 @@ func (s *unixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
 	}
 }
 
-// connect connects the socket to the one bound to a path of the VFS's.
-func (s *unixSocket) connect(p *Process, at, n uint32) error {
+func (s *UnixSocket) connect(p *Process, at, n uint32) error {
 	path, err := p.unixSocketPath(at, n)
 
 	if err != nil {
@@ -312,7 +338,8 @@ func (s *unixSocket) connect(p *Process, at, n uint32) error {
 		return syscall.EINVAL
 	}
 
-	var conn *pairEnd
+	var conn *PairEnd
+
 	err = p.onPath(atFdcwd, path, func(v Dir) error {
 		var err error
 		conn, err = p.connectUnix(v, path, s.kind, s.nonblock.Load(), &s.options.sndTimeout)
@@ -333,15 +360,17 @@ func (s *unixSocket) connect(p *Process, at, n uint32) error {
 	return nil
 }
 
-func (s *unixSocket) sockname(p *Process) ([]byte, error) {
+func (s *UnixSocket) sockname(p *Process) ([]byte, error) {
 	s.mu.Lock()
+
 	defer s.mu.Unlock()
 
 	return unixAddress([]byte(s.name)), nil
 }
 
-func (s *unixSocket) peername(p *Process) ([]byte, error) {
+func (s *UnixSocket) peername(p *Process) ([]byte, error) {
 	s.mu.Lock()
+
 	defer s.mu.Unlock()
 
 	if s.conn == nil {
@@ -351,9 +380,7 @@ func (s *unixSocket) peername(p *Process) ([]byte, error) {
 	return unixAddress([]byte(s.peer)), nil
 }
 
-// connection is the socket's pair end, for what only a connected one
-// does: ENOTCONN, or EINVAL for a listening one.
-func (s *unixSocket) connection() (*pairEnd, error) {
+func (s *UnixSocket) connection() (*PairEnd, error) {
 	l, c := s.state()
 
 	switch {
@@ -366,11 +393,11 @@ func (s *unixSocket) connection() (*pairEnd, error) {
 	return nil, syscall.ENOTCONN
 }
 
-func (s *unixSocket) socketKind() int {
+func (s *UnixSocket) socketKind() int {
 	return s.kind
 }
 
-func (s *unixSocket) shutdown(how int) error {
+func (s *UnixSocket) shutdown(how int) error {
 	c, err := s.connection()
 
 	if err != nil {
@@ -380,7 +407,7 @@ func (s *unixSocket) shutdown(how int) error {
 	return c.shutdown(how)
 }
 
-func (s *unixSocket) getsockopt(p *Process, level, name, at, lenAt uint32) error {
+func (s *UnixSocket) getsockopt(p *Process, level, name, at, lenAt uint32) error {
 	if l, c := s.state(); c != nil {
 		return c.getsockopt(p, level, name, at, lenAt)
 	} else if level == solSocket && name == soAcceptconn {
@@ -391,6 +418,7 @@ func (s *unixSocket) getsockopt(p *Process, level, name, at, lenAt uint32) error
 		}
 
 		length := min(p.u32(lenAt), 4)
+
 		var b [4]byte
 		binary.LittleEndian.PutUint32(b[:], value)
 		copy(p.span(at, length), b[:])
@@ -402,7 +430,7 @@ func (s *unixSocket) getsockopt(p *Process, level, name, at, lenAt uint32) error
 	return s.options.get(p, s.kind, level, name, at, lenAt)
 }
 
-func (s *unixSocket) setsockopt(p *Process, level, name, at, n uint32) error {
+func (s *UnixSocket) setsockopt(p *Process, level, name, at, n uint32) error {
 	if _, c := s.state(); c != nil {
 		return c.setsockopt(p, level, name, at, n)
 	}
@@ -410,7 +438,7 @@ func (s *unixSocket) setsockopt(p *Process, level, name, at, n uint32) error {
 	return s.options.set(p, level, name, at, n)
 }
 
-func (s *unixSocket) sendmsg(p *Process, at, flags uint32) (int, error) {
+func (s *UnixSocket) sendmsg(p *Process, at, flags uint32) (int, error) {
 	c, err := s.connection()
 
 	if err != nil {
@@ -420,7 +448,7 @@ func (s *unixSocket) sendmsg(p *Process, at, flags uint32) (int, error) {
 	return c.sendmsg(p, at, flags)
 }
 
-func (s *unixSocket) recvmsg(p *Process, at, flags uint32) (int, error) {
+func (s *UnixSocket) recvmsg(p *Process, at, flags uint32) (int, error) {
 	c, err := s.connection()
 
 	if err != nil {
@@ -430,7 +458,7 @@ func (s *unixSocket) recvmsg(p *Process, at, flags uint32) (int, error) {
 	return c.recvmsg(p, at, flags)
 }
 
-func (s *unixSocket) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, error) {
+func (s *UnixSocket) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, error) {
 	c, err := s.connection()
 
 	if err != nil {
@@ -440,7 +468,7 @@ func (s *unixSocket) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, 
 	return c.sendto(p, buf, n, flags, addr, alen)
 }
 
-func (s *unixSocket) recvfrom(p *Process, buf, n, flags uint32) (int, []byte, error) {
+func (s *UnixSocket) recvfrom(p *Process, buf, n, flags uint32) (int, []byte, error) {
 	c, err := s.connection()
 
 	if err != nil {
@@ -450,7 +478,7 @@ func (s *unixSocket) recvfrom(p *Process, buf, n, flags uint32) (int, []byte, er
 	return c.recvfrom(p, buf, n, flags)
 }
 
-func (s *unixSocket) read(p *Process, b []byte, mode ioMode) (int, error) {
+func (s *UnixSocket) read(p *Process, b []byte, mode IoMode) (int, error) {
 	c, err := s.connection()
 
 	if err != nil {
@@ -460,7 +488,7 @@ func (s *unixSocket) read(p *Process, b []byte, mode ioMode) (int, error) {
 	return c.read(p, b, mode)
 }
 
-func (s *unixSocket) write(p *Process, b []byte, mode ioMode) (int, error) {
+func (s *UnixSocket) write(p *Process, b []byte, mode IoMode) (int, error) {
 	c, err := s.connection()
 
 	if err != nil {
@@ -470,10 +498,10 @@ func (s *unixSocket) write(p *Process, b []byte, mode ioMode) (int, error) {
 	return c.write(p, b, mode)
 }
 
-func (s *unixSocket) pread(p *Process, b []byte, off int64) (int, error) {
+func (s *UnixSocket) pread(p *Process, b []byte, off int64) (int, error) {
 	return 0, syscall.ESPIPE
 }
 
-func (s *unixSocket) pwrite(p *Process, b []byte, off int64) (int, error) {
+func (s *UnixSocket) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return 0, syscall.ESPIPE
 }

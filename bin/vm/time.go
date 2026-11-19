@@ -12,7 +12,11 @@ import (
 	"unsafe"
 )
 
-// clockids of the guest's time.h
+var (
+	weekdays = []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
+	months   = []string{"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"}
+)
+
 const (
 	clockRealtime       = 0
 	clockMonotonic      = 1
@@ -22,8 +26,6 @@ const (
 	timerAbstime        = 1
 )
 
-// hostClock is the host's clock of a guest's. The processes of vm have
-// no CPU clocks of their own: both CPU clocks are vm's.
 func hostClock(clock uint32) (uintptr, bool) {
 	switch {
 	case clock == clockThreadCputime:
@@ -42,10 +44,6 @@ func clockGettime(clock uintptr) time.Duration {
 	return time.Duration(t.Sec)*time.Second + time.Duration(t.Nsec)
 }
 
-// posixZone is the zone of a POSIX TZ, std offset[dst[offset][,rule]]:
-// the standard time's name, <quoted> or letters, then hh[:mm[:ss]] west of
-// UTC, as leniently as musl reads them; with a daylight saving time, as Go
-// reads the footer of a zoneinfo file (footerZone).
 func posixZone(tz string) *time.Location {
 	i := 0
 
@@ -91,6 +89,7 @@ func posixZone(tz string) *time.Location {
 		}
 
 		n, _ := strconv.Atoi(rest[:j])
+
 		offset += n * unit
 		rest = rest[j:]
 
@@ -110,10 +109,6 @@ func posixZone(tz string) *time.Location {
 	return time.FixedZone(std, -sign*offset)
 }
 
-// footerZone is the zone of a TZ with a daylight saving time, as Go reads
-// the footer of a zoneinfo file: that of a file of one type, UTC's, and no
-// transition, whose footer holds for all time, the rules of daylight
-// saving time the United States' when TZ has none, as musl's.
 func footerZone(tz string) (*time.Location, error) {
 	var data []byte
 
@@ -121,7 +116,6 @@ func footerZone(tz string) (*time.Location, error) {
 		data = append(data, "TZif2"...)
 		data = append(data, make([]byte, 15)...)
 
-		// isutcnt, isstdcnt, leapcnt, timecnt, typecnt, charcnt
 		for _, n := range []uint32{0, 0, 0, 0, 1, 4} {
 			data = binary.BigEndian.AppendUint32(data, n)
 		}
@@ -133,24 +127,21 @@ func footerZone(tz string) (*time.Location, error) {
 	return time.LoadLocationFromTZData(tz, append(append(append(data, '\n'), tz...), '\n'))
 }
 
-// asctime is the 26 characters of asctime of a struct tm, or false when the
-// year needs more.
-func asctime(tm tmFields) (string, bool) {
+func asctime(tm TmFields) (string, bool) {
 	s := fmt.Sprintf("%.3s %.3s%3d %.2d:%.2d:%.2d %d\n", calendarName(weekdays, tm.wday, true), calendarName(months, tm.mon, true),
 		tm.mday, tm.hour, tm.min, tm.sec, tm.year+1900)
 
 	return s, len(s) < 26
 }
 
-// tmFields is a guest struct tm.
-type tmFields struct {
+type TmFields struct {
 	sec, min, hour, mday, mon, year, wday, yday, isdst, gmtoff int
 	zone                                                       string
 }
 
-func tmOf(t time.Time) tmFields {
+func tmOf(t time.Time) TmFields {
 	name, offset := t.Zone()
-	tm := tmFields{t.Second(), t.Minute(), t.Hour(), t.Day(), int(t.Month()) - 1, t.Year() - 1900, int(t.Weekday()), t.YearDay() - 1, 0, offset, name}
+	tm := TmFields{t.Second(), t.Minute(), t.Hour(), t.Day(), int(t.Month()) - 1, t.Year() - 1900, int(t.Weekday()), t.YearDay() - 1, 0, offset, name}
 
 	if t.IsDST() {
 		tm.isdst = 1
@@ -158,9 +149,6 @@ func tmOf(t time.Time) tmFields {
 
 	return tm
 }
-
-var weekdays = []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
-var months = []string{"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"}
 
 func calendarName(list []string, i int, short bool) string {
 	if i < 0 || i >= len(list) {
@@ -174,8 +162,7 @@ func calendarName(list []string, i int, short bool) string {
 	return list[i]
 }
 
-// strftime formats a struct tm, with glibc's flags _ - 0 ^ and widths.
-func strftime(format string, tm tmFields) string {
+func strftime(format string, tm TmFields) string {
 	var out strings.Builder
 
 	for i := 0; i < len(format); i++ {
@@ -188,6 +175,7 @@ func strftime(format string, tm tmFields) string {
 		}
 
 		i++
+
 		pad := byte(0)
 		up := false
 
@@ -230,8 +218,6 @@ func strftime(format string, tm tmFields) string {
 	return out.String()
 }
 
-// number formats a number in at least width digits, padded with def or the
-// flag's pad.
 func number(v, width int, def, pad byte) string {
 	if pad == '-' {
 		return strconv.Itoa(v)
@@ -250,10 +236,11 @@ func number(v, width int, def, pad byte) string {
 	return s
 }
 
-func conversion(c byte, tm tmFields, pad byte, width int) string {
+func conversion(c byte, tm TmFields, pad byte, width int) string {
 	num := func(v, w int, def byte) string {
 		return number(v, max(w, width), def, pad)
 	}
+
 	hour12 := tm.hour % 12
 
 	if hour12 == 0 {
@@ -261,6 +248,7 @@ func conversion(c byte, tm tmFields, pad byte, width int) string {
 	}
 
 	isoYear, isoWeek := time.Date(tm.year+1900, time.January, 1+tm.yday, 12, 0, 0, 0, time.UTC).ISOWeek()
+
 	str := func(s string) string {
 		for len(s) < width {
 			s = " " + s
@@ -368,18 +356,19 @@ func conversion(c byte, tm tmFields, pad byte, width int) string {
 	return "%" + string(c)
 }
 
-// strptime parses s by format into the fields it names and returns how much
-// of s it took.
-func strptime(s []byte, format string, tm *tmFields) (int, bool) {
+func strptime(s []byte, format string, tm *TmFields) (int, bool) {
 	at := 0
 	century := -1
+
 	space := func() {
 		for at < len(s) && (s[at] == ' ' || s[at] >= '\t' && s[at] <= '\r') {
 			at++
 		}
 	}
+
 	num := func(digits, lo, hi int) (int, bool) {
 		space()
+
 		sign := 1
 
 		if at < len(s) && (s[at] == '-' || s[at] == '+') && digits > 4 {
@@ -401,6 +390,7 @@ func strptime(s []byte, format string, tm *tmFields) (int, bool) {
 
 		return v, at > start && v >= lo && v <= hi
 	}
+
 	word := func(list []string) (int, bool) {
 		space()
 
@@ -514,15 +504,19 @@ func strptime(s []byte, format string, tm *tmFields) (int, bool) {
 			ok = true
 		case 'D':
 			n, good := strptime(s[at:], "%m/%d/%y", tm)
+
 			at, ok = at+n, good
 		case 'T':
 			n, good := strptime(s[at:], "%H:%M:%S", tm)
+
 			at, ok = at+n, good
 		case 'R':
 			n, good := strptime(s[at:], "%H:%M", tm)
+
 			at, ok = at+n, good
 		case 'F':
 			n, good := strptime(s[at:], "%Y-%m-%d", tm)
+
 			at, ok = at+n, good
 		case '%':
 			ok = at < len(s) && s[at] == '%'

@@ -11,41 +11,6 @@ import (
 	"time"
 )
 
-// WASI preview1, a personality of the kernel's: a module that imports
-// wasi_snapshot_preview1 runs as a process of the kernel, as a program of
-// lib/c does, and its calls are the process's, on its descriptors and its
-// root. A WASI descriptor is the process's own; the process's root, when
-// it has one, is preopened as "/" at the lowest descriptor free after 2
-// as the program starts (wasiPreopen). A call returns WASI's error number,
-// EFAULT for memory out of the module's, and finds its memory and its
-// process through the instance.
-
-const (
-	wasiOK           = 0
-	wasiE2big        = 1
-	wasiEacces       = 2
-	wasiEagain       = 6
-	wasiEbadf        = 8
-	wasiEexist       = 20
-	wasiEfault       = 21
-	wasiEintr        = 27
-	wasiEinval       = 28
-	wasiEio          = 29
-	wasiEisdir       = 31
-	wasiEloop        = 32
-	wasiEnametoolong = 37
-	wasiEnoent       = 44
-	wasiEnomem       = 48
-	wasiEnospc       = 51
-	wasiEnosys       = 52
-	wasiEnotdir      = 54
-	wasiEnotempty    = 55
-	wasiEperm        = 63
-	wasiEpipe        = 64
-	wasiEspipe       = 70
-	wasiExdev        = 75
-)
-
 var wasiErrnos = map[syscall.Errno]uint32{
 	syscall.E2BIG: wasiE2big, syscall.EACCES: wasiEacces, syscall.EAGAIN: wasiEagain, syscall.EBADF: wasiEbadf,
 	syscall.EEXIST: wasiEexist, syscall.EFAULT: wasiEfault, syscall.EINTR: wasiEintr, syscall.EINVAL: wasiEinval,
@@ -54,25 +19,6 @@ var wasiErrnos = map[syscall.Errno]uint32{
 	syscall.ENOTDIR: wasiEnotdir, syscall.ENOTEMPTY: wasiEnotempty, syscall.EPERM: wasiEperm, syscall.EPIPE: wasiEpipe,
 	syscall.ESPIPE: wasiEspipe, syscall.EXDEV: wasiExdev,
 }
-
-func wasiErrno(err error) uint32 {
-	var e syscall.Errno
-
-	if err == nil {
-		return wasiOK
-	}
-
-	if errors.As(err, &e) {
-		if w, ok := wasiErrnos[e]; ok {
-			return w
-		}
-	}
-
-	return wasiEio
-}
-
-// wasiModule is the import module of WASI preview1.
-const wasiModule = "wasi_snapshot_preview1"
 
 var wasiFunctions = map[string]any{
 	"args_get":              wasiArgsGet,
@@ -108,8 +54,49 @@ var wasiFunctions = map[string]any{
 	"proc_exit":             wasiProcExit,
 }
 
-// isWASI tells whether a module is a WASI command: one that imports WASI's
-// module.
+const (
+	wasiOK           = 0
+	wasiE2big        = 1
+	wasiEacces       = 2
+	wasiEagain       = 6
+	wasiEbadf        = 8
+	wasiEexist       = 20
+	wasiEfault       = 21
+	wasiEintr        = 27
+	wasiEinval       = 28
+	wasiEio          = 29
+	wasiEisdir       = 31
+	wasiEloop        = 32
+	wasiEnametoolong = 37
+	wasiEnoent       = 44
+	wasiEnomem       = 48
+	wasiEnospc       = 51
+	wasiEnosys       = 52
+	wasiEnotdir      = 54
+	wasiEnotempty    = 55
+	wasiEperm        = 63
+	wasiEpipe        = 64
+	wasiEspipe       = 70
+	wasiExdev        = 75
+	wasiModule       = "wasi_snapshot_preview1"
+)
+
+func wasiErrno(err error) uint32 {
+	var e syscall.Errno
+
+	if err == nil {
+		return wasiOK
+	}
+
+	if errors.As(err, &e) {
+		if w, ok := wasiErrnos[e]; ok {
+			return w
+		}
+	}
+
+	return wasiEio
+}
+
 func isWASI(obj *ElfObject) bool {
 	for _, imp := range obj.meta.imports {
 		if imp.module == wasiModule {
@@ -124,7 +111,6 @@ func guest(ctx uintptr) []byte {
 	return instanceAt(ctx).memoryBytes()
 }
 
-// span is n bytes of memory at at, or nil when they do not fit.
 func span(m []byte, at uint32, n uint64) []byte {
 	if uint64(at)+n > uint64(len(m)) {
 		return nil
@@ -199,9 +185,6 @@ func wasiEnvironSizesGet(ctx uintptr, count, size uint32) uint32 {
 	return stringsSizes(guest(ctx), proc(ctx).image.envp, count, size)
 }
 
-// clock is a clock's time or resolution, in nanoseconds: realtime,
-// monotonic, the process's and the thread's CPU time, as the kernel's
-// clock_gettime has them.
 func clock(p *Process, id uint32, res bool) (uint64, uint32) {
 	if id > 3 {
 		return 0, wasiEinval
@@ -240,7 +223,6 @@ func wasiClockResGet(ctx uintptr, id uint32, at uint32) uint32 {
 	return e
 }
 
-// iovecs is a guest iovec array as spans of the module's memory.
 func iovecs(m []byte, iovs, count uint32) ([][]byte, uint32) {
 	if count > 1024 {
 		return nil, wasiEinval
@@ -268,9 +250,6 @@ func iovecs(m []byte, iovs, count uint32) ([][]byte, uint32) {
 	return out, wasiOK
 }
 
-// vectored reads or writes a descriptor's file through iovecs, at its
-// position or at offset, and stores the count at done: a short transfer
-// ends it, as readv's and writev's.
 func vectored(ctx uintptr, fd, iovs, count uint32, offset uint64, positioned, write bool, done uint32) uint32 {
 	p, m := proc(ctx), guest(ctx)
 	obj, err := p.fd(fd)
@@ -310,9 +289,9 @@ func vectored(ctx uintptr, fd, iovs, count uint32, offset uint64, positioned, wr
 		case positioned:
 			n, err = t.pread(p, b, int64(offset)+int64(total))
 		case write:
-			n, err = t.write(p, b, ioMode{})
+			n, err = t.write(p, b, IoMode{})
 		default:
-			n, err = t.read(p, b, ioMode{})
+			n, err = t.read(p, b, IoMode{})
 		}
 
 		total += n
@@ -407,7 +386,6 @@ func wasiFdSync(ctx uintptr, fd uint32) uint32 {
 	return wasiErrno(a.sync(p, false))
 }
 
-// filetype is WASI's filetype of a mode.
 func filetype(mode uint32) byte {
 	switch mode & syscall.S_IFMT {
 	case syscall.S_IFBLK:
@@ -608,8 +586,6 @@ func direntType(t byte) byte {
 	return 0
 }
 
-// fdReaddir reads the directory from its start and writes the entries from
-// cookie on, each a 24-byte header and the name, until the buffer is full.
 func wasiFdReaddir(ctx uintptr, fd, buf, n uint32, cookie uint64, used uint32) uint32 {
 	p, m := proc(ctx), guest(ctx)
 	obj, err := p.fd(fd)
@@ -683,8 +659,6 @@ func wasiFdReaddir(ctx uintptr, fd, buf, n uint32, cookie uint64, used uint32) u
 	return wasiOK
 }
 
-// wasiPath is the path of a call, relative to its descriptor: "." for an
-// empty one.
 func wasiPath(m []byte, path, n uint32) (string, uint32) {
 	b := span(m, path, uint64(n))
 
@@ -703,7 +677,6 @@ func wasiPath(m []byte, path, n uint32) (string, uint32) {
 	return string(b), wasiOK
 }
 
-// dirfd is a descriptor a path is relative to: EBADF when it is not open.
 func dirfd(p *Process, fd uint32) (int32, uint32) {
 	if _, err := p.fd(fd); err != nil {
 		return 0, wasiEbadf
@@ -913,9 +886,6 @@ func wasiPathReadlink(ctx uintptr, fd, path, n, buf, size, used uint32) uint32 {
 	return wasiOK
 }
 
-// pollOneoff sleeps until the earliest clock subscription, as nanosleep
-// does, a signal ending it; descriptor subscriptions are reported ready
-// at once.
 func wasiPollOneoff(ctx uintptr, in, out, count, events uint32) uint32 {
 	if count == 0 {
 		return wasiEinval
@@ -939,6 +909,7 @@ func wasiPollOneoff(ctx uintptr, in, out, count, events uint32) uint32 {
 
 		if tag != 0 {
 			e := evs[32*ready : 32*ready+32]
+
 			clear(e)
 			copy(e, s[:8])
 			e[10] = tag
@@ -971,6 +942,7 @@ func wasiPollOneoff(ctx uintptr, in, out, count, events uint32) uint32 {
 		}
 
 		e := evs[:32]
+
 		clear(e)
 		copy(e, subs[48*earliest:48*earliest+8])
 		ready = 1
@@ -999,7 +971,6 @@ func wasiSchedYield(ctx uintptr) uint32 {
 	return wasiOK
 }
 
-// proc_exit ends the process, as _exit does.
 func wasiProcExit(ctx uintptr, code uint32) {
 	proc(ctx).exitWith(int(code&0xff) << 8)
 }

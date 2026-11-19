@@ -7,8 +7,21 @@ import (
 	"unicode"
 )
 
-// utf8Codeset tells whether a locale name's codeset, between its dot and
-// any @modifier, is UTF-8's, or it names none.
+const (
+	wcAlnum = 1 + iota
+	wcAlpha
+	wcBlank
+	wcCntrl
+	wcDigit
+	wcGraph
+	wcLower
+	wcPrint
+	wcPunct
+	wcSpace
+	wcUpper
+	wcXdigit
+)
+
 func utf8Codeset(name string) bool {
 	_, codeset, ok := strings.Cut(name, ".")
 
@@ -30,24 +43,6 @@ func localeShown(name string) string {
 	return name
 }
 
-// Wide character classes, by number as wctype returns them.
-const (
-	wcAlnum = 1 + iota
-	wcAlpha
-	wcBlank
-	wcCntrl
-	wcDigit
-	wcGraph
-	wcLower
-	wcPrint
-	wcPunct
-	wcSpace
-	wcUpper
-	wcXdigit
-)
-
-// noBreakSpace tells the spaces that are not where a line breaks, which
-// are no blanks nor spaces.
 func noBreakSpace(c rune) bool {
 	return c == 0xa0 || c == 0x2007 || c == 0x202f
 }
@@ -68,8 +63,6 @@ func towupper(c uint32) uint32 {
 	return uint32(unicode.ToUpper(rune(c)))
 }
 
-// iswprint is musl's: everything but controls, separators of lines,
-// surrogates and noncharacters.
 func iswprint(c uint32) bool {
 	switch {
 	case c < 0xff:
@@ -83,9 +76,6 @@ func iswprint(c uint32) bool {
 	return true
 }
 
-// iswClass tells whether a wide character is in a class: alphabetic by
-// Unicode's property, digits only the ASCII ones, spaces and blanks those
-// a line breaks at, cased by the case mappings, others as musl's.
 func iswClass(class int, c uint32) bool {
 	r := rune(c)
 	valid := c <= unicode.MaxRune
@@ -120,8 +110,6 @@ func iswClass(class int, c uint32) bool {
 	return false
 }
 
-// ctype tells a class of the C locale's ctype functions: only ASCII is in
-// one.
 func ctype(class string, c uint32) uint32 {
 	return bit(c < 0x80 && inClass(class, byte(c)))
 }

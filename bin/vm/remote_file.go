@@ -6,72 +6,170 @@ import (
 	"syscall"
 )
 
-// remoteFile is a server's file.
-type remoteFile struct {
-	node remoteNode
+type RemoteFile struct {
+	node RemoteNode
 }
 
-func (f *remoteFile) ref()   { f.node.ref() }
-func (f *remoteFile) unref() { f.node.unref() }
+func (f *RemoteFile) ref() {
+	f.node.ref()
+}
 
-// A remoteFile is a File, a Transfer, a Seeker, a Windowed, an Attrs and a
-// Locker: its node answers them all.
-func (f *remoteFile) asFile() File              { return f }
-func (f *remoteFile) asTransfer() Transfer      { return f }
-func (f *remoteFile) asSeeker() Seeker          { return f }
-func (f *remoteFile) asDir() Dir                { return nil }
-func (f *remoteFile) asTerminal() Terminal      { return nil }
-func (f *remoteFile) asWindowed() Windowed      { return f }
-func (f *remoteFile) asLink() Link              { return nil }
-func (f *remoteFile) asAttrs() Attrs            { return f }
-func (f *remoteFile) asSocket() Socket          { return nil }
-func (f *remoteFile) asIoctl() Ioctl            { return nil }
-func (f *remoteFile) asLocker() Locker          { return f }
-func (f *remoteFile) asEpoll() *epoll           { return nil }
-func (f *remoteFile) asMemfd() *memfdFile       { return nil }
-func (f *remoteFile) asPair() *pairEnd          { return nil }
-func (f *remoteFile) asListener() *unixListener { return nil }
-func (f *remoteFile) asConsole() *consoleEnd    { return nil }
-func (f *remoteFile) asVFS() *remoteDir         { return nil }
-func (f *remoteFile) asCall() *callEnd          { return nil }
+func (f *RemoteFile) unref() {
+	f.node.unref()
+}
 
-func (f *remoteFile) stat(p *Process, st *syscall.Stat_t) error { return f.node.stat(p, st) }
-func (f *remoteFile) poll(events int16) int16                   { return f.node.poll(events) }
-func (f *remoteFile) subscribe(s *subscription, events int16)   { f.node.subscribe(s, events) }
-func (f *remoteFile) unsubscribe(s *subscription)               { f.node.unsubscribe(s) }
-func (f *remoteFile) flags() (int, error)                       { return f.node.flags() }
-func (f *remoteFile) setFlags(fl int) error                     { return f.node.setFlags(fl) }
+func (f *RemoteFile) asFile() File {
+	return f
+}
 
-func (f *remoteFile) read(p *Process, b []byte, mode ioMode) (int, error) {
+func (f *RemoteFile) asTransfer() Transfer {
+	return f
+}
+
+func (f *RemoteFile) asSeeker() Seeker {
+	return f
+}
+
+func (f *RemoteFile) asDir() Dir {
+	return nil
+}
+
+func (f *RemoteFile) asTerminal() Terminal {
+	return nil
+}
+
+func (f *RemoteFile) asWindowed() Windowed {
+	return f
+}
+
+func (f *RemoteFile) asLink() Link {
+	return nil
+}
+
+func (f *RemoteFile) asAttrs() Attrs {
+	return f
+}
+
+func (f *RemoteFile) asSocket() Socket {
+	return nil
+}
+
+func (f *RemoteFile) asIoctl() Ioctl {
+	return nil
+}
+
+func (f *RemoteFile) asLocker() Locker {
+	return f
+}
+
+func (f *RemoteFile) asEpoll() *Epoll {
+	return nil
+}
+
+func (f *RemoteFile) asMemfd() *MemfdFile {
+	return nil
+}
+
+func (f *RemoteFile) asPair() *PairEnd {
+	return nil
+}
+
+func (f *RemoteFile) asListener() *UnixListener {
+	return nil
+}
+
+func (f *RemoteFile) asConsole() *ConsoleEnd {
+	return nil
+}
+
+func (f *RemoteFile) asVFS() *RemoteDir {
+	return nil
+}
+
+func (f *RemoteFile) asCall() *CallEnd {
+	return nil
+}
+
+func (f *RemoteFile) stat(p *Process, st *syscall.Stat_t) error {
+	return f.node.stat(p, st)
+}
+
+func (f *RemoteFile) poll(events int16) int16 {
+	return f.node.poll(events)
+}
+
+func (f *RemoteFile) subscribe(s *Subscription, events int16) {
+	f.node.subscribe(s, events)
+}
+
+func (f *RemoteFile) unsubscribe(s *Subscription) {
+	f.node.unsubscribe(s)
+}
+
+func (f *RemoteFile) flags() (int, error) {
+	return f.node.flags()
+}
+
+func (f *RemoteFile) setFlags(fl int) error {
+	return f.node.setFlags(fl)
+}
+
+func (f *RemoteFile) read(p *Process, b []byte, mode IoMode) (int, error) {
 	return f.node.read(p, b, mode)
 }
-func (f *remoteFile) write(p *Process, b []byte, mode ioMode) (int, error) {
+
+func (f *RemoteFile) write(p *Process, b []byte, mode IoMode) (int, error) {
 	return f.node.write(p, b, mode)
 }
-func (f *remoteFile) pread(p *Process, b []byte, off int64) (int, error) {
+
+func (f *RemoteFile) pread(p *Process, b []byte, off int64) (int, error) {
 	return f.node.readAt(p, b, off)
 }
-func (f *remoteFile) pwrite(p *Process, b []byte, off int64) (int, error) {
+
+func (f *RemoteFile) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return f.node.writeAt(p, b, off)
 }
-func (f *remoteFile) seek(p *Process, off int64, whence int) (int64, error) {
+
+func (f *RemoteFile) seek(p *Process, off int64, whence int) (int64, error) {
 	return f.node.seek(p, off, whence)
 }
-func (f *remoteFile) readWindow(p *Process, w *memfdFile, woff uint32, n int, from *int64) (int, error) {
+
+func (f *RemoteFile) readWindow(p *Process, w *MemfdFile, woff uint32, n int, from *int64) (int, error) {
 	return f.node.readWindow(p, w, woff, n, from)
 }
-func (f *remoteFile) writeWindow(p *Process, w *memfdFile, woff uint32, n int, to *int64) (int, error) {
+
+func (f *RemoteFile) writeWindow(p *Process, w *MemfdFile, woff uint32, n int, to *int64) (int, error) {
 	return f.node.writeWindow(p, w, woff, n, to)
 }
 
-func (f *remoteFile) truncate(p *Process, size int64) error          { return f.node.truncate(p, size) }
-func (f *remoteFile) sync(p *Process, data bool) error               { return f.node.sync(p, data) }
-func (f *remoteFile) chmod(p *Process, mode uint32) error            { return f.node.chmod(p, mode) }
-func (f *remoteFile) chown(p *Process, uid, gid int) error           { return f.node.chown(p, uid, gid) }
-func (f *remoteFile) utimes(p *Process, ts []syscall.Timespec) error { return f.node.utimes(p, ts) }
-func (f *remoteFile) statfs(p *Process, st *syscall.Statfs_t) error  { return f.node.statfs(p, st) }
+func (f *RemoteFile) truncate(p *Process, size int64) error {
+	return f.node.truncate(p, size)
+}
 
-func (f *remoteFile) flock(p *Process, op int) error { return f.node.flock(p, op) }
-func (f *remoteFile) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
+func (f *RemoteFile) sync(p *Process, data bool) error {
+	return f.node.sync(p, data)
+}
+
+func (f *RemoteFile) chmod(p *Process, mode uint32) error {
+	return f.node.chmod(p, mode)
+}
+
+func (f *RemoteFile) chown(p *Process, uid, gid int) error {
+	return f.node.chown(p, uid, gid)
+}
+
+func (f *RemoteFile) utimes(p *Process, ts []syscall.Timespec) error {
+	return f.node.utimes(p, ts)
+}
+
+func (f *RemoteFile) statfs(p *Process, st *syscall.Statfs_t) error {
+	return f.node.statfs(p, st)
+}
+
+func (f *RemoteFile) flock(p *Process, op int) error {
+	return f.node.flock(p, op)
+}
+
+func (f *RemoteFile) recordLock(p *Process, cmd int, lk *syscall.Flock_t) error {
 	return f.node.recordLock(p, cmd, lk)
 }

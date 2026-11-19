@@ -6,63 +6,40 @@ import (
 	"strings"
 )
 
-// An object is ordinary x86-64 ELF, relocatable:
-//
-//	.text          the code: every region a function symbol, the thunks Go
-//	               calls global (symbols.go)
-//	.rela.text     R_X86_64_PC32 to .rodata, R_X86_64_GOTPCREL to the
-//	               external symbols the code calls
-//	.rodata        constants, data and element segments
-//	.eh_frame      a CFA rule at every instruction of every region: the
-//	               stack pointer tables Go's unwinder needs
-//	.note.wasm2o   the module's description (meta.go)
-//
-// A linker may combine and relocate it; a loader needs nothing else.
-
-// section types and flags
 const (
-	shtProgbits = 1
-	shtSymtab   = 2
-	shtStrtab   = 3
-	shtRela     = 4
-	shtNote     = 7
-	shtNobits   = 8
-	shfAlloc    = 2
-	shfExec     = 4
-	shfInfoLink = 0x40
-)
-
-// relocation types
-const (
+	shtProgbits           = 1
+	shtSymtab             = 2
+	shtStrtab             = 3
+	shtRela               = 4
+	shtNote               = 7
+	shtNobits             = 8
+	shfAlloc              = 2
+	shfExec               = 4
+	shfInfoLink           = 0x40
 	rX86_64_64            = 1
 	rX86_64_PC32          = 2
 	rX86_64_GOTPCREL      = 9
 	rX86_64_GOTPCRELX     = 41
 	rX86_64_REX_GOTPCRELX = 42
+	noteOwner             = "wasm2o"
 )
 
-const noteOwner = "wasm2o"
-
-// ElfObject is what a loader takes from an object, as vm or a linker
-// that combined such objects wrote it.
-type ElfObject struct {
-	text   []byte
-	rodata []byte
-	// defined maps a symbol of the text to its offset; relocs are those
-	// of the text.
-	defined map[string]uint32
-	relocs  []objReloc
-	meta    *Meta
-}
-
-// Where relocations point: the text, .rodata, or an external symbol.
 const (
 	inExternal = iota
 	inText
 	inRodata
 )
 
-type objReloc struct {
+type ElfObject struct {
+	text   []byte
+	rodata []byte
+
+	defined map[string]uint32
+	relocs  []ObjReloc
+	meta    *Meta
+}
+
+type ObjReloc struct {
 	at     uint32
 	typ    uint32
 	in     int
@@ -71,31 +48,28 @@ type objReloc struct {
 	addend int64
 }
 
-type elfSection struct {
+type ElfSection struct {
 	name, typ  uint32
 	flags      uint64
 	data       []byte
 	link, info uint32
 }
 
-type elfSymbol struct {
+type ElfSymbol struct {
 	name    string
 	value   uint64
 	section int
 	info    byte
 }
 
-// elfFile is what readObject and readLibrary read of a relocatable object:
-// its sections, its symbols and which sections hold the text, the read-only
-// data and the symbol table.
-type elfFile struct {
-	sections      []elfSection
-	symbols       []elfSymbol
+type ElfFile struct {
+	sections      []ElfSection
+	symbols       []ElfSymbol
 	names, symtab int
 	text, rodata  int
 }
 
-func parseELF(data []byte) *elfFile {
+func parseELF(data []byte) *ElfFile {
 	le := binary.LittleEndian
 
 	if len(data) < 64 || string(data[:4]) != "\x7fELF" || data[4] != 2 || le.Uint16(data[16:]) != 1 || le.Uint16(data[18:]) != 62 {
@@ -108,12 +82,12 @@ func parseELF(data []byte) *elfFile {
 		throwFmt("malformed section headers")
 	}
 
-	f := &elfFile{sections: make([]elfSection, count), names: names}
+	f := &ElfFile{sections: make([]ElfSection, count), names: names}
 
 	for i := range f.sections {
 		h := data[shoff+uint64(64*i):]
 		offset, size := le.Uint64(h[24:]), le.Uint64(h[32:])
-		s := elfSection{name: le.Uint32(h), typ: le.Uint32(h[4:]), flags: le.Uint64(h[8:]), link: le.Uint32(h[40:]), info: le.Uint32(h[44:])}
+		s := ElfSection{name: le.Uint32(h), typ: le.Uint32(h[4:]), flags: le.Uint64(h[8:]), link: le.Uint32(h[40:]), info: le.Uint32(h[44:])}
 
 		if s.typ != shtNobits {
 			if offset > uint64(len(data)) || size > uint64(len(data))-offset {
@@ -136,7 +110,8 @@ func parseELF(data []byte) *elfFile {
 
 	for at := 0; at < len(f.sections[f.symtab].data); at += 24 {
 		e := f.sections[f.symtab].data[at:]
-		f.symbols = append(f.symbols, elfSymbol{name: cstr(strtab, le.Uint32(e)), info: e[4], section: int(le.Uint16(e[6:])), value: le.Uint64(e[8:])})
+
+		f.symbols = append(f.symbols, ElfSymbol{name: cstr(strtab, le.Uint32(e)), info: e[4], section: int(le.Uint16(e[6:])), value: le.Uint64(e[8:])})
 	}
 
 	return f
@@ -156,11 +131,11 @@ func cstr(table []byte, at uint32) string {
 	return string(table[at:end])
 }
 
-func (f *elfFile) sectionName(i int) string {
+func (f *ElfFile) sectionName(i int) string {
 	return cstr(f.sections[f.names].data, f.sections[i].name)
 }
 
-func (f *elfFile) find(name string) int {
+func (f *ElfFile) find(name string) int {
 	for i := range f.sections {
 		if f.sectionName(i) == name {
 			return i
@@ -170,8 +145,7 @@ func (f *elfFile) find(name string) int {
 	return -1
 }
 
-// functions maps the function symbols of the text to their offsets.
-func (f *elfFile) functions() map[string]uint32 {
+func (f *ElfFile) functions() map[string]uint32 {
 	defined := map[string]uint32{}
 
 	for _, s := range f.symbols {
@@ -187,12 +161,12 @@ func (f *elfFile) functions() map[string]uint32 {
 	return defined
 }
 
-// relocations of a section by offset, what each points at; a later entry at
-// an offset replaces an earlier one
-func (f *elfFile) relocations(of int) []objReloc {
+func (f *ElfFile) relocations(of int) []ObjReloc {
 	le := binary.LittleEndian
-	var out []objReloc
-	byOffset := func(a, b objReloc) int { return int(a.at) - int(b.at) }
+
+	var out []ObjReloc
+
+	byOffset := func(a, b ObjReloc) int { return int(a.at) - int(b.at) }
 
 	for i, s := range f.sections {
 		if s.typ != shtRela || int(s.info) != of {
@@ -226,7 +200,7 @@ func (f *elfFile) relocations(of int) []objReloc {
 				throwFmt("relocation out of section %s at %#x", f.sectionName(of), offset)
 			}
 
-			r := objReloc{at: uint32(offset), typ: uint32(info), addend: int64(le.Uint64(e[16:])), value: target.value}
+			r := ObjReloc{at: uint32(offset), typ: uint32(info), addend: int64(le.Uint64(e[16:])), value: target.value}
 
 			switch target.section {
 			case 0:
@@ -274,6 +248,7 @@ func readObject(data []byte) *ElfObject {
 	}
 
 	obj.relocs = f.relocations(f.text)
+
 	note := f.find(".note.wasm2o")
 
 	if note < 0 {
@@ -281,6 +256,7 @@ func readObject(data []byte) *ElfObject {
 	}
 
 	obj.meta = decodeNote(readNote(f.sections[note].data))
+
 	eh := f.find(".eh_frame")
 
 	if eh < 0 {
@@ -317,17 +293,18 @@ func readNote(data []byte) []byte {
 	return nil
 }
 
-// readEhFrame takes the regions from the FDEs: their ranges, and the stack
-// pointer, CFA less 8, along each.
-func readEhFrame(data []byte, relocs []objReloc, defined map[string]uint32) []Region {
+func readEhFrame(data []byte, relocs []ObjReloc, defined map[string]uint32) []Region {
 	le := binary.LittleEndian
+
 	type cie struct {
 		code uint64
 		cfa  int64
 	}
 
 	cies := map[int]cie{}
+
 	var regions []Region
+
 	uleb := func(b []byte, at *int) uint64 {
 		var x uint64
 		var shift uint
@@ -338,6 +315,7 @@ func readEhFrame(data []byte, relocs []objReloc, defined map[string]uint32) []Re
 			}
 
 			c := b[*at]
+
 			*at++
 			x |= uint64(c&0x7f) << shift
 			shift += 7
@@ -363,11 +341,10 @@ func readEhFrame(data []byte, relocs []objReloc, defined map[string]uint32) []Re
 		}
 
 		e := data[start:end]
+
 		off = end
 
 		if le.Uint32(e) == 0 {
-			// a CIE: version, augmentation "zR" or "", alignments, return
-			// register; an FDE points back at its CIE's length
 			at := 5
 			aug := ""
 
@@ -377,7 +354,9 @@ func readEhFrame(data []byte, relocs []objReloc, defined map[string]uint32) []Re
 			}
 
 			at++
+
 			c := cie{code: uleb(e, &at)}
+
 			uleb(e, &at)
 			uleb(e, &at)
 
@@ -402,8 +381,9 @@ func readEhFrame(data []byte, relocs []objReloc, defined map[string]uint32) []Re
 		}
 
 		c, ok := cies[start-int(le.Uint32(e))]
-		k, rok := slices.BinarySearchFunc(relocs, uint32(start+4), func(r objReloc, at uint32) int { return int(r.at) - int(at) })
-		var r objReloc
+		k, rok := slices.BinarySearchFunc(relocs, uint32(start+4), func(r ObjReloc, at uint32) int { return int(r.at) - int(at) })
+
+		var r ObjReloc
 
 		if rok {
 			r = relocs[k]
@@ -423,12 +403,13 @@ func readEhFrame(data []byte, relocs []objReloc, defined map[string]uint32) []Re
 		}
 
 		at += int(augmentation)
-		var sp []spEntry
+		var sp []SpEntry
 		cfaProgram(e[at:], c.code, c.cfa, &sp, size)
 		regions = append(regions, Region{start: pc, end: pc + size, sp: sp})
 	}
 
 	slices.SortFunc(regions, func(a, b Region) int { return int(a.start) - int(b.start) })
+
 	names := map[uint32]string{}
 
 	for name, at := range defined {
@@ -448,20 +429,18 @@ func readEhFrame(data []byte, relocs []objReloc, defined map[string]uint32) []Re
 	return regions
 }
 
-// cfaProgram runs the CFA instructions the compiler writes, starting from a CFA of
-// rsp+cfa, and returns the CFA offset at the end; with sp it records the
-// stack pointer, CFA less 8, at every change, from offset 0 of a range of
-// size bytes.
-func cfaProgram(b []byte, code uint64, cfa int64, sp *[]spEntry, size uint32) int64 {
+func cfaProgram(b []byte, code uint64, cfa int64, sp *[]SpEntry, size uint32) int64 {
 	le := binary.LittleEndian
 	loc := uint64(0)
 	at := 0
+
 	take := func(n int) []byte {
 		if n > len(b)-at {
 			throwFmt("malformed .eh_frame")
 		}
 
 		part := b[at : at+n]
+
 		at += n
 
 		return part
@@ -477,7 +456,7 @@ func cfaProgram(b []byte, code uint64, cfa int64, sp *[]spEntry, size uint32) in
 		if n := len(*sp); n > 0 && (*sp)[n-1].pc == int32(loc) {
 			(*sp)[n-1].delta = d
 		} else if n == 0 || (*sp)[n-1].delta != d {
-			*sp = append(*sp, spEntry{int32(loc), d})
+			*sp = append(*sp, SpEntry{int32(loc), d})
 		}
 
 		if n := len(*sp); n > 1 && (*sp)[n-2].delta == (*sp)[n-1].delta {
@@ -489,12 +468,14 @@ func cfaProgram(b []byte, code uint64, cfa int64, sp *[]spEntry, size uint32) in
 
 	for at < len(b) {
 		op := take(1)[0]
+
 		next := func() uint64 {
 			var x uint64
 			var shift uint
 
 			for {
 				c := take(1)[0]
+
 				x |= uint64(c&0x7f) << shift
 				shift += 7
 
@@ -545,10 +526,9 @@ func cfaProgram(b []byte, code uint64, cfa int64, sp *[]spEntry, size uint32) in
 	return cfa
 }
 
-// describeSymbols adds what the symbols tell to the description: the
-// exports and imports of functions, and the init thunk.
-func (obj *ElfObject) describeSymbols(symbols []elfSymbol, text int) {
+func (obj *ElfObject) describeSymbols(symbols []ElfSymbol, text int) {
 	m := obj.meta
+
 	m.init = symInit
 
 	if _, ok := obj.defined[symInit]; !ok {

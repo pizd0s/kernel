@@ -9,20 +9,24 @@ import (
 	"sync"
 )
 
-// Rules are deterministic one-shot failures after N successful visits.
-// State lives in the host, and a rule is spent before a resource is acquired.
-type ChaosRule struct {
-	name string
-	skip uint32
-}
+var (
+	vmPoints      = map[string]uint32{"mmap": 0, "compile-read": 0, "compile-write": 0}
+	processPoints = map[string]uint32{"openat": 0, "read": 0, "write": 0, "fork": 0, "file-stat": 0, "readlink": 0, "memory-grow": 0}
+)
 
 var chaosState struct {
 	mu    sync.Mutex
 	rules map[string]uint32
 }
 
+type ChaosRule struct {
+	name string
+	skip uint32
+}
+
 func chaosRules(text string, points map[string]uint32) []ChaosRule {
 	var rules []ChaosRule
+
 	seen := map[string]bool{}
 
 	if text == "" {
@@ -45,17 +49,6 @@ func chaosRules(text string, points map[string]uint32) []ChaosRule {
 	return rules
 }
 
-// vm's own points, of its compiler and its loader, are PIZDOS_VM_CHAOS's,
-// of vm's environment, for the whole run. The kernel's points are a tree
-// of processes': a process whose program starts with PIZDOS_CHAOS in its
-// environment, and has no rules yet, makes them of it (chaosStart), and
-// its children of fork and the programs they exec share them: the visits
-// of all of them count, and nothing else's.
-var (
-	vmPoints      = map[string]uint32{"mmap": 0, "compile-read": 0, "compile-write": 0}
-	processPoints = map[string]uint32{"openat": 0, "read": 0, "write": 0, "fork": 0, "file-stat": 0, "readlink": 0, "memory-grow": 0}
-)
-
 func setupVmChaos() {
 	chaosState.rules = map[string]uint32{}
 
@@ -64,9 +57,9 @@ func setupVmChaos() {
 	}
 }
 
-// chaosFail is a visit of one of vm's points.
 func chaosFail(point string) bool {
 	chaosState.mu.Lock()
+
 	defer chaosState.mu.Unlock()
 
 	n, ok := chaosState.rules[point]
@@ -86,20 +79,17 @@ func chaosFail(point string) bool {
 	return true
 }
 
-// chaosRulesOf is the rules of a tree of processes, which mu guards.
-type chaosRulesOf struct {
+type ChaosRulesOf struct {
 	mu    sync.Mutex
 	rules map[string]uint32
 }
 
-// chaosRulesIn is the rules the environment a program starts with names,
-// PIZDOS_CHAOS's, nil for none: an invalid one ends the process.
-func chaosRulesIn(env []string) *chaosRulesOf {
-	var c *chaosRulesOf
+func chaosRulesIn(env []string) *ChaosRulesOf {
+	var c *ChaosRulesOf
 
 	for _, e := range env {
 		if text, ok := strings.CutPrefix(e, "PIZDOS_CHAOS="); ok {
-			c = &chaosRulesOf{rules: map[string]uint32{}}
+			c = &ChaosRulesOf{rules: map[string]uint32{}}
 
 			for _, rule := range chaosRules(text, processPoints) {
 				c.rules[rule.name] = rule.skip
@@ -110,14 +100,13 @@ func chaosRulesIn(env []string) *chaosRulesOf {
 	return c
 }
 
-// fail is a visit of a point of the rules': the one its rule fails, after
-// the visits it skips. No rules fail none.
-func (c *chaosRulesOf) fail(point string) bool {
+func (c *ChaosRulesOf) fail(point string) bool {
 	if c == nil {
 		return false
 	}
 
 	c.mu.Lock()
+
 	defer c.mu.Unlock()
 
 	n, ok := c.rules[point]
@@ -143,6 +132,7 @@ func setupCompilerChaos(i *Instance) {
 
 	for _, rule := range rules {
 		entry, _ := i.export("chaosConfigure")
+
 		entry.Interface().(func(uintptr, uint32, uint32))(i.ctx(), points[rule.name], rule.skip)
 	}
 }
