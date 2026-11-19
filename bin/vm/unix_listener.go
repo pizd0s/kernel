@@ -5,12 +5,15 @@ package main
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type UnixListener struct {
 	refs      atomic.Int32
 	mu        sync.Mutex
-	conns     *MsgChannel
+	conns     MsgChannel[*PairEnd]
+	backlog   int
+	watchers  Subscribers
 	listening bool
 	closed    bool
 	ino       uint64
@@ -100,11 +103,21 @@ func (l *UnixListener) asCall() *CallEnd {
 }
 
 func (l *UnixListener) shut() {
+	var dropped []*PairEnd
+
 	l.mu.Lock()
 	l.closed = true
+
+	for e, ok := l.conns.take(); ok; e, ok = l.conns.take() {
+		dropped = append(dropped, e)
+	}
+
+	l.watchers.tell()
 	l.mu.Unlock()
-	l.conns.finish()
-	l.conns.nudge()
+
+	for _, e := range dropped {
+		e.unref()
+	}
 }
 
 func (l *UnixListener) listens() bool {
@@ -115,35 +128,68 @@ func (l *UnixListener) listens() bool {
 	return l.listening && !l.closed
 }
 
-func (l *UnixListener) pop() *PairEnd {
-	pk, _, ok, _ := l.conns.take()
+func (l *UnixListener) listen(backlog int) {
+	l.mu.Lock()
+	l.listening, l.backlog = true, min(max(backlog, 1), SOMAXCONN)
+	l.watchers.tell()
+	l.mu.Unlock()
+}
 
-	if !ok || len(pk.files) == 0 {
-		return nil
+func (l *UnixListener) accept(p *Process, nonblock bool) (*PairEnd, error) {
+	l.mu.Lock()
+
+	defer l.mu.Unlock()
+
+	for {
+		if !l.listening || l.closed {
+			return nil, EINVAL
+		}
+
+		if e, ok := l.conns.take(); ok {
+			l.watchers.tellOut()
+
+			return e, nil
+		}
+
+		if nonblock {
+			return nil, EAGAIN
+		}
+
+		if _, err := p.watch(&l.mu, &l.watchers, false, time.Time{}, restarts); err != nil {
+			return nil, err
+		}
 	}
-
-	return pk.files[0].asPair()
 }
 
 func (l *UnixListener) push(e *PairEnd) (queued, refused bool) {
 	l.mu.Lock()
 
-	listens := l.listening && !l.closed
+	defer l.mu.Unlock()
+
+	if !l.listening || l.closed {
+		return false, true
+	}
+
+	if l.conns.len() >= l.backlog {
+		return false, false
+	}
+
+	l.conns.put(e)
+	l.watchers.tellIn()
+
+	return true, false
+}
+
+func (l *UnixListener) awaitRoom(p *Process, end time.Time, how Signalled) (timedOut bool, err error) {
+	l.mu.Lock()
+
+	if l.listening && !l.closed && l.conns.len() >= l.backlog {
+		timedOut, err = p.watch(&l.mu, &l.watchers, true, end, how)
+	}
 
 	l.mu.Unlock()
 
-	if !listens {
-		return false, true
-	}
-
-	pk := Packet{files: []Object{e}}
-	full, err := l.conns.put(&pk)
-
-	if err != nil {
-		return false, true
-	}
-
-	return !full, false
+	return timedOut, err
 }
 
 func (l *UnixListener) stat(p *Process, st *Stat) error {
@@ -155,11 +201,10 @@ func (l *UnixListener) stat(p *Process, st *Stat) error {
 func (l *UnixListener) poll(events int16) int16 {
 	l.mu.Lock()
 
-	shut := l.closed
+	shut, n, room := l.closed, l.conns.len(), l.conns.len() < l.backlog
 
 	l.mu.Unlock()
 
-	n, room := l.conns.count(), l.conns.room()
 	mask := int16(0)
 
 	if n > 0 {
@@ -180,18 +225,24 @@ func (l *UnixListener) poll(events int16) int16 {
 func (l *UnixListener) subscribe(s *Subscription, events int16) {
 	in, out := l.sides(events)
 
+	l.mu.Lock()
+
 	if in {
-		l.conns.subscribe(&s.in, false)
+		l.watchers.add(&s.in)
 	}
 
 	if out {
-		l.conns.subscribe(&s.out, true)
+		l.watchers.add(&s.out)
 	}
+
+	l.mu.Unlock()
 }
 
 func (l *UnixListener) unsubscribe(s *Subscription) {
-	l.conns.unsubscribe(&s.in)
-	l.conns.unsubscribe(&s.out)
+	l.mu.Lock()
+	l.watchers.remove(&s.in)
+	l.watchers.remove(&s.out)
+	l.mu.Unlock()
 }
 
 func (l *UnixListener) sides(events int16) (in, out bool) {

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -10,18 +11,22 @@ import (
 
 var pipeInodes atomic.Uint64
 
-const pipeChunk = 4096
+const (
+	pipeChunk = 4096
+	pipeSize  = 65536
+)
 
 type Pipe struct {
 	mu          sync.Mutex
-	ch          *MsgChannel
-	eof         bool
+	ch          MsgChannel[*Packet]
+	tail        *Packet
 	front       []byte
-	bytes       atomic.Int64
+	bytes       int
 	readers     int
 	writers     int
 	readerOpens uint64
 	writerOpens uint64
+	watchers    Subscribers
 
 	opened Waiters[Turn]
 	name   *FifoName
@@ -30,26 +35,11 @@ type Pipe struct {
 }
 
 func newPipe() *Pipe {
-	return &Pipe{ch: newMsgChannel(queueMax), ino: pipeInodes.Add(1), made: time.Now()}
-}
-
-func (pp *Pipe) channel() *MsgChannel {
-	pp.mu.Lock()
-
-	defer pp.mu.Unlock()
-
-	return pp.ch
+	return &Pipe{ino: pipeInodes.Add(1), made: time.Now()}
 }
 
 func (pp *Pipe) join(reads, writes bool) (uint64, uint64) {
 	pp.mu.Lock()
-
-	old := pp.ch
-	renew := reads && pp.readers == 0 && old.gone() || writes && pp.writers == 0 && pp.eof
-
-	if renew {
-		pp.ch, pp.eof = old.renew(), false
-	}
 
 	if reads {
 		pp.readers++
@@ -64,14 +54,45 @@ func (pp *Pipe) join(reads, writes bool) (uint64, uint64) {
 	readerOpens, writerOpens := pp.readerOpens, pp.writerOpens
 
 	pp.opened.wake(Turn{})
-	pp.mu.Unlock()
 
-	if renew {
-		old.nudge()
-		old.nudgeWriter()
+	if reads && pp.readers == 1 || writes && pp.writers == 1 {
+		pp.watchers.tell()
 	}
 
+	pp.mu.Unlock()
+
 	return readerOpens, writerOpens
+}
+
+func (pp *Pipe) leave(reads, writes bool) (gone bool) {
+	pp.mu.Lock()
+
+	if writes {
+		pp.writers--
+
+		if pp.writers == 0 && pp.readers > 0 {
+			pp.ch.put(&Packet{kind: packetEnd})
+			pp.tail = nil
+		}
+	}
+
+	if reads {
+		pp.readers--
+
+		if pp.readers == 0 {
+			for _, ok := pp.ch.take(); ok; _, ok = pp.ch.take() {
+			}
+
+			pp.front, pp.tail, pp.bytes = nil, nil, 0
+		}
+	}
+
+	gone = pp.readers == 0 && pp.writers == 0
+
+	pp.watchers.tell()
+	pp.mu.Unlock()
+
+	return gone
 }
 
 func (pp *Pipe) meet(p *Process, reads bool, readerOpens, writerOpens uint64) error {
@@ -92,27 +113,48 @@ func (pp *Pipe) met(reads bool, readerOpens, writerOpens uint64) bool {
 	return pp.readers > 0 || pp.readerOpens > readerOpens
 }
 
-func (pp *Pipe) take(b []byte) (n int, eof, ok bool) {
-	pp.mu.Lock()
+func (pp *Pipe) put(chunk []byte) (full, gone bool) {
+	if pp.readers == 0 {
+		return false, true
+	}
 
-	defer pp.mu.Unlock()
+	if pp.bytes > 0 && pp.bytes+len(chunk) > pipeSize {
+		return true, false
+	}
 
-	ch := pp.ch
+	if t := pp.tail; t != nil && len(t.data)+len(chunk) <= pipeChunk {
+		t.data = append(t.data, chunk...)
+	} else {
+		t = &Packet{data: bytes.Clone(chunk)}
+		pp.ch.put(t)
+		pp.tail = t
+	}
 
+	pp.bytes += len(chunk)
+	pp.watchers.tellIn()
+
+	return false, false
+}
+
+func (pp *Pipe) take(b []byte) (n int, eof bool) {
 	for n < len(b) {
 		if len(pp.front) == 0 {
-			pk, end, got, _ := ch.take()
+			pk, ok := pp.ch.peek()
 
-			if end {
-				pp.bytes.Add(-int64(n))
-
-				return n, n == 0, true
+			if !ok {
+				break
 			}
 
-			if !got {
-				pp.bytes.Add(-int64(n))
+			if pk.kind == packetEnd && pp.ch.len() == 1 && pp.writers == 0 {
+				eof = true
 
-				return n, false, n > 0
+				break
+			}
+
+			pp.ch.take()
+
+			if pk == pp.tail {
+				pp.tail = nil
 			}
 
 			pp.front = pk.data
@@ -124,7 +166,23 @@ func (pp *Pipe) take(b []byte) (n int, eof, ok bool) {
 		n += c
 	}
 
-	pp.bytes.Add(-int64(n))
+	if n > 0 {
+		before := pp.bytes
 
-	return n, false, true
+		pp.bytes -= n
+
+		if before > pipeSize-pipeChunk {
+			pp.watchers.tellOut()
+		}
+	}
+
+	return n, eof && n == 0
+}
+
+func (pp *Pipe) unread() int {
+	pp.mu.Lock()
+
+	defer pp.mu.Unlock()
+
+	return pp.bytes
 }

@@ -123,34 +123,22 @@ func (m *Mover) fill(host int, w *PipeEnd) {
 }
 
 func (m *Mover) put(pp *Pipe, b []byte) bool {
-	pk := Packet{data: append([]byte(nil), b...)}
+	pp.mu.Lock()
 
 	for {
-		pp.mu.Lock()
+		full, gone := pp.put(b)
 
-		ch := pp.ch
-		full, err := ch.put(&pk)
+		if gone || !full {
+			pp.mu.Unlock()
 
-		if err == nil && !full {
-			pp.bytes.Add(int64(len(b)))
+			return !gone
 		}
 
+		pp.watchers.add(&m.sub.out)
 		pp.mu.Unlock()
-
-		if err != nil || !full {
-			return err == nil
-		}
-
-		ch.subscribe(&m.sub.out, true)
-
-		if ch.room() || ch.gone() {
-			ch.unsubscribe(&m.sub.out)
-
-			continue
-		}
-
 		<-m.ready
-		ch.unsubscribe(&m.sub.out)
+		pp.mu.Lock()
+		pp.watchers.remove(&m.sub.out)
 	}
 }
 
@@ -159,14 +147,30 @@ func (m *Mover) drain(r *PipeEnd, host int, c *Console) {
 
 	defer r.unref()
 
+	pp := r.pipe
 	buf := make([]byte, 65536)
 
 	for {
 		m.busy.Store(true)
+		pp.mu.Lock()
 
-		n, eof, ok := r.pipe.take(buf)
+		n, eof := pp.take(buf)
+		idle := n == 0 && !eof && !c.stop.Load()
 
-		if ok && n > 0 {
+		if idle {
+			pp.watchers.add(&m.sub.in)
+		}
+
+		pp.mu.Unlock()
+
+		switch {
+		case idle:
+			m.busy.Store(false)
+			<-m.ready
+			pp.mu.Lock()
+			pp.watchers.remove(&m.sub.in)
+			pp.mu.Unlock()
+		case n > 0:
 			written := writeAll(host, buf[:n])
 
 			m.busy.Store(false)
@@ -174,25 +178,11 @@ func (m *Mover) drain(r *PipeEnd, host int, c *Console) {
 			if !written {
 				return
 			}
+		default:
+			m.busy.Store(false)
 
-			continue
-		}
-
-		m.busy.Store(false)
-
-		if eof || c.stop.Load() {
 			return
 		}
-
-		ch := r.pipe.channel()
-
-		ch.subscribe(&m.sub.in, false)
-
-		if ch.count() == 0 && !ch.ended.Load() && !c.stop.Load() {
-			<-m.ready
-		}
-
-		ch.unsubscribe(&m.sub.in)
 	}
 }
 
@@ -241,7 +231,7 @@ func (c *Console) settle() {
 		moved := true
 
 		for _, m := range c.movers {
-			if m.pipe != nil && (m.busy.Load() || m.pipe.bytes.Load() != 0) {
+			if m.pipe != nil && (m.busy.Load() || m.pipe.unread() != 0) {
 				moved = false
 			}
 		}

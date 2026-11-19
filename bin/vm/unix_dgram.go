@@ -349,7 +349,7 @@ func (s *UnixDgram) send(p *Process, data []byte, files []Object, cred *Ucred, n
 		f.ref()
 	}
 
-	pk := Packet{data: data, files: files, cred: cred}
+	pk := &Packet{data: data, files: files, cred: cred}
 
 	if name != "" {
 		pk.addr = []byte(name)

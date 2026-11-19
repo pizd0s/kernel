@@ -3502,6 +3502,48 @@ func (p *Process) release(s *Subscription) {
 	s.spare, p.spare = p.spare, s
 }
 
+func (p *Process) watch(mu *sync.Mutex, l *Subscribers, out bool, end time.Time, how Signalled) (timedOut bool, err error) {
+	s := p.subscription(0)
+	h := &s.in
+
+	if out {
+		h = &s.out
+	}
+
+	l.add(h)
+	mu.Unlock()
+
+	back := false
+
+	defer func() {
+		if !back {
+			mu.Lock()
+			l.remove(h)
+			mu.Unlock()
+		}
+	}()
+
+	timedOut, err = p.wait(end, func(e *Event) (bool, error) {
+		if e == &s.event {
+			return true, nil
+		}
+
+		if how == waitsOn {
+			return false, nil
+		}
+
+		return p.interrupts(how == restarts), EINTR
+	})
+
+	mu.Lock()
+	l.remove(h)
+	p.release(s)
+
+	back = true
+
+	return timedOut, err
+}
+
 func (p *Process) wait(end time.Time, done func(e *Event) (bool, error)) (timedOut bool, err error) {
 	if over, err := done(nil); over {
 		return false, err
@@ -7673,7 +7715,7 @@ func (p *Process) connectUnix(v Dir, path string, kind int, nonblock bool, to *a
 
 			var timedOut bool
 
-			if timedOut, err = l.conns.writable(p, func() bool { return !l.listens() }, end, how); err == nil && !timedOut {
+			if timedOut, err = l.awaitRoom(p, end, how); err == nil && !timedOut {
 				continue
 			} else if err == nil {
 				err = EAGAIN

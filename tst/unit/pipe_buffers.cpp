@@ -72,9 +72,10 @@ int main() {
     drain(ends[0], held);
     assert(poll(&out, 1, 0) == 1 && (out.revents & POLLOUT));
 
-    // Single bytes fill it too, however many it holds.
-    held = fill(ends[1], 1);
-    assert(held >= 1);
+    // Single bytes fill it too, and to the same number: the pipe holds
+    // bytes, however they were written.
+    const int bytes = fill(ends[1], 1);
+    assert(bytes == held);
     assert(ioctl(ends[0], FIONREAD, &available) == 0 && available == held);
     drain(ends[0], held);
 

@@ -102,6 +102,12 @@ type Connector struct {
 }
 
 func (n *RemoteNode) deliver(pk *Packet) {
+	if pk.kind == packetEnd {
+		n.hungUp()
+
+		return
+	}
+
 	if len(pk.data) < remoteHeader {
 		dropFiles(pk.files)
 
@@ -206,7 +212,7 @@ func (n *RemoteNode) connect(p *Process) (*CallEnd, error) {
 			return nil, EIO
 		}
 
-		full, err := n.end.to.put(&pk)
+		full, err := n.end.offer(&pk)
 
 		if err == nil && !full {
 			n.connecting = append(n.connecting, place)
@@ -222,7 +228,7 @@ func (n *RemoteNode) connect(p *Process) (*CallEnd, error) {
 			break
 		}
 
-		n.end.to.writable(p, func() bool { return false }, time.Time{}, waitsOn)
+		n.end.awaitRoom(p)
 	}
 
 	p.await(&w.done, time.Time{}, waitsOn)

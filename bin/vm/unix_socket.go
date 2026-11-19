@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 type UnixSocket struct {
@@ -19,8 +18,8 @@ type UnixSocket struct {
 	conn     *PairEnd
 	peer     string
 
-	readers, writers Subscribers
-	inner            Subscription
+	watchers Subscribers
+	inner    Subscription
 
 	options SockOptions
 }
@@ -172,11 +171,11 @@ func (s *UnixSocket) subscribe(sub *Subscription, events int16) {
 	s.mu.Lock()
 
 	if in {
-		s.readers.add(&sub.in)
+		s.watchers.add(&sub.in)
 	}
 
 	if out {
-		s.writers.add(&sub.out)
+		s.watchers.add(&sub.out)
 	}
 
 	s.mu.Unlock()
@@ -184,16 +183,15 @@ func (s *UnixSocket) subscribe(sub *Subscription, events int16) {
 
 func (s *UnixSocket) unsubscribe(sub *Subscription) {
 	s.mu.Lock()
-	s.readers.remove(&sub.in)
-	s.writers.remove(&sub.out)
+	s.watchers.remove(&sub.in)
+	s.watchers.remove(&sub.out)
 	s.mu.Unlock()
 }
 
 func (s *UnixSocket) attach(to Object) {
 	to.subscribe(&s.inner, POLLIN|POLLOUT)
 	s.mu.Lock()
-	s.readers.tell()
-	s.writers.tell()
+	s.watchers.tell()
 	s.mu.Unlock()
 }
 
@@ -201,9 +199,9 @@ func (s *UnixSocket) wake(l *Hook) {
 	s.mu.Lock()
 
 	if l == &s.inner.in {
-		s.readers.tell()
+		s.watchers.tellIn()
 	} else {
-		s.writers.tell()
+		s.watchers.tellOut()
 	}
 
 	s.mu.Unlock()
@@ -240,7 +238,7 @@ func (s *UnixSocket) bind(p *Process, at, n uint32) error {
 		return EINVAL
 	}
 
-	l := &UnixListener{ino: pairInodes.Add(1), conns: newMsgChannel(1), kind: s.kind}
+	l := &UnixListener{ino: pairInodes.Add(1), backlog: 1, kind: s.kind}
 
 	l.refs.Store(1)
 
@@ -273,12 +271,7 @@ func (s *UnixSocket) listen(backlog int) error {
 		return EINVAL
 	}
 
-	l.mu.Lock()
-	l.listening = true
-	l.mu.Unlock()
-	l.conns.setLimit(min(max(backlog, 1), SOMAXCONN))
-	l.conns.nudge()
-	l.conns.nudgeWriter()
+	l.listen(backlog)
 
 	return nil
 }
@@ -286,40 +279,20 @@ func (s *UnixSocket) listen(backlog int) error {
 func (s *UnixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
 	l, _ := s.state()
 
-	if l == nil || !l.listens() {
+	if l == nil {
 		return nil, nil, EINVAL
 	}
 
-	for {
-		e := l.pop()
+	e, err := l.accept(p, s.nonblock.Load())
 
-		if e == nil && !l.listens() {
-			return nil, nil, EINVAL
-		}
-
-		if e == nil && s.nonblock.Load() {
-			return nil, nil, EAGAIN
-		}
-
-		if e == nil {
-			pk, given, _, err := l.conns.receive(p, func() bool { return !l.listens() }, time.Time{}, restarts)
-
-			if err != nil {
-				return nil, nil, err
-			}
-
-			if given && len(pk.files) > 0 {
-				e = pk.files[0].asPair()
-			}
-		}
-
-		if e != nil {
-			e.nonblock.Store(flags&SOCK_NONBLOCK != 0)
-			e.options.copyOptions(&s.options)
-
-			return e, unixAddress(nil), nil
-		}
+	if err != nil {
+		return nil, nil, err
 	}
+
+	e.nonblock.Store(flags&SOCK_NONBLOCK != 0)
+	e.options.copyOptions(&s.options)
+
+	return e, unixAddress(nil), nil
 }
 
 func (s *UnixSocket) connect(p *Process, at, n uint32) error {

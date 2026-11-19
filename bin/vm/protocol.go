@@ -100,7 +100,7 @@ func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *PairEn
 	n.append.Store(flags&O_APPEND != 0)
 	n.nonblock.Store(flags&O_NONBLOCK != 0)
 
-	end.from.drain(n.deliver, n.hungUp)
+	end.consume(n.deliver)
 
 	return f, nil
 }

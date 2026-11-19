@@ -27,34 +27,7 @@ func (e *PipeEnd) unref() {
 
 	pp := e.pipe
 
-	pp.mu.Lock()
-
-	ch := pp.ch
-
-	if e.writes {
-		pp.writers--
-
-		if pp.writers == 0 {
-			ch.end()
-			pp.eof = true
-		}
-	}
-
-	if e.reads {
-		pp.readers--
-
-		if pp.readers == 0 {
-			ch.finish()
-			pp.front = nil
-			pp.bytes.Store(0)
-		}
-	}
-
-	gone := pp.readers == 0 && pp.writers == 0
-
-	pp.mu.Unlock()
-
-	if gone && pp.name != nil {
+	if pp.leave(e.reads, e.writes) && pp.name != nil {
 		pp.name.forget(pp)
 	}
 }
@@ -147,26 +120,24 @@ func (e *PipeEnd) subscribe(s *Subscription, events int16) {
 
 	pp.mu.Lock()
 
-	defer pp.mu.Unlock()
-
 	if in {
-		pp.ch.subscribe(&s.in, false)
+		pp.watchers.add(&s.in)
 	}
 
 	if out {
-		pp.ch.subscribe(&s.out, true)
+		pp.watchers.add(&s.out)
 	}
+
+	pp.mu.Unlock()
 }
 
 func (e *PipeEnd) unsubscribe(s *Subscription) {
 	pp := e.pipe
 
 	pp.mu.Lock()
-
-	defer pp.mu.Unlock()
-
-	pp.ch.unsubscribe(&s.in)
-	pp.ch.unsubscribe(&s.out)
+	pp.watchers.remove(&s.in)
+	pp.watchers.remove(&s.out)
+	pp.mu.Unlock()
 }
 
 func (e *PipeEnd) stat(p *Process, st *Stat) error {
@@ -189,15 +160,14 @@ func (e *PipeEnd) poll(events int16) int16 {
 
 	pp.mu.Lock()
 
-	ch, front, readers, writers := pp.ch, len(pp.front), pp.readers, pp.writers
+	unread, readers, writers := pp.bytes, pp.readers, pp.writers
 
 	pp.mu.Unlock()
 
-	queued := ch.count()
 	mask := int16(0)
 
 	if e.writes {
-		if ch.room() {
+		if pipeSize-unread >= pipeChunk {
 			mask |= POLLOUT | POLLWRNORM
 		}
 
@@ -207,7 +177,7 @@ func (e *PipeEnd) poll(events int16) int16 {
 	}
 
 	if e.reads {
-		if front > 0 || queued > 0 || writers == 0 {
+		if unread > 0 || writers == 0 {
 			mask |= POLLIN | POLLRDNORM
 		}
 
@@ -246,7 +216,7 @@ func (e *PipeEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
 		return ENOTTY
 	}
 
-	*(*int32)(arg) = int32(e.pipe.bytes.Load())
+	*(*int32)(arg) = int32(e.pipe.unread())
 
 	return nil
 }
@@ -266,20 +236,26 @@ func (e *PipeEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 
 	pp := e.pipe
 
-	for {
-		n, _, ok := pp.take(b)
+	pp.mu.Lock()
 
-		if ok {
+	for {
+		n, eof := pp.take(b)
+
+		if n > 0 || eof {
+			pp.mu.Unlock()
+
 			return n, nil
 		}
 
 		if mode.nonblock || e.nonblock.Load() {
+			pp.mu.Unlock()
+
 			return 0, EAGAIN
 		}
 
-		ch := pp.channel()
+		if _, err := p.watch(&pp.mu, &pp.watchers, false, time.Time{}, restarts); err != nil {
+			pp.mu.Unlock()
 
-		if _, err := ch.readable(p, func() bool { return ch.ended.Load() }, time.Time{}, restarts); err != nil {
 			return 0, err
 		}
 	}
@@ -297,57 +273,37 @@ func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 	pp := e.pipe
 	total := 0
 
-	for total < len(b) {
+	var err error
+
+	pp.mu.Lock()
+
+	for total < len(b) && err == nil {
 		chunk := b[total:min(len(b), total+pipeChunk)]
-		pk := Packet{data: append([]byte(nil), chunk...)}
+		full, gone := pp.put(chunk)
 
-		pp.mu.Lock()
-
-		full, err := pp.ch.put(&pk)
-		finished, sent := err != nil, err == nil && !full
-
-		if sent {
-			pp.bytes.Add(int64(len(chunk)))
-		}
-
-		pp.mu.Unlock()
-
-		if finished {
-			if !mode.quiet {
-				p.sendSelf(SIGPIPE)
-			}
-
-			if total > 0 {
-				return total, nil
-			}
-
-			return 0, EPIPE
-		}
-
-		if sent {
+		switch {
+		case gone:
+			err = EPIPE
+		case !full:
 			total += len(chunk)
-
-			continue
-		}
-
-		if mode.nonblock || e.nonblock.Load() {
-			if total > 0 {
-				return total, nil
-			}
-
-			return 0, EAGAIN
-		}
-
-		if _, err := pp.channel().writable(p, func() bool { return false }, time.Time{}, restarts); err != nil {
-			if total > 0 {
-				return total, nil
-			}
-
-			return 0, err
+		case mode.nonblock || e.nonblock.Load():
+			err = EAGAIN
+		default:
+			_, err = p.watch(&pp.mu, &pp.watchers, true, time.Time{}, restarts)
 		}
 	}
 
-	return total, nil
+	pp.mu.Unlock()
+
+	if err == EPIPE && !mode.quiet {
+		p.sendSelf(SIGPIPE)
+	}
+
+	if total > 0 {
+		return total, nil
+	}
+
+	return 0, err
 }
 
 func (e *PipeEnd) pread(p *Process, b []byte, off int64) (int, error) {

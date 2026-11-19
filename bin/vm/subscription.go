@@ -64,6 +64,22 @@ func (s *Subscribers) tell() {
 	}
 }
 
+func (s *Subscribers) tellIn() {
+	for l := s.first; l != nil; l = l.next {
+		if l == &l.sub.in {
+			l.sub.to.wake(l)
+		}
+	}
+}
+
+func (s *Subscribers) tellOut() {
+	for l := s.first; l != nil; l = l.next {
+		if l == &l.sub.out {
+			l.sub.to.wake(l)
+		}
+	}
+}
+
 func (s *Subscribers) takeOver(from *Subscribers) {
 	for l := from.first; l != nil; {
 		next := l.next
