@@ -211,7 +211,7 @@ static void handle(Endpoint& e, Request& r) {
             answer(r.reply(), opOk, 0, &device.st, sizeof device.st);
             break;
         default:
-            fail(r.reply(), EINVAL);
+            fail(r.reply(), unserved(r.h.op));
     }
 }
 

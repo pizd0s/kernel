@@ -322,6 +322,40 @@ static pid_t directoryServer(int end, int other) {
     }
 }
 
+// A child that serves two ends of what is no directory until both close:
+// every request is ENOTDIR, where it is answered. The open files of the
+// ends, which it gets with the fork, it lets go of.
+static pid_t noDirectories(int a, int b, int aFile, int bFile) {
+    fflush(stdout);
+    const pid_t child = fork();
+    assert(child >= 0);
+    if (child != 0) {
+        return child;
+    }
+    close(aFile);
+    close(bFile);
+    pollfd ends[2] = {{a, POLLIN, 0}, {b, POLLIN, 0}};
+    while (ends[0].fd >= 0 || ends[1].fd >= 0) {
+        assert(poll(ends, 2, -1) > 0);
+        for (pollfd& e : ends) {
+            if (e.fd < 0 || e.revents == 0) {
+                continue;
+            }
+            unsigned char packet[256];
+            int reply;
+            if (receiveWith(e.fd, packet, sizeof packet, reply) <= 0 || reply < 0) {
+                close(e.fd);
+                e.fd = -1;
+                continue;
+            }
+            const Header no{opErr, ENOTDIR, 0, 0};
+            assert(send(reply, &no, sizeof no, 0) == ssize_t(sizeof no));
+            close(reply);
+        }
+    }
+    _exit(0);
+}
+
 static void waitFor(pid_t child) {
     int status;
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
@@ -371,17 +405,24 @@ int main() {
     waitFor(reader);
     waitFor(child);
 
-    // fchdir takes a directory: a path's handle, a file and a stream
-    // socket are none.
+    // fchdir asks what it is given what it is: the servers of a path's
+    // handle and of a file say ENOTDIR to a call by path, as what is no
+    // directory does; a stream socket speaks no protocol and is none.
     int pathEnd;
     int fileEnd;
     int stream[2];
     const int path = opened(channel, {openedPath, O_RDWR, 0, 0, 0}, pathEnd);
     file = opened(channel, {openedFile, O_RDWR, 0, 0, 0}, fileEnd);
     assert(path >= 0 && file >= 0 && socketpair(AF_UNIX, SOCK_STREAM, 0, stream) == 0);
+    const pid_t none = noDirectories(pathEnd, fileEnd, path, file);
     const int a = fchdir(path) == -1 ? errno : 0;
     const int b = fchdir(file) == -1 ? errno : 0;
     const int d = fchdir(stream[0]) == -1 ? errno : 0;
+    close(pathEnd);
+    close(fileEnd);
+    close(path);
+    close(file);
+    waitFor(none);
     printf("fchdir: a path's %s, a file's %s, a stream socket's %s\n", errorName(a), errorName(b), errorName(d));
 
     // An end of a seqpacket pair is a directory to fchdir to: the calls

@@ -254,7 +254,8 @@
 //          with a path name the root by
 //   io { off u64, woff u32, flags u32 }   flags: ioAppend, a WRITE at the
 //          end the file has, O_APPEND's; ioNonblock, answered at once, EAGAIN
-//          where it would wait, O_NONBLOCK's
+//          where it would wait, O_NONBLOCK's; ioAt, at off as pread and
+//          pwrite ask, ESPIPE from what cannot seek
 //   stat { ino u64, size u64, mtime u64 nanoseconds, mode u32, nlink u32,
 //          uid u32, gid u32, atime u64, dev u64, ctime u64 }
 //   statfs { blocks u64, bfree u64, files u64, ffree u64, dev u64,
@@ -359,6 +360,7 @@ constexpr uint32_t readyTostop = 1;
 // Io's flags.
 constexpr uint32_t ioAppend = 1;
 constexpr uint32_t ioNonblock = 2;
+constexpr uint32_t ioAt = 4;
 // UTIMES's when.
 constexpr uint32_t whenAtimeNow = 2;
 constexpr uint32_t whenMtimeNow = 4;
@@ -431,3 +433,12 @@ ssize_t sendPacket(int fd, const iovec* parts, size_t count, const int* fds, siz
 // exec: its length, 0 at the end of the endpoint, or -1 and errno. The
 // kernel drops descriptors past maxFds.
 ssize_t receivePacket(int fd, void* buffer, size_t size, int* fds, size_t& fdCount, int flags = 0);
+
+// What an object answers to a request of the VFS's, an open file's or a
+// terminal's it does not serve: the error POSIX has the call fail with on
+// what is no such thing. Any call goes to any open file, and its server
+// says what it is: one by a path from what is no directory ENOTDIR, a
+// listing of what is no directory ENOTDIR, a terminal's call on what is
+// no terminal ENOTTY, a change of size or a sync of what has none EINVAL,
+// a read or a write of what has none EBADF; another ENOSYS.
+int unserved(uint32_t op);

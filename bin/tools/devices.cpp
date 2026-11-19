@@ -124,7 +124,7 @@ static void handle(Endpoint& e, Request& r) {
             fail(r.reply(), EPERM);
             break;
         default:
-            fail(r.reply(), EINVAL);
+            fail(r.reply(), unserved(r.h.op));
     }
 }
 

@@ -4302,7 +4302,10 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 				err = ENODEV
 			} else {
 				f = t
-				_, err = f.pread(p, b, int64(off))
+
+				if _, err = f.pread(p, b, int64(off)); err == ESPIPE {
+					err = ENODEV
+				}
 			}
 		}
 
@@ -6378,8 +6381,18 @@ func (p *Process) libcFchdir(fd uint32) uint32 {
 
 	d.ref()
 
-	if err := p.access(d, "", 1, 0); err != nil {
+	var st Stat
+
+	if err := d.statPath(p, "", true, &st); err != nil || st.Mode&S_IFMT != S_IFDIR || !p.permits(&st, 1) {
 		d.unref()
+
+		switch {
+		case err != nil:
+		case st.Mode&S_IFMT != S_IFDIR:
+			err = ENOTDIR
+		default:
+			err = EACCES
+		}
 
 		return p.result(0, err)
 	}
@@ -7815,11 +7828,11 @@ func (p *Process) libcEpoll_pwait(epfd, at, max, timeout, mask uint32) uint32 {
 	}))
 }
 
-func (p *Process) opened(pk *Packet) (Object, error) {
+func (p *Process) opened(pk *Packet) (Object, bool, error) {
 	f := pk.files[0]
 
 	if len(pk.data) == 0 {
-		return f, nil
+		return f, false, nil
 	}
 
 	end := f.asPair()
@@ -7827,21 +7840,22 @@ func (p *Process) opened(pk *Packet) (Object, error) {
 	if len(pk.data) != sizeofOpened || end == nil || end.shared.kind != SOCK_SEQPACKET {
 		f.unref()
 
-		return nil, EIO
+		return nil, false, EIO
 	}
 
 	b := pk.data
+	kind := binary.LittleEndian.Uint32(b)
 
-	obj, err := served(p, binary.LittleEndian.Uint32(b), int(binary.LittleEndian.Uint32(b[4:])), binary.LittleEndian.Uint64(b[8:]),
-		binary.LittleEndian.Uint64(b[16:]), binary.LittleEndian.Uint64(b[24:]), end)
+	obj, err := served(p, kind, int(binary.LittleEndian.Uint32(b[4:])), binary.LittleEndian.Uint64(b[8:]), binary.LittleEndian.Uint64(b[16:]),
+		binary.LittleEndian.Uint64(b[24:]), end)
 
 	if err != nil {
 		f.unref()
 
-		return nil, EIO
+		return nil, false, EIO
 	}
 
-	return obj, nil
+	return obj, kind&^openedTells == openedTerminal, nil
 }
 
 func (p *Process) head(data []byte, op, arg uint32) {
@@ -7869,7 +7883,7 @@ func (p *Process) permits(st *Stat, want uint32) bool {
 }
 
 func (p *Process) rootID(id uint64) uint64 {
-	if root := p.root.asVFS(); root != nil {
+	if root := p.root.asRemote(); root != nil {
 		return root.id
 	}
 
@@ -8027,7 +8041,13 @@ func (p *Process) terminalAt(fd uint32) (Terminal, error) {
 }
 
 func (p *Process) libcIsatty(fd uint32) uint32 {
-	if _, err := p.terminalAt(fd); err != nil {
+	t, err := p.terminalAt(fd)
+
+	if err == nil {
+		_, err = t.getattr(p)
+	}
+
+	if err != nil {
 		p.setErrno(errnoOf(err))
 
 		return 0

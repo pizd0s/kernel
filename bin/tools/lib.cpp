@@ -196,7 +196,7 @@ bool tools::ioOf(const Header& h, Body body, Io& out) {
         return false;
     }
     memcpy(&out, body.at, sizeof out);
-    const u32 known = h.op == opWrite ? ioAppend | ioNonblock : ioNonblock;
+    const u32 known = h.op == opWrite ? ioAppend | ioNonblock | ioAt : ioNonblock | ioAt;
     return (out.flags & ~known) == 0;
 }
 

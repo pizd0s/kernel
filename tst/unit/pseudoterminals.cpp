@@ -1,5 +1,5 @@
 //@ compile-flags: -D_GNU_SOURCE
-//@ stdout: "slave /dev/pts/ 1 1\nline 'abc\\n' echo 'abc\\r\\n'\nerase 'ac\\n' echo 'ab\\b \\bc\\r\\n'\nkill 'd\\n' echo 'abc\\b \\b\\b \\b\\b \\bd\\r\\n'\nword 'foo baz\\n' echo 'foo bar\\b \\b\\b \\b\\b \\bbaz\\r\\n'\neof 0 'xy'\ncontrol '\\x01\\n' echo '^A\\r\\n'\nliteral '\\x7f\\n' echo '^\\b^?\\r\\n'\ninq 4\nraw 'x\\ry' echo ''\nraw out 'a\\nb'\ntimeout 0\nwindow 24 80\nmaster settings 1 1\nowner 1 private 1\ninterrupted 1 foreground 1 echo '^C'\nhangup read 0 write EIO\n"
+//@ stdout: "slave /dev/pts/ 1 1\nat a place: pread ESPIPE, pwrite ESPIPE, mmap ENODEV\nline 'abc\\n' echo 'abc\\r\\n'\nerase 'ac\\n' echo 'ab\\b \\bc\\r\\n'\nkill 'd\\n' echo 'abc\\b \\b\\b \\b\\b \\bd\\r\\n'\nword 'foo baz\\n' echo 'foo bar\\b \\b\\b \\b\\b \\bbaz\\r\\n'\neof 0 'xy'\ncontrol '\\x01\\n' echo '^A\\r\\n'\nliteral '\\x7f\\n' echo '^\\b^?\\r\\n'\ninq 4\nraw 'x\\ry' echo ''\nraw out 'a\\nb'\ntimeout 0\nwindow 24 80\nmaster settings 1 1\nowner 1 private 1\ninterrupted 1 foreground 1 echo '^C'\nhangup read 0 write EIO\n"
 
 // The pseudoterminals: openpty's master and slave, the slave's line
 // discipline as Linux's, its settings, which the master's calls get and
@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <termios.h>
@@ -79,6 +80,13 @@ int main() {
     char name[64];
     assert(openpty(&master, &slave, name, nullptr, nullptr) == 0);
     printf("slave %.9s %d %d\n", name, isatty(master), isatty(slave));
+    // A terminal has no place to read or write at, nor to map.
+    char byte;
+    const bool preads = pread(slave, &byte, 1, 0) == -1 && errno == ESPIPE;
+    const bool pwrites = pwrite(slave, "x", 1, 0) == -1 && errno == ESPIPE;
+    const bool maps = mmap(nullptr, 4096, PROT_READ, MAP_SHARED, slave, 0) == MAP_FAILED && errno == ENODEV;
+    printf("at a place: pread %s, pwrite %s, mmap %s\n", preads ? "ESPIPE" : "something else", pwrites ? "ESPIPE" : "something else",
+           maps ? "ENODEV" : "something else");
     char got[256];
     char a[1024];
     char b[1024];

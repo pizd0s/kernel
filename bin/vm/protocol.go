@@ -7,23 +7,27 @@ import (
 )
 
 const (
-	openedFile            = 1
-	openedTerminal        = 2
-	openedDir             = 3
-	openedPath            = 4
-	openedTells           = 16
-	sizeofOpened          = 32
-	readyTostop           = 1
-	rOk            uint32 = 128
-	rErr           uint32 = 129
-	remoteHeader          = 16
-	remoteStat            = 64
-	remoteStatfs          = 52
-	whenAtimeNow          = 2
-	whenMtimeNow          = 4
-	whenAtimeKept         = 8
-	whenMtimeKept         = 16
-	rOpen          uint32 = 96
+	openedFile             = 1
+	openedTerminal         = 2
+	openedDir              = 3
+	openedPath             = 4
+	openedTells            = 16
+	sizeofOpened           = 32
+	readyTostop            = 1
+	rOk             uint32 = 128
+	rErr            uint32 = 129
+	remoteHeader           = 16
+	remoteStat             = 64
+	remoteStatfs           = 52
+	whenAtimeNow           = 2
+	whenMtimeNow           = 4
+	whenAtimeKept          = 8
+	whenMtimeKept          = 16
+	rOpen           uint32 = 96
+	ioAppend               = 1
+	ioNonblock             = 2
+	ioAt                   = 4
+	openControlling        = 4
 )
 
 const (
@@ -39,6 +43,22 @@ const (
 	rFstatfs
 	rCancel
 	rReady
+)
+
+const (
+	rTcgetattr uint32 = iota + 112
+	rTcsetattr
+	rTcflush
+	rTcflow
+	rTcdrain
+	rGetWinsize
+	rSetWinsize
+	rInq
+	rOutq
+	rName
+	rGetPgrp
+	rSetPgrp
+	rSetCtty
 )
 
 const (
@@ -64,42 +84,22 @@ const (
 	vConnect
 )
 
-func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *PairEnd) (Object, error) {
-	var n *RemoteNode
-	var f Object
+func served(p *Process, kind uint32, flags int, dev, ino, id uint64, end *PairEnd) (*RemoteFD, error) {
+	what := kind &^ openedTells
 
-	switch kind &^ openedTells {
-	case openedFile:
-		r := &RemoteFile{}
-
-		n, f = &r.node, r
-
-	case openedTerminal:
-		t := &RemoteTerminal{key: FileKey{dev, ino}}
-
-		n, f = &t.node, t
-	case openedDir:
-		d := &RemoteDir{id: id, opath: flags&O_PATH != 0}
-
-		n, f = &d.node, d
-	case openedPath:
-		h := &RemotePath{id: id}
-
-		n, f = &h.node, h
-	default:
+	if what != openedFile && what != openedTerminal && what != openedDir && what != openedPath {
 		return nil, EINVAL
 	}
 
-	if what := kind &^ openedTells; ino != 0 && (what == openedFile || what == openedDir) {
-		n.locks, n.file = &p.k.locks, FileKey{dev, ino}
+	f := &RemoteFD{end: end, id: id, key: FileKey{dev, ino}, accmode: flags & O_ACCMODE, opath: flags&O_PATH != 0 || what == openedPath,
+		append: flags&O_APPEND != 0, nonblock: flags&O_NONBLOCK != 0, tells: kind&openedTells != 0}
+
+	if ino != 0 {
+		f.locks = &p.k.locks
 	}
 
-	n.end, n.accmode, n.tells = end, flags&O_ACCMODE, kind&openedTells != 0
-	n.refs.Store(1)
-	n.append.Store(flags&O_APPEND != 0)
-	n.nonblock.Store(flags&O_NONBLOCK != 0)
-
-	end.consume(n.deliver)
+	f.refs.Store(1)
+	end.consume(f.deliver)
 
 	return f, nil
 }

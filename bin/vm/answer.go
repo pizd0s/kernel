@@ -202,7 +202,7 @@ func (a *Answer) asConsole() *ConsoleEnd {
 	return nil
 }
 
-func (a *Answer) asVFS() *RemoteDir {
+func (a *Answer) asRemote() *RemoteFD {
 	return nil
 }
 

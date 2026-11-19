@@ -938,6 +938,9 @@ static void readFile(Open& o, Request& r) {
     if (r.window() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
+    if ((io.flags & ioAt) != 0) {
+        return fail(r.reply(), ESPIPE); // a terminal has no place to read at
+    }
     if (Waiting* w = hold(o, r, Wait::Read)) {
         w->woff = io.woff;
         progress(t);
@@ -956,6 +959,9 @@ static void writeFile(Open& o, Request& r) {
     }
     if (r.window() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
+    }
+    if ((io.flags & ioAt) != 0) {
+        return fail(r.reply(), ESPIPE);
     }
     if (!o.master && t.hungUp) {
         return fail(r.reply(), EIO);
@@ -1178,7 +1184,7 @@ static void fileCall(Open& o, Request& r) {
         case opOpen:
             return reopened(o, r);
         default:
-            return fail(r.reply(), EINVAL);
+            return fail(r.reply(), unserved(r.h.op));
     }
 }
 

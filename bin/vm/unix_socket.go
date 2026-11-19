@@ -126,7 +126,7 @@ func (s *UnixSocket) asConsole() *ConsoleEnd {
 	return nil
 }
 
-func (s *UnixSocket) asVFS() *RemoteDir {
+func (s *UnixSocket) asRemote() *RemoteFD {
 	return nil
 }
 

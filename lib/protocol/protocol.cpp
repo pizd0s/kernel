@@ -50,3 +50,24 @@ ssize_t receivePacket(int fd, void* buffer, size_t size, int* fds, size_t& fdCou
     }
     return n;
 }
+
+int unserved(uint32_t op) {
+    if (op >= vfsOpen && op <= vfsConnect) {
+        return ENOTDIR;
+    }
+    if (op >= opTcgetattr && op <= opSetCtty) {
+        return ENOTTY;
+    }
+    switch (op) {
+        case opReaddir:
+            return ENOTDIR;
+        case opFtruncate:
+        case opFsync:
+            return EINVAL;
+        case opRead:
+        case opWrite:
+            return EBADF;
+        default:
+            return ENOSYS;
+    }
+}

@@ -121,7 +121,7 @@ func (s *UnixDgram) asConsole() *ConsoleEnd {
 	return nil
 }
 
-func (s *UnixDgram) asVFS() *RemoteDir {
+func (s *UnixDgram) asRemote() *RemoteFD {
 	return nil
 }
 

@@ -96,7 +96,7 @@ func (f *DiskFile) asConsole() *ConsoleEnd {
 	return nil
 }
 
-func (f *DiskFile) asVFS() *RemoteDir {
+func (f *DiskFile) asRemote() *RemoteFD {
 	return nil
 }
 

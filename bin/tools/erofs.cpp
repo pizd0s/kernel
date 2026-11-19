@@ -501,7 +501,7 @@ static void fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
         case opFtruncate:
             return error(fd, EROFS);
         default:
-            return error(fd, ENOSYS);
+            return error(fd, unserved(h.op));
     }
 }
 

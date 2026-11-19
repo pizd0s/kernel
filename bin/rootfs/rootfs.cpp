@@ -2726,7 +2726,8 @@ Name Path::text() const {
 // An open file's call on a handle: FSTAT rootfs answers, with the
 // handle's id, the others are handed on to the file system its place
 // is of. O_PATH's handle reads, changes and locks nothing: EBADF; a
-// handle locks nothing, EINVAL.
+// handle locks nothing, EINVAL; a directory reads by READDIR, not READ,
+// EISDIR; a call no handle serves fails as the protocol has it.
 static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
     const Place& at = ep->at;
     const bool opath = !ep->reads;
@@ -2748,6 +2749,8 @@ static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
             return opath ? error(fd, EBADF) : answer(fd, 0);
         case opFtruncate:
             return error(fd, opath ? EBADF : EINVAL);
+        case opRead:
+            return error(fd, opath ? EBADF : EISDIR);
         case opFchmod:
         case opFchown:
         case opFutimes:
@@ -2758,7 +2761,7 @@ static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
             forgetStat(knownAt(at), h.op != opFutimes);
             return hand(at, h, h.op == opFchmod ? fsChmod : h.op == opFchown ? fsChown : fsUtimes, h.arg, body.at, body.size(), {}, fd);
         default:
-            return error(fd, ENOSYS);
+            return error(fd, unserved(h.op));
     }
 }
 

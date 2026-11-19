@@ -96,7 +96,7 @@ func (e *PipeEnd) asConsole() *ConsoleEnd {
 	return nil
 }
 
-func (e *PipeEnd) asVFS() *RemoteDir {
+func (e *PipeEnd) asRemote() *RemoteFD {
 	return nil
 }
 

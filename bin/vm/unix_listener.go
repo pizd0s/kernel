@@ -94,7 +94,7 @@ func (l *UnixListener) asConsole() *ConsoleEnd {
 	return nil
 }
 
-func (l *UnixListener) asVFS() *RemoteDir {
+func (l *UnixListener) asRemote() *RemoteFD {
 	return nil
 }
 

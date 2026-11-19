@@ -118,7 +118,7 @@ func (f *MemfdFile) asConsole() *ConsoleEnd {
 	return nil
 }
 
-func (f *MemfdFile) asVFS() *RemoteDir {
+func (f *MemfdFile) asRemote() *RemoteFD {
 	return nil
 }
 

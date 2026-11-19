@@ -35,7 +35,7 @@ type PairEnd struct {
 	options SockOptions
 
 	making sync.Mutex
-	dir    *RemoteDir
+	dir    *RemoteFD
 }
 
 func newPair(nonblock bool) (*PairEnd, *PairEnd) {
@@ -189,7 +189,7 @@ func (e *PairEnd) asConsole() *ConsoleEnd {
 	return nil
 }
 
-func (e *PairEnd) asVFS() *RemoteDir {
+func (e *PairEnd) asRemote() *RemoteFD {
 	return nil
 }
 
@@ -907,20 +907,18 @@ func (e *PairEnd) recvmsg(p *Process, at, flags uint32) (int, error) {
 	return n, nil
 }
 
-func (e *PairEnd) directory(p *Process) *RemoteDir {
+func (e *PairEnd) directory(p *Process) *RemoteFD {
 	e.making.Lock()
 
 	defer e.making.Unlock()
 
-	if d := e.dir; d != nil && d.node.revive() {
+	if d := e.dir; d != nil && d.revive() {
 		return d
 	}
 
 	e.ref()
 
-	f, _ := served(p, openedDir, O_RDONLY, 0, 0, 0, e)
-
-	e.dir = f.asVFS()
+	e.dir, _ = served(p, openedDir, O_RDONLY, 0, 0, 0, e)
 
 	return e.dir
 }

@@ -112,7 +112,7 @@ func (c *ConsoleEnd) asConsole() *ConsoleEnd {
 	return c
 }
 
-func (c *ConsoleEnd) asVFS() *RemoteDir {
+func (c *ConsoleEnd) asRemote() *RemoteFD {
 	return nil
 }
 

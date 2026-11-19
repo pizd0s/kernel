@@ -180,7 +180,7 @@ bool Request::io(Io& out) const {
         return false;
     }
     memcpy(&out, body, sizeof out);
-    const uint32_t known = h.op == opWrite ? ioAppend | ioNonblock : ioNonblock;
+    const uint32_t known = h.op == opWrite ? ioAppend | ioNonblock | ioAt : ioNonblock | ioAt;
     return (out.flags & ~known) == 0;
 }
 

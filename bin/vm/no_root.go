@@ -101,7 +101,7 @@ func (r *NoRoot) asConsole() *ConsoleEnd {
 	return nil
 }
 
-func (r *NoRoot) asVFS() *RemoteDir {
+func (r *NoRoot) asRemote() *RemoteFD {
 	return nil
 }
 

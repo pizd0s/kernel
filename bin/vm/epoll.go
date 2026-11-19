@@ -150,7 +150,7 @@ func (ep *Epoll) asConsole() *ConsoleEnd {
 	return nil
 }
 
-func (ep *Epoll) asVFS() *RemoteDir {
+func (ep *Epoll) asRemote() *RemoteFD {
 	return nil
 }
 

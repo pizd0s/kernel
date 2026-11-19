@@ -38,7 +38,7 @@ type Object interface {
 	asPair() *PairEnd
 	asListener() *UnixListener
 	asConsole() *ConsoleEnd
-	asVFS() *RemoteDir
+	asRemote() *RemoteFD
 }
 
 type File interface {
