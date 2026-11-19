@@ -28,11 +28,11 @@
 // process that asks. A place is a mount and a node of its file system. A
 // handle is an endpoint of rootfs's at a place, which a path walks from:
 // the root, the working directory and the directory descriptors of a
-// process are handles, and so is what O_PATH opens. Who calls connects to
-// the handle, and its calls come on the connection and are answered on
-// it, by rootfs or by the file system it hands a call on to, connection
-// and all. An open file is its file system's endpoint: the kernel reads
-// and writes it there, and the VFS is out of the way.
+// process are handles, and so is what O_PATH opens. A call comes on the
+// handle's endpoint with where it is answered, the last of its
+// descriptors, by rootfs or by the file system it hands the call on to,
+// that descriptor with it. An open file is its file system's endpoint: the
+// kernel reads and writes it there, and the VFS is out of the way.
 //
 // A walk goes through a directory who asks may search, as the stat its
 // file system gave says; a file system checks the rest of what it does
@@ -482,9 +482,8 @@ namespace {
 
     // What an endpoint is to the loop.
     enum class Role : u8 {
-        Handle,     // a handle of the VFS's, at a place: who asks connects on it
-        Connection, // a connection to a handle: its calls come on it, and walk from the handle's place
-        Fs,         // ours of the channel of a file system: the answers to its questions come on it
+        Handle, // a handle of the VFS's, at a place: its calls come on it, and walk from the place
+        Fs,     // ours of the channel of a file system: the answers to its questions come on it
     };
 
     // A file system of the VFS's, another process's behind the channel
@@ -537,17 +536,12 @@ namespace {
         bool writes;
         Role role;
         bool dead;       // closed, while a batch of events may still name it
-        Place at;         // a Handle's
-        u64 id;           // a Handle's
-        Fs* fs;           // a Fs's
-        Endpoint* next;   // among the free ones
-        Endpoint* after;  // among the live ones
+        Place at;        // a Handle's
+        u64 id;          // a Handle's
+        Fs* fs;          // a Fs's
+        Endpoint* next;  // among the free ones
+        Endpoint* after; // among the live ones
         Endpoint* before;
-        Endpoint* handle; // a Connection's handle, none once that closed
-        Endpoint* first;  // a Handle's connections,
-        Endpoint* other;  // each the next of its handle's
-        u32 calls;        // a Connection's calls not done yet, which answer on it
-        bool left;        // a Connection whose other end closed: it goes with its last call
     };
 }
 
@@ -691,40 +685,6 @@ static Endpoint* listen(int fd, Role role) {
 static void hold(const Place& p);
 static void letGo(Mount* m);
 
-// The connections by their descriptors, for a call to find the one it
-// answers on.
-static Buffer connections;
-
-static Endpoint*& connectionSlot(int fd) {
-    return static_cast<Endpoint**>(connections.data())[usize(fd)];
-}
-
-static Endpoint* connectionAt(int fd) {
-    return fd >= 0 && usize(fd) < connections.size() / sizeof(Endpoint*) ? connectionSlot(fd) : nullptr;
-}
-
-// A handle's CONNECT: a pair, one end of which is a connection of the
-// handle's from now on and the other the OK brings, on the handle's
-// endpoint, the question's.
-static void connect(Endpoint* ep) {
-    int pair[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
-        error(ep->fd, errno);
-        return;
-    }
-    Endpoint* c = listen(pair[0], Role::Connection);
-    c->handle = ep;
-    c->other = ep->first;
-    ep->first = c;
-    while (connections.size() / sizeof(Endpoint*) <= usize(pair[0])) {
-        Endpoint* none = nullptr;
-        connections.append(&none, sizeof none);
-    }
-    connectionSlot(pair[0]) = c;
-    reply(ep->fd, opOk, 0, nullptr, 0, &pair[1], 1);
-    close(pair[1]);
-}
-
 // A handle of id at a place, on our end of its pair; O_PATH's reads
 // nothing and changes nothing.
 static Endpoint* listenHandle(int fd, const Place& p, bool opath, u64 id) {
@@ -743,46 +703,12 @@ static Endpoint* listenHandle(int fd, const Place& p, bool opath, u64 id) {
 static void forget(Endpoint* ep);
 
 // The other end of an endpoint closed, or it is let go of: the file is
-// closed. A handle's connections go with it. A connection with calls not
-// done yet stays, out of the loop, until the last of them is: they answer
-// on its descriptor, which no other may take meanwhile.
+// closed.
 static void closed(Endpoint* ep) {
-    while (Endpoint* c = ep->first) {
-        ep->first = c->other;
-        c->handle = nullptr;
-        closed(c);
-    }
-    if (ep->handle) {
-        for (Endpoint** at = &ep->handle->first; *at; at = &(*at)->other) {
-            if (*at == ep) {
-                *at = ep->other;
-                break;
-            }
-        }
-        ep->handle = nullptr;
-    }
     const int fd = ep->fd;
-    if (!ep->left) {
-        epoll_ctl(watcher, EPOLL_CTL_DEL, fd, nullptr);
-    }
-    if (ep->role == Role::Connection && ep->calls > 0) {
-        ep->left = true;
-        return;
-    }
-    if (ep->role == Role::Connection) {
-        connectionSlot(fd) = nullptr;
-    }
+    epoll_ctl(watcher, EPOLL_CTL_DEL, fd, nullptr);
     forget(ep);
     close(fd);
-}
-
-// A call is done with the connection it answers on: one whose other end
-// closed meanwhile goes with its last call.
-static void done(int fd) {
-    Endpoint* c = connectionAt(fd);
-    if (c && --c->calls == 0 && c->left) {
-        closed(c);
-    }
 }
 
 // The endpoints closed in a batch of events are free once it is done.
@@ -810,8 +736,6 @@ static void forget(Endpoint* ep) {
             if (ep->fs) {
                 gone(ep->fs);
             }
-            break;
-        case Role::Connection:
             break;
     }
     if (ep->before) {
@@ -1558,11 +1482,6 @@ static bool hand(const Place& p, const Header& h, u32 op, u32 arg, const void* a
     if (!channel || sendPacket(channel->fd, parts, 4, extra >= 0 ? fds : fds + 1, extra >= 0 ? 2 : 1, MSG_DONTWAIT) < 0) {
         return error(fd, channel && errno == EAGAIN ? EAGAIN : EIO);
     }
-    // The connection is the file system's now, who answers on it: ours
-    // closes with this call, and who asked connects again for its next.
-    if (Endpoint* c = connectionAt(fd)) {
-        closed(c);
-    }
     return false;
 }
 
@@ -2090,7 +2009,8 @@ Walk::Step Walk::answered(const Answer& a) {
 // the request it copies before it first waits.
 
 namespace {
-    // The connection a call answers on, the call's until it is done.
+    // Where a call is answered, the call's until it is done: its close is
+    // the end of the answer.
     struct Reply {
         int fd;
 
@@ -2760,7 +2680,7 @@ static Task unmountCall(Header h, int fd, Place root, Place from, Name path) {
 
 Reply::~Reply() {
     if (fd >= 0) {
-        done(fd);
+        close(fd);
     }
 }
 
@@ -3020,33 +2940,19 @@ static void handle(Endpoint* ep, ssize_t n) {
     }
     Header h;
     memcpy(&h, packet, sizeof h);
-    // What comes on a connection besides a call is the CANCEL of the one
-    // in hand, which rootfs, keeping none to wait, has nothing to do for.
-    if (ep->role == Role::Handle) {
-        // Who asks connects; nothing else comes on a handle's own
-        // endpoint.
-        if (h.op == opConnect) {
-            connect(ep);
-        }
-    } else if (ep->handle && h.op != opOk && h.op != opErr && h.op != opCancel) {
-        // A call of the handle's, answered on the connection: the call's
-        // until it is done, at once or when what it waits for came. The
-        // connection is the last of the request's descriptors to the call.
+    if (h.op != opOk && h.op != opErr && packetFdCount > 0) {
+        // A call of the handle's, answered where the last of its
+        // descriptors says, by us or by the file system the call is
+        // handed on to: the call's until it is done, at once or when what
+        // it waits for came, and closed then, which ends the answer.
         const Body body{packet + sizeof(Header), packet + n};
-        const int fd = ep->fd;
-        const usize brought = packetFdCount;
-        if (brought < maxFds) {
-            packetFds[packetFdCount++] = fd;
+        const usize last = packetFdCount - 1;
+        if (onHandle(ep, h, body, packetFds[last])) {
+            packetFds[last] = -1;
         }
-        ++ep->calls;
-        const bool kept = onHandle(ep->handle, h, body, fd);
-        if (!kept) {
-            done(fd);
-        }
-        packetFdCount = brought;
     }
-    // The request's descriptors, a MOUNT's connection or a BIND's
-    // listener, are done with once it is answered; one a call kept is -1.
+    // The request's descriptors are done with once it is answered; one a
+    // call kept is -1.
     for (usize i = 0; i < packetFdCount; ++i) {
         if (packetFds[i] >= 0) {
             close(packetFds[i]);

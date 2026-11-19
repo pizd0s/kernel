@@ -183,9 +183,8 @@ namespace tools {
 
     // What an endpoint is to the loop.
     enum class Role : u8 {
-        File,       // an open file: who asks connects on it
-        Connection, // a connection to an open file: its requests come on it
-        Channel,    // rootfs's channel: its calls by node come on it
+        File,    // an open file: its requests come on it
+        Channel, // rootfs's channel: its calls by node come on it
     };
 
     struct Endpoint {
@@ -198,9 +197,6 @@ namespace tools {
         Endpoint* next;  // among the free ones
         Endpoint* after; // among the live ones
         Endpoint* before;
-        Endpoint* file;  // a Connection's open file
-        Endpoint* first; // a File's connections,
-        Endpoint* other; // each the next of its file's
     };
 
     // A file system's calls: rootfs's on its channel, by node, and those
@@ -218,20 +214,19 @@ namespace tools {
     // pair whose second end goes with the OK to who asked, an openedFile
     // of the file's dev and ino, which the kernel keeps its locks by; the
     // first, an endpoint of the loop's, to read, to write or both, is the
-    // open file's, which who asks connects on. That endpoint, or none, the
+    // open file's, where its requests come. That endpoint, or none, the
     // error answered.
     Endpoint* openFile(int fd, u32 flags, void* node, u64 dev, u64 ino, bool reads, bool writes);
 
     // Serves the endpoints until the last of them closes: rootfs's channel,
     // and the open files after it. A question of rootfs's, which brings
-    // nowhere to answer, is answered on its channel, in order; a call
-    // rootfs hands on brings the connection it came on, where it is
-    // answered, and an open's open file goes there (openFile). An open
-    // file's endpoint takes CONNECT, which the loop answers: a pair, one
-    // end of which the OK brings and the other is a connection of the
-    // file's, where its requests come and are answered. The
-    // descriptors of a request close after it, but for those the call set
-    // to -1 and the connection it came on.
+    // nowhere to answer, is answered on its channel, in order. Every
+    // other request brings where it is answered, the last of its
+    // descriptors: a call rootfs hands on, whose open's open file goes
+    // there (openFile), and a request of an open file's, which comes on
+    // the file's endpoint. The descriptors of a request close after it,
+    // but for those the call set to -1; the close of the last is the end
+    // of the answer.
     void serve(FsCall fsCall, FileCall fileCall, Closing closing);
 }
 

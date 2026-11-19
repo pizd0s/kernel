@@ -1,14 +1,14 @@
 //@ host: false
 //@ compile-flags: -D_GNU_SOURCE
-//@ stdout: "a kind the kernel does not know: EIO\nserved: CONNECT, then READ of 16 at 0\nread: 'hello'\nserved: CONNECT, then READ of 8 at 0\npassed on, read: 'world'\nfchdir: a path's ENOTDIR, a file's ENOTDIR, a stream socket's ENOTDIR\nserved: STAT of ''\nserved: STAT of 'name'\na pair's end, the working directory: fchdir 0, a name there ENOENT\n"
+//@ stdout: "a kind the kernel does not know: EIO\nserved: READ of 16 at 0\nread: 'hello'\nserved: READ of 8 at 0\npassed on, read: 'world'\nfchdir: a path's ENOTDIR, a file's ENOTDIR, a stream socket's ENOTDIR\nserved: STAT of ''\nserved: STAT of 'name'\na pair's end, the working directory: fchdir 0, a name there ENOENT\n"
 
 // An open file is the end of a pair its server made, which an OPEN's OK
 // brings with what it is (lib/protocol/protocol.h): the kernel makes it
 // that open file, and its calls are the file protocol's, whoever holds
 // it, the process that opened it or one it passed it on to. A call is a
-// connection asked on the server's end, CONNECT, which the server
-// answers there with the asking end of a call pair it makes, and the
-// request sent on that connection, answered on it. The test is the
+// request sent on the server's end, which brings where it is answered,
+// the last of its descriptors: the server writes the answer there and
+// closes it. The test is the
 // server: a device of its own, whose opens it answers. What is no
 // directory's handle, a path's, a file's or a stream socket, is no
 // directory to fchdir to; and an end of a seqpacket pair is one, the
@@ -200,7 +200,6 @@ struct Io {
 
 constexpr uint32_t vfsStat = 2;
 constexpr uint32_t opRead = 64;
-constexpr uint32_t opConnect = 76;
 constexpr uint32_t opErr = 129;
 constexpr uint32_t openedPath = 4;
 
@@ -219,36 +218,46 @@ static const char* errorName(int e) {
     }
 }
 
-// The connection who calls asks for on end, an open file's endpoint or a
-// directory's: a pair of ours, one end of which the OK brings. Our
-// end of it, or -1 at the end of end.
-static int connection(int end) {
-    Header asked;
-    if (recv(end, &asked, sizeof asked, 0) != ssize_t(sizeof asked)) {
-        return -1;
+// A packet into data with up to two descriptors: its length, the last of
+// them in last and the one before it in first, -1 for none.
+static ssize_t receiveTwo(int from, void* data, size_t size, int& first, int& last) {
+    alignas(cmsghdr) char control[CMSG_SPACE(4 * sizeof(int))];
+    iovec iov{data, size};
+    msghdr m{};
+    m.msg_iov = &iov;
+    m.msg_iovlen = 1;
+    m.msg_control = control;
+    m.msg_controllen = sizeof control;
+    const ssize_t n = recvmsg(from, &m, 0);
+    first = last = -1;
+    for (cmsghdr* c = n >= 0 ? CMSG_FIRSTHDR(&m) : nullptr; c; c = CMSG_NXTHDR(&m, c)) {
+        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) {
+            continue;
+        }
+        for (size_t at = 0; at + sizeof(int) <= c->cmsg_len - CMSG_LEN(0); at += sizeof(int)) {
+            if (first >= 0) {
+                close(first);
+            }
+            first = last;
+            memcpy(&last, CMSG_DATA(c) + at, sizeof(int));
+        }
     }
-    assert(asked.op == opConnect);
-    int call[2];
-    assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, call) == 0);
-    const Header ok{opOk, 0, 0, 0};
-    sendWith(end, &ok, sizeof ok, call[1]);
-    close(call[1]);
-    return call[0];
+    return n;
 }
 
-// Serves one READ of the open file whose endpoint end is: the connection
-// first, then the READ on it. The bytes go into the reader's memory, the
-// memfd that came with the READ, and the count is the answer.
+// Serves one READ of the open file whose endpoint end is: the request
+// comes there with the reader's memory, a memfd, and where to answer.
+// The bytes go into the memory, and the count is the answer.
 static void serveRead(int end, const char* bytes) {
-    const int call = connection(end);
     unsigned char packet[256];
     int window;
-    assert(receiveWith(call, packet, sizeof packet, window) == ssize_t(sizeof(Header) + sizeof(Io)) && window >= 0);
+    int reply;
+    assert(receiveTwo(end, packet, sizeof packet, window, reply) == ssize_t(sizeof(Header) + sizeof(Io)) && window >= 0 && reply >= 0);
     Header h;
     Io io;
     memcpy(&h, packet, sizeof h);
     memcpy(&io, packet + sizeof h, sizeof io);
-    printf("served: CONNECT, then %s of %u at %llu\n", h.op == opRead ? "READ" : "another call", h.arg, (unsigned long long)io.off);
+    printf("served: %s of %u at %llu\n", h.op == opRead ? "READ" : "another call", h.arg, (unsigned long long)io.off);
     fflush(stdout);
     const size_t length = strlen(bytes);
     assert(pwrite(window, bytes, length, io.woff) == ssize_t(length));
@@ -258,9 +267,9 @@ static void serveRead(int end, const char* bytes) {
         uint32_t count;
     } answer{{opOk, 0, 0, 0}, uint32_t(length)};
 
-    assert(send(call, &answer, sizeof answer, 0) == ssize_t(sizeof answer));
+    assert(send(reply, &answer, sizeof answer, 0) == ssize_t(sizeof answer));
     close(window);
-    close(call);
+    close(reply);
 }
 
 // A child that serves one READ of the endpoint, then ends.
@@ -285,29 +294,12 @@ static pid_t directoryServer(int end, int other) {
         return child;
     }
     close(other);
-    // A connection stays who made it's while it holds the directory: the
-    // directory's own end closing is what ends us.
-    for (int call = -1;;) {
-        pollfd fds[2] = {{end, POLLIN, 0}, {call, POLLIN, 0}};
-        assert(poll(fds, call >= 0 ? 2 : 1, -1) > 0);
-        if (call < 0 || fds[1].revents == 0) {
-            const int made = connection(end);
-            if (made < 0) {
-                _exit(0);
-            }
-            if (call >= 0) {
-                close(call);
-            }
-            call = made;
-            continue;
-        }
+    for (;;) {
         unsigned char packet[256];
-        int brought;
-        const ssize_t n = receiveWith(call, packet, sizeof packet, brought);
-        if (n < ssize_t(sizeof(Header) + 8)) {
-            close(call);
-            call = -1;
-            continue;
+        int reply;
+        const ssize_t n = receiveWith(end, packet, sizeof packet, reply);
+        if (n < ssize_t(sizeof(Header) + 8) || reply < 0) {
+            _exit(0);
         }
         Header h;
         memcpy(&h, packet, sizeof h);
@@ -321,11 +313,12 @@ static pid_t directoryServer(int end, int other) {
                 Stat st;
             } answer{{opOk, 0, 0, 0}, {1, 0, 0, S_IFDIR | 0755, 2, 0, 0, 0, 1, 0}};
 
-            assert(send(call, &answer, sizeof answer, 0) == ssize_t(sizeof answer));
+            assert(send(reply, &answer, sizeof answer, 0) == ssize_t(sizeof answer));
         } else {
             const Header none{opErr, ENOENT, 0, 0};
-            assert(send(call, &none, sizeof none, 0) == ssize_t(sizeof none));
+            assert(send(reply, &none, sizeof none, 0) == ssize_t(sizeof none));
         }
+        close(reply);
     }
 }
 
@@ -342,7 +335,7 @@ int main() {
     assert(opened(channel, {99, O_RDWR, 0, 0, 0}, end) == -1);
     printf("a kind the kernel does not know: %s\n", errorName(errno));
 
-    // A read of the file is a READ on a connection to the server's end.
+    // A read of the file is a READ sent on the server's end.
     int file = opened(channel, {openedFile, O_RDWR, 0, 0, 0}, end);
     assert(file >= 0);
     pid_t child = server(end, "hello");

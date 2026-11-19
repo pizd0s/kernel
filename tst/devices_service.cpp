@@ -106,7 +106,7 @@ static void readMail(const Endpoint& e, Request& r) {
     if (reader.at) {
         return fail(r.reply(), EBUSY);
     }
-    // The READ waits: its connection hears of it and the memfd is ours
+    // The READ waits: where it is answered hears of it and the memfd is ours
     // until it ends.
     reader = {keep(epoll, r, &readerTag), r.window(), r.h.arg, io.woff};
     r.fds[0] = -1;

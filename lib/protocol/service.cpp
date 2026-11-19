@@ -107,8 +107,6 @@ int readyDescriptor(int argc, char** argv, int& first) {
     return -1;
 }
 
-// Watches an endpoint for events: its level, or a connection's edges
-// (protocol.h).
 static Endpoint* watchFor(int epoll, Endpoint e, uint32_t events) {
     auto* at = static_cast<Endpoint*>(malloc(sizeof(Endpoint)));
     if (!at) {
@@ -147,61 +145,18 @@ static void drop(int epoll, Endpoint* e) {
     released = e;
 }
 
-// A connection goes: out of its open file's.
-static void disconnect(int epoll, Endpoint* c) {
-    for (Endpoint** at = &c->file->first; *at; at = &(*at)->after) {
-        if (*at == c) {
-            *at = c->after;
-            break;
-        }
-    }
-    drop(epoll, c);
-}
-
 void unwatch(int epoll, Endpoint* e) {
-    while (Endpoint* c = e->first) {
-        disconnect(epoll, c);
-    }
     drop(epoll, e);
 }
 
-// An open file's CONNECT: a pair, one end of which is a connection of the
-// file's from now on and the other the OK brings, on the file's endpoint,
-// the question's.
-static void connect(int epoll, Endpoint* e) {
-    int pair[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
-        fail(e->fd, errno);
-        return;
-    }
-    Endpoint* c = watchFor(epoll, {pair[0], false, e->reads, e->writes, e->of}, EPOLLIN);
-    c->file = e;
-    c->after = e->first;
-    e->first = c;
-    Header h{opOk, 0, 0, 0};
-    const iovec part{&h, sizeof h};
-    sendPacket(e->fd, &part, 1, &pair[1], 1); // a gone asker is its own loss
-    close(pair[1]);
-}
-
 Endpoint* keep(int epoll, Request& r, void* of) {
-    if (Endpoint* c = r.connection) {
-        c->kept = true;
-        c->of = of;
-        return c;
-    }
     Endpoint* e = watch(epoll, {r.reply(), false, false, false, of});
     r.fds[r.count - 1] = -1;
     return e;
 }
 
 void unkeep(int epoll, Endpoint* e) {
-    if (e->file) {
-        e->kept = false;
-        e->of = e->file->of;
-    } else {
-        unwatch(epoll, e);
-    }
+    unwatch(epoll, e);
 }
 
 int Request::reply() const {
@@ -234,12 +189,11 @@ void stopServing() {
 }
 
 // Serves one event of the loop's: a connection to accept, a request to
-// handle, or the end of an endpoint. true for a connection whose request
-// was kept: what came with the request, its CANCEL, is received next.
-static bool serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepted accepted) {
+// handle, or the end of an endpoint.
+static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepted accepted) {
     alignas(Header) static unsigned char packet[65536];
     if (e->fd < 0) {
-        return false; // let go of during this batch
+        return; // let go of during this batch
     }
     if (e->listens) {
         const int connection = accept4(e->fd, nullptr, nullptr, SOCK_CLOEXEC);
@@ -248,62 +202,36 @@ static bool serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepte
         } else if (connection >= 0) {
             close(connection);
         }
-        return false;
+        return;
     }
     Request r{};
-    const bool kept = e->kept;
-    const ssize_t got = receivePacket(e->fd, packet, sizeof packet, r.fds, r.count, e->file ? MSG_DONTWAIT : 0);
-    if (got < 0 && e->file && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-        return false; // an edge with nothing to receive
-    }
+    const ssize_t got = receivePacket(e->fd, packet, sizeof packet, r.fds, r.count, 0);
     if (got <= 0) {
-        if (e->file) {
-            // A connection whose asker let go of it, a request kept on it
-            // gone with it.
-            if (e->kept && gone) {
-                gone(*e);
-            }
-            disconnect(epoll, e);
-            return false;
-        }
-        // An open file closed: what is kept of it on its connections
-        // first.
-        for (Endpoint* c = e->first; c; c = c->after) {
-            if (c->kept && gone) {
-                gone(*c);
-            }
-        }
+        // The other end closed: an open file's, or who asked the request
+        // kept here.
         if (gone && !e->channel) {
             gone(*e);
         }
         unwatch(epoll, e);
-        return false;
+        return;
     }
     if (size_t(got) < sizeof(Header) || (r.count == 0 && e->channel)) {
         for (size_t k = 0; k < r.count; ++k) {
             close(r.fds[k]);
         }
-        return false;
+        return;
     }
     memcpy(&r.h, packet, sizeof r.h);
     r.body = packet + sizeof(Header);
     r.size = size_t(got) - sizeof(Header);
-    if ((e->file || e->answers || r.count == 0) && r.count < maxFds) {
-        // Answered on the endpoint it came on: a connection's request, and
-        // a question, in the order the questions came.
+    if ((e->answers || r.count == 0) && r.count < maxFds) {
+        // Answered on the endpoint it came on: a question, in the order
+        // the questions came, and the CANCEL of a request kept there.
         r.fds[r.count++] = e->fd;
         r.onEndpoint = true;
     }
-    if (r.h.op == opConnect && !e->channel && !e->file && !e->answers) {
-        connect(epoll, e);
-    } else if (e->channel && r.h.op != opOpen) {
+    if (e->channel && r.h.op != opOpen) {
         fail(r.reply(), EINVAL);
-    } else if (e->file && !e->kept) {
-        // The CANCEL of a request nobody kept has nothing to end.
-        if (r.h.op != opCancel) {
-            r.connection = e;
-            handle(*e->file, r);
-        }
     } else {
         handle(*e, r);
     }
@@ -312,7 +240,6 @@ static bool serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepte
             close(r.fds[k]);
         }
     }
-    return e->file && e->fd >= 0 && e->kept && !kept;
 }
 
 void serve(int epoll, Handle handle, Gone gone, Accepted accepted, Expire expire) {
@@ -330,8 +257,7 @@ void serve(int epoll, Handle handle, Gone gone, Accepted accepted, Expire expire
             for (int i = 0; i < n; ++i) {
                 const bool hangup = (events[i].events & (EPOLLHUP | EPOLLERR)) != 0;
                 if (hangup == (pass == 0)) {
-                    while (serveEvent(epoll, static_cast<Endpoint*>(events[i].data.ptr), handle, gone, accepted)) {
-                    }
+                    serveEvent(epoll, static_cast<Endpoint*>(events[i].data.ptr), handle, gone, accepted);
                 }
             }
         }

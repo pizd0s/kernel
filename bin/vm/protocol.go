@@ -39,7 +39,6 @@ const (
 	rFstatfs
 	rCancel
 	rReady
-	rConnect
 )
 
 const (

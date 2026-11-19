@@ -887,7 +887,7 @@ static void progress(Terminal& t) {
     tellAll(t);
 }
 
-// Keeps a request to answer it later: its connection hears CANCEL.
+// Keeps a request to answer it later: where it is answered hears CANCEL.
 static Waiting* hold(Open& o, Request& r, Wait kind) {
     for (Waiting& w : waits) {
         if (!w.at) {

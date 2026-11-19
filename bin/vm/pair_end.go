@@ -71,8 +71,6 @@ func (e *PairEnd) unref() {
 	e.mu.Lock()
 
 	for pk, ok := e.in.take(); ok; pk, ok = e.in.take() {
-		pk.kind = packetLost
-
 		if len(pk.files) > 0 {
 			dropped = append(dropped, pk)
 		}
@@ -416,47 +414,26 @@ func (e *PairEnd) awaitRoom(p *Process) {
 	r.mu.Unlock()
 }
 
-func (e *PairEnd) alive() bool {
-	e.mu.Lock()
-
-	idle := e.in.len() == 0
-
-	e.mu.Unlock()
-
-	return idle && !e.peer.dead.Load()
-}
-
-func (e *PairEnd) answer(p *Process) *Packet {
-	e.mu.Lock()
+func (e *PairEnd) kernelSend(p *Process, pk *Packet) error {
+	for _, f := range pk.files {
+		f.ref()
+	}
 
 	for {
-		pk, ok := e.in.peek()
+		full, err := e.offer(pk)
 
-		if ok && pk.kind == packetEnd {
-			pk = nil
-		} else if ok {
-			if e.in.take(); e.in.len() == queueMax-1 {
-				e.watchers.tellOut()
-			}
+		if err != nil {
+			dropFiles(pk.files)
+
+			return err
 		}
 
-		if ok {
-			e.mu.Unlock()
-
-			return pk
+		if !full {
+			return nil
 		}
 
-		p.watch(&e.mu, &e.watchers, false, time.Time{}, waitsOn)
+		e.awaitRoom(p)
 	}
-}
-
-func (e *PairEnd) cancel(p *Process) {
-	data := make([]byte, remoteHeader)
-
-	binary.LittleEndian.PutUint32(data, rCancel)
-	binary.LittleEndian.PutUint32(data[8:], p.cred.euid())
-	binary.LittleEndian.PutUint32(data[12:], p.cred.egid())
-	e.offer(&Packet{data: data})
 }
 
 func (e *PairEnd) queueAs(p *Process, pk *Packet, nonblock bool, timeout *atomic.Int64) error {

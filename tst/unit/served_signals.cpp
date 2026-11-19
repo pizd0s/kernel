@@ -1,16 +1,17 @@
 //@ host: false
 //@ compile-flags: -D_GNU_SOURCE
-//@ stdout: "killed as it connects: by SIGKILL\nkilled in a call: by SIGTERM, by SIGKILL\na handler in a call: ran before the answer, then fstat 0 of 5 bytes\nstopped in a call: by SIGSTOP, continued, then fstat 0 of 5 bytes\n"
+//@ stdout: "killed before its request is taken: by SIGKILL\nkilled in a call: by SIGTERM, by SIGKILL\na handler in a call: ran before the answer, then fstat 0 of 5 bytes\nstopped in a call: by SIGSTOP, continued, then fstat 0 of 5 bytes\n"
 
 // A process takes its signals in a call to a server as in any wait: one
-// that ends it ends it though the server never answers, its call or the
-// connection it asks for first, a handler runs at once, and a stop stops
+// that ends it ends it though the server never answers or never takes
+// the request, a handler runs at once, and a stop stops
 // it, the call going on after to its answer. The test serves a file
 // itself, of a device of its own, and holds the answer of an FSTAT back.
 
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -187,7 +188,6 @@ static int opened(int channel, Opened what, int& end) {
 }
 
 constexpr uint32_t opFstat = 67;
-constexpr uint32_t opConnect = 76;
 
 static int channel;
 
@@ -197,35 +197,27 @@ static int servedFile(int sv[2]) {
     return sv[1] >= 0 ? 0 : -1;
 }
 
-// Takes the FSTAT of the file whose endpoint end is: the connection who
-// asks wants first, a pair of ours one end of which the OK brings,
-// then the FSTAT on it. The connection, where the answer goes: who asked
-// waits for it from now on.
+// Takes the FSTAT of the file whose endpoint end is: where it is
+// answered, the request's descriptor; who asked waits for the answer
+// from now on.
 static int takeFstat(int end) {
     Header h;
-    assert(recv(end, &h, sizeof h, 0) == ssize_t(sizeof h) && h.op == opConnect);
-    int call[2];
-    assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, call) == 0);
-    const Header ok{opOk, 0, 0, 0};
     alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))] = {};
-    iovec iov{const_cast<Header*>(&ok), sizeof ok};
+    iovec iov{&h, sizeof h};
     msghdr m{};
     m.msg_iov = &iov;
     m.msg_iovlen = 1;
     m.msg_control = control;
     m.msg_controllen = sizeof control;
+    assert(recvmsg(end, &m, 0) == ssize_t(sizeof h) && h.op == opFstat);
     cmsghdr* c = CMSG_FIRSTHDR(&m);
-    c->cmsg_level = SOL_SOCKET;
-    c->cmsg_type = SCM_RIGHTS;
-    c->cmsg_len = CMSG_LEN(sizeof(int));
-    memcpy(CMSG_DATA(c), &call[1], sizeof(int));
-    assert(sendmsg(end, &m, 0) == ssize_t(sizeof ok));
-    close(call[1]);
-    assert(recv(call[0], &h, sizeof h, 0) == ssize_t(sizeof h) && h.op == opFstat);
-    return call[0];
+    assert(c && c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && c->cmsg_len == CMSG_LEN(sizeof(int)));
+    int reply;
+    memcpy(&reply, CMSG_DATA(c), sizeof(int));
+    return reply;
 }
 
-// Answers an FSTAT on its connection: a regular file of 5 bytes.
+// Answers an FSTAT where its request said: a regular file of 5 bytes.
 static void answerFstat(int reply) {
     struct {
         Header h;
@@ -272,15 +264,15 @@ int main() {
     int sv[2];
     int status;
 
-    // The server never answers who connects; a signal that ends who waits
-    // for it ends it.
+    // The server never takes the request; a signal that ends who waits
+    // for its answer ends it.
     assert(servedFile(sv) == 0);
-    pid_t connecting = asker(sv[1], nullptr);
-    Header first;
-    assert(recv(sv[0], &first, sizeof first, 0) == ssize_t(sizeof first) && first.op == opConnect);
-    assert(kill(connecting, SIGKILL) == 0);
-    assert(waitpid(connecting, &status, 0) == connecting);
-    printf("killed as it connects: by %s\n", WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL ? "SIGKILL" : "something else");
+    pid_t waiting = asker(sv[1], nullptr);
+    pollfd sent{sv[0], POLLIN, 0};
+    assert(poll(&sent, 1, -1) == 1);
+    assert(kill(waiting, SIGKILL) == 0);
+    assert(waitpid(waiting, &status, 0) == waiting);
+    printf("killed before its request is taken: by %s\n", WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL ? "SIGKILL" : "something else");
     close(sv[0]);
     close(sv[1]);
 

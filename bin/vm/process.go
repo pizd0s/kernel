@@ -268,11 +268,8 @@ type Process struct {
 
 	unwound bool
 
-	asking    *PairEnd
+	asking    *Answer
 	cancelled bool
-
-	kept         [keptConnections]KeptConnection
-	disconnected bool
 
 	interruption uint64
 }
@@ -614,7 +611,6 @@ func (p *Process) terminate(status int) {
 		p.closeFd(fd)
 	}
 
-	p.disconnect()
 	p.root.unref()
 	p.cwd.unref()
 	p.setSink(nil)
@@ -2770,7 +2766,7 @@ func (p *Process) takeSignals() {
 	}
 }
 
-func (p *Process) ask(r *PairEnd) (*PairEnd, bool) {
+func (p *Process) ask(r *Answer) (*Answer, bool) {
 	outer, was := p.asking, p.cancelled
 
 	p.asking, p.cancelled = r, false
@@ -2778,7 +2774,7 @@ func (p *Process) ask(r *PairEnd) (*PairEnd, bool) {
 	return outer, was
 }
 
-func (p *Process) unask(outer *PairEnd, was bool) {
+func (p *Process) unask(outer *Answer, was bool) {
 	p.asking, p.cancelled = outer, was
 }
 
@@ -7853,18 +7849,6 @@ func (p *Process) head(data []byte, op, arg uint32) {
 	binary.LittleEndian.PutUint32(data[4:], arg)
 	binary.LittleEndian.PutUint32(data[8:], p.cred.euid())
 	binary.LittleEndian.PutUint32(data[12:], p.cred.egid())
-}
-
-func (p *Process) disconnect() {
-	p.disconnected = true
-
-	for i := range p.kept {
-		if c := p.kept[i].c; c != nil {
-			c.unref()
-		}
-
-		p.kept[i] = KeptConnection{}
-	}
 }
 
 func (p *Process) permits(st *Stat, want uint32) bool {

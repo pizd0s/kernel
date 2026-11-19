@@ -10,19 +10,16 @@ import (
 )
 
 const (
-	ioAppend        = 1
-	ioNonblock      = 2
-	keptConnections = 8
+	ioAppend   = 1
+	ioNonblock = 2
 )
 
 type RemoteNode struct {
 	end  *PairEnd
 	refs atomic.Int32
 
-	mu         sync.Mutex
-	connecting []*Connector
-	gone       bool
-	watchers   Subscribers
+	mu       sync.Mutex
+	watchers Subscribers
 
 	accmode  int
 	append   atomic.Bool
@@ -97,10 +94,6 @@ func (n *RemoteNode) readiness() int16 {
 	return int16(n.ready.Load())
 }
 
-type Connector struct {
-	w *Waiter[Received]
-}
-
 func (n *RemoteNode) deliver(pk *Packet) {
 	if pk.kind == packetEnd {
 		n.hungUp()
@@ -108,60 +101,24 @@ func (n *RemoteNode) deliver(pk *Packet) {
 		return
 	}
 
-	if len(pk.data) < remoteHeader {
-		dropFiles(pk.files)
+	if n.tells && len(pk.data) >= remoteHeader+8 && binary.LittleEndian.Uint32(pk.data) == rReady {
+		n.foreground.Store(int32(binary.LittleEndian.Uint32(pk.data[remoteHeader:])))
+		n.tostop.Store(binary.LittleEndian.Uint32(pk.data[remoteHeader+4:])&readyTostop != 0)
 
-		return
-	}
+		events := int16(binary.LittleEndian.Uint32(pk.data[4:])) & (POLLIN | POLLPRI | POLLOUT | POLLERR | POLLHUP)
 
-	switch binary.LittleEndian.Uint32(pk.data) {
-	case rReady:
-		if n.tells && len(pk.data) >= remoteHeader+8 {
-			n.foreground.Store(int32(binary.LittleEndian.Uint32(pk.data[remoteHeader:])))
-			n.tostop.Store(binary.LittleEndian.Uint32(pk.data[remoteHeader+4:])&readyTostop != 0)
-
-			events := int16(binary.LittleEndian.Uint32(pk.data[4:])) & (POLLIN | POLLPRI | POLLOUT | POLLERR | POLLHUP)
-
-			if events&POLLIN != 0 {
-				events |= POLLRDNORM
-			}
-
-			if events&POLLOUT != 0 {
-				events |= POLLWRNORM
-			}
-
-			n.ready.Store(int32(events))
-			n.mu.Lock()
-			n.watchers.tell()
-			n.mu.Unlock()
+		if events&POLLIN != 0 {
+			events |= POLLRDNORM
 		}
-	case rOk, rErr:
+
+		if events&POLLOUT != 0 {
+			events |= POLLWRNORM
+		}
+
+		n.ready.Store(int32(events))
 		n.mu.Lock()
-
-		if len(n.connecting) == 0 {
-			n.mu.Unlock()
-
-			break
-		}
-
-		c := n.connecting[0]
-
-		n.connecting[0] = nil
-		n.connecting = n.connecting[1:]
-
-		w := c.w
-
-		if w == nil {
-			n.mu.Unlock()
-
-			break
-		}
-
-		c.w = nil
-		w.wake(Received{pk: *pk})
+		n.watchers.tell()
 		n.mu.Unlock()
-
-		return
 	}
 
 	dropFiles(pk.files)
@@ -170,90 +127,8 @@ func (n *RemoteNode) deliver(pk *Packet) {
 func (n *RemoteNode) hungUp() {
 	n.ready.Store(int32(POLLHUP | POLLERR))
 	n.mu.Lock()
-	n.gone = true
-
-	waiting := n.connecting
-
-	n.connecting = nil
-
-	for _, c := range waiting {
-		if w := c.w; w != nil {
-			c.w = nil
-			w.wake(Received{eof: true})
-		}
-	}
-
 	n.watchers.tell()
 	n.mu.Unlock()
-}
-
-func (n *RemoteNode) connect(p *Process) (*PairEnd, error) {
-	data := make([]byte, remoteHeader)
-
-	p.head(data, rConnect, 0)
-
-	pk := Packet{data: data}
-	w := p.receives.get(p)
-	place := &Connector{w: w}
-
-	defer func() {
-		n.mu.Lock()
-		place.w = nil
-		n.mu.Unlock()
-		p.receives.put(w)
-	}()
-
-	for {
-		n.mu.Lock()
-
-		if n.gone {
-			n.mu.Unlock()
-
-			return nil, EIO
-		}
-
-		full, err := n.end.offer(&pk)
-
-		if err == nil && !full {
-			n.connecting = append(n.connecting, place)
-		}
-
-		n.mu.Unlock()
-
-		if err != nil {
-			return nil, EIO
-		}
-
-		if !full {
-			break
-		}
-
-		n.end.awaitRoom(p)
-	}
-
-	p.await(&w.done, time.Time{}, waitsOn)
-
-	got := w.answer
-
-	if err := replyOf(&got.pk, got.eof); err != nil {
-		return nil, err
-	}
-
-	if len(got.pk.files) == 0 {
-		return nil, EIO
-	}
-
-	dropFiles(got.pk.files[1:])
-
-	c := got.pk.files[0].asPair()
-
-	if c == nil || c.shared.kind != SOCK_SEQPACKET {
-		got.pk.files[0].unref()
-
-		return nil, EIO
-	}
-
-	return c, nil
 }
 
 func (n *RemoteNode) flags() (int, error) {
@@ -277,119 +152,26 @@ func (n *RemoteNode) setFlags(fl int) error {
 	return nil
 }
 
-type KeptConnection struct {
-	node *RemoteNode
-	c    *PairEnd
-}
-
-func (n *RemoteNode) connected(p *Process) (c *PairEnd, fresh bool, err error) {
-	for i := range p.kept {
-		if k := &p.kept[i]; k.node == n {
-			c := k.c
-
-			copy(p.kept[i:], p.kept[i+1:])
-			p.kept[keptConnections-1] = KeptConnection{}
-
-			if c.alive() {
-				return c, false, nil
-			}
-
-			c.unref()
-
-			break
-		}
-	}
-
-	c, err = n.connect(p)
-
-	return c, true, err
-}
-
-func (n *RemoteNode) keep(p *Process, c *PairEnd) {
-	if p.disconnected {
-		c.unref()
-
-		return
-	}
-
-	last := keptConnections - 1
-
-	for i := range p.kept {
-		if p.kept[i].node == n {
-			last = i
-
-			break
-		}
-	}
-
-	if old := p.kept[last].c; old != nil {
-		old.unref()
-	}
-
-	copy(p.kept[1:last+1], p.kept[:last])
-	p.kept[0] = KeptConnection{n, c}
-}
-
-func (n *RemoteNode) exchange(p *Process, data []byte, files []Object, interruptible bool) (pk *Packet, cancelled bool, err error) {
-	for {
-		c, fresh, err := n.connected(p)
-
-		if err != nil {
-			return nil, false, err
-		}
-
-		pk, cancelled, lost, err := n.exchangeOn(p, c, data, files, interruptible)
-
-		if !lost || fresh {
-			return pk, cancelled, err
-		}
-	}
-}
-
-func (n *RemoteNode) exchangeOn(p *Process, c *PairEnd, data []byte, files []Object, interruptible bool) (pk *Packet, cancelled, lost bool, err error) {
-	kept := false
-
-	defer func() {
-		if !kept {
-			c.unref()
-		}
-	}()
-
+func (n *RemoteNode) exchange(p *Process, data []byte, files []Object, interruptible bool) (pk Packet, cancelled bool, err error) {
 	if interruptible && p.interrupts(true) {
-		n.keep(p, c)
-
-		kept = true
-
-		return nil, false, false, EINTR
+		return Packet{}, false, EINTR
 	}
 
-	for _, f := range files {
-		f.ref()
+	a := &Answer{asker: p}
+
+	defer a.leave()
+
+	if n.end.kernelSend(p, &Packet{data: data, files: append(files, a)}) != nil {
+		return Packet{}, false, EIO
 	}
 
-	request := &Packet{data: data, files: files}
+	outer, was := p.ask(a)
 
-	if full, err := c.offer(request); err != nil || full {
-		dropFiles(files)
-
-		return nil, false, err == EPIPE, EIO
-	}
-
-	outer, was := p.ask(c)
-
-	pk = c.answer(p)
+	p.await(&a.done, time.Time{}, waitsOn)
 	cancelled = p.cancelled
 	p.unask(outer, was)
 
-	if pk == nil {
-		return nil, cancelled, request.kind == packetLost, EIO
-	}
-
-	n.keep(p, c)
-
-	kept = true
-
-	return pk, cancelled, false, nil
+	return a.taken(), cancelled, nil
 }
 
 func (n *RemoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Object) (pk Packet, restart bool, err error) {
@@ -402,13 +184,12 @@ func (n *RemoteNode) waiting(p *Process, op, arg uint32, body []byte, files []Ob
 	p.head(data, op, arg)
 	copy(data[remoteHeader:], body)
 
-	got, cancelled, err := n.exchange(p, data, files, true)
+	pk, cancelled, err := n.exchange(p, data, files, true)
 
 	if err != nil {
 		return Packet{}, false, err
 	}
 
-	pk = *got
 	err = replyOf(&pk, false)
 
 	dropFiles(pk.files)
@@ -427,13 +208,11 @@ func (n *RemoteNode) call(p *Process, op, arg uint32, body []byte, files []Objec
 }
 
 func (n *RemoteNode) asked(p *Process, op uint32, data []byte, files []Object) (Packet, error) {
-	got, _, err := n.exchange(p, data, files, false)
+	pk, _, err := n.exchange(p, data, files, false)
 
 	if err != nil {
 		return Packet{}, err
 	}
-
-	pk := *got
 
 	if err := replyOf(&pk, false); err != nil {
 		return Packet{}, err

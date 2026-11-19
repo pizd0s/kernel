@@ -25,28 +25,25 @@
 // the kernel, the handle of id 0: the root of the server behind it, which
 // rootfs makes the root of the processes it starts so.
 //
-// A call on an open file goes on a connection to it, which who calls
-// asks for on the open file's endpoint: CONNECT, a question, answered
-// there, the questions' answers in their order. The server makes a pair
-// for it, socketpair's SOCK_SEQPACKET, keeps one end and answers with the
-// other. A request is a packet sent on the connection, and its reply the
-// packet that comes back on it; who asks sends one request and waits for
-// its reply. A server may hand a request on, its descriptors and its end
-// of the connection it came on with it, to another, which answers there:
-// the end is whose answers, so the server that handed it on closes its
-// own, and who asked finds the connection closed after the reply and
-// connects again for its next call. A server that is gone is EIO: its
-// ends close with it, and who asked reads the end of the connection.
+// A call on an open file is a request sent on the open file's endpoint:
+// a packet, its descriptors with it, the last of them where the request
+// is answered, an object of the kernel's that takes one answer. The
+// server writes the reply there, a packet as it would send it (sendmsg,
+// its descriptors with it, or write), and closes the descriptor: the
+// close is the end of the answer, and who asked wakes with what was
+// written. A server may hand a request on, its descriptors with it, to
+// another, which answers there: the descriptor is whose answers, so the
+// server that handed it on closes its own. A server that is gone is EIO:
+// its descriptors close with it, and a request closed with no answer
+// written is EIO to who asked.
 //
-// A request may be followed on its connection by CANCEL from who asked,
-// whose caller took a signal: a packet as a request is, with no answer of
-// its own. A server that keeps the request, a READ or a WRITE that waits
-// as long as its file says, answers the request at once then, with the
-// count so far or ERR EINTR; one that does not keep it drops the CANCEL,
-// and so does one the CANCEL reaches after its reply. Who asks keeps its
-// connection for its next calls: a server sees one connection of a
-// process to an open file, and another only for a call made while the
-// first has one in hand.
+// Who asked may take a signal while the request waits: where the request
+// is answered is readable then, and a receive there gives CANCEL, a
+// header with the ids of who asked. A server that keeps the request, a
+// READ or a WRITE that waits as long as its file says, watches for it and
+// answers the request at once, with the count so far or ERR EINTR; one
+// that does not keep it never looks. When who asked is gone the receive
+// gives the end, and an answer is EPIPE.
 //
 // A packet is a Header and a body; descriptors ride with it (SCM_RIGHTS).
 //
@@ -161,9 +158,6 @@
 //     FSTATFS                             OK statfs
 //     CANCEL                              of the request the server
 //                                         keeps while it waits
-//   on its endpoint:
-//     CONNECT                             OK, fds[0] the other end of a
-//                                         pair, a connection
 //   and from the server, on its end of an open file it made telling
 //   (openedTells), the file's readiness, which select, poll and epoll
 //   find: until the first, nothing is ready; the last counts.
@@ -330,7 +324,6 @@ enum : uint32_t {
     opFstatfs,
     opCancel,
     opReady,
-    opConnect,
     // A service's.
     opOpen = 96,
     opRegister,
