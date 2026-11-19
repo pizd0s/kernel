@@ -24,8 +24,7 @@ type Epoll struct {
 	order  []*EpollMember
 	byID   map[uint64]*EpollMember
 	lastID uint64
-	ready  []*EpollMember
-	spare  []*EpollMember
+	ready  MsgChannel[*EpollMember]
 
 	subs    Subscribers
 	waiting Waiters[Turn]
@@ -73,7 +72,7 @@ func (ep *Epoll) unref() {
 
 	members := ep.order
 
-	ep.members, ep.byID, ep.order, ep.ready = map[EpollKey]*EpollMember{}, map[uint64]*EpollMember{}, nil, nil
+	ep.members, ep.byID, ep.order, ep.ready = map[EpollKey]*EpollMember{}, map[uint64]*EpollMember{}, nil, MsgChannel[*EpollMember]{}
 
 	for _, m := range members {
 		m.removed = true
@@ -171,9 +170,13 @@ func (ep *Epoll) poll(events int16) int16 {
 
 	ep.mu.Lock()
 
-	marked := make([]asked, 0, len(ep.ready))
+	marked := make([]asked, 0, ep.ready.len())
 
-	for _, m := range ep.ready {
+	for left := ep.ready.len(); left > 0; left-- {
+		m, _ := ep.ready.take()
+
+		ep.ready.put(m)
+
 		if !m.disabled && !m.removed {
 			marked = append(marked, asked{m.key.obj, m.events})
 		}
@@ -225,7 +228,7 @@ func (ep *Epoll) mark(m *EpollMember) {
 	}
 
 	m.queued = true
-	ep.ready = append(ep.ready, m)
+	ep.ready.put(m)
 	ep.waiting.wake(Turn{})
 }
 
@@ -350,27 +353,15 @@ func (ep *Epoll) add(key EpollKey, events uint32, data uint64) error {
 }
 
 func (ep *Epoll) collect(buf []byte, max int, who **EpollMember) int {
+	n := 0
+
 	ep.mu.Lock()
 
-	if len(ep.ready) == 0 {
-		ep.mu.Unlock()
-
-		return 0
-	}
-
-	marked := ep.ready
-
-	ep.ready, ep.spare = ep.spare[:0], nil
-
-	for _, m := range marked {
-		m.queued = false
-	}
-
-	n, i := 0, 0
-
-	for ; i < len(marked) && n < max; i++ {
-		m := marked[i]
+	for left := ep.ready.len(); left > 0 && n < max; left-- {
+		m, _ := ep.ready.take()
 		events := m.events
+
+		m.queued = false
 
 		if m.disabled || m.removed {
 			continue
@@ -411,21 +402,6 @@ func (ep *Epoll) collect(buf []byte, max int, who **EpollMember) int {
 		}
 	}
 
-	if i < len(marked) {
-		left := make([]*EpollMember, 0, len(marked)-i+len(ep.ready))
-
-		for _, m := range marked[i:] {
-			if !m.queued && !m.disabled && !m.removed {
-				m.queued = true
-				left = append(left, m)
-			}
-		}
-
-		ep.ready = append(left, ep.ready...)
-	}
-
-	clear(marked)
-	ep.spare = marked[:0]
 	ep.mu.Unlock()
 
 	return n
@@ -448,7 +424,7 @@ func (ep *Epoll) marked(p *Process, end time.Time) (timedOut bool, err error) {
 		return true, nil
 	}
 
-	_, _, timedOut, err = attend(p, &p.turns, &ep.mu, &ep.waiting, func() bool { return len(ep.ready) > 0 }, end, interrupts)
+	_, _, timedOut, err = attend(p, &p.turns, &ep.mu, &ep.waiting, func() bool { return ep.ready.len() > 0 }, end, interrupts)
 
 	return timedOut, err
 }
