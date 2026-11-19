@@ -3528,11 +3528,11 @@ func (p *Process) watch(mu *sync.Mutex, l *Subscribers, out bool, end time.Time,
 			return true, nil
 		}
 
-		if how == waitsOn {
-			return false, nil
+		if how != waitsOn && p.interrupts(how == restarts) {
+			return true, EINTR
 		}
 
-		return p.interrupts(how == restarts), EINTR
+		return e != nil && e.kind == eventSignal, nil
 	})
 
 	mu.Lock()

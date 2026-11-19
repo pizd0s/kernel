@@ -138,26 +138,37 @@ func (l *UnixListener) listen(backlog int) {
 func (l *UnixListener) accept(p *Process, nonblock bool) (*PairEnd, error) {
 	l.mu.Lock()
 
-	defer l.mu.Unlock()
-
 	for {
-		if !l.listening || l.closed {
-			return nil, EINVAL
-		}
+		e, ok := l.conns.take()
 
-		if e, ok := l.conns.take(); ok {
+		var err error
+
+		switch {
+		case !l.listening || l.closed:
+			err = EINVAL
+		case ok:
 			l.watchers.tellOut()
+		case nonblock:
+			err = EAGAIN
+		default:
+			_, err = p.watch(&l.mu, &l.watchers, false, time.Time{}, restarts)
 
-			return e, nil
+			if err == nil {
+				continue
+			}
 		}
 
-		if nonblock {
-			return nil, EAGAIN
+		l.mu.Unlock()
+
+		if err != nil && ok {
+			e.unref()
 		}
 
-		if _, err := p.watch(&l.mu, &l.watchers, false, time.Time{}, restarts); err != nil {
+		if err != nil {
 			return nil, err
 		}
+
+		return e, nil
 	}
 }
 
