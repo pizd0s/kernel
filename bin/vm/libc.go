@@ -2614,6 +2614,10 @@ func libcStrcspn(ctx uintptr, s, set uint32) uint32 {
 	return proc(ctx).libcStrcspn(s, set)
 }
 
+func libcExecmode(ctx uintptr, modes, classes, sink uint32) uint32 {
+	return proc(ctx).libcExecmode(modes, classes, sink)
+}
+
 func fcntlSize(cmd uint32) uint32 {
 	switch cmd {
 	case F_GETLK, F_SETLK, F_SETLKW:

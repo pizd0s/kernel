@@ -42,6 +42,40 @@ var signalMessages = map[int]string{
 	SIGSYS:    "Bad system call",
 }
 
+var signalNames = map[int]string{
+	SIGHUP:    "SIGHUP",
+	SIGINT:    "SIGINT",
+	SIGQUIT:   "SIGQUIT",
+	SIGILL:    "SIGILL",
+	SIGTRAP:   "SIGTRAP",
+	SIGABRT:   "SIGABRT",
+	SIGBUS:    "SIGBUS",
+	SIGFPE:    "SIGFPE",
+	SIGKILL:   "SIGKILL",
+	SIGUSR1:   "SIGUSR1",
+	SIGSEGV:   "SIGSEGV",
+	SIGUSR2:   "SIGUSR2",
+	SIGPIPE:   "SIGPIPE",
+	SIGALRM:   "SIGALRM",
+	SIGTERM:   "SIGTERM",
+	SIGSTKFLT: "SIGSTKFLT",
+	SIGCHLD:   "SIGCHLD",
+	SIGCONT:   "SIGCONT",
+	SIGSTOP:   "SIGSTOP",
+	SIGTSTP:   "SIGTSTP",
+	SIGTTIN:   "SIGTTIN",
+	SIGTTOU:   "SIGTTOU",
+	SIGURG:    "SIGURG",
+	SIGXCPU:   "SIGXCPU",
+	SIGXFSZ:   "SIGXFSZ",
+	SIGVTALRM: "SIGVTALRM",
+	SIGPROF:   "SIGPROF",
+	SIGWINCH:  "SIGWINCH",
+	SIGIO:     "SIGIO",
+	SIGPWR:    "SIGPWR",
+	SIGSYS:    "SIGSYS",
+}
+
 func lower(c byte) byte {
 	if c >= 'A' && c <= 'Z' {
 		return c + 'a' - 'A'
@@ -102,6 +136,14 @@ func capitalize(s string) string {
 	}
 
 	return s
+}
+
+func signalName(sig int) string {
+	if s, ok := signalNames[sig]; ok {
+		return s
+	}
+
+	return fmt.Sprintf("signal %d", sig)
 }
 
 func signalMessage(sig int) string {

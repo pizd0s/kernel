@@ -11,13 +11,17 @@ import (
 	"unsafe"
 )
 
+const thunkSize = 16
+
 type Code struct {
 	name string
 	obj  *ElfObject
 	text []byte
 	base uintptr
 
-	keep []any
+	keep    []any
+	thunks  []byte
+	thunkOf map[string]uintptr
 }
 
 func bindContext(code, ctx uintptr) uintptr {
@@ -106,6 +110,24 @@ func goFuncType(params, results []ValType) reflect.Type {
 	return reflect.FuncOf(in, out, false)
 }
 
+func (c *Code) keepClosure(sym string, f any) uintptr {
+	if c.thunks == nil {
+		c.thunks = mmap((thunkSize*len(c.obj.meta.imports)+4095)&^4095, syscall.PROT_READ|syscall.PROT_WRITE)[:0]
+		c.thunkOf = map[string]uintptr{}
+	}
+
+	c.keep = append(c.keep, f)
+
+	at := uintptr(unsafe.Pointer(unsafe.SliceData(c.thunks))) + uintptr(len(c.thunks))
+
+	c.thunks = append(c.thunks, 0x48, 0xba)
+	c.thunks = binary.LittleEndian.AppendUint64(c.thunks, uint64(funcval(f)))
+	c.thunks = append(c.thunks, 0xff, 0x22, 0xcc, 0xcc, 0xcc, 0xcc)
+	c.thunkOf[sym] = at
+
+	return at
+}
+
 func (c *Code) keepFunc(f any) uintptr {
 	c.keep = append(c.keep, f)
 
@@ -134,6 +156,10 @@ func (c *Code) resolve(sym string, imports Imports) uintptr {
 		return strFunction(sym)
 	}
 
+	if at, ok := c.thunkOf[sym]; ok {
+		return at
+	}
+
 	for k := range c.obj.meta.imports {
 		imp := &c.obj.meta.imports[k]
 
@@ -151,8 +177,18 @@ func (c *Code) resolve(sym string, imports Imports) uintptr {
 			return code
 		}
 
+		wrapped, closure := f.(Closure)
+
+		if closure {
+			f = wrapped.f
+		}
+
 		if want := goFuncType(imp.params, imp.results); reflect.TypeOf(f) != want {
 			throwFmt("import %s.%s is %T, not %s", imp.module, imp.name, f, want)
+		}
+
+		if closure {
+			return c.keepClosure(sym, f)
 		}
 
 		return c.keepFunc(f)
@@ -230,6 +266,11 @@ func link(name string, obj *ElfObject, imports Imports) *Code {
 
 	throw(syscall.Mprotect(c.text[:textSize], syscall.PROT_READ|syscall.PROT_EXEC))
 	throw(syscall.Mprotect(c.text[textSize:], syscall.PROT_READ))
+
+	if c.thunks != nil {
+		throw(syscall.Mprotect(c.thunks[:cap(c.thunks)], syscall.PROT_READ|syscall.PROT_EXEC))
+	}
+
 	registerCode(name, c.base, uintptr(len(obj.text)), obj.meta.regions, false, obj.meta.files, obj.meta.lines)
 
 	return c

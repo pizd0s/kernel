@@ -511,7 +511,7 @@ vm_chaos_coverage = command(
 # The tools of the system, its services and the commands that speak to
 # them, in one multicall executable, /bin/tools, each a link to it in the
 # image (bin/tools).
-TOOLS = ["blk", "console", "devfs", "devices", "erofs", "mount", "pty", "tmpfs", "umount"]
+TOOLS = ["blk", "console", "devfs", "devices", "erofs", "mount", "pty", "spawn", "tmpfs", "umount"]
 PROTOCOL_SOURCES = build.glob("$(S)/lib/protocol/*.cpp")
 PROTOCOL_HEADERS = build.glob("$(S)/lib/protocol/*.h")
 TOOL_SOURCES = [*build.glob("$(S)/bin/tools/*.cpp"), *PROTOCOL_SOURCES]
@@ -1059,6 +1059,7 @@ APPLICATION_TESTED = {
     "doom": [vm, rootfs, tests_image],
     "mc": [vm, rootfs, tests_image],
     "python": [vm, rootfs, tests_image],
+    "spawn": [vm, rootfs, tests_image],
     "terminfo": [ncurses_tarball, terminfo],
 }
 TESTED = {**E2E_TESTED, **APPLICATION_TESTED}
@@ -1134,6 +1135,20 @@ libc_consts_test = command(
 )
 tests.append(libc_consts_test)
 e2e_tests.append(libc_consts_test)
+
+# How the kernel writes the arguments of a traced call, against lib/c's
+# declarations of the kernel's functions.
+call_formats_test = command(
+    name="test_call_formats",
+    inputs=["$(S)/tst/test_call_formats.py", "$(S)/bin/vm/traced_imports.go", "$(S)/lib/c/src/kernel.c", "$(S)/lib/c/src/kernel.h", *LIBC_HEADERS],
+    outputs=["$(B)/tst/call_formats.stamp"],
+    deps=[],
+    cmd=[["python3", "$(S)/tst/test_call_formats.py", CLANG, "$(S)"], touch("$(B)/tst/call_formats.stamp")],
+    env={"PYTHONDONTWRITEBYTECODE": "1"},
+    descr="TS", color="green",
+)
+tests.append(call_formats_test)
+e2e_tests.append(call_formats_test)
 
 for name, runner, fixture in (("wat_updates", "run_updates.py", "update_branches.wat"),
                               ("wat_float_selects", "run_float_selects.py", "float_selects.wat"),

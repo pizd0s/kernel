@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"os"
 	"path"
+	"reflect"
 	"regexp"
 	"regexp/syntax"
 	"runtime"
@@ -171,6 +172,7 @@ const (
 	databaseMax      = 16 << 20
 	resolveWait      = 10 * time.Second
 	localeNameMax    = 23
+	traceStringMax   = 64
 )
 
 const (
@@ -224,6 +226,10 @@ type Process struct {
 
 	wasiRoot  int
 	chaos     *ChaosRulesOf
+	modes     uint32
+	classes   uint32
+	sink      Transfer
+	failure   Errno
 	regexes   map[uint32]*PosixRegex
 	nextRegex uint32
 
@@ -289,6 +295,173 @@ func proc(ctx uintptr) *Process {
 	p.interruption = signalNone
 
 	return p
+}
+
+func (p *Process) libcExecmode(modes, classes, sink uint32) uint32 {
+	if modes&^(EXEC_ASAN|EXEC_TRACE) != 0 || classes&^(TRACE_SYSTEM|TRACE_LIBRARY|TRACE_PROCESS|TRACE_SIGNALS|TRACE_FAULTS) != 0 {
+		return p.result(0, EINVAL)
+	}
+
+	var to Transfer
+
+	if int32(sink) != -1 {
+		t, err := p.transferAt(sink, false)
+
+		if err != nil {
+			return p.result(0, err)
+		}
+
+		to = t
+	}
+
+	if modes&EXEC_TRACE != 0 && (to == nil || classes == 0) || modes&EXEC_TRACE == 0 && (to != nil || classes != 0) {
+		return p.result(0, EINVAL)
+	}
+
+	if to != nil {
+		to.ref()
+	}
+
+	p.setSink(to)
+	p.modes, p.classes = modes, classes
+
+	return p.result(0, nil)
+}
+
+func (p *Process) setSink(to Transfer) {
+	if p.sink != nil {
+		p.sink.unref()
+	}
+
+	p.sink = to
+}
+
+func (p *Process) tracedCalls() uint32 {
+	if p.modes&EXEC_TRACE == 0 {
+		return 0
+	}
+
+	return p.classes & (TRACE_SYSTEM | TRACE_LIBRARY)
+}
+
+func (p *Process) traces(class uint32) bool {
+	return p.sink != nil && p.modes&EXEC_TRACE != 0 && p.classes&class != 0
+}
+
+func (p *Process) sinkWrite(b []byte) {
+	for p.sink != nil {
+		_, err := p.sink.write(p, b, IoMode{quiet: true})
+
+		if err == nil || err == EAGAIN {
+			return
+		}
+
+		if err != EINTR {
+			p.setSink(nil)
+			p.modes, p.classes = p.modes&^EXEC_TRACE, 0
+		}
+	}
+}
+
+func (p *Process) trace(class uint32, text string) {
+	if p.traces(class) {
+		p.sinkWrite(fmt.Appendf(nil, "[%d] %s\n", p.pid, text))
+	}
+}
+
+func (p *Process) traceString(at uint32) string {
+	if at == 0 {
+		return "0"
+	}
+
+	if p.inst == nil {
+		return fmt.Sprintf("%#x", at)
+	}
+
+	m := p.mem()
+
+	if uint64(at) >= uint64(len(m)) {
+		return fmt.Sprintf("%#x", at)
+	}
+
+	s := m[at:min(uint64(len(m)), uint64(at)+traceStringMax)]
+
+	if n := bytes.IndexByte(s, 0); n >= 0 {
+		return strconv.Quote(string(s[:n]))
+	}
+
+	return strconv.Quote(string(s)) + "..."
+}
+
+func (p *Process) traceValue(kind byte, v reflect.Value) string {
+	if v.Kind() == reflect.Float32 || v.Kind() == reflect.Float64 {
+		return strconv.FormatFloat(v.Float(), 'g', -1, 64)
+	}
+
+	u := v.Uint()
+	n := int64(u)
+
+	if v.Kind() == reflect.Uint32 {
+		n = int64(int32(u))
+	}
+
+	switch {
+	case kind == 's' && v.Kind() == reflect.Uint32:
+		return p.traceString(uint32(u))
+	case kind == 'o':
+		return fmt.Sprintf("%#o", u)
+	case kind != 'p' && kind != 's' && n >= -4096 && n < 65536, u == 0:
+		return strconv.FormatInt(n, 10)
+	}
+
+	return fmt.Sprintf("%#x", u)
+}
+
+func (p *Process) traceCall(class uint32, name string, args, out []reflect.Value, failure Errno) {
+	if !p.traces(class) {
+		return
+	}
+
+	var b strings.Builder
+
+	format := callFormats[name]
+
+	fmt.Fprintf(&b, "[%d] %s(", p.pid, name)
+
+	for i, a := range args {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+
+		kind := byte('d')
+
+		if i+1 < len(format) {
+			kind = format[i+1]
+		}
+
+		b.WriteString(p.traceValue(kind, a))
+	}
+
+	b.WriteString(")")
+
+	for _, r := range out {
+		kind := byte('d')
+
+		if len(format) > 0 {
+			kind = format[0]
+		}
+
+		b.WriteString(" = ")
+
+		if failed := r.Kind() == reflect.Uint32 && int32(r.Uint()) == -1 || r.Kind() == reflect.Uint64 && int64(r.Uint()) == -1; failed && failure != 0 {
+			fmt.Fprintf(&b, "-1 %s (%s)", errnoNames[failure], failure.error())
+		} else {
+			b.WriteString(p.traceValue(kind, r))
+		}
+	}
+
+	b.WriteString("\n")
+	p.sinkWrite([]byte(b.String()))
 }
 
 func (p *Process) chaosStart(env []string) {
@@ -427,6 +600,13 @@ func trapSignal(code uint32) int {
 
 func (p *Process) terminate(status int) {
 	p.unwound = true
+
+	if sig := status & 0x7f; sig != 0 {
+		p.trace(TRACE_PROCESS, "killed "+signalName(sig))
+	} else {
+		p.trace(TRACE_PROCESS, fmt.Sprintf("exit %d", status>>8&0xff))
+	}
+
 	p.stopTimers()
 	p.leaveSession(true)
 
@@ -437,6 +617,7 @@ func (p *Process) terminate(status int) {
 	p.disconnect()
 	p.root.unref()
 	p.cwd.unref()
+	p.setSink(nil)
 	p.sig.mu.Lock()
 	p.sig.dead = true
 	p.sig.mu.Unlock()
@@ -723,6 +904,7 @@ func errnoOf(err error) Errno {
 }
 
 func (p *Process) setErrno(e Errno) {
+	p.failure = e
 	p.put32(p.errnoAt, uint32(e))
 }
 
@@ -805,6 +987,7 @@ func (p *Process) execFrom(path string, f Object, argv, envp []string) error {
 	}
 
 	img.envp = envp
+	p.trace(TRACE_PROCESS, "exec "+strconv.Quote(path))
 	p.execImage(img)
 
 	return ELOOP
@@ -1895,6 +2078,7 @@ func (p *Process) startVfork() uint32 {
 	c.token.Store(p.token.Load())
 	c.inherit(p)
 	p.inst.attach(c)
+	c.trace(TRACE_PROCESS, fmt.Sprintf("child of %d", p.pid))
 
 	return c.result(0, nil)
 }
@@ -1972,7 +2156,12 @@ func (p *Process) fork(setup func(c *Process)) (int32, error) {
 		setup(c)
 	}
 
-	go c.runFrom(p.image, inst, func() { inst.resume(frames) })
+	parent := p.pid
+
+	go c.runFrom(p.image, inst, func() {
+		c.trace(TRACE_PROCESS, fmt.Sprintf("child of %d", parent))
+		inst.resume(frames)
+	})
 
 	return c.pid, nil
 }
@@ -2638,6 +2827,7 @@ func (p *Process) handleSignals() (taken, restart bool) {
 		}
 
 		taken = true
+		p.trace(TRACE_SIGNALS, "signal "+signalName(sig))
 
 		switch act.handler {
 		case SIG_IGN:
@@ -3821,6 +4011,14 @@ func (p *Process) crash(msg string, stack []uintptr) {
 
 	for _, line := range traceLines(stack) {
 		fmt.Fprintf(&b, "%s[%d]:     %s\n", name, p.pid, line)
+	}
+
+	if p.traces(TRACE_FAULTS) {
+		p.sinkWrite([]byte(b.String()))
+
+		if p.sink != nil {
+			return
+		}
 	}
 
 	if t, err := p.transferAt(2, false); err == nil {

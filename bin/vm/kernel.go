@@ -38,8 +38,7 @@ type Kernel struct {
 	procs   map[int32]*Process
 	lastPid int32
 
-	codes   map[[sha256.Size]byte]*CodeEntry
-	options CompileOptions
+	codes map[CodeKey]*CodeEntry
 
 	fifos map[FileKey]*Pipe
 	locks LockTable
@@ -51,8 +50,8 @@ type Kernel struct {
 	functions map[string]any
 }
 
-func newKernel(options CompileOptions, user Cred) *Kernel {
-	k := &Kernel{procs: map[int32]*Process{}, codes: map[[sha256.Size]byte]*CodeEntry{}, options: options, fifos: map[FileKey]*Pipe{},
+func newKernel(user Cred) *Kernel {
+	k := &Kernel{procs: map[int32]*Process{}, codes: map[CodeKey]*CodeEntry{}, fifos: map[FileKey]*Pipe{},
 		exit: make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]Terminal{}}
 
 	k.locks.files = map[FileKey]*LockedFile{}
@@ -108,6 +107,11 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 		p.cred = parent.cred.clone()
 		p.chaos = parent.chaos
 		p.root = parent.root
+		p.modes, p.classes, p.sink = parent.modes, parent.classes, parent.sink
+
+		if p.sink != nil {
+			p.sink.ref()
+		}
 	}
 
 	p.root.ref()
@@ -198,15 +202,22 @@ func readAt(p *Process, t Transfer, b []byte, off int64) error {
 	return nil
 }
 
+type CodeKey struct {
+	hash [sha256.Size]byte
+	asan bool
+}
+
 type CodeEntry struct {
 	done    bool
 	waiting []*Process
 	code    *Code
 	err     error
+	link    sync.Mutex
+	traced  map[uint32]*Code
 }
 
 func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*Code, error) {
-	key := sha256.Sum256(data)
+	key := CodeKey{hash: sha256.Sum256(data), asan: p.modes&EXEC_ASAN != 0}
 
 	k.mu.Lock()
 
@@ -217,7 +228,7 @@ func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*
 		k.codes[key] = e
 
 		go func() {
-			code, err := k.compile(data, name, obj)
+			code, err := k.compile(data, name, obj, key.asan)
 
 			k.mu.Lock()
 			e.code, e.err, e.done = code, err, true
@@ -252,14 +263,48 @@ func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*
 		return e.done, nil
 	})
 
-	return e.code, e.err
+	if e.err != nil {
+		return nil, e.err
+	}
+
+	return k.traced(e, name, p.tracedCalls())
 }
 
-func (k *Kernel) compile(data []byte, name string, obj *ElfObject) (*Code, error) {
+func (k *Kernel) traced(e *CodeEntry, name string, classes uint32) (*Code, error) {
+	if classes == 0 {
+		return e.code, nil
+	}
+
+	e.link.Lock()
+
+	defer e.link.Unlock()
+
+	if c := e.traced[classes]; c != nil {
+		return c, nil
+	}
+
+	var c *Code
+
+	if x := try(func() {
+		c = link(name, e.code.obj, &TracedImports{k: k, classes: classes})
+	}); x != nil {
+		return nil, fmt.Errorf("%s: %s: %w", name, x, ENOEXEC)
+	}
+
+	if e.traced == nil {
+		e.traced = map[uint32]*Code{}
+	}
+
+	e.traced[classes] = c
+
+	return c, nil
+}
+
+func (k *Kernel) compile(data []byte, name string, obj *ElfObject, asan bool) (*Code, error) {
 	if obj == nil {
 		var err error
 
-		if obj, err = compileExecutable(data, k.options); err != nil {
+		if obj, err = compileExecutable(data, programOptions(asan)); err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
 	}
@@ -563,6 +608,7 @@ func (k *Kernel) functionTable() map[string]any {
 		"mount":                  libcMount,
 		"umount":                 libcUmount,
 		"umount2":                libcUmount2,
+		"execmode":               libcExecmode,
 		"remove":                 libcRemove,
 		"rename":                 libcRename,
 		"renameat":               libcRenameat,

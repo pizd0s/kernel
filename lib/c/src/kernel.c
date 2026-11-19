@@ -45,6 +45,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/epoll.h>
+#include <sys/execmode.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -601,6 +602,7 @@ KERNEL(int, rmdir, (const char* a), (a))
 KERNEL(int, mount, (const char* a, const char* b, const char* c, unsigned long d, const void* e), (a, b, c, d, e))
 KERNEL(int, umount, (const char* a), (a))
 KERNEL(int, umount2, (const char* a, int b), (a, b))
+KERNEL(int, execmode, (unsigned a, unsigned b, int c), (a, b, c))
 KERNEL(int, link, (const char* a, const char* b), (a, b))
 KERNEL(int, linkat, (int a, const char* b, int c, const char* d, int e), (a, b, c, d, e))
 KERNEL(int, symlink, (const char* a, const char* b), (a, b))

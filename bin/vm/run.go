@@ -52,7 +52,7 @@ func runModule(path string, argv []string, asan bool, disks []Disk, user Cred) i
 		disks = append([]Disk{{name: imageDisk, mem: tail}}, disks...)
 	}
 
-	return runKernel(path, argv, options, data, obj, disks, user)
+	return runKernel(path, argv, asan, data, obj, disks, user)
 }
 
 func hostProgram(path string) (data []byte, exe bool, tail []byte, err error) {
@@ -116,9 +116,14 @@ func importsKernel(obj *ElfObject) bool {
 	return false
 }
 
-func runKernel(path string, argv []string, options CompileOptions, data []byte, obj *ElfObject, disks []Disk, user Cred) int {
-	k := newKernel(options, user)
+func runKernel(path string, argv []string, asan bool, data []byte, obj *ElfObject, disks []Disk, user Cred) int {
+	k := newKernel(user)
 	p := throw2(k.newProcess(nil))
+
+	if asan {
+		p.modes = EXEC_ASAN
+	}
+
 	code, err := k.codeOf(p, data, path, obj)
 
 	throw(err)

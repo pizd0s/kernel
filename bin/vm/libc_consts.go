@@ -516,4 +516,11 @@ const (
 	CLOCK_MONOTONIC_RAW            = 4
 	CLOCK_REALTIME_COARSE          = 5
 	CLOCK_MONOTONIC_COARSE         = 6
+	EXEC_ASAN                      = 1
+	EXEC_TRACE                     = 2
+	TRACE_SYSTEM                   = 1
+	TRACE_LIBRARY                  = 2
+	TRACE_PROCESS                  = 4
+	TRACE_SIGNALS                  = 8
+	TRACE_FAULTS                   = 16
 )
