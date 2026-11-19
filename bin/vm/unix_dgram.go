@@ -141,14 +141,14 @@ func (s *UnixDgram) stat(p *Process, st *Stat) error {
 	return s.inbox.stat(p, st)
 }
 
-func (s *UnixDgram) poll(events int16) int16 {
+func (s *UnixDgram) poll(events int16, through []*Epoll) int16 {
 	out := events & (POLLOUT | POLLWRNORM)
-	ready := s.inbox.poll(events) &^ (POLLOUT | POLLWRNORM)
+	ready := s.inbox.poll(events, through) &^ (POLLOUT | POLLWRNORM)
 
 	if t := s.targetEnd(); t != nil {
 		defer t.unref()
 
-		return ready | t.poll(out)&out
+		return ready | t.poll(out, through)&out
 	}
 
 	return ready | out

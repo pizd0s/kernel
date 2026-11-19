@@ -148,14 +148,14 @@ func (s *UnixSocket) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (s *UnixSocket) poll(events int16) int16 {
+func (s *UnixSocket) poll(events int16, through []*Epoll) int16 {
 	l, c := s.state()
 
 	switch {
 	case c != nil:
-		return c.poll(events)
+		return c.poll(events, through)
 	case l != nil:
-		return l.poll(events) & (POLLIN | POLLRDNORM | POLLERR | POLLHUP)
+		return l.poll(events, through) & (POLLIN | POLLRDNORM | POLLERR | POLLHUP)
 	}
 
 	return 0

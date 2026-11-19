@@ -151,7 +151,7 @@ func (e *PipeEnd) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (e *PipeEnd) poll(events int16) int16 {
+func (e *PipeEnd) poll(events int16, through []*Epoll) int16 {
 	pp := e.pipe
 
 	pp.mu.Lock()

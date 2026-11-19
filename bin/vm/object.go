@@ -18,7 +18,7 @@ type Object interface {
 	ref()
 	unref()
 
-	poll(events int16) int16
+	poll(events int16, through []*Epoll) int16
 	subscribe(s *Subscription, events int16)
 	unsubscribe(s *Subscription)
 

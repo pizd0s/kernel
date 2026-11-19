@@ -232,7 +232,7 @@ func (e *PairEnd) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (e *PairEnd) poll(events int16) int16 {
+func (e *PairEnd) poll(events int16, through []*Epoll) int16 {
 	mask := int16(0)
 	dgram := e.shared.kind == SOCK_DGRAM
 	r := e.peer

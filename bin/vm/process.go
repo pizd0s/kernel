@@ -4882,7 +4882,7 @@ func (p *Process) waitObjects(entries []PollEntry, timeout int, restart bool) (i
 
 		case e.kind != eventChanged || e.id >= uint64(len(entries)) || e != &entries[e.id].sub.event:
 			return false, nil
-		case entries[e.id].obj.poll(entries[e.id].events) == 0:
+		case entries[e.id].obj.poll(entries[e.id].events, nil) == 0:
 			return false, nil
 		}
 
@@ -4900,7 +4900,7 @@ func pollEntries(entries []PollEntry) int {
 	ready := 0
 
 	for i := range entries {
-		entries[i].revents = entries[i].obj.poll(entries[i].events)
+		entries[i].revents = entries[i].obj.poll(entries[i].events, nil)
 
 		if entries[i].revents != 0 {
 			ready++

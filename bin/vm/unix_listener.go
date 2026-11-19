@@ -205,7 +205,7 @@ func (l *UnixListener) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (l *UnixListener) poll(events int16) int16 {
+func (l *UnixListener) poll(events int16, through []*Epoll) int16 {
 	l.mu.Lock()
 
 	shut, n, room := l.closed, l.conns.len(), l.conns.len() < l.backlog

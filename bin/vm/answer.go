@@ -206,7 +206,7 @@ func (a *Answer) asRemote() *RemoteFD {
 	return nil
 }
 
-func (a *Answer) poll(events int16) int16 {
+func (a *Answer) poll(events int16, through []*Epoll) int16 {
 	a.mu.Lock()
 
 	said := a.said

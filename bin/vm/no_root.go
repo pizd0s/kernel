@@ -105,7 +105,7 @@ func (r *NoRoot) asRemote() *RemoteFD {
 	return nil
 }
 
-func (r *NoRoot) poll(events int16) int16 {
+func (r *NoRoot) poll(events int16, through []*Epoll) int16 {
 	return events & (POLLIN | POLLOUT | POLLRDNORM | POLLWRNORM)
 }
 

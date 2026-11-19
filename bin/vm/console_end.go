@@ -122,15 +122,15 @@ func (c *ConsoleEnd) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (c *ConsoleEnd) poll(events int16) int16 {
+func (c *ConsoleEnd) poll(events int16, through []*Epoll) int16 {
 	var ready int16
 
 	if c.in != nil {
-		ready |= c.in.poll(events&inEvents) & inEvents
+		ready |= c.in.poll(events&inEvents, through) & inEvents
 	}
 
 	if c.out != nil {
-		ready |= c.out.poll(events&outEvents) & outEvents
+		ready |= c.out.poll(events&outEvents, through) & outEvents
 	}
 
 	return ready

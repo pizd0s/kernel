@@ -131,7 +131,7 @@ func (f *MemfdFile) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (f *MemfdFile) poll(events int16) int16 {
+func (f *MemfdFile) poll(events int16, through []*Epoll) int16 {
 	return events & (POLLIN | POLLRDNORM | POLLOUT | POLLWRNORM)
 }
 

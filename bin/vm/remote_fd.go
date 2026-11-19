@@ -159,7 +159,7 @@ func (f *RemoteFD) unsubscribe(s *Subscription) {
 	f.mu.Unlock()
 }
 
-func (f *RemoteFD) poll(events int16) int16 {
+func (f *RemoteFD) poll(events int16, through []*Epoll) int16 {
 	f.mu.Lock()
 
 	ready := f.ready

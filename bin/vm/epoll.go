@@ -27,6 +27,8 @@ type Epoll struct {
 	ready  MsgChannel[*EpollMember]
 
 	subs    Subscribers
+	told    bool
+	self    []*Epoll
 	waiting Waiters[Turn]
 	refs    atomic.Int32
 	ino     uint64
@@ -54,6 +56,7 @@ type EpollMember struct {
 func newEpoll() *Epoll {
 	ep := &Epoll{members: map[EpollKey]*EpollMember{}, byID: map[uint64]*EpollMember{}, ino: epollInodes.Add(1), made: time.Now()}
 
+	ep.self = []*Epoll{ep}
 	ep.refs.Store(1)
 
 	return ep
@@ -162,13 +165,25 @@ func (ep *Epoll) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (ep *Epoll) poll(events int16) int16 {
+func (ep *Epoll) poll(events int16, through []*Epoll) int16 {
+	if slices.Contains(through, ep) {
+		return 0
+	}
+
+	inner := ep.self
+
+	if len(through) > 0 {
+		inner = append(slices.Clip(through), ep)
+	}
+
 	type asked struct {
 		obj    Object
 		events uint32
 	}
 
 	ep.mu.Lock()
+
+	ep.told = false
 
 	marked := make([]asked, 0, ep.ready.len())
 
@@ -185,7 +200,7 @@ func (ep *Epoll) poll(events int16) int16 {
 	ep.mu.Unlock()
 
 	for _, m := range marked {
-		if m.obj.poll(int16(m.events)) != 0 {
+		if m.obj.poll(int16(m.events), inner) != 0 {
 			return (POLLIN | POLLRDNORM) & events
 		}
 	}
@@ -206,14 +221,26 @@ func (ep *Epoll) unsubscribe(s *Subscription) {
 }
 
 func (ep *Epoll) wake(l *Hook) {
+	var buf [4]*Hook
+
+	hooks := buf[:0]
+
 	ep.mu.Lock()
 
-	if m := ep.byID[l.sub.id]; m != nil {
+	if m := ep.byID[l.sub.id]; m != nil && !m.disabled && !m.removed {
 		ep.mark(m)
+
+		if !ep.told {
+			ep.told = true
+			hooks = ep.subs.hooks(hooks)
+		}
 	}
 
-	ep.subs.tell()
 	ep.mu.Unlock()
+
+	for _, h := range hooks {
+		h.sub.to.wake(h)
+	}
 }
 
 func (ep *Epoll) mark(m *EpollMember) {
@@ -254,22 +281,6 @@ func (ep *Epoll) pread(p *Process, b []byte, off int64) (int, error) {
 
 func (ep *Epoll) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return 0, EINVAL
-}
-
-func (ep *Epoll) contains(inner *Epoll) bool {
-	ep.mu.Lock()
-
-	members := slices.Clone(ep.order)
-
-	ep.mu.Unlock()
-
-	for _, m := range members {
-		if e := m.key.obj.asEpoll(); e != nil && (e == inner || e.contains(inner)) {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (ep *Epoll) ctl(op uint32, key EpollKey, events uint32, data uint64) error {
@@ -324,10 +335,6 @@ func (ep *Epoll) remove(m *EpollMember) {
 }
 
 func (ep *Epoll) add(key EpollKey, events uint32, data uint64) error {
-	if inner := key.obj.asEpoll(); inner != nil && (inner == ep || inner.contains(ep)) {
-		return ELOOP
-	}
-
 	ep.mu.Lock()
 
 	if _, dup := ep.members[key]; dup {
@@ -370,7 +377,7 @@ func (ep *Epoll) collect(buf []byte, max int, who **EpollMember) int {
 		m.asking = true
 		ep.mu.Unlock()
 
-		revents := m.key.obj.poll(int16(events))
+		revents := m.key.obj.poll(int16(events), ep.self)
 
 		ep.mu.Lock()
 		m.asking = false

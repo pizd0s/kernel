@@ -64,6 +64,14 @@ func (s *Subscribers) tell() {
 	}
 }
 
+func (s *Subscribers) hooks(into []*Hook) []*Hook {
+	for l := s.first; l != nil; l = l.next {
+		into = append(into, l)
+	}
+
+	return into
+}
+
 func (s *Subscribers) tellIn() {
 	for l := s.first; l != nil; l = l.next {
 		if l == &l.sub.in {

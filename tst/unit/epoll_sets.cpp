@@ -186,14 +186,13 @@ int main() {
     assert(epoll_ctl(ep, EPOLL_CTL_DEL, pair[0], nullptr) == 0);
     assert(close(pair[0]) == 0);
 
-    // A set in a set: ready when a member of the inner one is; no loops.
+    // A set in a set: ready when a member of the inner one is. Loops of
+    // sets: tst/unit/epoll_loops.cpp.
     int outer = epoll_create1(0);
     assert(outer >= 0);
     event.events = EPOLLIN;
     event.data.fd = ep;
     assert(epoll_ctl(outer, EPOLL_CTL_ADD, ep, &event) == 0);
-    event.data.fd = outer;
-    assert(epoll_ctl(ep, EPOLL_CTL_ADD, outer, &event) == -1 && errno == ELOOP);
     assert(waitOne(outer, &event, 0) == 0);
     assert(write(ends[1], "j", 1) == 1);
     assert(waitOne(outer, &event, 0) == 1 && event.data.fd == ep && event.events == EPOLLIN);
