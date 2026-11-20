@@ -288,7 +288,7 @@ func vectored(fd, iovs, count uint32, offset uint64, positioned, write bool, don
 			mode = O_RDONLY
 		}
 
-		w := p.memory(binary.LittleEndian.Uint32(m[iovs+8*uint32(i):]), uint32(len(b)), mode)
+		w := p.memory(binary.LittleEndian.Uint32(guest()[iovs+8*uint32(i):]), uint32(len(b)), mode)
 
 		switch {
 		case positioned && write:
@@ -314,7 +314,7 @@ func vectored(fd, iovs, count uint32, offset uint64, positioned, write bool, don
 		return wasiErrno(err)
 	}
 
-	put32(m, done, uint32(total))
+	put32(guest(), done, uint32(total))
 
 	return wasiOK
 }
@@ -422,9 +422,7 @@ func wasiFdFdstatGet(fd, at uint32) uint32 {
 		return wasiEbadf
 	}
 
-	b := span(guest(), at, 24)
-
-	if b == nil {
+	if span(guest(), at, 24) == nil {
 		return wasiEfault
 	}
 
@@ -449,6 +447,8 @@ func wasiFdFdstatGet(fd, at uint32) uint32 {
 	if fl&O_NONBLOCK != 0 {
 		flags |= 4
 	}
+
+	b := span(guest(), at, 24)
 
 	clear(b)
 	b[0] = filetype(st.Mode)
@@ -510,9 +510,7 @@ func wasiFdFilestatGet(fd, at uint32) uint32 {
 		return wasiEbadf
 	}
 
-	b := span(guest(), at, 64)
-
-	if b == nil {
+	if span(guest(), at, 64) == nil {
 		return wasiEfault
 	}
 
@@ -522,7 +520,7 @@ func wasiFdFilestatGet(fd, at uint32) uint32 {
 		return wasiErrno(err)
 	}
 
-	filestat(b, &st)
+	filestat(span(guest(), at, 64), &st)
 
 	return wasiOK
 }
@@ -633,6 +631,8 @@ func wasiFdReaddir(fd, buf, n uint32, cookie uint64, used uint32) uint32 {
 			return wasiErrno(err)
 		}
 
+		out = span(guest(), buf, uint64(n))
+
 		if got == 0 {
 			break
 		}
@@ -664,7 +664,7 @@ func wasiFdReaddir(fd, buf, n uint32, cookie uint64, used uint32) uint32 {
 		}
 	}
 
-	put32(m, used, uint32(written))
+	put32(guest(), used, uint32(written))
 
 	return wasiOK
 }
@@ -709,9 +709,7 @@ func wasiPathFilestatGet(fd, flags, path, n, at uint32) uint32 {
 		return e
 	}
 
-	b := span(m, at, 64)
-
-	if b == nil {
+	if span(m, at, 64) == nil {
 		return wasiEfault
 	}
 
@@ -721,7 +719,7 @@ func wasiPathFilestatGet(fd, flags, path, n, at uint32) uint32 {
 		return wasiErrno(err)
 	}
 
-	filestat(b, &st)
+	filestat(span(guest(), at, 64), &st)
 
 	return wasiOK
 }
@@ -796,7 +794,7 @@ func wasiPathOpen(fd, dirflags, path, n, oflags uint32, rights, inheriting uint6
 		return wasiErrno(err)
 	}
 
-	put32(m, opened, uint32(r))
+	put32(guest(), opened, uint32(r))
 
 	return wasiOK
 }
@@ -891,7 +889,7 @@ func wasiPathReadlink(fd, path, n, buf, size, used uint32) uint32 {
 		return wasiErrno(err)
 	}
 
-	put32(m, used, uint32(r))
+	put32(guest(), used, uint32(r))
 
 	return wasiOK
 }
@@ -951,10 +949,12 @@ func wasiPollOneoff(in, out, count, events uint32) uint32 {
 			return wasiEintr
 		}
 
-		e := evs[:32]
+		m = guest()
+
+		e := span(m, out, 32)
 
 		clear(e)
-		copy(e, subs[48*earliest:48*earliest+8])
+		copy(e, span(m, in+48*earliest, 8))
 		ready = 1
 	}
 
