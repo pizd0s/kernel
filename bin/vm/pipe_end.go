@@ -52,10 +52,6 @@ func (e *PipeEnd) asTerminal() Terminal {
 	return nil
 }
 
-func (e *PipeEnd) asWindowed() Windowed {
-	return nil
-}
-
 func (e *PipeEnd) asLink() Link {
 	return nil
 }
@@ -77,10 +73,6 @@ func (e *PipeEnd) asLocker() Locker {
 }
 
 func (e *PipeEnd) asEpoll() *Epoll {
-	return nil
-}
-
-func (e *PipeEnd) asMemfd() *MemfdFile {
 	return nil
 }
 
@@ -308,4 +300,8 @@ func (e *PipeEnd) pread(p *Process, b []byte, off int64) (int, error) {
 
 func (e *PipeEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return 0, ESPIPE
+}
+
+func (e *PipeEnd) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
+	return 0, EINVAL
 }

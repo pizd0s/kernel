@@ -163,7 +163,7 @@ int Request::reply() const {
     return fds[count - 1];
 }
 
-int Request::window() const {
+int Request::memfd() const {
     return count >= 2 ? fds[0] : -1;
 }
 

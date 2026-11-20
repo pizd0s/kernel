@@ -1,18 +1,18 @@
 //@ host: false
 //@ compile-flags: -O2 -D_GNU_SOURCE
-//@ stdout: "memory windows: ok\n"
+//@ stdout: "memfd passing: ok\n"
 
 // A memfd of a range of a process's memory, passed through three processes
-// as a partition's block would go: A, the reader, seeks it to its window
+// as a partition's block would go: A, the reader, seeks it to its block
 // and passes it to B; B, as a partition, seeks further by its offset and
 // passes it on to C; C, as the disk, writes there. The bytes land in A's
-// memory at the window and nowhere else, B never has them, and the
+// memory at the block and nowhere else, B never has them, and the
 // position the three share ends past them. A read-only grant refuses a
 // write, a write-only one a read, and the memory outlives its process
 // while a descriptor of it is open.
 //
 // With the argument bench it measures instead: a copy of the bytes in one
-// process, the same bytes from C into A's window through the memfd, and
+// process, the same bytes from C into A's block through the memfd, and
 // the same bytes relayed C -> B -> A over seqpacket pairs.
 
 #include <assert.h>
@@ -118,20 +118,20 @@ static void chain(int fd, off_t delta, void (*produce)(int)) {
     close(bc[1]);
 }
 
-static const size_t windowLength = 65536;
+static const size_t blockLength = 65536;
 
-static void writeWindow(int fd) {
-    unsigned char* data = (unsigned char*)malloc(windowLength);
-    for (size_t k = 0; k < windowLength; ++k) {
+static void writeBlock(int fd) {
+    unsigned char* data = (unsigned char*)malloc(blockLength);
+    for (size_t k = 0; k < blockLength; ++k) {
         data[k] = pattern(k);
     }
-    assert(write(fd, data, windowLength) == (ssize_t)windowLength);
+    assert(write(fd, data, blockLength) == (ssize_t)blockLength);
 }
 
-static void readWindow(int fd) {
-    unsigned char* data = (unsigned char*)malloc(windowLength);
-    assert(read(fd, data, windowLength) == (ssize_t)windowLength);
-    for (size_t k = 0; k < windowLength; ++k) {
+static void readBlock(int fd) {
+    unsigned char* data = (unsigned char*)malloc(blockLength);
+    assert(read(fd, data, blockLength) == (ssize_t)blockLength);
+    for (size_t k = 0; k < blockLength; ++k) {
         assert(data[k] == changed(k));
     }
 }
@@ -146,21 +146,21 @@ static void check() {
     struct stat st;
     assert(fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size == (off_t)size);
 
-    // C writes at the window A and B set.
+    // C writes at the block A and B set.
     assert(lseek(fd, base, SEEK_SET) == base);
-    chain(fd, delta, writeWindow);
+    chain(fd, delta, writeBlock);
     for (size_t k = 0; k < size; ++k) {
-        bool inside = k >= size_t(base + delta) && k < base + delta + windowLength;
+        bool inside = k >= size_t(base + delta) && k < base + delta + blockLength;
         assert(buffer[k] == (inside ? pattern(k - base - delta) : 0xaa));
     }
-    assert(lseek(fd, 0, SEEK_CUR) == base + delta + (off_t)windowLength);
+    assert(lseek(fd, 0, SEEK_CUR) == base + delta + (off_t)blockLength);
 
     // C reads what A changed in place.
-    for (size_t k = 0; k < windowLength; ++k) {
+    for (size_t k = 0; k < blockLength; ++k) {
         buffer[base + delta + k] = changed(k);
     }
     assert(lseek(fd, base, SEEK_SET) == base);
-    chain(fd, delta, readWindow);
+    chain(fd, delta, readBlock);
 
     // The range does not grow; its end reads nothing.
     assert(pwrite(fd, "x", 1, size) == -1 && errno == ENOSPC);
@@ -199,10 +199,10 @@ static void check() {
 static const size_t benchLength = 256 << 20;
 static unsigned char* benchData;
 
-static void benchWindow(int fd) {
+static void benchBlock(int fd) {
     double start = now();
     assert(write(fd, benchData, benchLength) == (ssize_t)benchLength);
-    printf("window:  %.3f s\n", now() - start);
+    printf("memfd:   %.3f s\n", now() - start);
     fflush(stdout);
 }
 
@@ -223,7 +223,7 @@ static void bench() {
 
     int fd = memfd_create(buffer, benchLength, O_RDWR);
     assert(fd >= 0);
-    chain(fd, 0, benchWindow);
+    chain(fd, 0, benchBlock);
     assert(memcmp(buffer, benchData, benchLength) == 0);
     memset(buffer, 0, benchLength);
 
@@ -265,6 +265,6 @@ int main(int argc, char** argv) {
         return 0;
     }
     check();
-    printf("memory windows: ok\n");
+    printf("memfd passing: ok\n");
     return 0;
 }

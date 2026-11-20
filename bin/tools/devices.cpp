@@ -55,7 +55,7 @@ static void readSource(const Source& s, const Endpoint& e, const Request& r) {
     if (!e.reads) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.io(io)) {
+    if (r.memfd() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
     const size_t n = s.kind == Kind::Null ? 0 : r.h.arg;
@@ -70,7 +70,7 @@ static void readSource(const Source& s, const Endpoint& e, const Request& r) {
             }
             bytes = entropy;
         }
-        if (pwrite(r.window(), bytes, count, off_t(io.woff) + off_t(at)) != ssize_t(count)) {
+        if (pwrite(r.memfd(), bytes, count, off_t(at)) != ssize_t(count)) {
             return fail(r.reply(), EIO);
         }
     }
@@ -84,7 +84,7 @@ static void writeSource(const Source& s, const Endpoint& e, const Request& r) {
     if (!e.writes) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.io(io)) {
+    if (r.memfd() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
     if (s.kind == Kind::Full) {

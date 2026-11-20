@@ -82,10 +82,6 @@ func (s *UnixSocket) asTerminal() Terminal {
 	return nil
 }
 
-func (s *UnixSocket) asWindowed() Windowed {
-	return nil
-}
-
 func (s *UnixSocket) asLink() Link {
 	return nil
 }
@@ -107,10 +103,6 @@ func (s *UnixSocket) asLocker() Locker {
 }
 
 func (s *UnixSocket) asEpoll() *Epoll {
-	return nil
-}
-
-func (s *UnixSocket) asMemfd() *MemfdFile {
 	return nil
 }
 
@@ -470,4 +462,8 @@ func (s *UnixSocket) pread(p *Process, b []byte, off int64) (int, error) {
 
 func (s *UnixSocket) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return 0, ESPIPE
+}
+
+func (s *UnixSocket) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
+	return 0, EINVAL
 }

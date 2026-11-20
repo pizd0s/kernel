@@ -152,7 +152,7 @@ namespace tools {
     // A reply of an error.
     void error(int fd, int e);
 
-    // The reply of a READ: how many bytes went into its window.
+    // The reply of a READ: how many bytes went into its memfd.
     void readCount(int fd, usize count);
 
     // The reply of a call that changes something: OK, or the error.
@@ -161,7 +161,7 @@ namespace tools {
     // The memfd of the memory a READ fills or a WRITE takes from: the
     // first of the request's descriptors, before where it is answered; -1
     // when it brought none.
-    int window();
+    int memfd();
 
     // What a reply assembles in out.
     struct Assembly {

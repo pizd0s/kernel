@@ -52,10 +52,6 @@ func (f *DiskFile) asTerminal() Terminal {
 	return nil
 }
 
-func (f *DiskFile) asWindowed() Windowed {
-	return f
-}
-
 func (f *DiskFile) asLink() Link {
 	return nil
 }
@@ -77,10 +73,6 @@ func (f *DiskFile) asLocker() Locker {
 }
 
 func (f *DiskFile) asEpoll() *Epoll {
-	return nil
-}
-
-func (f *DiskFile) asMemfd() *MemfdFile {
 	return nil
 }
 
@@ -256,25 +248,10 @@ func (f *DiskFile) statfs(p *Process, st *Statfs) error {
 	return nil
 }
 
-func (d *DiskFile) readWindow(p *Process, w *MemfdFile, woff uint32, n int, from *int64) (int, error) {
-	return d.transfer(p, w.mem[woff:int(woff)+n], from, false)
-}
-
-func (d *DiskFile) writeWindow(p *Process, w *MemfdFile, woff uint32, n int, to *int64) (int, error) {
-	return d.transfer(p, w.mem[woff:int(woff)+n], to, true)
-}
-
-func (d *DiskFile) transfer(p *Process, b []byte, off *int64, write bool) (int, error) {
-	switch {
-	case off == nil && write:
-		return d.write(p, b, IoMode{})
-	case off == nil:
-		return d.read(p, b, IoMode{})
+func (f *DiskFile) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
+	if out == Transfer(f) && in != out {
+		return in.copyFileRange(p, in, out, from, to, n)
 	}
 
-	n, err := d.at(b, *off, write)
-
-	*off += int64(n)
-
-	return n, err
+	return copyThrough(p, in, out, from, to, n)
 }

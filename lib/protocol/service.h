@@ -74,7 +74,7 @@ struct Request {
     bool onEndpoint; // answered on the endpoint it came on, whose descriptor is the last
 
     int reply() const;
-    int window() const;
+    int memfd() const;
     bool copy(size_t offset, void* out, size_t length) const;
 
     // A READ's or a WRITE's body, false for one that is not: just an Io,

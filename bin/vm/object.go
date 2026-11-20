@@ -27,14 +27,12 @@ type Object interface {
 	asSeeker() Seeker
 	asDir() Dir
 	asTerminal() Terminal
-	asWindowed() Windowed
 	asLink() Link
 	asAttrs() Attrs
 	asSocket() Socket
 	asIoctl() Ioctl
 	asLocker() Locker
 	asEpoll() *Epoll
-	asMemfd() *MemfdFile
 	asPair() *PairEnd
 	asListener() *UnixListener
 	asConsole() *ConsoleEnd
@@ -61,6 +59,7 @@ type Transfer interface {
 	write(p *Process, b []byte, mode IoMode) (int, error)
 	pread(p *Process, b []byte, off int64) (int, error)
 	pwrite(p *Process, b []byte, off int64) (int, error)
+	copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error)
 }
 
 type Seeker interface {
@@ -125,12 +124,6 @@ type Terminal interface {
 	control(p *Process, sid, pgrp int32) error
 
 	reopen(p *Process, flags int) (Terminal, error)
-}
-
-type Windowed interface {
-	Object
-	readWindow(p *Process, w *MemfdFile, woff uint32, n int, from *int64) (int, error)
-	writeWindow(p *Process, w *MemfdFile, woff uint32, n int, to *int64) (int, error)
 }
 
 type Link interface {

@@ -50,10 +50,6 @@ func (l *UnixListener) asTerminal() Terminal {
 	return nil
 }
 
-func (l *UnixListener) asWindowed() Windowed {
-	return nil
-}
-
 func (l *UnixListener) asLink() Link {
 	return nil
 }
@@ -75,10 +71,6 @@ func (l *UnixListener) asLocker() Locker {
 }
 
 func (l *UnixListener) asEpoll() *Epoll {
-	return nil
-}
-
-func (l *UnixListener) asMemfd() *MemfdFile {
 	return nil
 }
 

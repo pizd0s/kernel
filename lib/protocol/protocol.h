@@ -142,12 +142,11 @@
 //   An open file's, on a connection to it:
 //     READ      arg len     io            OK count u32; fds[0] a memfd of
 //                                         the reader's memory, the bytes
-//                                         go there from its byte woff on
+//                                         go there
 //     WRITE     arg len     io            OK count u32 at u64, where an
 //                                         append went; fds[0] a memfd of
 //                                         the writer's memory, the bytes
-//                                         come from there from its byte
-//                                         woff on
+//                                         come from there
 //     READDIR               after u64     OK (ino u64, pos u64, type u8, name, 0)*
 //     FSTAT                               OK stat
 //     FCHMOD    arg mode
@@ -255,7 +254,7 @@
 //          file to lock, and a file of ino 0 has no locks; two opens of a
 //          terminal are one terminal by them. id is a handle's, which calls
 //          with a path name the root by
-//   io { off u64, woff u32, flags u32 }   flags: ioAppend, a WRITE at the
+//   io { off u64, flags u32 }   flags: ioAppend, a WRITE at the
 //          end the file has, O_APPEND's; ioNonblock, answered at once, EAGAIN
 //          where it would wait, O_NONBLOCK's; ioAt, at off as pread and
 //          pwrite ask, ESPIPE from what cannot seek
@@ -394,9 +393,8 @@ constexpr uint32_t openedDir = 3;
 constexpr uint32_t openedPath = 4;
 
 // A READ's and a WRITE's body.
-struct Io {
+struct [[gnu::packed]] Io {
     uint64_t off;
-    uint32_t woff;
     uint32_t flags;
 };
 
@@ -426,6 +424,7 @@ struct [[gnu::packed]] Statfs {
 
 static_assert(sizeof(Header) == 16);
 static_assert(sizeof(Opened) == 40);
+static_assert(sizeof(Io) == 12);
 static_assert(sizeof(Stat) == 64 && offsetof(Stat, atime) == 40);
 static_assert(sizeof(Statfs) == 52);
 

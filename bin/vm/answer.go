@@ -158,10 +158,6 @@ func (a *Answer) asTerminal() Terminal {
 	return nil
 }
 
-func (a *Answer) asWindowed() Windowed {
-	return nil
-}
-
 func (a *Answer) asLink() Link {
 	return nil
 }
@@ -183,10 +179,6 @@ func (a *Answer) asLocker() Locker {
 }
 
 func (a *Answer) asEpoll() *Epoll {
-	return nil
-}
-
-func (a *Answer) asMemfd() *MemfdFile {
 	return nil
 }
 
@@ -258,6 +250,10 @@ func (a *Answer) pread(p *Process, b []byte, off int64) (int, error) {
 
 func (a *Answer) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return 0, ESPIPE
+}
+
+func (a *Answer) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
+	return 0, EINVAL
 }
 
 func (a *Answer) bind(p *Process, at, n uint32) error {

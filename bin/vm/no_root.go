@@ -57,10 +57,6 @@ func (r *NoRoot) asTerminal() Terminal {
 	return nil
 }
 
-func (r *NoRoot) asWindowed() Windowed {
-	return nil
-}
-
 func (r *NoRoot) asLink() Link {
 	return nil
 }
@@ -82,10 +78,6 @@ func (r *NoRoot) asLocker() Locker {
 }
 
 func (r *NoRoot) asEpoll() *Epoll {
-	return nil
-}
-
-func (r *NoRoot) asMemfd() *MemfdFile {
 	return nil
 }
 

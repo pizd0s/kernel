@@ -841,10 +841,9 @@ static int change(Server& s, Node* node, u32 op, const Header& h, Body args) {
 
 // ---- calls on a node ---------------------------------------------------------
 
-// Puts count bytes into a READ's window at at: false when they do not
-// all go.
-static bool put(int w, const void* from, usize count, usize at) {
-    return count == 0 || pwrite(w, from, count, off_t(at)) == ssize_t(count);
+// Puts count bytes into a READ's memfd: false when they do not all go.
+static bool put(int w, const void* from, usize count) {
+    return count == 0 || pwrite(w, from, count, 0) == ssize_t(count);
 }
 
 static void readNode(Endpoint* ep, const Header& h, Body body, int fd) {
@@ -853,13 +852,12 @@ static void readNode(Endpoint* ep, const Header& h, Body body, int fd) {
         return error(fd, EINVAL);
     }
     const u64 off = io.off;
-    const u32 woff = io.woff;
     const auto* node = static_cast<const Node*>(ep->node);
     const usize n = h.arg;
     if (node->kind != Kind::Dir && !ep->reads) {
         return error(fd, EBADF);
     }
-    const int w = window();
+    const int w = memfd();
     if (w < 0 && node->kind != Kind::Dir) {
         return error(fd, EINVAL);
     }
@@ -867,7 +865,7 @@ static void readNode(Endpoint* ep, const Header& h, Body body, int fd) {
         case Kind::File: {
             const usize size = node->content.size();
             const usize count = off >= size ? 0 : MIN(n, size - usize(off));
-            if (!put(w, node->content.data() + (count ? usize(off) : 0), count, woff)) {
+            if (!put(w, node->content.data() + (count ? usize(off) : 0), count)) {
                 return error(fd, EIO);
             }
             return readCount(fd, count);
@@ -886,10 +884,9 @@ static void writeNode(Endpoint* ep, const Header& h, Body body, int fd) {
     }
     u64 off = io.off;
     const usize length = h.arg;
-    const u32 woff = io.woff;
     Server& s = tree;
     auto* node = static_cast<Node*>(ep->node);
-    const int w = window();
+    const int w = memfd();
     if (node->kind != Kind::Dir && !ep->writes) {
         return error(fd, EBADF);
     }
@@ -917,7 +914,7 @@ static void writeNode(Endpoint* ep, const Header& h, Body body, int fd) {
             if (size < off + count && !resize(s, node, off + count)) {
                 return error(fd, ENOSPC);
             }
-            if (count && pread(w, static_cast<u8*>(node->content.own.data()) + usize(off), usize(count), woff) != ssize_t(count)) {
+            if (count && pread(w, static_cast<u8*>(node->content.own.data()) + usize(off), usize(count), 0) != ssize_t(count)) {
                 return error(fd, EIO);
             }
             touch(node);

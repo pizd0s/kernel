@@ -94,16 +94,14 @@ namespace {
 
     // A request that waits: its endpoint, kept until it is answered, which
     // hears CANCEL; the open file it came on; a read's or a write's memfd,
-    // length, place in the memfd and what of it is done, and a read's
-    // start; a drain's settings, which a TCSETATTR sets once the output
+    // length and what of it is done, and a read's start; a drain's settings, which a TCSETATTR sets once the output
     // went, and when, TCSADRAIN or TCSAFLUSH.
     struct Waiting {
         Endpoint* at;
         Open* open;
         Wait kind;
-        int window;
+        int memfd;
         uint32_t length;
-        uint32_t woff;
         uint32_t done;
         int64_t start;
         bool settles;
@@ -695,7 +693,7 @@ static void answerWrote(int fd, uint32_t count) {
 // Takes what a read of the slave gets into the reader's memory: in the
 // canonical mode up to the end of a line, an end of file none of it; else
 // what is there, the ends of file dropped.
-static uint32_t takeInput(Terminal& t, int window, uint32_t woff, uint32_t length) {
+static uint32_t takeInput(Terminal& t, int memfd, uint32_t length) {
     unsigned char bytes[4096];
     size_t n = 0;
     while (t.input.count > 0 && n < length) {
@@ -719,7 +717,7 @@ static uint32_t takeInput(Terminal& t, int window, uint32_t woff, uint32_t lengt
     if (!canonical(t)) {
         t.lines = 0;
     }
-    pwrite(window, bytes, n, woff);
+    pwrite(memfd, bytes, n, 0);
     return uint32_t(n);
 }
 
@@ -756,7 +754,7 @@ static bool moveOutput(Terminal& t, Waiting& w) {
     unsigned char bytes[1024];
     while (w.done < w.length && !t.stopped) {
         const size_t n = MIN(sizeof bytes, size_t(w.length - w.done));
-        const ssize_t got = pread(w.window, bytes, n, w.woff + w.done);
+        const ssize_t got = pread(w.memfd, bytes, n, w.done);
         if (got <= 0) {
             return true;
         }
@@ -778,7 +776,7 @@ static bool moveInput(Terminal& t, Waiting& w) {
     unsigned char bytes[1024];
     while (w.done < w.length) {
         const size_t n = MIN(sizeof bytes, size_t(w.length - w.done));
-        const ssize_t got = pread(w.window, bytes, n, w.woff + w.done);
+        const ssize_t got = pread(w.memfd, bytes, n, w.done);
         if (got <= 0) {
             return true;
         }
@@ -795,25 +793,25 @@ static bool moveInput(Terminal& t, Waiting& w) {
 }
 
 // Takes what the master reads into its memory.
-static uint32_t takeOutput(Terminal& t, int window, uint32_t woff, uint32_t length) {
+static uint32_t takeOutput(Terminal& t, int memfd, uint32_t length) {
     unsigned char bytes[4096];
     size_t n = 0;
     while (t.output.count > 0 && n < MIN(size_t(length), sizeof bytes)) {
         bytes[n++] = t.output.take();
     }
-    pwrite(window, bytes, n, woff);
+    pwrite(memfd, bytes, n, 0);
     return uint32_t(n);
 }
 
 static void apply(Terminal& t, const termios& settings);
 
 static void release(Waiting& w) {
-    if (w.window >= 0) {
-        close(w.window);
+    if (w.memfd >= 0) {
+        close(w.memfd);
     }
     unkeep(epoll, w.at);
     w = {};
-    w.window = -1;
+    w.memfd = -1;
 }
 
 // Answers what of the waiting requests of a terminal can be. A request
@@ -835,13 +833,13 @@ static void progress(Terminal& t) {
                 case Wait::Read: {
                     int64_t due;
                     if (w.open->master && t.output.count > 0) {
-                        const auto count = takeOutput(t, w.window, w.woff, w.length);
+                        const auto count = takeOutput(t, w.memfd, w.length);
                         tellAll(t);
                         answerCount(fd, count);
                     } else if (w.open->master && t.slaves == 0) {
                         fail(fd, EIO);
                     } else if (!w.open->master && readDone(t, w, at, due)) {
-                        const auto count = t.hungUp ? 0 : takeInput(t, w.window, w.woff, w.length);
+                        const auto count = t.hungUp ? 0 : takeInput(t, w.memfd, w.length);
                         tellAll(t);
                         answerCount(fd, count);
                     } else {
@@ -894,11 +892,11 @@ static Waiting* hold(Open& o, Request& r, Wait kind) {
             w = {};
             w.open = &o;
             w.kind = kind;
-            w.window = r.window();
+            w.memfd = r.memfd();
             w.length = r.h.arg;
             w.start = now();
             w.at = keep(epoll, r, &w);
-            if (w.window >= 0) {
+            if (w.memfd >= 0) {
                 r.fds[0] = -1;
             }
             return &w;
@@ -935,14 +933,13 @@ static void readFile(Open& o, Request& r) {
     if (!o.reads) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.io(io)) {
+    if (r.memfd() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
     if ((io.flags & ioAt) != 0) {
         return fail(r.reply(), ESPIPE); // a terminal has no place to read at
     }
     if (Waiting* w = hold(o, r, Wait::Read)) {
-        w->woff = io.woff;
         progress(t);
         if (w->at && (io.flags & ioNonblock) != 0) {
             fail(w->at->fd, EAGAIN);
@@ -957,7 +954,7 @@ static void writeFile(Open& o, Request& r) {
     if (!o.writes) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.io(io)) {
+    if (r.memfd() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
     if ((io.flags & ioAt) != 0) {
@@ -967,7 +964,6 @@ static void writeFile(Open& o, Request& r) {
         return fail(r.reply(), EIO);
     }
     if (Waiting* w = hold(o, r, Wait::Write)) {
-        w->woff = io.woff;
         progress(t);
         if (w->at && (io.flags & ioNonblock) != 0) {
             if (w->done > 0) {
@@ -1305,11 +1301,11 @@ static void gone(Endpoint& e) {
     if (isWaiting(e.of)) {
         // The asker went; serve closes the endpoint itself.
         auto& w = *static_cast<Waiting*>(e.of);
-        if (w.window >= 0) {
-            close(w.window);
+        if (w.memfd >= 0) {
+            close(w.memfd);
         }
         w = {};
-        w.window = -1;
+        w.memfd = -1;
         return;
     }
     if (!isOpen(e.of)) {
@@ -1374,7 +1370,7 @@ int ptyMain(int argc, char** argv) {
         fatal("pty: errno %d", errno);
     }
     for (Waiting& w : waits) {
-        w.window = -1;
+        w.memfd = -1;
     }
     signal(SIGPIPE, SIG_IGN);
     device = enroll("pty", "pty", S_IFCHR | 0666);

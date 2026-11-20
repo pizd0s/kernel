@@ -77,10 +77,6 @@ func (s *UnixDgram) asTerminal() Terminal {
 	return nil
 }
 
-func (s *UnixDgram) asWindowed() Windowed {
-	return nil
-}
-
 func (s *UnixDgram) asLink() Link {
 	return nil
 }
@@ -102,10 +98,6 @@ func (s *UnixDgram) asLocker() Locker {
 }
 
 func (s *UnixDgram) asEpoll() *Epoll {
-	return nil
-}
-
-func (s *UnixDgram) asMemfd() *MemfdFile {
 	return nil
 }
 
@@ -425,4 +417,8 @@ func (s *UnixDgram) pread(p *Process, b []byte, off int64) (int, error) {
 
 func (s *UnixDgram) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return 0, ESPIPE
+}
+
+func (s *UnixDgram) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
+	return 0, EINVAL
 }

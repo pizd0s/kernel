@@ -195,9 +195,8 @@ static int opened(int channel, Opened what, int& end) {
     return fd;
 }
 
-struct Io {
+struct [[gnu::packed]] Io {
     uint64_t off;
-    uint32_t woff;
     uint32_t flags;
 };
 
@@ -254,9 +253,9 @@ static ssize_t receiveTwo(int from, void* data, size_t size, int& first, int& la
 // The bytes go into the memory, and the count is the answer.
 static void serveRead(int end, const char* bytes) {
     unsigned char packet[256];
-    int window;
+    int memfd;
     int reply;
-    assert(receiveTwo(end, packet, sizeof packet, window, reply) == ssize_t(sizeof(Header) + sizeof(Io)) && window >= 0 && reply >= 0);
+    assert(receiveTwo(end, packet, sizeof packet, memfd, reply) == ssize_t(sizeof(Header) + sizeof(Io)) && memfd >= 0 && reply >= 0);
     Header h;
     Io io;
     memcpy(&h, packet, sizeof h);
@@ -264,7 +263,7 @@ static void serveRead(int end, const char* bytes) {
     printf("served: %s of %u at %llu\n", h.op == opRead ? "READ" : "another call", h.arg, (unsigned long long)io.off);
     fflush(stdout);
     const size_t length = strlen(bytes);
-    assert(pwrite(window, bytes, length, io.woff) == ssize_t(length));
+    assert(pwrite(memfd, bytes, length, 0) == ssize_t(length));
 
     struct {
         Header h;
@@ -272,7 +271,7 @@ static void serveRead(int end, const char* bytes) {
     } answer{{opOk, 0, 0, 0}, uint32_t(length)};
 
     assert(send(reply, &answer, sizeof answer, 0) == ssize_t(sizeof answer));
-    close(window);
+    close(memfd);
     close(reply);
 }
 

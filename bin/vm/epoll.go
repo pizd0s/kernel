@@ -109,10 +109,6 @@ func (ep *Epoll) asTerminal() Terminal {
 	return nil
 }
 
-func (ep *Epoll) asWindowed() Windowed {
-	return nil
-}
-
 func (ep *Epoll) asLink() Link {
 	return nil
 }
@@ -135,10 +131,6 @@ func (ep *Epoll) asLocker() Locker {
 
 func (ep *Epoll) asEpoll() *Epoll {
 	return ep
-}
-
-func (ep *Epoll) asMemfd() *MemfdFile {
-	return nil
 }
 
 func (ep *Epoll) asPair() *PairEnd {
@@ -280,6 +272,10 @@ func (ep *Epoll) pread(p *Process, b []byte, off int64) (int, error) {
 }
 
 func (ep *Epoll) pwrite(p *Process, b []byte, off int64) (int, error) {
+	return 0, EINVAL
+}
+
+func (ep *Epoll) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 

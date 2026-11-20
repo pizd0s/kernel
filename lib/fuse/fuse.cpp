@@ -381,17 +381,16 @@ static int changeOwner(const char* path, const Request& r, size_t at) {
     return operations.chown ? result(operations.chown(path, uid_t(uid), gid_t(gid))) : ENOSYS;
 }
 
-// A READ: what the file system reads at off, into the memfd at woff.
+// A READ: what the file system reads at off, into the memfd.
 static void readFile(Open& o, const Endpoint& e, const Request& r) {
     Io io;
     if (!e.reads || !o.opened) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.io(io) || !operations.read) {
+    if (r.memfd() < 0 || !r.io(io) || !operations.read) {
         return fail(r.reply(), EINVAL);
     }
     const uint64_t off = io.off;
-    const uint32_t woff = io.woff;
     size_t done = 0;
     while (done < r.h.arg) {
         const size_t ask = MIN(sizeof bytes, size_t(r.h.arg) - done);
@@ -402,7 +401,7 @@ static void readFile(Open& o, const Endpoint& e, const Request& r) {
         if (got <= 0) {
             break;
         }
-        if (pwrite(r.window(), bytes, size_t(got), off_t(woff + done)) != got) {
+        if (pwrite(r.memfd(), bytes, size_t(got), off_t(done)) != got) {
             return fail(r.reply(), EIO);
         }
         done += size_t(got);
@@ -414,19 +413,18 @@ static void readFile(Open& o, const Endpoint& e, const Request& r) {
     answer(r.reply(), opOk, 0, &count, sizeof count);
 }
 
-// A WRITE: the memfd's bytes at woff, what the file system writes at
+// A WRITE: the memfd's bytes, what the file system writes at
 // off, or at its end with append.
 static void writeFile(Open& o, const Endpoint& e, const Request& r) {
     Io io;
     if (!e.writes || !o.opened) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.io(io) || !operations.write) {
+    if (r.memfd() < 0 || !r.io(io) || !operations.write) {
         return fail(r.reply(), EINVAL);
     }
     uint64_t off = io.off;
     const uint32_t length = r.h.arg;
-    const uint32_t woff = io.woff;
     if ((io.flags & ioAppend) != 0) {
         struct stat st;
         if (const int failed = attributes(o.path, st)) {
@@ -437,7 +435,7 @@ static void writeFile(Open& o, const Endpoint& e, const Request& r) {
     size_t done = 0;
     while (done < length) {
         const size_t n = MIN(sizeof bytes, size_t(length) - done);
-        if (pread(r.window(), bytes, n, off_t(woff + done)) != ssize_t(n)) {
+        if (pread(r.memfd(), bytes, n, off_t(done)) != ssize_t(n)) {
             return fail(r.reply(), EIO);
         }
         const int wrote = operations.write(o.path, bytes, n, off_t(off + done), &o.info);

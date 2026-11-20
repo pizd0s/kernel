@@ -13,14 +13,14 @@
 // must not wait finds EAGAIN.
 //
 // copy reads n bytes of a device at off into a memfd of 16 bytes of its
-// memory, at woff, with copy_file_range, and prints the count, the offsets
+// memory, at to, with copy_file_range, and prints the count, the offsets
 // after it and the bytes; put writes a text from a memfd of its memory to
 // a device with copy_file_range and prints the count. wait reads a
 // mailbox with a SIGALRM due in a second, its handler SA_RESTART or not,
 // and prints what the read gave and whether the handler ran.
 //
 //     devices_service <name> <mode> <text> [ro|wait]
-//     devices_service copy <device> <off> <woff> <n>
+//     devices_service copy <device> <off> <to> <n>
 //     devices_service put <device> <text>
 //     devices_service wait <device> <restart>
 
@@ -44,8 +44,7 @@ static Device device;
 static int epoll = -1;
 
 // The mailbox's: the mail a WRITE left, and the READ that waits for some,
-// its endpoint, the memfd of the reader's memory, the length and the
-// offset in it.
+// its endpoint, the memfd of the reader's memory and the length.
 static bool mailbox = false;
 static char mail[256];
 static size_t mailLength = 0;
@@ -53,9 +52,8 @@ static size_t mailLength = 0;
 namespace {
     struct Reader {
         Endpoint* at;
-        int window;
+        int memfd;
         uint32_t length;
-        uint32_t woff;
     };
 }
 
@@ -73,9 +71,9 @@ static void tellAll() {
     }
 }
 
-static void deliver(int window, uint32_t woff, uint32_t room, int to) {
+static void deliver(int memfd, uint32_t room, int to) {
     const size_t part = MIN(size_t(room), mailLength);
-    pwrite(window, mail, part, woff);
+    pwrite(memfd, mail, part, 0);
     memmove(mail, mail + part, mailLength - part);
     mailLength -= part;
     const uint32_t done = uint32_t(part);
@@ -84,7 +82,7 @@ static void deliver(int window, uint32_t woff, uint32_t room, int to) {
 }
 
 static void letReaderGo() {
-    close(reader.window);
+    close(reader.memfd);
     unkeep(epoll, reader.at);
     reader = {};
 }
@@ -94,11 +92,11 @@ static void readMail(const Endpoint& e, Request& r) {
     if (!e.reads) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.io(io)) {
+    if (r.memfd() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
     if (mailLength > 0) {
-        return deliver(r.window(), io.woff, r.h.arg, r.reply());
+        return deliver(r.memfd(), r.h.arg, r.reply());
     }
     if ((io.flags & ioNonblock) != 0) {
         return fail(r.reply(), EAGAIN);
@@ -108,7 +106,7 @@ static void readMail(const Endpoint& e, Request& r) {
     }
     // The READ waits: where it is answered hears of it and the memfd is ours
     // until it ends.
-    reader = {keep(epoll, r, &readerTag), r.window(), r.h.arg, io.woff};
+    reader = {keep(epoll, r, &readerTag), r.memfd(), r.h.arg};
     r.fds[0] = -1;
 }
 
@@ -117,11 +115,11 @@ static void writeMail(const Endpoint& e, const Request& r) {
     if (!e.writes) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.io(io)) {
+    if (r.memfd() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
     const size_t part = MIN(size_t(r.h.arg), sizeof mail - mailLength);
-    const ssize_t got = pread(r.window(), mail + mailLength, part, io.woff);
+    const ssize_t got = pread(r.memfd(), mail + mailLength, part, 0);
     mailLength += got > 0 ? size_t(got) : 0;
 
     struct {
@@ -131,7 +129,7 @@ static void writeMail(const Endpoint& e, const Request& r) {
 
     answer(r.reply(), opOk, 0, &done, sizeof done);
     if (reader.at && mailLength > 0) {
-        deliver(reader.window, reader.woff, reader.length, reader.at->fd);
+        deliver(reader.memfd, reader.length, reader.at->fd);
         letReaderGo();
     } else {
         tellAll();
@@ -141,7 +139,7 @@ static void writeMail(const Endpoint& e, const Request& r) {
 static void gone(Endpoint& e) {
     if (e.of == &readerTag) {
         // The reader went: serve closes its endpoint itself.
-        close(reader.window);
+        close(reader.memfd);
         reader = {};
         return;
     }
@@ -158,13 +156,12 @@ static void readText(const Endpoint& e, const Request& r) {
     if (!e.reads) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.io(io)) {
+    if (r.memfd() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
     const uint64_t off = io.off;
-    const uint32_t woff = io.woff;
     const size_t part = off < length ? MIN(size_t(r.h.arg), length - size_t(off)) : 0;
-    pwrite(r.window(), text + MIN(off, uint64_t(length)), part, woff);
+    pwrite(r.memfd(), text + MIN(off, uint64_t(length)), part, 0);
     const uint32_t done = uint32_t(part);
     answer(r.reply(), opOk, 0, &done, sizeof done);
 }
@@ -215,22 +212,22 @@ static void handle(Endpoint& e, Request& r) {
     }
 }
 
-static int copy(const char* path, long long off, long long woff, long long n) {
+static int copy(const char* path, long long off, long long at, long long n) {
     char bytes[16];
     memset(bytes, '.', sizeof bytes);
     const int source = open(path, O_RDONLY);
-    const int window = memfd_create(bytes, sizeof bytes, O_RDWR);
+    const int memfd = memfd_create(bytes, sizeof bytes, O_RDWR);
     off_t from = off;
-    off_t to = woff;
-    const ssize_t got = copy_file_range(source, &from, window, &to, size_t(n), 0);
+    off_t to = at;
+    const ssize_t got = copy_file_range(source, &from, memfd, &to, size_t(n), 0);
     printf("%zd %lld %lld %.16s\n", got, (long long)from, (long long)to, bytes);
     return 0;
 }
 
 static int put(const char* path, const char* bytes) {
     const int target = open(path, O_WRONLY);
-    const int window = memfd_create(const_cast<char*>(bytes), strlen(bytes), O_RDONLY);
-    printf("%zd\n", copy_file_range(window, nullptr, target, nullptr, strlen(bytes), 0));
+    const int memfd = memfd_create(const_cast<char*>(bytes), strlen(bytes), O_RDONLY);
+    printf("%zd\n", copy_file_range(memfd, nullptr, target, nullptr, strlen(bytes), 0));
     return 0;
 }
 

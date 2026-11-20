@@ -212,7 +212,7 @@ void tools::answer(int fd, int e) {
     ok(fd);
 }
 
-int tools::window() {
+int tools::memfd() {
     return packetFdCount >= 2 ? packetFds[0] : -1;
 }
 

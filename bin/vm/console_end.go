@@ -68,10 +68,6 @@ func (c *ConsoleEnd) asTerminal() Terminal {
 	return nil
 }
 
-func (c *ConsoleEnd) asWindowed() Windowed {
-	return nil
-}
-
 func (c *ConsoleEnd) asLink() Link {
 	return nil
 }
@@ -93,10 +89,6 @@ func (c *ConsoleEnd) asLocker() Locker {
 }
 
 func (c *ConsoleEnd) asEpoll() *Epoll {
-	return nil
-}
-
-func (c *ConsoleEnd) asMemfd() *MemfdFile {
 	return nil
 }
 
@@ -196,6 +188,10 @@ func (c *ConsoleEnd) pread(p *Process, b []byte, off int64) (int, error) {
 
 func (c *ConsoleEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return 0, ESPIPE
+}
+
+func (c *ConsoleEnd) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
+	return 0, EINVAL
 }
 
 func (c *ConsoleEnd) ioctl(req uintptr, arg unsafe.Pointer) error {

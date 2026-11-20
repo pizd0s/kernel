@@ -87,14 +87,6 @@ func (f *RemoteFD) asTerminal() Terminal {
 	return f
 }
 
-func (f *RemoteFD) asWindowed() Windowed {
-	if f.opath {
-		return nil
-	}
-
-	return f
-}
-
 func (f *RemoteFD) asLink() Link {
 	if !f.opath {
 		return nil
@@ -124,10 +116,6 @@ func (f *RemoteFD) asLocker() Locker {
 }
 
 func (f *RemoteFD) asEpoll() *Epoll {
-	return nil
-}
-
-func (f *RemoteFD) asMemfd() *MemfdFile {
 	return nil
 }
 
@@ -485,12 +473,11 @@ func (f *RemoteFD) recordLock(p *Process, cmd int, lk *Flock) error {
 	return f.locks.lock(p, want, cmd == fOfdSetlkw)
 }
 
-func ioBody(off int64, woff, flags uint32) [16]byte {
-	var b [16]byte
+func ioBody(off int64, flags uint32) [12]byte {
+	var b [12]byte
 
 	binary.LittleEndian.PutUint64(b[:], uint64(off))
-	binary.LittleEndian.PutUint32(b[8:], woff)
-	binary.LittleEndian.PutUint32(b[12:], flags)
+	binary.LittleEndian.PutUint32(b[8:], flags)
 
 	return b
 }
@@ -515,18 +502,18 @@ func (f *RemoteFD) ioFlags(at bool) uint32 {
 
 func (f *RemoteFD) readAt(p *Process, b []byte, off int64, at bool) (int, error) {
 	if off < 0 || len(b) == 0 {
-		return f.readInto(p, nil, 0, 0, off, at)
+		return f.readInto(p, nil, 0, off, at)
 	}
 
-	w := window(p, b, O_WRONLY)
-	count, err := f.readInto(p, w, 0, len(b), off, at)
+	w := newMemfd(p.inst, b, O_WRONLY)
+	count, err := f.readInto(p, w, len(b), off, at)
 
 	w.unref()
 
 	return count, err
 }
 
-func (f *RemoteFD) readInto(p *Process, w *MemfdFile, woff uint32, size int, off int64, at bool) (int, error) {
+func (f *RemoteFD) readInto(p *Process, w *MemfdFile, size int, off int64, at bool) (int, error) {
 	if off < 0 {
 		return 0, EINVAL
 	}
@@ -535,7 +522,7 @@ func (f *RemoteFD) readInto(p *Process, w *MemfdFile, woff uint32, size int, off
 		return 0, nil
 	}
 
-	body := ioBody(off, woff, f.ioFlags(at))
+	body := ioBody(off, f.ioFlags(at))
 
 	for {
 		pk, cancelled, err := f.waiting(p, rRead, uint32(size), body[:], []Object{w})
@@ -564,18 +551,18 @@ func (f *RemoteFD) writeAt(p *Process, b []byte, off int64) (int, error) {
 
 func (f *RemoteFD) put(p *Process, b []byte, off int64, atEnd, at bool) (int, int64, error) {
 	if off < 0 || len(b) == 0 {
-		return f.writeFrom(p, nil, 0, 0, off, atEnd, at)
+		return f.writeFrom(p, nil, 0, off, atEnd, at)
 	}
 
-	w := window(p, b, O_RDONLY)
-	count, end, err := f.writeFrom(p, w, 0, len(b), off, atEnd, at)
+	w := newMemfd(p.inst, b, O_RDONLY)
+	count, end, err := f.writeFrom(p, w, len(b), off, atEnd, at)
 
 	w.unref()
 
 	return count, end, err
 }
 
-func (f *RemoteFD) writeFrom(p *Process, w *MemfdFile, woff uint32, size int, off int64, atEnd, at bool) (int, int64, error) {
+func (f *RemoteFD) writeFrom(p *Process, w *MemfdFile, size int, off int64, atEnd, at bool) (int, int64, error) {
 	if off < 0 {
 		return 0, 0, EINVAL
 	}
@@ -590,7 +577,7 @@ func (f *RemoteFD) writeFrom(p *Process, w *MemfdFile, woff uint32, size int, of
 		flags |= ioAppend
 	}
 
-	body := ioBody(off, woff, flags)
+	body := ioBody(off, flags)
 
 	for {
 		pk, cancelled, err := f.waiting(p, rWrite, uint32(size), body[:], []Object{w})
@@ -697,40 +684,12 @@ func (f *RemoteFD) seek(p *Process, off int64, whence int) (int64, error) {
 	return base + off, nil
 }
 
-func (f *RemoteFD) readWindow(p *Process, w *MemfdFile, woff uint32, size int, from *int64) (int, error) {
-	if from != nil {
-		count, err := f.readInto(p, w, woff, size, *from, true)
-
-		*from += int64(count)
-
-		return count, err
+func (f *RemoteFD) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
+	if out == Transfer(f) && in != out {
+		return in.copyFileRange(p, in, out, from, to, n)
 	}
 
-	count, err := f.readInto(p, w, woff, size, f.position(), false)
-
-	f.advance(count)
-
-	return count, err
-}
-
-func (f *RemoteFD) writeWindow(p *Process, w *MemfdFile, woff uint32, size int, to *int64) (int, error) {
-	if fl, _ := f.flags(); fl&O_APPEND != 0 {
-		return 0, EBADF
-	}
-
-	if to != nil {
-		count, _, err := f.writeFrom(p, w, woff, size, *to, false, true)
-
-		*to += int64(count)
-
-		return count, err
-	}
-
-	count, _, err := f.writeFrom(p, w, woff, size, f.position(), false, false)
-
-	f.advance(count)
-
-	return count, err
+	return copyThrough(p, in, out, from, to, n)
 }
 
 func (f *RemoteFD) readdir(p *Process, b []byte) (int, error) {

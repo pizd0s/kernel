@@ -250,16 +250,15 @@ static int linkError(const Node* dst, Name newName, const Header& h) {
 // ---- calls on a node ---------------------------------------------------------
 
 // A READ of a file of the image: its bytes at the offset, as many as
-// asked up to its end, from the image into the window.
+// asked up to its end, from the image into the memfd.
 static void readNode(Endpoint* ep, const Header& h, Body body, int fd) {
     Io io;
     if (!ioOf(h, body, io) || io.off > INT64_MAX) {
         return error(fd, EINVAL);
     }
     const u64 off = io.off;
-    const u32 woff = io.woff;
     const auto* node = static_cast<const Node*>(ep->node);
-    const int w = window();
+    const int w = memfd();
     if (w < 0) {
         return error(fd, EINVAL);
     }
@@ -268,7 +267,7 @@ static void readNode(Endpoint* ep, const Header& h, Body body, int fd) {
     }
     const usize count = off >= node->size ? 0 : MIN(usize(h.arg), usize(node->size - off));
     off_t from = off_t(node->data + off);
-    off_t to = off_t(woff);
+    off_t to = 0;
     for (usize left = count; left > 0;) {
         const ssize_t n = copy_file_range(image.fd, &from, w, &to, left, 0);
         if (n <= 0) {

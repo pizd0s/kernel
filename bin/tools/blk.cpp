@@ -45,23 +45,22 @@ static Area whole;
 static int epoll = -1;
 
 // A READ: the area's bytes at off, as many as asked up to its end, into
-// the memfd at woff.
+// the memfd.
 static void readBlocks(const Area& a, const Endpoint& e, const Request& r) {
     Io io;
     if (!e.reads) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.io(io)) {
+    if (r.memfd() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
     const uint64_t off = io.off;
-    const uint32_t woff = io.woff;
     const uint64_t count = off >= a.length ? 0 : MIN(uint64_t(r.h.arg), a.length - off);
     uint64_t done = 0;
     while (done < count) {
         off_t from = off_t(a.first + off + done);
-        off_t to = off_t(woff) + off_t(done);
-        const ssize_t n = copy_file_range(disk, &from, r.window(), &to, size_t(count - done), 0);
+        off_t to = off_t(done);
+        const ssize_t n = copy_file_range(disk, &from, r.memfd(), &to, size_t(count - done), 0);
         if (n < 0 && done == 0) {
             return fail(r.reply(), errno);
         }
@@ -74,28 +73,27 @@ static void readBlocks(const Area& a, const Endpoint& e, const Request& r) {
     answer(r.reply(), opOk, 0, &got, sizeof got);
 }
 
-// A WRITE: the memfd's bytes at woff, as many as fit before the area's
+// A WRITE: the memfd's bytes, as many as fit before the area's
 // end, onto it at off; none fit, ENOSPC. An area has no end to append at.
 static void writeBlocks(const Area& a, const Endpoint& e, const Request& r) {
     Io io;
     if (!e.writes) {
         return fail(r.reply(), EBADF);
     }
-    if (r.window() < 0 || !r.io(io) || (io.flags & ioAppend) != 0) {
+    if (r.memfd() < 0 || !r.io(io) || (io.flags & ioAppend) != 0) {
         return fail(r.reply(), EINVAL);
     }
     const uint64_t off = io.off;
     const uint32_t length = r.h.arg;
-    const uint32_t woff = io.woff;
     if (length > 0 && off >= a.length) {
         return fail(r.reply(), ENOSPC);
     }
     const uint64_t count = length == 0 ? 0 : MIN(uint64_t(length), a.length - off);
     uint64_t done = 0;
     while (done < count) {
-        off_t from = off_t(woff) + off_t(done);
+        off_t from = off_t(done);
         off_t to = off_t(a.first + off + done);
-        const ssize_t n = copy_file_range(r.window(), &from, disk, &to, size_t(count - done), 0);
+        const ssize_t n = copy_file_range(r.memfd(), &from, disk, &to, size_t(count - done), 0);
         if (n < 0 && done == 0) {
             return fail(r.reply(), errno);
         }

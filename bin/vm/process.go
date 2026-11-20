@@ -5200,59 +5200,84 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 		return p.result(0, err)
 	}
 
-	fromWindow := src.asMemfd() != nil
-	toWindow := dst.asMemfd() != nil
-
 	if flags != 0 {
 		return p.result(0, EINVAL)
 	}
 
-	var from, to *int64
+	inFlags, _ := src.flags()
+	outFlags, _ := dst.flags()
+	r, w := src.asTransfer(), dst.asTransfer()
 
-	if offIn != 0 {
-		from = new(int64)
-		*from = int64(p.u64(offIn))
+	if r == nil || w == nil || inFlags&O_ACCMODE == O_WRONLY || outFlags&O_ACCMODE == O_RDONLY || outFlags&O_APPEND != 0 {
+		return p.result(0, EBADF)
 	}
 
-	if offOut != 0 {
-		to = new(int64)
-		*to = int64(p.u64(offOut))
-	}
-
-	var r int
-
-	if fromWindow || toWindow {
-		r, err = copyWindow(p, src, dst, from, to, int(n))
-	} else {
-		r, err = copyFiles(p, src, dst, from, to, int(n))
-	}
+	from, err := p.copyOffset(src, offIn)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	if from != nil {
-		p.put64(offIn, uint64(*from))
+	to, err := p.copyOffset(dst, offOut)
+
+	if err != nil {
+		return p.result(0, err)
 	}
 
-	if to != nil {
-		p.put64(offOut, uint64(*to))
+	count, err := w.copyFileRange(p, r, w, from, to, int(n))
+
+	if count == 0 && err != nil {
+		if err == ESPIPE {
+			err = EINVAL
+		}
+
+		return p.result(0, err)
 	}
 
-	return p.result(r, nil)
+	p.copied(src, offIn, from+int64(count))
+	p.copied(dst, offOut, to+int64(count))
+
+	return p.result(count, nil)
 }
 
-func copyFiles(p *Process, src, dst File, from, to *int64, n int) (int, error) {
-	in, out := src.asTransfer(), dst.asTransfer()
-	inFlags, _ := src.flags()
-	outFlags, _ := dst.flags()
+func (p *Process) copyOffset(f File, at uint32) (int64, error) {
+	off := int64(0)
 
-	if in == nil || out == nil || inFlags&O_ACCMODE == O_WRONLY || outFlags&O_ACCMODE == O_RDONLY ||
-		outFlags&O_APPEND != 0 {
-		return 0, EBADF
+	if at != 0 {
+		off = int64(p.u64(at))
+	} else if s := f.asSeeker(); s == nil {
+		return 0, EINVAL
+	} else if pos, err := s.seek(p, 0, 1); err != nil {
+		return 0, EINVAL
+	} else {
+		off = pos
 	}
 
-	for _, f := range []File{src, dst} {
+	if off < 0 {
+		return 0, EINVAL
+	}
+
+	return off, nil
+}
+
+func (p *Process) copied(f File, at uint32, off int64) {
+	if at != 0 {
+		p.put64(at, uint64(off))
+
+		return
+	}
+
+	f.asSeeker().seek(p, off, 0)
+}
+
+func copyThrough(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
+	for _, t := range []Transfer{in, out} {
+		f := t.asFile()
+
+		if f == nil {
+			return 0, EINVAL
+		}
+
 		var st Stat
 
 		if err := f.stat(p, &st); err != nil {
@@ -5273,15 +5298,7 @@ func copyFiles(p *Process, src, dst File, from, to *int64, n int) (int, error) {
 
 	for done < n {
 		chunk := buf[:min(len(buf), n-done)]
-
-		var got int
-		var err error
-
-		if from != nil {
-			got, err = in.pread(p, chunk, *from)
-		} else {
-			got, err = in.read(p, chunk, IoMode{})
-		}
+		got, err := in.pread(p, chunk, from+int64(done))
 
 		if err != nil || got == 0 {
 			if done > 0 {
@@ -5291,18 +5308,7 @@ func copyFiles(p *Process, src, dst File, from, to *int64, n int) (int, error) {
 			return done, err
 		}
 
-		var put int
-
-		if to != nil {
-			put, err = out.pwrite(p, chunk[:got], *to)
-			*to += int64(put)
-		} else {
-			put, err = out.write(p, chunk[:got], IoMode{})
-		}
-
-		if from != nil {
-			*from += int64(put)
-		}
+		put, err := out.pwrite(p, chunk[:got], to+int64(done))
 
 		done += put
 
@@ -7240,14 +7246,6 @@ func (p *Process) libcMemfd_create(at, n, flags uint32) uint32 {
 	}
 
 	return p.result(fd, nil)
-}
-
-func copyWindow(p *Process, src, dst Object, from, to *int64, n int) (int, error) {
-	if w := dst.asMemfd(); w != nil {
-		return w.fill(p, src, from, to, n)
-	}
-
-	return src.asMemfd().drain(p, dst, from, to, n)
 }
 
 func (p *Process) putAddress(addr []byte, at, lenAt uint32) {

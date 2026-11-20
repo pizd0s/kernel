@@ -34,16 +34,6 @@ func newMemfd(inst *Instance, mem []byte, mode int) *MemfdFile {
 	return f
 }
 
-func window(p *Process, b []byte, mode int) *MemfdFile {
-	var inst *Instance
-
-	if p != nil {
-		inst = p.inst
-	}
-
-	return newMemfd(inst, b, mode)
-}
-
 func (f *MemfdFile) ref() {
 	f.refs.Add(1)
 }
@@ -74,10 +64,6 @@ func (f *MemfdFile) asTerminal() Terminal {
 	return nil
 }
 
-func (f *MemfdFile) asWindowed() Windowed {
-	return nil
-}
-
 func (f *MemfdFile) asLink() Link {
 	return nil
 }
@@ -100,10 +86,6 @@ func (f *MemfdFile) asLocker() Locker {
 
 func (f *MemfdFile) asEpoll() *Epoll {
 	return nil
-}
-
-func (f *MemfdFile) asMemfd() *MemfdFile {
-	return f
 }
 
 func (f *MemfdFile) asPair() *PairEnd {
@@ -233,100 +215,27 @@ func (f *MemfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 	return off, nil
 }
 
-func (f *MemfdFile) fill(p *Process, src Object, from, to *int64, n int) (int, error) {
-	if src == Object(f) {
+func (f *MemfdFile) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
+	if in == out {
 		return 0, EINVAL
 	}
 
-	if f.mode == O_RDONLY {
-		return 0, EBADF
+	size := int64(len(f.mem))
+
+	if out == Transfer(f) {
+		switch {
+		case n == 0:
+			return 0, nil
+		case to >= size:
+			return 0, ENOSPC
+		}
+
+		return in.pread(p, f.mem[to:to+min(int64(n), size-to)], from)
 	}
 
-	at := f.position(to)
-
-	switch {
-	case at < 0:
-		return 0, EINVAL
-	case n == 0:
-		return 0, nil
-	case at >= int64(len(f.mem)):
-		return 0, ENOSPC
-	}
-
-	n = min(n, len(f.mem)-int(at))
-	var count int
-	var err error
-
-	if m := src.asMemfd(); m != nil {
-		count, err = m.moveTo(f.mem[at:int(at)+n], from)
-	} else if w := src.asWindowed(); w != nil {
-		count, err = w.readWindow(p, f, uint32(at), n, from)
-	} else {
-		err = EINVAL
-	}
-
-	f.moved(to, count)
-
-	return count, err
-}
-
-func (f *MemfdFile) drain(p *Process, dst Object, from, to *int64, n int) (int, error) {
-	if f.mode == O_WRONLY {
-		return 0, EBADF
-	}
-
-	at := f.position(from)
-
-	switch {
-	case at < 0:
-		return 0, EINVAL
-	case n == 0 || at >= int64(len(f.mem)):
+	if n == 0 || from >= size {
 		return 0, nil
 	}
 
-	n = min(n, len(f.mem)-int(at))
-	var count int
-	var err error
-
-	if d := dst.asWindowed(); d != nil {
-		count, err = d.writeWindow(p, f, uint32(at), n, to)
-	} else {
-		err = EINVAL
-	}
-
-	f.moved(from, count)
-
-	return count, err
-}
-
-func (f *MemfdFile) moveTo(b []byte, from *int64) (int, error) {
-	n, err := f.pread(nil, b, f.position(from))
-
-	f.moved(from, n)
-
-	return n, err
-}
-
-func (f *MemfdFile) position(at *int64) int64 {
-	if at != nil {
-		return *at
-	}
-
-	f.mu.Lock()
-
-	defer f.mu.Unlock()
-
-	return f.off
-}
-
-func (f *MemfdFile) moved(at *int64, count int) {
-	if at != nil {
-		*at += int64(count)
-
-		return
-	}
-
-	f.mu.Lock()
-	f.off += int64(count)
-	f.mu.Unlock()
+	return out.pwrite(p, f.mem[from:from+min(int64(n), size-from)], to)
 }
