@@ -3837,38 +3837,6 @@ func (p *Process) refill(h *Heap, cls int) bool {
 	return true
 }
 
-func (p *Process) mallocSmall(h *Heap, cls int) uint32 {
-	c := &h.classes[cls]
-
-	for {
-		if page := c.current; page != noPage {
-			pg := &h.pages[page]
-			slot := uint16(0)
-
-			if n := len(pg.freed); n > 0 {
-				slot = pg.freed[n-1]
-				pg.freed = pg.freed[:n-1]
-			} else if pg.bump < classSlots[cls] {
-				slot = pg.bump
-				pg.bump++
-			} else {
-				slot = math.MaxUint16
-			}
-
-			if slot != math.MaxUint16 {
-				pg.used[slot/64] |= 1 << (slot % 64)
-				pg.live++
-
-				return h.address(page) + uint32(slot)*classSizes[cls]
-			}
-		}
-
-		if !p.refill(h, cls) {
-			return 0
-		}
-	}
-}
-
 func (p *Process) mallocRun(h *Heap, n uint64) uint32 {
 	count := pagesFor(n)
 	first, ok := p.takePages(h, count)
@@ -3889,71 +3857,95 @@ func (p *Process) malloc(n uint32) uint32 {
 		h = p.heapInit()
 	}
 
-	if n <= smallLimit {
-		cls := classOf(n)
-		at := p.mallocSmall(h, cls)
+	if n > smallLimit {
+		if n > heapMax {
+			return 0
+		}
 
-		if at != 0 {
-			p.shadowBlock(at, n, classSizes[cls])
+		at := p.mallocRun(h, uint64(n))
+
+		if at != 0 && p.shadow() != nil {
+			p.shadowBlock(at, n, pagesFor(uint64(n))<<heapPageShift)
 		}
 
 		return at
 	}
 
-	if n > heapMax {
-		return 0
+	cls := classOf(n)
+	c := &h.classes[cls]
+
+	for {
+		if page := c.current; page != noPage {
+			pg := &h.pages[page]
+			slot := uint16(math.MaxUint16)
+
+			if k := len(pg.freed); k > 0 {
+				slot, pg.freed = pg.freed[k-1], pg.freed[:k-1]
+			} else if pg.bump < classSlots[cls] {
+				slot = pg.bump
+				pg.bump++
+			}
+
+			if slot != math.MaxUint16 {
+				pg.used[slot/64] |= 1 << (slot % 64)
+				pg.live++
+
+				at := h.address(page) + uint32(slot)*classSizes[cls]
+
+				if p.shadow() != nil {
+					p.shadowBlock(at, n, classSizes[cls])
+				}
+
+				return at
+			}
+		}
+
+		if !p.refill(h, cls) {
+			return 0
+		}
 	}
-
-	at := p.mallocRun(h, uint64(n))
-
-	if at != 0 {
-		p.shadowBlock(at, n, pagesFor(uint64(n))<<heapPageShift)
-	}
-
-	return at
 }
 
 func (p *Process) usedBlock(ptr uint32) (page int32, slot, size uint32, ok bool) {
 	h := p.heap
 
-	if h == nil || ptr < h.base || uint64(ptr-h.base)>>heapPageShift >= uint64(len(h.pages)) {
+	if h == nil {
 		return 0, 0, 0, false
 	}
 
-	page = int32((ptr - h.base) >> heapPageShift)
-
-	if h.pages[page].kind == pageSlab {
-		page = int32(h.pages[page].run)
+	if page = h.pageOf(ptr); page == noPage {
+		return 0, 0, 0, false
 	}
 
-	off := ptr - h.address(page)
 	pg := &h.pages[page]
 
-	switch {
-	case pg.kind < smallClasses:
-		size = classSizes[pg.kind]
-		slot = off / size
-
-		if off%size != 0 || slot >= uint32(pg.bump) || pg.used[slot/64]&(1<<(slot%64)) == 0 {
+	if pg.kind == pageRun {
+		if ptr != h.address(page) {
 			return 0, 0, 0, false
 		}
-	case pg.kind == pageRun && off == 0:
-		size = pg.run << heapPageShift
-	default:
+
+		return page, 0, pg.run << heapPageShift, true
+	}
+
+	if slot, ok = h.slotOf(page, ptr); !ok {
 		return 0, 0, 0, false
 	}
 
-	return page, slot, size, true
+	return page, slot, classSizes[pg.kind], true
 }
 
 func (p *Process) block(ptr uint32, what string) (int32, uint32, uint32) {
 	page, slot, size, ok := p.usedBlock(ptr)
 
 	if !ok {
-		p.fatal(fmt.Sprintf("%s(): invalid pointer %#x", what, ptr))
+		p.invalidPointer(what, ptr)
 	}
 
 	return page, slot, size
+}
+
+func (p *Process) invalidPointer(what string, ptr uint32) {
+	p.fatal(fmt.Sprintf("%s(): invalid pointer %#x", what, ptr))
 }
 
 func (p *Process) free(ptr uint32) {
@@ -3961,19 +3953,50 @@ func (p *Process) free(ptr uint32) {
 		return
 	}
 
-	page, slot, size := p.block(ptr, "free")
 	h := p.heap
+	page := int32(noPage)
+
+	if h != nil {
+		page = h.pageOf(ptr)
+	}
+
+	if page == noPage {
+		p.invalidPointer("free", ptr)
+
+		return
+	}
+
 	pg := &h.pages[page]
 
-	p.shadowFree(ptr, size)
-
 	if pg.kind == pageRun {
+		if ptr != h.address(page) {
+			p.invalidPointer("free", ptr)
+
+			return
+		}
+
+		if p.shadow() != nil {
+			p.shadowFree(ptr, pg.run<<heapPageShift)
+		}
+
 		h.releasePages(page, pg.run)
 
 		return
 	}
 
+	slot, ok := h.slotOf(page, ptr)
+
+	if !ok {
+		p.invalidPointer("free", ptr)
+
+		return
+	}
+
 	cls := int(pg.kind)
+
+	if p.shadow() != nil {
+		p.shadowFree(ptr, classSizes[cls])
+	}
 
 	pg.used[slot/64] &^= 1 << (slot % 64)
 	pg.live--
@@ -4134,7 +4157,7 @@ func (p *Process) memalign(align, n uint32) uint32 {
 
 	if size := max(n, align); size <= smallLimit && align <= heapPageSize {
 		cls := classOf(1 << bits.Len32(size-1))
-		at := p.mallocSmall(h, cls)
+		at := p.malloc(classSizes[cls])
 
 		if at != 0 {
 			p.shadowBlock(at, n, classSizes[cls])

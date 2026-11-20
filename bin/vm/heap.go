@@ -7,7 +7,9 @@ import (
 	"slices"
 )
 
-var classSizes, classSlots, classPages = func() (sizes [smallClasses]uint32, slots [smallClasses]uint16, pages [smallClasses]uint8) {
+var classSizes, classSlots, classPages, classInverses = func() (sizes [smallClasses]uint32, slots [smallClasses]uint16,
+	pages [smallClasses]uint8, inverses [smallClasses]uint64,
+) {
 	for i := range sizes {
 		if i < 16 {
 			sizes[i] = uint32(i+1) * 16
@@ -24,6 +26,7 @@ var classSizes, classSlots, classPages = func() (sizes [smallClasses]uint32, slo
 		}
 
 		pages[i], slots[i] = uint8(n), uint16(n*heapPageSize/sizes[i])
+		inverses[i] = (1<<32 + uint64(sizes[i]) - 1) / uint64(sizes[i])
 	}
 
 	return
@@ -110,6 +113,33 @@ func newHeap(base uint32) *Heap {
 
 func (h *Heap) address(page int32) uint32 {
 	return h.base + uint32(page)<<heapPageShift
+}
+
+func (h *Heap) pageOf(ptr uint32) int32 {
+	if ptr < h.base || uint64(ptr-h.base)>>heapPageShift >= uint64(len(h.pages)) {
+		return noPage
+	}
+
+	page := int32((ptr - h.base) >> heapPageShift)
+
+	if h.pages[page].kind == pageSlab {
+		page = int32(h.pages[page].run)
+	}
+
+	return page
+}
+
+func (h *Heap) slotOf(page int32, ptr uint32) (uint32, bool) {
+	pg := &h.pages[page]
+
+	if pg.kind >= smallClasses {
+		return 0, false
+	}
+
+	off := ptr - h.address(page)
+	slot := uint32(uint64(off) * classInverses[pg.kind] >> 32)
+
+	return slot, slot*classSizes[pg.kind] == off && slot < uint32(pg.bump) && pg.used[slot/64]&(1<<(slot%64)) != 0
 }
 
 func longestRun(mask uint32) uint8 {
