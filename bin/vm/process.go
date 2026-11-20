@@ -3667,9 +3667,7 @@ func (p *Process) heapInit() *Heap {
 }
 
 func (p *Process) heapGrow(h *Heap) bool {
-	end := uint64(h.base) + uint64(len(h.segments)+1)*segmentSize
-
-	if end > math.MaxUint32 || !p.ensure(end) {
+	if uint64(h.base)+uint64(len(h.segments)+1)*segmentSize > math.MaxUint32 {
 		return false
 	}
 
@@ -3680,6 +3678,20 @@ func (p *Process) heapGrow(h *Heap) bool {
 	}
 
 	h.link(int32(len(h.segments) - 1))
+
+	return true
+}
+
+func (p *Process) heapReach(h *Heap, end uint32) bool {
+	if end <= h.top {
+		return true
+	}
+
+	if !p.ensure(uint64(end)) {
+		return false
+	}
+
+	h.top = end
 
 	return true
 }
@@ -3711,16 +3723,17 @@ func (p *Process) takePages(h *Heap, count uint32) (int32, bool) {
 			}
 
 			start := bits.TrailingZeros32(runs)
+			first := s*segmentPages + int32(start)
+
+			if !p.heapReach(h, h.address(first+int32(count))) {
+				return 0, false
+			}
 
 			seg.mask &^= need << start
 
 			if seg.mask == 0 {
 				h.unlink(s)
 			}
-
-			first := s*segmentPages + int32(start)
-
-			h.top = max(h.top, h.address(first+int32(count)))
 
 			return first, true
 		}
@@ -3759,6 +3772,12 @@ func (p *Process) takeSegments(h *Heap, count uint32) (int32, bool) {
 		at = len(h.segments) - k
 	}
 
+	first := int32(at * segmentPages)
+
+	if !p.heapReach(h, h.address(first+int32(count))) {
+		return 0, false
+	}
+
 	left := count
 
 	for s := at; s < at+k; s++ {
@@ -3777,10 +3796,6 @@ func (p *Process) takeSegments(h *Heap, count uint32) (int32, bool) {
 
 		left -= n
 	}
-
-	first := int32(at * segmentPages)
-
-	h.top = max(h.top, h.address(first+int32(count)))
 
 	return first, true
 }
@@ -4002,6 +4017,10 @@ func (p *Process) resizeRun(page int32, n uint64) bool {
 		}
 	}
 
+	if !p.heapReach(h, h.address(end)) {
+		return false
+	}
+
 	for q := page + int32(run); q < end; q++ {
 		s := q / segmentPages
 
@@ -4013,7 +4032,6 @@ func (p *Process) resizeRun(page int32, n uint64) bool {
 	}
 
 	h.markRun(page, count)
-	h.top = max(h.top, h.address(end))
 
 	return true
 }
