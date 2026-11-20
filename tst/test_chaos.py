@@ -112,7 +112,8 @@ def main():
             run_guest(vm_chaos, operation, 0, f"{point}@4294967295")
 
         # A memory moves at every grow and as every handler starts with
-        # memory-move, under waits a handler interrupts: nothing is lost.
+        # memory-move, under waits a handler interrupts and in a loop it
+        # interrupts anywhere: nothing is lost.
         for binary, rule in ((vm, "memory-move@0"), (vm_chaos, ""), (vm_chaos, "memory-move@0")):
             run_guest(binary, "memory-move", 0, rule)
 

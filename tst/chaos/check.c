@@ -81,9 +81,94 @@ static int waitsMoved(void) {
     return wrong;
 }
 
+// The code a handler interrupts at any of its instructions while the memory
+// moves: calls through pointers, lib/c's string functions and the heap's
+// bytes, which must give what they give with no interruption. The handler
+// takes a little memory, which the memory outgrows its room by.
+static volatile int ticks;
+static void* grabbed[8];
+
+static void tick(int sig) {
+    (void)sig;
+    if (ticks < 8) {
+        char* block = malloc(1 << 18);
+        assert(block);
+        memset(block, ticks, 1 << 18);
+        grabbed[ticks] = block;
+    }
+    ticks++;
+}
+
+static unsigned mix(unsigned x) {
+    return x * 2654435761u ^ x >> 13;
+}
+
+static unsigned twist(unsigned x) {
+    return (x << 7 | x >> 25) + 0x9e3779b9u;
+}
+
+static unsigned (*volatile steps[2])(unsigned) = {mix, twist};
+
+static unsigned stir(char* text, char* copy, unsigned x) {
+    for (int i = 0; i < 64; i++) {
+        x = steps[x & 1](x);
+        text[x % 4000] = (char)('a' + x % 26);
+    }
+    memcpy(copy, text, 4001);
+    x += (unsigned)strlen(copy);
+    char* q = memchr(copy, 'q', 4000);
+    x += q ? (unsigned)(q - copy) : 7;
+    char* z = strchr(copy, 'z');
+    x += z ? (unsigned)(z - copy) : 11;
+    return x;
+}
+
+static unsigned stirred(char* text, char* copy, int rounds) {
+    memset(text, 'b', 4000);
+    text[4000] = 0;
+    unsigned x = 1;
+    for (int r = 0; r < rounds; r++) {
+        x = stir(text, copy, x);
+    }
+    return x;
+}
+
+// The loop runs until it has been interrupted 32 times, then once more as
+// many rounds with no timer.
+static int loopsMoved(void) {
+    char* text = malloc(4001);
+    char* copy = malloc(4001);
+    assert(text && copy);
+    struct sigaction action = {0};
+    action.sa_handler = tick;
+    action.sa_flags = SA_RESTART;
+    assert(sigaction(SIGALRM, &action, NULL) == 0);
+    struct itimerval timer = {{0, 2000}, {0, 2000}};
+    memset(text, 'b', 4000);
+    text[4000] = 0;
+    unsigned got = 1;
+    int rounds = 0;
+    assert(setitimer(ITIMER_REAL, &timer, NULL) == 0);
+    for (; ticks < 32 && rounds < 10000000; rounds++) {
+        got = stir(text, copy, got);
+    }
+    struct itimerval off = {{0, 0}, {0, 0}};
+    assert(setitimer(ITIMER_REAL, &off, NULL) == 0);
+    unsigned want = stirred(text, copy, rounds);
+    free(text);
+    free(copy);
+    if (got != want || ticks < 32) {
+        fprintf(stderr, "loops: %#x, not %#x, after %d interruptions in %d rounds\n", got, want, ticks, rounds);
+        return 1;
+    }
+    return 0;
+}
+
 static int attempt(const char* operation) {
     if (strcmp(operation, "memory-move") == 0) {
-        return waitsMoved();
+        int wrong = loopsMoved();
+        wrong |= waitsMoved();
+        return wrong;
     }
     if (strcmp(operation, "system") == 0) {
         // A shell that cannot be loaded ends with 127, as system reports.
