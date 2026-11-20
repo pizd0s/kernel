@@ -86,12 +86,12 @@ def main():
     # executable's module.
     rejected = {1: "unsupported: an imported table", 2: "unsupported: an imported memory", 3: "unsupported: an imported global"}
     cases = [("kernel-" + str(kind), program(kind, "kernel"), False, rejected[kind]) for kind in (1, 2, 3)]
-    cases += [("wasi-" + str(kind), program(kind, "wasi_snapshot_preview1"), False, rejected[kind]) for kind in (1, 2, 3)]
     cases += [("stand-" + str(kind), program(kind, "foreign"), True, rejected.get(kind, "unresolved import foreign.value")) for kind in range(4)]
-    cases += [("wasi-foreign-function", program(0, "foreign"), False, "unresolved import foreign.value"),
+    # WASI is a foreign module as any other: the kernel provides none of it.
+    cases += [("foreign-function", program(0, "foreign"), False, "unresolved import foreign.value"),
               ("kernel-foreign-function", program(0, "foreign", kernel=True), False, "unresolved import foreign.value"),
               ("kernel-signature", program(0, "kernel", "getpid", parameter=True), False, "import kernel.getpid is"),
-              ("wasi-signature", program(0, "wasi_snapshot_preview1", "fd_write"), False, "import wasi_snapshot_preview1.fd_write is")]
+              ("wasi-function", program(0, "wasi_snapshot_preview1", "fd_write"), False, "unresolved import wasi_snapshot_preview1.fd_write")]
     for pattern in (("i32",), ("i64",), ("f32",), ("f64",), ("i32", "f64", "i64", "f32")):
         for count in (8, 9, 16, 17, 32, 40):
             kinds = [pattern[index % len(pattern)] for index in range(count)]
@@ -129,7 +129,7 @@ def main():
                 result = subprocess.run([vm, *args], capture_output=True, env=env, timeout=30)
                 assert result.returncode == 1 and result.stdout == b"" and diagnostic.encode() in result.stderr, (label, result)
                 assert b"panic:" not in result.stderr, (label, result)
-    print(f"import errors: {len(cases)} kernel/WASI/stand import kinds, imported tables, memories and globals, foreign modules and signature mismatches rejected with both AOTs")
+    print(f"import errors: {len(cases)} kernel/stand import kinds, imported tables, memories and globals, foreign and WASI modules and signature mismatches rejected with both AOTs")
 
 
 if __name__ == "__main__":

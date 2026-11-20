@@ -7,7 +7,6 @@ import (
 	_ "embed"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"sync"
@@ -21,10 +20,6 @@ var (
 	wasmHeader   = []byte("\x00asm\x01\x00\x00\x00")
 	exeMagic     = []byte("PZD1")
 )
-
-var compilerCode = sync.OnceValue(func() *Code {
-	return link("aot", readObject(compilerBlob), CompilerImports{})
-})
 
 var unpacker = sync.OnceValue(func() *zstd.Decoder {
 	return throw2(zstd.NewReader(nil, zstd.WithDecoderMaxMemory(unpackLimit)))
@@ -62,129 +57,58 @@ func compileOptions() CompileOptions {
 	return options
 }
 
-type CompilerImports struct{}
+func (o CompileOptions) arguments() []string {
+	switch o {
+	case CompileOptions{memoryTail: true, tailRanges: true}:
+		return nil
+	case CompileOptions{memoryTail: true}:
+		return []string{"--plain"}
+	case CompileOptions{memoryTail: true, tailRanges: true, tailProfile: true}:
+		return []string{"--tail-profile"}
+	case CompileOptions{}:
+		return []string{"--strict"}
+	case CompileOptions{asan: true}:
+		return []string{"--asan"}
+	}
 
-type CompilerIO struct {
-	input      io.Reader
-	output     func(p []byte) (int, error)
-	diagnostic bytes.Buffer
+	throwFmt("compile options %+v are no arguments of the compiler", o)
+
+	return nil
 }
 
-func (CompilerImports) function(imp *ImportMeta) any {
-	switch imp.name {
-	case "fd_read":
-		return compilerRead
-	case "fd_write":
-		return compilerWrite
+func (k *Kernel) compileObject(module []byte, options CompileOptions) ([]byte, error) {
+	code := k.compiler()
+	p := k.process(0, nil)
+	out, diagnostic := newCapture(objectSize), newCapture(nil)
+
+	out.ref()
+	diagnostic.ref()
+
+	defer out.unref()
+
+	defer diagnostic.unref()
+
+	p.files.put(0, newMemfd(&LinearMemory{data: module}, 0, int64(len(module)), O_RDONLY), false)
+	p.files.put(1, out, false)
+	p.files.put(2, diagnostic, false)
+
+	status := p.run(&ExecImage{code: code, argv: append([]string{"aot"}, options.arguments()...), envp: compilerEnv()})
+	text := strings.TrimSpace(string(diagnostic.bytes()))
+
+	switch {
+	case status&0x7f != 0:
+		return nil, fmt.Errorf("aot killed by %s: %s", signalName(status&0x7f), text)
+	case status != 0:
+		return nil, fmt.Errorf("aot exited with code %d: %s", status>>8&0xff, text)
 	}
 
-	return compilerExit
-}
+	b := out.bytes()
 
-func compilerTransfer(fd, iovs, done uint32, write bool) uint32 {
-	m := guest()
-	host := current().host.(*CompilerIO)
-	table := span(m, iovs, 8)
-	at := binary.LittleEndian.Uint32(table)
-	size := binary.LittleEndian.Uint32(table[4:])
-	b := span(m, at, uint64(size))
-
-	var n int
-	var err error
-
-	if write {
-		out := host.output
-
-		if fd == 2 {
-			out = host.diagnostic.Write
-		}
-
-		if chaosFail("compile-write") {
-			err = io.ErrShortWrite
-		} else {
-			n, err = out(b)
-		}
-	} else {
-		if chaosFail("compile-read") {
-			err = io.ErrUnexpectedEOF
-		} else {
-			n, err = host.input.Read(b)
-		}
+	if len(b) != cap(b) {
+		b = bytes.Clone(b)
 	}
 
-	if err != nil && err != io.EOF {
-		throw(err)
-	}
-
-	put32(m, done, uint32(n))
-
-	return wasiOK
-}
-
-func compilerRead(fd, iovs, count, done uint32) uint32 {
-	return compilerTransfer(fd, iovs, done, false)
-}
-
-func compilerWrite(fd, iovs, count, done uint32) uint32 {
-	return compilerTransfer(fd, iovs, done, true)
-}
-
-func compilerExit(code uint32) {
-	diagnostic := strings.TrimSpace(current().host.(*CompilerIO).diagnostic.String())
-
-	throwFmt("aot exited with code %d: %s", code, diagnostic)
-}
-
-func compileStreams(input io.Reader, output func(p []byte) (int, error), options CompileOptions) {
-	i := newInstance(compilerCode(), runStack)
-
-	defer i.release()
-
-	i.attach(&CompilerIO{input: input, output: output})
-	i.start()
-	setupCompilerChaos(i)
-
-	flags := uint32(0)
-
-	if options.memoryTail {
-		flags |= 1
-	}
-
-	if options.tailRanges {
-		flags |= 2
-	}
-
-	if options.tailProfile {
-		flags |= 4
-	}
-
-	if options.asan {
-		flags |= 8
-	}
-
-	if flags == 3 {
-		entry, _ := i.export("compile")
-
-		entry.Interface().(func(uintptr))(i.handle())
-	} else {
-		entry, _ := i.export("compileOptions")
-
-		entry.Interface().(func(uintptr, uint32))(i.handle(), flags)
-	}
-}
-
-type ObjectWriter struct {
-	b []byte
-}
-
-func (w *ObjectWriter) write(p []byte) (int, error) {
-	if w.b == nil {
-		w.b = make([]byte, 0, objectSize(p))
-	}
-
-	w.b = append(w.b, p...)
-
-	return len(p), nil
+	return b, nil
 }
 
 func objectSize(header []byte) int {
@@ -200,17 +124,6 @@ func objectSize(header []byte) int {
 	}
 
 	return int(size)
-}
-
-func compileModuleWithOptions(data []byte, options CompileOptions) []byte {
-	var out ObjectWriter
-	compileStreams(bytes.NewReader(data), out.write, options)
-
-	if len(out.b) != cap(out.b) {
-		return bytes.Clone(out.b)
-	}
-
-	return out.b
 }
 
 func programOptions(asan bool) CompileOptions {
@@ -245,27 +158,33 @@ func unpack(exe []byte) ([]byte, error) {
 	return module, nil
 }
 
-func compileExecutable(exe []byte, options CompileOptions) (*ElfObject, error) {
+func (k *Kernel) compileExecutable(exe []byte, options CompileOptions) (*ElfObject, error) {
 	module, err := unpack(exe)
 
 	if err != nil {
 		return nil, err
 	}
 
-	return compileModule(module, options)
+	return k.compileModule(module, options)
 }
 
-func compileModule(data []byte, options CompileOptions) (obj *ElfObject, err error) {
+func (k *Kernel) compileModule(data []byte, options CompileOptions) (obj *ElfObject, err error) {
 	if !bytes.HasPrefix(data, wasmHeader) {
 		return nil, ENOEXEC
 	}
 
-	if t := tryAs[*Trap](func() {
-		if e := try(func() { obj = readObject(compileModuleWithOptions(data, options)) }); e != nil {
-			err = fmt.Errorf("%s: %w", e, ENOEXEC)
+	if e := try(func() {
+		b, failed := k.compileObject(data, options)
+
+		if failed != nil {
+			err = fmt.Errorf("%s: %w", failed, ENOEXEC)
+
+			return
 		}
-	}); t != nil {
-		return nil, fmt.Errorf("the compiler: %s: %w", t.Error(), ENOEXEC)
+
+		obj = readObject(b)
+	}); e != nil {
+		return nil, fmt.Errorf("%s: %w", e, ENOEXEC)
 	}
 
 	return obj, err

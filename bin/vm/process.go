@@ -225,7 +225,6 @@ type Process struct {
 	limits [RLIM_NLIMITS]Rlimit
 	cred   Cred
 
-	wasiRoot  int
 	chaos     *ChaosRulesOf
 	modes     uint32
 	classes   uint32
@@ -482,11 +481,11 @@ func (p *Process) firstCwd() (Dir, string) {
 	return p.root, "/"
 }
 
-func (p *Process) run(img *ExecImage) {
-	p.runFrom(img, nil, nil)
+func (p *Process) run(img *ExecImage) int {
+	return p.runFrom(img, nil, nil)
 }
 
-func (p *Process) runFrom(img *ExecImage, i *Instance, enter func()) {
+func (p *Process) runFrom(img *ExecImage, i *Instance, enter func()) int {
 	status := 0
 
 	if err := try(func() {
@@ -505,6 +504,8 @@ func (p *Process) runFrom(img *ExecImage, i *Instance, enter func()) {
 	}
 
 	p.terminate(status)
+
+	return status
 }
 
 func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *ExecImage, status int) {
@@ -518,12 +519,6 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 		p.jumps, p.stackAt = map[uint32]*JmpBuf{}, 0
 		enter = func() {
 			p.chaosStart(img.envp)
-			p.wasiRoot = -1
-
-			if isWASI(img.code.obj) {
-				p.wasiPreopen()
-			}
-
 			p.asanStart()
 			i.start()
 			p.stackStart()
@@ -623,6 +618,10 @@ func (p *Process) terminate(status int) {
 	p.sig.mu.Lock()
 	p.sig.dead = true
 	p.sig.mu.Unlock()
+
+	if p.pid == 0 {
+		return
+	}
 
 	k := p.k
 
@@ -13091,19 +13090,5 @@ func (p *Process) sized(call string, sizes ...uint32) {
 			p.crash(fmt.Sprintf("%s: a structure of %d bytes, which this kernel knows of %d", call, sizes[k], sizes[k+1]), callers(1))
 			p.exitWith(SIGSYS)
 		}
-	}
-}
-
-func (p *Process) wasiPreopen() {
-	p.wasiRoot = -1
-
-	f, err := p.openAt(AT_FDCWD, "/", O_RDONLY|O_DIRECTORY, 0)
-
-	if err != nil {
-		return
-	}
-
-	if fd, err := p.install(f, 3, true); err == nil {
-		p.wasiRoot = fd
 	}
 }

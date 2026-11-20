@@ -44,14 +44,14 @@ def run(vm, wast2json, wast, work, native=None):
             data = module.read_bytes()
             host = subprocess.run([native, "--strict"], input=data, capture_output=True, timeout=60)
             target = work / "comparison.o"
-            reactor = subprocess.run([vm, "-o", str(target), str(module)], capture_output=True, env=environment, timeout=60)
-            if bool(host.returncode) != bool(reactor.returncode):
-                return f"compiler acceptance differs for {module.name}: native {host.returncode}, Wasm {reactor.returncode}"
+            embedded = subprocess.run([vm, "-o", str(target), str(module)], capture_output=True, env=environment, timeout=60)
+            if bool(host.returncode) != bool(embedded.returncode):
+                return f"compiler acceptance differs for {module.name}: native {host.returncode}, Wasm {embedded.returncode}"
             if host.returncode == 0:
                 if host.stdout != target.read_bytes():
                     return f"native/Wasm objects differ for {module.name}"
-            elif not host.stderr.strip() or host.stderr.strip() not in reactor.stderr:
-                return f"compiler rejection differs for {module.name}: native {host.stderr[-500:]!r}, Wasm {reactor.stderr[-500:]!r}"
+            elif not host.stderr.strip() or host.stderr.strip() not in embedded.stderr:
+                return f"compiler rejection differs for {module.name}: native {host.stderr[-500:]!r}, Wasm {embedded.stderr[-500:]!r}"
             compiled += 1
 
     try:

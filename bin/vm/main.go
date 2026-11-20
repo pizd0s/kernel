@@ -88,10 +88,7 @@ func compileCommand(args []string) {
 		usage()
 	}
 
-	source := throw2(os.Open(input))
-
-	defer source.Close()
-
+	source := throw2(os.ReadFile(input))
 	destination := throw2(os.CreateTemp(filepath.Dir(output), ".vm-*"))
 
 	defer destination.Close()
@@ -108,17 +105,16 @@ func compileCommand(args []string) {
 
 	options := programOptions(asan)
 	start := time.Now()
-
-	compileStreams(source, destination.Write, options)
-
+	object := throw2(newKernel(Cred{}).compileObject(source, options))
 	elapsed := time.Since(start)
 
+	throw2(destination.Write(object))
 	throw(destination.Chmod(0o644))
 	throw(destination.Close())
 	throw(os.Rename(destination.Name(), output))
 
 	if verbose {
-		fmt.Fprintf(os.Stderr, "vm: %d bytes -> %d bytes in %s\n", throw2(source.Stat()).Size(), throw2(os.Stat(output)).Size(), elapsed)
+		fmt.Fprintf(os.Stderr, "vm: %d bytes -> %d bytes in %s\n", len(source), len(object), elapsed)
 	}
 }
 

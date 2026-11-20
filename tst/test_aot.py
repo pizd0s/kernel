@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""The standalone C++ compiler's WASI export and command match vm.
+"""The compiler, a program of the system, matches the kernel's.
 
-    test_aot.py <aot.wasm> <aot-command.wasm> <wazero> <vm> <fixture.wasm> <rootfs>
+    test_aot.py <aot.wasm> <vm> <fixture.wasm> <rootfs>
 
-The command, compiled by the kernel as it starts, compiles in the system,
-its inputs one batch of a boot (tst/system.py).
+vm -o compiles with the compiler the kernel runs as a process of its own.
+The same aot.wasm, an executable of the batch, compiles the same inputs in
+the system, all of them one batch of a boot (tst/system.py), and refuses
+what is no module, as vm -o does.
 """
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -16,54 +17,46 @@ from pathlib import Path
 import system
 
 
-def run(command, data):
-    return subprocess.run(command, input=data, capture_output=True, check=True)
-
-
 def main():
-    aot, command, wazero, vm, fixture, rootfs = sys.argv[1:]
+    aot, vm, fixture, rootfs = sys.argv[1:]
     env = dict(os.environ, W2X_MEMORY_TAIL="optimized", W2X_TAIL_PROFILE="")
+    empty = b"\0asm\1\0\0\0"
+    sources = {
+        "empty": empty,
+        # A malformed optional name subsection must not reject the module.
+        "optional-names": empty + b"\0\x0b\x04name\x01\x04\x01\0\x01\xff",
+        "fixture": Path(fixture).read_bytes(),
+        "aot": Path(aot).read_bytes(),
+    }
+    malformed = [b"", b"bad!\1\0\0\0", b"\0asm\1\0\0\0\1\1\x80"]
 
     with tempfile.TemporaryDirectory(prefix="aot-") as directory:
         directory = Path(directory)
-        empty = directory / "empty.wasm"
-        empty.write_bytes(b"\0asm\1\0\0\0")
-        # A malformed optional name subsection must not reject the module.
-        names = directory / "optional-names.wasm"
-        names.write_bytes(empty.read_bytes() + b"\0\x0b\x04name\x01\x04\x01\0\x01\xff")
+        source, output = directory / "input.wasm", directory / "output.o"
         references = {}
 
-        for source in (empty, names, Path(fixture), Path(aot), Path(command)):
-            output = directory / "reference.o"
+        for name, data in sources.items():
+            source.write_bytes(data)
             subprocess.run([vm, "-o", str(output), str(source)], env=env, capture_output=True, check=True)
-            expected = output.read_bytes()
-            references[source] = expected
-            data = source.read_bytes()
-            for entry in ([wazero, "-aot", aot], [wazero, command]):
-                result = run(entry, data)
-                assert result.stdout == expected, f"{entry}: {source.name} differs from vm"
-            print(f"aot export/command: {source.name} -> {len(expected)} bytes, identical")
+            references[name] = output.read_bytes()
 
-        # Run the C++ compiler as its own x86 output, which the kernel compiles
-        # as it starts, through the same Go loader and stack/runtime ABI that
-        # ordinary compiled modules use.
-        sources = (Path(fixture), Path(command))
-        program = Path(command).read_bytes()
-        results = system.run(vm, rootfs, [("aot", program, [], source.read_bytes()) for source in sources], env=env)
-        for source, (status, out, err) in zip(sources, results):
-            assert status == 0 and out == references[source], f"self-compiled aot differs for {source.name}: {status} {err[-500:]!r}"
-            print(f"self-compiled aot: {source.name}, identical")
+        for data in malformed:
+            source.write_bytes(data)
+            result = subprocess.run([vm, "-o", str(output), str(source)], env=env, capture_output=True)
+            assert result.returncode == 1 and b"aot exited with code 134: " in result.stderr, (data, result)
 
-        once = run([wazero, "-aot", aot], empty.read_bytes())
-        repeated = run([wazero, "-aot", aot, "100"], empty.read_bytes())
-        assert once.stdout == repeated.stdout
-        memory = lambda r: float(re.search(rb"aot memory ([\d.]+) MiB", r.stderr)[1])
-        assert memory(repeated) <= memory(once) + 2, "repeated compilation retains memory"
-        print(f"aot export: 100 calls, {memory(repeated):.3f} MiB")
+    program = Path(aot).read_bytes()
+    inputs = [*sources.values(), *malformed]
+    results = system.run(vm, rootfs, [("aot", program, [], data) for data in inputs], env=env)
 
-        for data in (b"", b"bad!\1\0\0\0", b"\0asm\1\0\0\0\1\1\x80"):
-            result = subprocess.run([wazero, "-aot", aot], input=data, capture_output=True)
-            assert result.returncode != 0, "malformed module compiled"
+    for name, (status, out, err) in zip(sources, results):
+        assert status == 0 and out == references[name], f"aot in the system differs for {name}: {status} {err[-500:]!r}"
+        print(f"aot in the system: {name} -> {len(out)} bytes, identical")
+
+    for data, (status, out, err) in zip(malformed, results[len(sources):]):
+        assert status == 134 and out == b"" and err, (data, status, out, err)
+
+    print(f"aot in the system and vm -o: {len(malformed)} malformed modules refused")
 
 
 if __name__ == "__main__":

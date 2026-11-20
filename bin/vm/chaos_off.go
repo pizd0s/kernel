@@ -23,5 +23,6 @@ func (*ChaosRulesOf) holds(string) bool {
 	return false
 }
 
-func setupCompilerChaos(*Instance) {
+func compilerEnv() []string {
+	return nil
 }

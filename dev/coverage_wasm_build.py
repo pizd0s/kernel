@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Build an instrumented freestanding Wasm reactor without compiler-rt.
+"""Build the instrumented wasm compiler, a program on lib/c, without compiler-rt.
 
     coverage_wasm_build.py <clang> <wasm-ld> <aot.cpp> <shim.c> <output> <flags-json>
 
-The VM extracts counters before unmapping each compiler instance. Keep the
-coverage mapping custom sections; production --strip-all would erase them.
+The flags carry the compiler's flags, whether it is the chaos build and
+lib/c's libc.a. The VM extracts counters before unmapping each compiler
+instance. Keep the coverage mapping custom sections; production --strip-all
+would erase them.
 """
 import json
 from pathlib import Path
@@ -25,8 +27,8 @@ def build(clang, linker, source, shim, output, options):
                         "-mllvm", "-enable-name-compression=false", "-c", source, "-o", obj], check=True)
         subprocess.run([clang, "--target=wasm32-unknown-unknown", "-ffreestanding", "-nostdinc",
                         "-O2", *variant, "-c", shim, "-o", runtime], check=True)
-        subprocess.run([linker, "--no-entry", "--export-memory", "--stack-first",
-                        "-z", "stack-size=4195328", obj, runtime, "-o", str(output)], check=True)
+        subprocess.run([linker, "--stack-first", "--max-memory=4294967296", "--export=__heap_base",
+                        "--export=__stack_pointer", obj, runtime, options["libc"], "-o", str(output)], check=True)
 
 
 if __name__ == "__main__":

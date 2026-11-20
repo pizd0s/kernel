@@ -4,7 +4,7 @@
     coverage.py <output-directory> <suite-json>
     coverage.py --check <summary.json> [minimum-percent]
 
-Clang/LLVM measures native aot.cpp and the embedded Wasm reactor;
+Clang/LLVM measures native aot.cpp and the embedded Wasm compiler;
 go build -cover measures the VM executable. The AOT goal counts source
 lines other than standalone block braces; raw LLVM totals remain alongside
 that metric and in the unmodified LCOV files.

@@ -1,14 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,36 +15,7 @@ import (
 )
 
 func usage() {
-	throwFmt("usage: wazero [-interpreter] [-compile] [-reserve] [-aot] module.wasm [args...]")
-}
-
-func compileAot(ctx context.Context, runtime wazero.Runtime, compiled wazero.CompiledModule, args []string, repeat int) {
-	input := throw2(io.ReadAll(os.Stdin))
-	reader := bytes.NewReader(input)
-
-	var output bytes.Buffer
-
-	config := moduleConfig(args).WithStartFunctions().WithStdin(reader).WithStdout(&output)
-	module := throw2(runtime.InstantiateModule(ctx, compiled, config))
-
-	var expected []byte
-
-	for i := 0; i < repeat; i++ {
-		throw2(reader.Seek(0, io.SeekStart))
-		output.Reset()
-		throw2(module.ExportedFunction("compile").Call(ctx))
-
-		if i == 0 {
-			expected = append([]byte(nil), output.Bytes()...)
-		} else if !bytes.Equal(expected, output.Bytes()) {
-			throwFmt("repeated compilation changed the object")
-		}
-	}
-
-	pages, _ := module.Memory().Grow(0)
-
-	fmt.Fprintf(os.Stderr, "wazero: aot memory %.3f MiB\n", float64(pages)/16)
-	throw2(os.Stdout.Write(expected))
+	throwFmt("usage: wazero [-interpreter] [-compile] [-reserve] module.wasm [args...]")
 }
 
 func report(compile time.Duration, run time.Duration) {
@@ -91,7 +59,7 @@ func moduleConfig(args []string) wazero.ModuleConfig {
 }
 
 func run(args []string) int {
-	interpreter, compileOnly, reserve, aot := false, false, false, false
+	interpreter, compileOnly, reserve := false, false, false
 
 	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
 		switch args[0] {
@@ -101,8 +69,6 @@ func run(args []string) int {
 			compileOnly = true
 		case "-reserve":
 			reserve = true
-		case "-aot":
-			aot = true
 		default:
 			usage()
 		}
@@ -135,24 +101,7 @@ func run(args []string) int {
 
 	wasi_snapshot_preview1.MustInstantiate(ctx, runtime)
 	start = time.Now()
-	var err error
-
-	if aot {
-		repeat := 1
-
-		if len(args) > 1 {
-			repeat = throw2(strconv.Atoi(args[1]))
-		}
-
-		if repeat < 1 {
-			throwFmt("aot repeat must be positive")
-		}
-
-		compileAot(ctx, runtime, compiled, args, repeat)
-	} else {
-		_, err = runtime.InstantiateModule(ctx, compiled, moduleConfig(args))
-	}
-
+	_, err := runtime.InstantiateModule(ctx, compiled, moduleConfig(args))
 	elapsed := time.Since(start)
 	code := 0
 

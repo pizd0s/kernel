@@ -18,14 +18,15 @@ func runModule(path string, argv []string, asan bool, disks []Disk, user Cred) i
 		throwFmt("%s: %v", path, err)
 	}
 
+	k := newKernel(user)
 	options := programOptions(asan)
 
 	var obj *ElfObject
 
 	if exe {
-		obj, err = compileExecutable(data, options)
+		obj, err = k.compileExecutable(data, options)
 	} else {
-		obj, err = compileModule(data, options)
+		obj, err = k.compileModule(data, options)
 	}
 
 	if err == ENOEXEC {
@@ -52,7 +53,7 @@ func runModule(path string, argv []string, asan bool, disks []Disk, user Cred) i
 		disks = append([]Disk{{name: imageDisk, mem: tail}}, disks...)
 	}
 
-	return runKernel(path, argv, asan, data, obj, disks, user)
+	return runKernel(k, path, argv, asan, data, obj, disks)
 }
 
 func hostProgram(path string) (data []byte, exe bool, tail []byte, err error) {
@@ -116,8 +117,10 @@ func importsKernel(obj *ElfObject) bool {
 	return false
 }
 
-func runKernel(path string, argv []string, asan bool, data []byte, obj *ElfObject, disks []Disk, user Cred) int {
-	k := newKernel(user)
+func runKernel(k *Kernel, path string, argv []string, asan bool, data []byte, obj *ElfObject, disks []Disk) int {
+	syscall.Umask(0)
+	k.routeSignals()
+
 	p := throw2(k.newProcess(nil))
 
 	if asan {

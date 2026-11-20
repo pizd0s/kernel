@@ -63,6 +63,7 @@ type SpecCmd struct {
 }
 
 type SpecRunner struct {
+	k       *Kernel
 	dir     string
 	current *Instance
 	named   map[string]*Instance
@@ -83,7 +84,8 @@ func specCommand(args []string) int {
 
 	throw(json.Unmarshal(throw2(os.ReadFile(args[0])), &file))
 
-	r := &SpecRunner{dir: filepath.Dir(args[0]), named: map[string]*Instance{}, live: map[*Instance]bool{}, unsupported: map[string]bool{}}
+	r := &SpecRunner{k: newKernel(Cred{}), dir: filepath.Dir(args[0]), named: map[string]*Instance{}, live: map[*Instance]bool{},
+		unsupported: map[string]bool{}}
 
 	for i := range file.Commands {
 		r.command(&file.Commands[i])
@@ -134,16 +136,12 @@ func globalAddr(i *Instance, index uint32) uintptr {
 	return i.ctx() + uintptr(i.obj.meta.globals[index].offset)
 }
 
-func specCompile(data []byte) []byte {
-	return compileModuleWithOptions(data, CompileOptions{})
-}
-
 func (r *SpecRunner) load(filename string) *Instance {
 	var i *Instance
 
 	if e := try(func() {
 		data := throw2(os.ReadFile(filepath.Join(r.dir, filename)))
-		obj := readObject(specCompile(data))
+		obj := readObject(throw2(r.k.compileObject(data, CompileOptions{})))
 
 		i = instantiate(filename, obj, r, specStack)
 	}); e != nil {

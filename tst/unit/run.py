@@ -13,10 +13,8 @@ boots rootfs from that image (--disk image=) and runs the program there,
 in /tmp, its environment rootfs's with the env directives; with root:
 own, in a root of its own under /tmp instead, chroot's, which has /bin/check,
 the program, and /tmp, its working directory the root, for a program
-that makes /etc's files or execs itself as /bin/check. A program of WASI
-(freestanding: true) runs as a process of the kernel as well
-(bin/vm/wasi.go). all is build and run, as coverage runs a case
-with its own vm and aot.
+that makes /etc's files or execs itself as /bin/check. all is build and
+run, as coverage runs a case with its own vm and aot.
 
 Directives use trustme's //@ spelling. stdout/stderr are JSON strings;
 compile-flags, aot-flags, run-flags and args use shell quoting. host: false
@@ -46,7 +44,7 @@ import exe
 
 LINK = ["--stack-first", "--max-memory=4294967296",
         "--export=__heap_base", "--export=__stack_pointer", "--gc-sections"]
-DIRECTIVES = {"compile-flags", "aot-flags", "run-flags", "args", "env", "stdout", "stderr", "stderr-pattern", "exit-code", "host", "timeout", "freestanding", "max-memory", "root"}
+DIRECTIVES = {"compile-flags", "aot-flags", "run-flags", "args", "env", "stdout", "stderr", "stderr-pattern", "exit-code", "host", "timeout", "max-memory", "root"}
 
 
 def directives(source):
@@ -65,9 +63,8 @@ def directives(source):
         else:
             result[key] = value
 
-    for key in ("host", "freestanding"):
-        if case_flag(result, key, "true" if key == "host" else "false") not in (True, False):
-            raise ValueError(f"{key} must be true or false")
+    if case_flag(result, "host", "true") not in (True, False):
+        raise ValueError("host must be true or false")
     if result.get("root", "system") not in ("system", "own"):
         raise ValueError("root must be system or own")
 
@@ -108,7 +105,7 @@ def check(result, case, phase):
 
 def environment(case):
     env = dict(os.environ)
-    # The native AOT command and the embedded reactor use the same mode.
+    # The native AOT and the embedded compiler use the same mode.
     env["W2X_MEMORY_TAIL"] = "strict" if aot_flags(case) == ["--strict"] else "optimized"
     env["W2X_TAIL_PROFILE"] = ""
     return env
@@ -150,8 +147,7 @@ def build(source, prefix, tools):
         successful([tools["cc"], *wasm.CFLAGS, *cflags, "-nostdinc++",
                     "-isystem", work / "cxx/include/c++/v1", "-isystem", tools["c_headers"],
                     "-c", source, "-o", obj], env=env, timeout=timeout)
-        libraries = [] if case_flag(case, "freestanding", "false") else [tools["libcxx"], tools["libc"]]
-        successful([tools["ld"], *link, "-o", module, obj, *libraries], env=env, timeout=timeout)
+        successful([tools["ld"], *link, "-o", module, obj, tools["libcxx"], tools["libc"]], env=env, timeout=timeout)
 
     native = Path(str(prefix) + ".native.o")
     embedded = Path(str(prefix) + ".embedded.o")

@@ -2,19 +2,19 @@
 """Fetch a Go program's modules, or build the program.
 
     go.py download <go> <source dir> <modules.tar>
-    go.py build <go> <source dir> <output> [--wasip1] [--cover] [--tags <tags>] [--ldflags <flags>] [--modules <modules.tar>] [--runtime <dir>] [--embed <file>]
+    go.py build <go> <source dir> <output> [--cover] [--tags <tags>] [--ldflags <flags>] [--modules <modules.tar>] [--runtime <dir>] [--embed <file>]
     go.py test <go> <source dir> <stamp> [--runtime <dir>] [--embed <file>]
 
 download runs `go mod download` on the directory's go.mod and go.sum, which
 checks every module against go.sum, and keeps the module cache's download
 directory as a deterministic tarball. build compiles a copy of the
-directory's .go and .s files, go.mod and go.sum, natively or with --wasip1 as a
-WASI module; its modules come from that tarball as the module proxy, with no
-network. test runs the directory's tests, its _test.go files included, and
-touches the stamp when they pass. --runtime builds with a fork of package
-runtime: the directory's .go files join it and its edits.py edits its
-files, as an overlay. --embed stages a dependency output next to the Go
-sources for go:embed; it never modifies the source directory.
+directory's .go and .s files, go.mod and go.sum; its modules come from that
+tarball as the module proxy, with no network. test runs the directory's
+tests, its _test.go files included, and touches the stamp when they pass.
+--runtime builds with a fork of package runtime: the directory's .go files
+join it and its edits.py edits its files, as an overlay. --embed stages a
+dependency output next to the Go sources for go:embed; it never modifies
+the source directory.
 """
 import json
 import os
@@ -155,10 +155,6 @@ def build(go, source, output, *flags, work):
             archive.extractall(proxy, filter="data")
 
         env["GOPROXY"] = f"file://{proxy}"
-
-    if "--wasip1" in flags:
-        env.update(GOOS="wasip1", GOARCH="wasm")
-        flags.remove("--wasip1")
 
     if flags:
         raise SystemExit(f"unknown arguments {flags}")

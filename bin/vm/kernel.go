@@ -46,6 +46,7 @@ type Kernel struct {
 	first     *Process
 	exit      chan int
 	functions map[string]any
+	compiler  func() *Code
 }
 
 func newKernel(user Cred) *Kernel {
@@ -56,18 +57,16 @@ func newKernel(user Cred) *Kernel {
 	k.names.host, k.names.domain = "pizdos", "(none)"
 	k.functions = k.functionTable()
 
-	syscall.Umask(0)
-	k.routeSignals()
+	k.compiler = sync.OnceValue(func() *Code {
+		return link("aot", readObject(compilerBlob), k)
+	})
 
 	return k
 }
 
 func (k *Kernel) function(imp *ImportMeta) any {
-	switch imp.module {
-	case "kernel":
+	if imp.module == "kernel" {
 		return k.functions[imp.name]
-	case wasiModule:
-		return wasiFunctions[imp.name]
 	}
 
 	return nil
@@ -85,7 +84,15 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 
 	k.lastPid++
 
-	p := &Process{k: k, pid: k.lastPid, umask: 0o022, regexes: map[uint32]*PosixRegex{}, seed: 0,
+	p := k.process(k.lastPid, parent)
+
+	k.procs[p.pid] = p
+
+	return p, nil
+}
+
+func (k *Kernel) process(pid int32, parent *Process) *Process {
+	p := &Process{k: k, pid: pid, umask: 0o022, regexes: map[uint32]*PosixRegex{}, seed: 0,
 		events: EventQueue{bell: make(chan struct{}, 1)}}
 
 	p.own.signal.kind, p.own.continued.kind = eventSignal, eventContinued
@@ -117,9 +124,8 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 
 	p.root.ref()
 	p.cwd.ref()
-	k.procs[p.pid] = p
 
-	return p, nil
+	return p
 }
 
 func (k *Kernel) code(p *Process, f Object, name string) (*Code, error) {
@@ -305,7 +311,7 @@ func (k *Kernel) compile(data []byte, name string, obj *ElfObject, asan bool) (*
 	if obj == nil {
 		var err error
 
-		if obj, err = compileExecutable(data, programOptions(asan)); err != nil {
+		if obj, err = k.compileExecutable(data, programOptions(asan)); err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
 	}

@@ -25,9 +25,8 @@ type CompilerProfile struct {
 
 func compilerCoverage(i *Instance) {
 	directory := os.Getenv("PIZDOS_WASM_COVERDIR")
-	_, compiler := i.host.(*CompilerIO)
 
-	if directory == "" || !compiler {
+	if directory == "" || findExport(i, "__coverage_info", externFunc) == nil {
 		return
 	}
 

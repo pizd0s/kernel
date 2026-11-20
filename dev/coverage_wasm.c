@@ -1,4 +1,4 @@
-// LLVM's source coverage counters live in the reactor's linear memory.
+// LLVM's source coverage counters live in the compiler's linear memory.
 // Only coverage builds link this shim; it needs no compiler-rt or libc.
 // ProfileData follows LLVM 23's llvm/ProfileData/InstrProfData.inc.
 #if __clang_major__ != 23

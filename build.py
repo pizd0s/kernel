@@ -309,28 +309,26 @@ python_core = command(
     color="yellow",
 )
 
-# bin/aot is a single freestanding C++ translation unit. The WASI reactor
-# exports compile(), reading fd 0 and writing fd 1; the command adds _start.
+# bin/aot is a single C++ translation unit, a command: the module comes on
+# fd 0, the object goes to fd 1, the options are its arguments. Its wasm
+# build is a program of the system on lib/c, the one the kernel runs as its
+# compiler; the native build is the same program on the host's libc.
 AOT_FLAGS = ["-x", "c++", "-std=c++20", "-O2", "-fno-exceptions", "-fno-rtti", "-fno-builtin", "-fwrapv", "-ffp-contract=off", "-Wno-parentheses-equality"]
-# Compiler debug names otherwise get duplicated in ELF symbols and Go's
-# runtime metadata when vm embeds the compiled reactor. The multivalue
-# ABI passes and returns small structs, the compiler's slices and views
-# among them, as values instead of through the shadow stack.
-AOT_WASM_FLAGS = [*AOT_FLAGS, "--target=wasm32-unknown-unknown", "-ffreestanding", "-nostdlib", "-nostdinc", "-nostdinc++", "-mbulk-memory", "-Xclang", "-target-abi", "-Xclang", "experimental-mv", "-Wl,--no-entry", "-Wl,--export-memory", "-Wl,--stack-first", "-Wl,-z,stack-size=4195328"]
+# A program's flags and link (dev/wasm.py, bin/tools/make.py). The
+# multivalue ABI passes and returns small structs, the compiler's slices and
+# views among them, as values instead of through the shadow stack; what it
+# calls of lib/c takes and returns scalars only.
+AOT_WASM_FLAGS = [*AOT_FLAGS, "--target=wasm32-unknown-unknown", "-Xclang", "-mlong-double-64", "-mbulk-memory", "-nostdinc", "-nostdinc++",
+                  "-nostdlib", "-isystem", "$(S)/lib/c/include", "-ffunction-sections", "-fdata-sections",
+                  "-Xclang", "-target-abi", "-Xclang", "experimental-mv", "-Wl,--stack-first", "-Wl,--max-memory=4294967296",
+                  "-Wl,--export=__heap_base", "-Wl,--export=__stack_pointer", "-Wl,--gc-sections"]
 
 aot = command(
     name="aot",
-    inputs=["$(S)/bin/aot/aot.cpp"],
+    inputs=["$(S)/bin/aot/aot.cpp", *LIBC_HEADERS],
     outputs=["$(B)/bin/aot/aot.wasm"],
-    cmd=[CLANG, *AOT_WASM_FLAGS, "$(S)/bin/aot/aot.cpp", "-o", "$(B)/bin/aot/aot.wasm"],
-    descr="CC", color="green",
-)
-
-aot_command = command(
-    name="aot_command",
-    inputs=["$(S)/bin/aot/aot.cpp"],
-    outputs=["$(B)/bin/aot/aot-command.wasm"],
-    cmd=[CLANG, *AOT_WASM_FLAGS, "-DAOT_COMMAND", "$(S)/bin/aot/aot.cpp", "-o", "$(B)/bin/aot/aot-command.wasm"],
+    deps=[libc],
+    cmd=[CLANG, *AOT_WASM_FLAGS, "$(S)/bin/aot/aot.cpp", "-x", "none", libc.outputs[0], "-o", "$(B)/bin/aot/aot.wasm"],
     descr="CC", color="green",
 )
 
@@ -376,7 +374,7 @@ aot_measure = command(
 )
 
 # Bootstrap without an existing vm: the native C++ compiler compiles the
-# WASI reactor to the machine-code object embedded in the Go loader.
+# wasm compiler to the machine-code object embedded in the Go loader.
 aot_aot = command(
     name="aot_aot",
     inputs=["$(S)/dev/aot.py"],
@@ -397,9 +395,10 @@ aot_native_chaos = command(
 
 aot_wasm_chaos = command(
     name="aot_wasm_chaos",
-    inputs=["$(S)/bin/aot/aot.cpp"],
+    inputs=["$(S)/bin/aot/aot.cpp", *LIBC_HEADERS],
     outputs=["$(B)/chaos/bin/aot.wasm"],
-    cmd=[CLANG, *AOT_WASM_FLAGS, "-DAOT_CHAOS", "$(S)/bin/aot/aot.cpp", "-o", "$(B)/chaos/bin/aot.wasm"],
+    deps=[libc],
+    cmd=[CLANG, *AOT_WASM_FLAGS, "-DAOT_CHAOS", "$(S)/bin/aot/aot.cpp", "-x", "none", libc.outputs[0], "-o", "$(B)/chaos/bin/aot.wasm"],
     descr="CC", color="green",
 )
 
@@ -413,29 +412,30 @@ aot_chaos_aot = command(
 )
 
 # Keep LLVM's coverage mapping in the Wasm module. Only coverage VMs embed
-# these reactors; the production and chaos executables use the usual ones.
+# these compilers; the production and chaos executables use the usual ones.
 wasm_coverage = []
 for chaos in (False, True):
     variant = "chaos/" if chaos else ""
     prefix = f"$(B)/coverage/{variant}compiler"
-    reactor = command(
+    compiler = command(
         name="aot_wasm_chaos_coverage" if chaos else "aot_wasm_coverage",
-        inputs=["$(S)/bin/aot/aot.cpp", "$(S)/dev/coverage_wasm.c", "$(S)/dev/coverage_wasm_build.py"],
+        inputs=["$(S)/bin/aot/aot.cpp", "$(S)/dev/coverage_wasm.c", "$(S)/dev/coverage_wasm_build.py", *LIBC_HEADERS],
         outputs=[prefix + "/aot.wasm"],
+        deps=[libc],
         cmd=["python3", "$(S)/dev/coverage_wasm_build.py", CLANG, WASM_LD,
              "$(S)/bin/aot/aot.cpp", "$(S)/dev/coverage_wasm.c", prefix + "/aot.wasm",
-             json.dumps({"flags": AOT_WASM_FLAGS, "chaos": chaos})],
+             json.dumps({"flags": AOT_WASM_FLAGS, "chaos": chaos, "libc": libc.outputs[0]})],
         descr="CC", color="green",
     )
     embedded = command(
         name="aot_chaos_coverage_aot" if chaos else "aot_coverage_aot",
         inputs=["$(S)/dev/aot.py"],
         outputs=[prefix + "/aot.aot"],
-        deps=[aot_native, reactor],
-        cmd=["python3", "$(S)/dev/aot.py", aot_native.outputs[0], reactor.outputs[0], prefix + "/aot.aot"],
+        deps=[aot_native, compiler],
+        cmd=["python3", "$(S)/dev/aot.py", aot_native.outputs[0], compiler.outputs[0], prefix + "/aot.aot"],
         descr="AO", color="light-cyan",
     )
-    wasm_coverage.append((reactor, embedded))
+    wasm_coverage.append((compiler, embedded))
 
 WASM2O_SOURCES = [*build.glob("$(S)/bin/vm/*.go"), *build.glob("$(S)/bin/vm/*.s"), "$(S)/bin/vm/go.mod", "$(S)/bin/vm/go.sum", "$(S)/dev/go.py"]
 GO_RUNTIME = [*build.glob("$(S)/lib/goruntime/*.go"), "$(S)/lib/goruntime/edits.py"]
@@ -872,11 +872,16 @@ stand_corpus = fetch(
     "$(B)/stand/decode-corpus-1.tgz",
 )
 
+# A reactor of no imports the stand links (test_stand.py): it exports what
+# the stand calls, and its stack is the one it links, for the stand gives
+# no stack blocks.
 stand_fixture = command(
     name="stand_fixture",
     inputs=["$(S)/tst/stand/fixture.cpp"],
     outputs=["$(B)/tst/stand/fixture.wasm"],
-    cmd=[CLANG, *AOT_WASM_FLAGS, "$(S)/tst/stand/fixture.cpp", "-o", "$(B)/tst/stand/fixture.wasm"],
+    cmd=[CLANG, *AOT_FLAGS, "--target=wasm32-unknown-unknown", "-ffreestanding", "-nostdlib", "-nostdinc", "-nostdinc++", "-mbulk-memory",
+         "-Xclang", "-target-abi", "-Xclang", "experimental-mv", "-Wl,--no-entry", "-Wl,--export-memory", "-Wl,--stack-first",
+         "-Wl,-z,stack-size=4195328", "$(S)/tst/stand/fixture.cpp", "-o", "$(B)/tst/stand/fixture.wasm"],
     descr="CC", color="green",
 )
 
@@ -992,7 +997,7 @@ clang_image = command(
 )
 
 E2E_TESTED = {
-    "aot": [aot, aot_command, wazero, vm, chaos_check, rootfs],
+    "aot": [aot, vm, chaos_check, rootfs],
     "asan": [vm, rootfs, tests_image],
     "asan_bounds": [vm, aot_native, wazero, rootfs],
     "bounded_copy_loops": [vm, aot_native, wazero, rootfs],
@@ -1042,7 +1047,7 @@ E2E_TESTED = {
     "unary_loops": [vm, aot_native, wazero, rootfs],
     "vfork_traps": [vm, aot_native, wazero, rootfs],
     "wide_results": [vm, aot_native, wazero, rootfs],
-    "vm": [vm, aot_native, aot, aot_command, wazero, chaos_check, rootfs],
+    "vm": [vm, aot_native, aot, chaos_check, rootfs],
 }
 APPLICATION_TESTED = {
     "rootfs": [vm, rootfs],
@@ -1202,7 +1207,7 @@ coverage = command(
             + ["$(B)/coverage/" + stem + suffix for stem in ("aot-wasm", "aot-wasm-chaos") for suffix in (".proftext", ".profdata", ".lcov")]
             + ["$(B)/coverage/" + case["name"] + ".log" for case in coverage_cases],
     deps=[aot_coverage, vm_coverage, aot_chaos_coverage, vm_chaos_coverage,
-          *[reactor for reactor, embedded in wasm_coverage], *dict.fromkeys(coverage_dependencies)],
+          *[compiler for compiler, embedded in wasm_coverage], *dict.fromkeys(coverage_dependencies)],
     cmd=["python3", "$(S)/dev/coverage.py", "$(B)/coverage", json.dumps({
         "jobs": int(os.environ.get("COVERAGE_JOBS") or os.environ.get("BUILD_JOBS") or "4"),
         "wrapper_tools": {"cc": CLANG, "cppflags": build.cppflags, "ldflags": build.ldflags},

@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	vmPoints      = map[string]uint32{"mmap": 0, "compile-read": 0, "compile-write": 0}
+	vmPoints      = map[string]uint32{"mmap": 0}
 	processPoints = map[string]uint32{"openat": 0, "read": 0, "write": 0, "fork": 0, "file-stat": 0, "readlink": 0, "memory-grow": 0, "memory-move": 0}
 )
 
@@ -150,13 +150,10 @@ func (c *ChaosRulesOf) holds(point string) bool {
 	return true
 }
 
-func setupCompilerChaos(i *Instance) {
-	points := map[string]uint32{"read": 0, "write": 1, "grow": 2}
-	rules := chaosRules(os.Getenv("PIZDOS_AOT_CHAOS"), points)
-
-	for _, rule := range rules {
-		entry, _ := i.export("chaosConfigure")
-
-		entry.Interface().(func(uintptr, uint32, uint32))(i.handle(), points[rule.name], rule.skip)
+func compilerEnv() []string {
+	if rules, ok := os.LookupEnv("PIZDOS_AOT_CHAOS"); ok {
+		return []string{"PIZDOS_AOT_CHAOS=" + rules}
 	}
+
+	return nil
 }

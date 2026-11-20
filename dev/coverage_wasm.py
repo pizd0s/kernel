@@ -1,4 +1,4 @@
-"""Turn the embedded reactor's LLVM 23 counters into source coverage.
+"""Turn the embedded compiler's LLVM 23 counters into source coverage.
 
 The counter layout is exported by dev/coverage_wasm.c. LLVM's text profile
 format lets llvm-profdata own the indexed format; no native raw-profile

@@ -59,7 +59,7 @@ def main():
             ("read@1", b"stdin read failed", b"stdin read failed"),
             ("write@0", b"", b"aot exited with code 1"),
             ("write@1", b"", b"aot exited with code 1"),
-            ("grow@0", b"allocator mapping failed", b"out of memory"),
+            ("malloc@0", b"out of memory", b"out of memory"),
         ):
             result = call([native_chaos], data=EMPTY, PIZDOS_AOT_CHAOS=rule)
             assert result.returncode != 0 and native_text in result.stderr, (rule, result)
@@ -67,22 +67,19 @@ def main():
             assert result.returncode != 0 and wasm_text in result.stderr, (rule, result)
             assert compile_with(vm_chaos).returncode == 0, "a later compilation did not recover"
 
-        for rule, diagnostic in (("mmap@0", b"cannot allocate memory"),
-                                 ("compile-read@0", b"unexpected EOF"),
-                                 ("compile-write@0", b"short write")):
-            result = compile_with(vm_chaos, PIZDOS_VM_CHAOS=rule)
-            assert result.returncode != 0 and diagnostic in result.stderr, (rule, result)
-            assert compile_with(vm_chaos).returncode == 0
+        result = compile_with(vm_chaos, PIZDOS_VM_CHAOS="mmap@0")
+        assert result.returncode != 0 and b"cannot allocate memory" in result.stderr, result
+        assert compile_with(vm_chaos).returncode == 0
 
         for script in ("missing@0", "read@-1", "read@", "read@1,", "read@0,read@1", "write@4294967296"):
             result = call([native_chaos], data=EMPTY, PIZDOS_AOT_CHAOS=script)
             assert result.returncode != 0 and b"invalid PIZDOS_AOT_CHAOS" in result.stderr, (script, result)
             result = compile_with(vm_chaos, PIZDOS_AOT_CHAOS=script)
-            assert result.returncode != 0 and b"invalid chaos rule" in result.stderr, (script, result)
-        assert compile_with(vm_chaos, PIZDOS_AOT_CHAOS="read@4294967295,write@4294967295,grow@4294967295").returncode == 0
+            assert result.returncode != 0 and b"invalid PIZDOS_AOT_CHAOS" in result.stderr, (script, result)
+        assert compile_with(vm_chaos, PIZDOS_AOT_CHAOS="read@4294967295,write@4294967295,malloc@4294967295").returncode == 0
         result = compile_with(vm_chaos, PIZDOS_VM_CHAOS="missing@0")
         assert result.returncode != 0 and b"invalid chaos rule" in result.stderr
-        assert compile_with(vm_chaos, PIZDOS_VM_CHAOS="mmap@4294967295,compile-read@4294967295,compile-write@4294967295").returncode == 0
+        assert compile_with(vm_chaos, PIZDOS_VM_CHAOS="mmap@4294967295").returncode == 0
 
         compiled = call([native], data=Path(guest).read_bytes())
         assert compiled.returncode == 0, compiled.stderr

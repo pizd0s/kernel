@@ -9,35 +9,24 @@ using i64 = __INT64_TYPE__;
 using usize = __SIZE_TYPE__;
 using uptr = __UINTPTR_TYPE__;
 
-#if !defined(__wasm__) && !defined(wasm)
-    #include <stdlib.h>
-    #include <unistd.h>
-    #include <errno.h>
-    #include <sys/mman.h>
-#endif
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 // Placement new expressions are lowered directly by Clang; no runtime
-// call uses this overload. Its declaration supplies the freestanding ABI.
+// call uses this overload. Its declaration stands for <new>, which no
+// C++ library supplies.
 void* operator new(usize, void*) noexcept;
 
 static constexpr usize pageBytes = 65536;
 static constexpr usize objectAlignment = 16;
 
 namespace {
-    struct IoVec {
-        void* data;
-        usize length;
-    };
-
-    struct ConstIoVec {
-        const void* data;
-        usize length;
-    };
-
     enum class ChaosFault : u32 {
         Read,
         Write,
-        Grow,
+        Malloc,
         Count
     };
 }
@@ -63,78 +52,30 @@ static bool chaosFail(ChaosFault point) {
     #define chaosFail(point) false
 #endif
 
-#if defined(__wasm__) || defined(wasm)
-extern "C" __attribute__((import_module("wasi_snapshot_preview1"), import_name("fd_read"))) u16 wasiFdRead(u32, const IoVec*, usize, usize*);
-extern "C" __attribute__((import_module("wasi_snapshot_preview1"), import_name("fd_write"))) u16 wasiFdWrite(u32, const ConstIoVec*, usize, usize*);
-extern "C" __attribute__((import_module("wasi_snapshot_preview1"), import_name("proc_exit"), noreturn)) void wasiProcExit(u32);
-#else
-extern "C" u16 wasiFdRead(u32 fd, const IoVec* vectors, usize count, usize* done) {
-    *done = 0;
-    for (usize i = 0; i < count; ++i) {
-        ssize_t result;
-        do {
-            result = ::read(static_cast<int>(fd), vectors[i].data, vectors[i].length);
-        } while (result < 0 && errno == EINTR);
-        if (result < 0) {
-            return 29;
-        }
-        *done += static_cast<usize>(result);
-        if (static_cast<usize>(result) != vectors[i].length) {
-            break;
-        }
-    }
-    return 0;
-}
-
-extern "C" u16 wasiFdWrite(u32 fd, const ConstIoVec* vectors, usize count, usize* done) {
-    *done = 0;
-    for (usize i = 0; i < count; ++i) {
-        ssize_t result;
-        do {
-            result = ::write(static_cast<int>(fd), vectors[i].data, vectors[i].length);
-        } while (result < 0 && errno == EINTR);
-        if (result < 0) {
-            return 29;
-        }
-        *done += static_cast<usize>(result);
-        if (static_cast<usize>(result) != vectors[i].length) {
-            break;
-        }
-    }
-    return 0;
-}
-
-extern "C" [[noreturn]] void wasiProcExit(u32 code) {
-    if (code == 134) {
-        ::abort();
-    }
-    ::_exit(static_cast<int>(code));
-}
-#endif
-
-static void copyBytes(void* destination, const void* source, usize size) {
-    __builtin_memcpy(destination, source, size);
-}
-
-static void zeroBytes(void* destination, usize size) {
-    __builtin_memset(destination, 0, size);
-}
-
-static void moveBytes(void* destination, const void* source, usize size) {
-    __builtin_memmove(destination, source, size);
-}
-
-static void writeAll(u32 fd, const void* data, usize length) {
+static void writeAll(int fd, const void* data, usize length) {
     auto* at = static_cast<const u8*>(data);
     while (length != 0) {
-        const ConstIoVec vector{at, length};
-        usize done = 0;
-        if (chaosFail(ChaosFault::Write) || wasiFdWrite(fd, &vector, 1, &done) != 0 || done == 0) {
-            wasiProcExit(1);
+        if (chaosFail(ChaosFault::Write)) {
+            _exit(1);
+        }
+        const ssize_t done = ::write(fd, at, length);
+        if (done < 0 && errno == EINTR) {
+            continue;
+        }
+        if (done <= 0) {
+            _exit(1);
         }
         at += done;
-        length -= done;
+        length -= usize(done);
     }
+}
+
+[[noreturn]] static void failed() {
+#if defined(__wasm__) || defined(wasm)
+    _exit(134);
+#else
+    abort();
+#endif
 }
 
 [[noreturn]] static void fail(const char* text) {
@@ -144,7 +85,7 @@ static void writeAll(u32 fd, const void* data, usize length) {
     }
     writeAll(2, text, length);
     writeAll(2, "\n", 1);
-    wasiProcExit(134);
+    failed();
 }
 
 static void require(bool condition, const char* text) {
@@ -167,324 +108,26 @@ static usize alignUp(usize size, usize alignment) {
     return checkedAdd(size, alignment - 1) & ~(alignment - 1);
 }
 
-static constexpr usize heapSegmentShift = 21;
-static constexpr usize heapSegmentBytes = usize(1) << heapSegmentShift;
-static constexpr usize heapPagesPerSegment = heapSegmentBytes / pageBytes;
-static constexpr usize heapClassCount = 48;
-static constexpr u16 heapFreePage = 0xffff;
-static constexpr u16 heapUnavailablePage = 0xfffe;
-static constexpr u32 heapNoSegment = 0;
-#if defined(__wasm__) || defined(wasm)
-static constexpr usize heapSegmentLimit = usize(1) << 11;
-#else
-static constexpr usize heapSegmentLimit = usize(1) << 15;
-static constexpr uptr heapNativeBase = uptr(0x2000) << 32;
-#endif
-
-namespace {
-    struct HeapSlot {
-        HeapSlot* next;
-    };
-
-    struct HeapPage {
-        HeapSlot* free;
-        HeapPage* prev;
-        HeapPage* next;
-        u32 live;
-        u16 cls;
-    };
-
-    struct HeapSegment {
-        u32 freeMask;
-        u32 next;
-        bool linked;
-        bool registered;
-    };
-
-    struct HeapClass {
-        HeapSlot* free;
-        uptr bump;
-        uptr end;
-        usize size;
-        HeapPage* current;
-        HeapPage* partial;
-    };
-
-    // Adapted from trustme/bin/rustc/malloc.cpp. All ordinary allocations
-    // fit in one page, so runs and large-object headers are unnecessary.
-    // Metadata is outside payload pages, including the 64 KiB size class.
-    struct Heap {
-        static usize classIndex(usize size);
-        static usize classSize(usize index);
-        HeapPage* pageOf(const void* object);
-        uptr pageAddress(const HeapPage* page);
-        void linkSegment(u32 index);
-        void registerSegment(u32 index);
-        void mapSegment();
-        HeapPage* takePage();
-        void releasePage(HeapPage* page);
-        void* refill(usize index);
-        void* allocate(usize size);
-        void release(void* object);
-        void releaseSlow(HeapPage* page, void* object);
-#if defined(__wasm__) || defined(wasm)
-        void adoptPages(void* data, usize bytes);
-#endif
-
-        HeapClass classes[heapClassCount]{};
-        HeapSegment segments[heapSegmentLimit]{};
-        HeapPage pages[heapSegmentLimit * heapPagesPerSegment]{};
-        u32 freeSegments = heapNoSegment;
-        u32 mappedSegments = 0;
-    };
-}
-
-static Heap heap;
-
-usize Heap::classIndex(usize size) {
+// Every block the compiler takes from malloc fits in a page: what grows
+// past one is paged (PageVec, paged slices), so a request for more is the
+// compiler's own error.
+static void* allocateBlock(usize size) {
     require(size != 0 && size <= pageBytes, "allocation exceeds 64 KiB");
-    if (size <= 256) {
-        return (size + 15) / 16 - 1;
-    }
-    const unsigned exponent = 31 - __builtin_clz(u32(size - 1));
-    return 16 + (exponent - 8) * 4 + (((size - 1) >> (exponent - 2)) & 3);
+    void* block = chaosFail(ChaosFault::Malloc) ? nullptr : ::malloc(size);
+    require(block != nullptr, "out of memory");
+    return block;
 }
 
-usize Heap::classSize(usize index) {
-    if (index < 16) {
-        return (index + 1) * objectAlignment;
-    }
-    const usize base = usize(1) << (8 + (index - 16) / 4);
-    return base + (base / 4) * ((index - 16) % 4 + 1);
+static void releaseBlock(void* block) {
+    ::free(block);
 }
-
-HeapPage* Heap::pageOf(const void* object) {
-    uptr address = reinterpret_cast<uptr>(object);
-#if !defined(__wasm__) && !defined(wasm)
-    address -= heapNativeBase;
-    require(address < heapSegmentLimit * heapSegmentBytes, "object outside allocator");
-#endif
-    return pages + (address >> 16);
-}
-
-uptr Heap::pageAddress(const HeapPage* page) {
-    const uptr address = uptr(page - pages) << 16;
-#if defined(__wasm__) || defined(wasm)
-    return address;
-#else
-    return heapNativeBase + address;
-#endif
-}
-
-void Heap::linkSegment(u32 index) {
-    auto& segment = segments[index];
-    segment.linked = true;
-    segment.next = freeSegments;
-    freeSegments = index;
-}
-
-void Heap::registerSegment(u32 index) {
-    require(index < heapSegmentLimit, "allocator region exhausted");
-    auto& segment = segments[index];
-    require(!segment.registered, "allocator segment already registered");
-    segment.registered = true;
-    segment.freeMask = 0;
-    segment.linked = false;
-    segment.next = heapNoSegment;
-    for (usize i = 0; i < heapPagesPerSegment; ++i) {
-        pages[usize(index) * heapPagesPerSegment + i].cls = heapUnavailablePage;
-    }
-}
-
-void Heap::mapSegment() {
-#if defined(__wasm__) || defined(wasm)
-    const usize before = __builtin_wasm_memory_size(0);
-    const usize first = alignUp(before, heapPagesPerSegment);
-    const u32 index = u32(first / heapPagesPerSegment);
-    require(index < heapSegmentLimit, "allocator region exhausted");
-    if (chaosFail(ChaosFault::Grow) || __builtin_wasm_memory_grow(0, first - before + heapPagesPerSegment) == ~usize(0)) {
-        fail("out of memory");
-    }
-    // I/O blobs and host-owned input may separate segments in linear memory.
-    // The padding after them is ordinary reusable page storage.
-    if (first != before) {
-        adoptPages(reinterpret_cast<void*>(before * pageBytes), (first - before) * pageBytes);
-    }
-#else
-    require(mappedSegments + 1 < heapSegmentLimit, "allocator region exhausted");
-    const u32 index = mappedSegments + 1;
-    void* wanted = reinterpret_cast<void*>(heapNativeBase + usize(index) * heapSegmentBytes);
-    void* got = chaosFail(ChaosFault::Grow) ? MAP_FAILED : ::mmap(wanted, heapSegmentBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-    require(got == wanted, "allocator mapping failed");
-    #if defined(MADV_HUGEPAGE)
-    (void)::madvise(got, heapSegmentBytes, MADV_HUGEPAGE);
-    #endif
-#endif
-    registerSegment(index);
-    auto& segment = segments[index];
-    segment.freeMask = ~u32(0);
-    for (usize i = 0; i < heapPagesPerSegment; ++i) {
-        pages[usize(index) * heapPagesPerSegment + i].cls = heapFreePage;
-    }
-    linkSegment(index);
-    ++mappedSegments;
-}
-
-HeapPage* Heap::takePage() {
-    if (freeSegments == heapNoSegment) {
-        mapSegment();
-    }
-    const u32 index = freeSegments;
-    auto& segment = segments[index];
-    const unsigned slot = __builtin_ctz(segment.freeMask);
-    segment.freeMask &= ~(u32(1) << slot);
-    if (segment.freeMask == 0) {
-        // takePage always consumes the head of the free-segment list.
-        freeSegments = segment.next;
-        segment.linked = false;
-    }
-    auto* page = pages + usize(index) * heapPagesPerSegment + slot;
-    require(page->cls == heapFreePage, "allocator page is not free");
-    page->free = nullptr;
-    page->prev = page->next = nullptr;
-    page->live = 0;
-    return page;
-}
-
-void Heap::releasePage(HeapPage* page) {
-    const usize pageIndex = usize(page - pages);
-    const u32 segmentIndex = u32(pageIndex / heapPagesPerSegment);
-    auto& segment = segments[segmentIndex];
-    const u32 bit = u32(1) << (pageIndex % heapPagesPerSegment);
-    require((segment.freeMask & bit) == 0, "allocator page already free");
-    page->cls = heapFreePage;
-    page->free = nullptr;
-    page->prev = page->next = nullptr;
-    segment.freeMask |= bit;
-    if (!segment.linked) {
-        linkSegment(segmentIndex);
-    }
-}
-
-void* Heap::refill(usize index) {
-    auto& state = classes[index];
-    const usize size = classSize(index);
-    // A current page counts frees in the class-local list. At this point
-    // both that list and the bump range are exhausted: every slot is live.
-    if (state.current) {
-        state.current->live = u32(pageBytes / size);
-    }
-    if (auto* page = state.partial) {
-        state.partial = page->next;
-        if (state.partial) {
-            state.partial->prev = nullptr;
-        }
-        page->prev = page->next = nullptr;
-        state.current = page;
-        auto* slot = page->free;
-        page->free = nullptr;
-        state.free = slot->next;
-        state.bump = state.end = 0;
-        return slot;
-    }
-    auto* page = takePage();
-    page->cls = u16(index);
-    state.current = page;
-    state.free = nullptr;
-    state.size = size;
-    state.bump = pageAddress(page) + size;
-    state.end = pageAddress(page) + (pageBytes / size) * size;
-    return reinterpret_cast<void*>(pageAddress(page));
-}
-
-void* Heap::allocate(usize size) {
-    auto& state = classes[classIndex(size)];
-    if (auto* slot = state.free) {
-        state.free = slot->next;
-        return slot;
-    }
-    if (state.bump < state.end) {
-        void* object = reinterpret_cast<void*>(state.bump);
-        state.bump += state.size;
-        return object;
-    }
-    return refill(classIndex(size));
-}
-
-void Heap::releaseSlow(HeapPage* page, void* object) {
-    const usize index = page->cls;
-    require(index < heapClassCount && page->live != 0, "free of unallocated object");
-    auto& state = classes[index];
-    if (--page->live == 0) {
-        // Classes above 32 KiB have one slot per page. Such a full page
-        // becomes empty on its first free and was never on the partial list.
-        if (page->free) {
-            if (page->prev) {
-                page->prev->next = page->next;
-            } else {
-                state.partial = page->next;
-            }
-            if (page->next) {
-                page->next->prev = page->prev;
-            }
-        }
-        releasePage(page);
-        return;
-    }
-    auto* slot = static_cast<HeapSlot*>(object);
-    slot->next = page->free;
-    page->free = slot;
-    if (!slot->next) {
-        page->prev = nullptr;
-        page->next = state.partial;
-        if (state.partial) {
-            state.partial->prev = page;
-        }
-        state.partial = page;
-    }
-}
-
-void Heap::release(void* object) {
-    // freePage validates its page; buffers, chunks and inline vectors only
-    // release owned allocations. None of the callers passes a null object.
-    auto* page = pageOf(object);
-    const usize index = page->cls;
-    require(index < heapClassCount, "free of unallocated object");
-    auto& state = classes[index];
-    if (page == state.current) {
-        auto* slot = static_cast<HeapSlot*>(object);
-        slot->next = state.free;
-        state.free = slot;
-        return;
-    }
-    releaseSlow(page, object);
-}
-
-#if defined(__wasm__) || defined(wasm)
-void Heap::adoptPages(void* data, usize bytes) {
-    const uptr first = reinterpret_cast<uptr>(data);
-    require(first % pageBytes == 0 && bytes % pageBytes == 0, "invalid free memory range");
-    for (usize offset = 0; offset < bytes; offset += pageBytes) {
-        const usize pageIndex = (first + offset) >> 16;
-        const u32 segmentIndex = u32(pageIndex / heapPagesPerSegment);
-        require(segmentIndex < heapSegmentLimit, "allocator region exhausted");
-        if (!segments[segmentIndex].registered) {
-            registerSegment(segmentIndex);
-        }
-        auto* page = pages + pageIndex;
-        require(page->cls == heapUnavailablePage, "I/O memory already owned by allocator");
-        releasePage(page);
-    }
-}
-#endif
 
 static void* allocPage() {
-    return heap.allocate(pageBytes);
+    return allocateBlock(pageBytes);
 }
 
 static void freePage(void* page) {
-    require(page && reinterpret_cast<uptr>(page) % pageBytes == 0, "invalid page");
-    heap.release(page);
+    releaseBlock(page);
 }
 
 static usize allocationBytes(usize size) {
@@ -538,7 +181,7 @@ Buffer::Buffer()
 
 Buffer::~Buffer() {
     if (header() != &emptyBuffer) {
-        heap.release(header());
+        releaseBlock(header());
     }
 }
 
@@ -587,13 +230,13 @@ __attribute__((noinline)) void Buffer::grow(usize size) {
     const usize bytes = allocationBytes(need);
     auto* before = header();
     const usize used = before->used;
-    auto* next = static_cast<Header*>(heap.allocate(bytes));
+    auto* next = static_cast<Header*>(allocateBlock(bytes));
     *next = {used, bytes};
     if (used) {
-        copyBytes(next + 1, storage, used);
+        memcpy(next + 1, storage, used);
     }
     if (before != &emptyBuffer) {
-        heap.release(before);
+        releaseBlock(before);
     }
     storage = next + 1;
 }
@@ -610,7 +253,7 @@ void Buffer::append(const void* data, usize size) {
     // or at least one formatted digit, both outside the output buffer.
     const usize before = this->size();
     reserve(checkedAdd(before, size));
-    copyBytes(static_cast<u8*>(storage) + before, data, size);
+    memcpy(static_cast<u8*>(storage) + before, data, size);
     header()->used = before + size;
 }
 
@@ -805,7 +448,7 @@ template <typename T>
 inline void SmallVec<T>::pushBack(T value) {
     const usize before = buffer.size();
     buffer.resize(checkedAdd(before, sizeof(T)));
-    copyBytes(static_cast<u8*>(buffer.data()) + before, &value, sizeof(T));
+    memcpy(static_cast<u8*>(buffer.data()) + before, &value, sizeof(T));
 }
 
 template <typename T>
@@ -956,7 +599,7 @@ inline void PageVec<T>::append(const T* values, usize size) {
         const usize offset = count % itemsPerPage;
         const usize available = itemsPerPage - offset;
         const usize take = size < available ? size : available;
-        copyBytes(pages.data()[count / itemsPerPage] + offset, values, take * sizeof(T));
+        memcpy(pages.data()[count / itemsPerPage] + offset, values, take * sizeof(T));
         count += take;
         values += take;
         size -= take;
@@ -1009,7 +652,7 @@ void* ObjPool::allocate(usize size, usize alignment) {
             bytes *= 2;
         }
         require(bytes <= pageBytes, "object exceeds pool chunk");
-        auto* chunk = static_cast<Chunk*>(heap.allocate(bytes));
+        auto* chunk = static_cast<Chunk*>(allocateBlock(bytes));
         *chunk = {chunks, bytes};
         chunks = chunk;
         current = reinterpret_cast<u8*>(chunk + 1);
@@ -1031,7 +674,7 @@ void ObjPool::clear() {
     while (chunks != nullptr) {
         auto* chunk = chunks;
         chunks = chunk->next;
-        heap.release(chunk);
+        releaseBlock(chunk);
     }
     current = nullptr;
     left = 0;
@@ -1298,7 +941,7 @@ template <typename T>
 inline void ArrayData<T>::reset(T* values, usize count) {
     // clearElements supplies a nonempty array tail or page chunk.
     if constexpr (scalarType<T>) {
-        zeroBytes(values, count * sizeof(T));
+        memset(values, 0, count * sizeof(T));
     } else {
         for (usize i = 0; i < count; ++i) {
             values[i] = T{};
@@ -1891,7 +1534,7 @@ inline InlineVec<T, inlineCount>& InlineVec<T, inlineCount>::operator=(InlineVec
 template <typename T, usize inlineCount>
 inline void InlineVec<T, inlineCount>::releaseBuffer() {
     if (contiguous && contiguous != storage.values) {
-        heap.release(contiguous);
+        releaseBlock(contiguous);
     }
 }
 
@@ -1947,9 +1590,9 @@ inline void InlineVec<T, inlineCount>::grow(usize size) {
         space = u32(capacity < 0x7fffffff ? capacity : 0x7fffffff);
     } else if (size <= PageVec<T>::itemsPerPage) {
         const usize bytes = allocationBytes(checkedMultiply(size, sizeof(T)));
-        auto* next = static_cast<T*>(heap.allocate(bytes));
+        auto* next = static_cast<T*>(allocateBlock(bytes));
         if (count) {
-            copyBytes(next, data(), count * sizeof(T));
+            memcpy(next, data(), count * sizeof(T));
         }
         releaseBuffer();
         contiguous = next;
@@ -2096,7 +1739,7 @@ static Int copySlice(Span<T> destination, Span<U> source) {
         return 0;
     }
     if (destination.contiguous && source.contiguous) {
-        moveBytes(destination.contiguous + destination.offset, source.contiguous + source.offset, count * sizeof(T));
+        memmove(destination.contiguous + destination.offset, source.contiguous + source.offset, count * sizeof(T));
         return Int(count);
     }
     const bool backward = destination.pages == source.pages && destination.offset > source.offset;
@@ -2123,7 +1766,7 @@ static Int copySlice(Span<T> destination, Span<U> source) {
         const usize srcBegin = src - (backward ? take : 0);
         T* out = destination.contiguous ? destination.contiguous + dstBegin : destination.pages->pages.data()[dstBegin / perPage] + dstBegin % perPage;
         const T* in = source.contiguous ? source.contiguous + srcBegin : source.pages->pages.data()[srcBegin / perPage] + srcBegin % perPage;
-        moveBytes(out, in, take * sizeof(T));
+        memmove(out, in, take * sizeof(T));
         remaining -= take;
     }
     return Int(count);
@@ -2356,8 +1999,8 @@ static Slice<u8> appendSlice(Slice<u8> out, String text) {
 static String operator+(String a, String b) {
     require(a.count + b.count <= pageBytes - 32, "large internal string");
     auto* p = static_cast<u8*>(activePool->allocate(a.count + b.count + 1, 1));
-    copyBytes(p, a.data, a.count);
-    copyBytes(p + a.count, b.data, b.count);
+    memcpy(p, a.data, a.count);
+    memcpy(p + a.count, b.data, b.count);
     p[a.count + b.count] = 0;
     return {p, a.count + b.count};
 }
@@ -2365,7 +2008,7 @@ static String operator+(String a, String b) {
 [[noreturn]] static void compilerError(String message) {
     writeAll(2, message.data, message.count);
     writeAll(2, "\n", 1);
-    wasiProcExit(134);
+    failed();
 }
 
 template <typename T>
@@ -2865,7 +2508,7 @@ static Slice<u8> binaryAppendUvarint(Slice<u8> bytes, u64 value) {
 
 static String cloneString(String value) {
     auto* bytes = static_cast<u8*>(activePool->allocate(value.count, 1));
-    copyBytes(bytes, value.data, value.count);
+    memcpy(bytes, value.data, value.count);
     return {bytes, value.count};
 }
 
@@ -2964,7 +2607,7 @@ static String fmtSprintf(String format, A... values) {
         out.append(buffer + at, sizeof(buffer) - at);
     }
     auto* bytes = static_cast<u8*>(activePool->allocate(out.size() + 1, 1));
-    copyBytes(bytes, out.data(), out.size());
+    memcpy(bytes, out.data(), out.size());
     bytes[out.size()] = 0;
     return {bytes, out.size()};
 }
@@ -3234,7 +2877,7 @@ static u64* bitsetDenseWords(BitsetData* data) {
     if (!data->storage) {
         const usize bytes = ((usize(data->bits) + 63) / 64) * sizeof(u64);
         data->storage = data->pool->allocate(bytes, alignof(u64));
-        zeroBytes(data->storage, bytes);
+        memset(data->storage, 0, bytes);
     }
     return static_cast<u64*>(data->storage);
 }
@@ -3249,7 +2892,7 @@ static bool bitsetAddSparseWord(BitsetData* data, usize index, u64 bits) {
         const usize count = available < 64 ? available : 64;
         const usize bytes = sizeof(BitNode) + count * sizeof(BitChunk*);
         void* storage = data->pool->allocate(bytes, alignof(BitNode));
-        zeroBytes(storage, bytes);
+        memset(storage, 0, bytes);
         node = new (storage) BitNode;
     }
     BitChunk*& chunk = bitNodeChunks(node)[index / 4 % 64];
@@ -6790,7 +6433,7 @@ static void asmBytes(Asm* a, const u8 (&bytes)[size]) {
     const usize offset = at % pageBytes;
     if (__builtin_expect(size <= pageBytes && offset <= pageBytes - size, true)) {
         a->buf.reserve(checkedAdd(at, size));
-        copyBytes(a->buf.pages.data()[at / pageBytes] + offset, bytes, size);
+        memcpy(a->buf.pages.data()[at / pageBytes] + offset, bytes, size);
         a->buf.count = at + size;
     } else {
         a->buf.append(bytes, size);
@@ -23154,7 +22797,7 @@ static bool bitsetUnion(Bitset s, Bitset o) {
         }
         if (!s.data->occupied) {
             auto* words = bitsetDenseWords(s.data);
-            copyBytes(words, o.data->storage, ((usize(s.data->bits) + 63) / 64) * sizeof(u64));
+            memcpy(words, o.data->storage, ((usize(s.data->bits) + 63) / 64) * sizeof(u64));
             s.data->occupied = o.data->occupied;
             return true;
         }
@@ -26692,7 +26335,7 @@ static void writeELF(ObjCode* oc, Slice<u8> note) {
     place(10, {}, 1);
     const u64 shoff = alignUp(usize(position), 8);
     u8 fileHeader[64]{};
-    copyBytes(fileHeader, "\177ELF\002\001\001", 8);
+    memcpy(fileHeader, "\177ELF\002\001\001", 8);
     storeLittle(fileHeader + 16, u16(1));
     storeLittle(fileHeader + 18, u16(62));
     storeLittle(fileHeader + 20, u32(1));
@@ -27244,14 +26887,17 @@ static Slice<u8> readInput(ObjPool& owner) {
         pages->reserve(before + 1);
         const usize offset = before % pageBytes;
         const usize available = pageBytes - offset;
-        IoVec vector{pages->pages.data()[before / pageBytes] + offset, available};
-        usize count = 0;
-        require(!chaosFail(ChaosFault::Read) && wasiFdRead(0, &vector, 1, &count) == 0, "stdin read failed");
-        require(count <= available, "stdin read overflow");
+        require(!chaosFail(ChaosFault::Read), "stdin read failed");
+        ssize_t count;
+        do {
+            count = ::read(0, pages->pages.data()[before / pageBytes] + offset, available);
+        } while (count < 0 && errno == EINTR);
+        require(count >= 0, "stdin read failed");
+        require(usize(count) <= available, "stdin read overflow");
         if (!count) {
             break;
         }
-        pages->count += count;
+        pages->count += usize(count);
     }
     if (pages->size() % pageBytes == 0) {
         freePage(pages->pages.popBack());
@@ -27350,38 +26996,10 @@ static void compileWithOptions(CompileOptions options) {
     writeELF(code, encodeNote(objCodeDescription(code)));
 }
 
-extern "C"
-#if defined(__wasm__) || defined(wasm)
-    __attribute__((export_name("compile")))
-#endif
-    void compile() {
-    compileWithOptions(CompileOptions{true, true, false});
-}
-
-extern "C"
-#if defined(__wasm__) || defined(wasm)
-    __attribute__((export_name("compileOptions")))
-#endif
-    void compileOptions(u32 flags) {
-    require((flags & ~u32(15)) == 0, "invalid compile options");
-    compileWithOptions(CompileOptions{bool(flags & 1), bool(flags & 2), bool(flags & 4), bool(flags & 8)});
-}
-
 #ifdef AOT_CHAOS
-extern "C"
-    #if defined(__wasm__) || defined(wasm)
-    __attribute__((export_name("chaosConfigure")))
-    #endif
-    void chaosConfigure(u32 point, u32 skip) {
-    require(point < u32(ChaosFault::Count), "unknown chaos point");
-    chaosSkips[point] = skip;
-    chaosArmed[point] = true;
-}
-
-    #if !defined(__wasm__) && !defined(wasm)
-static void configureNativeChaos() {
+static void configureChaos() {
     const char* script = ::getenv("PIZDOS_AOT_CHAOS");
-    const char* names[] = {"read", "write", "grow"};
+    const char* names[] = {"read", "write", "malloc"};
     while (script && *script) {
         u32 point = 0;
         usize length = 0;
@@ -27403,28 +27021,16 @@ static void configureNativeChaos() {
             require(skip <= 0xffffffffULL, "invalid PIZDOS_AOT_CHAOS");
         }
         require(*script == 0 || *script == ',', "invalid PIZDOS_AOT_CHAOS");
-        chaosConfigure(point, u32(skip));
+        chaosSkips[point] = u32(skip);
+        chaosArmed[point] = true;
         if (*script == ',') {
             ++script;
             require(*script != 0, "invalid PIZDOS_AOT_CHAOS");
         }
     }
 }
-    #endif
 #endif
 
-#if (!defined(__wasm__) && !defined(wasm)) || defined(AOT_COMMAND)
-static void compilerCommand(bool strict = false) {
-    if (strict) {
-        compileWithOptions(CompileOptions{});
-    } else {
-        compile();
-    }
-}
-
-#endif
-
-#if !defined(__wasm__) && !defined(wasm)
 static bool sameString(const char* a, const char* b) {
     usize i = 0;
     while (a[i] && a[i] == b[i]) {
@@ -27434,34 +27040,22 @@ static bool sameString(const char* a, const char* b) {
 }
 
 int main(int count, char** arguments) {
-    #ifdef AOT_CHAOS
-    configureNativeChaos();
-    #endif
+#ifdef AOT_CHAOS
+    configureChaos();
+#endif
     const char* usage = "usage: aot [--plain|--strict|--asan|--tail-profile] < input.wasm > output.o";
+    CompileOptions options{true, true, false};
     if (count == 2 && sameString(arguments[1], "--plain")) {
-        compileOptions(1);
-        return 0;
-    }
-    if (count == 2 && sameString(arguments[1], "--tail-profile")) {
-        compileOptions(7);
-        return 0;
-    }
-    if (count == 2 && sameString(arguments[1], "--asan")) {
-        compileWithOptions(CompileOptions{false, false, false, true});
-        return 0;
-    }
-    bool strict = false;
-    if (count == 2) {
-        require(sameString(arguments[1], "--strict"), usage);
-        strict = true;
+        options = CompileOptions{true, false, false};
+    } else if (count == 2 && sameString(arguments[1], "--tail-profile")) {
+        options = CompileOptions{true, true, true};
+    } else if (count == 2 && sameString(arguments[1], "--asan")) {
+        options = CompileOptions{false, false, false, true};
+    } else if (count == 2 && sameString(arguments[1], "--strict")) {
+        options = CompileOptions{};
     } else {
         require(count == 1, usage);
     }
-    compilerCommand(strict);
+    compileWithOptions(options);
     return 0;
 }
-#elif defined(AOT_COMMAND)
-extern "C" __attribute__((export_name("_start"))) void start() {
-    compilerCommand();
-}
-#endif

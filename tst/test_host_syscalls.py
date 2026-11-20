@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Propagate real Linux syscall failures of vm's own: its read of the
-program it starts. The guest's calls, a WASI command's too, are the
-kernel's, none of the host's.
+program it starts. The guest's calls are the kernel's, none of the host's.
 
     test_host_syscalls.py <vm> <native-aot> <filter>
 
