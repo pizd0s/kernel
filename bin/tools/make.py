@@ -19,7 +19,7 @@ import wasm  # noqa: E402
 
 CXXFLAGS = ["-O2", "-std=c++23", "-fno-exceptions", "-fno-rtti", "-nostdinc++", "-Wall", "-Wextra", "-Werror"]
 
-LINK = ["--stack-first", "-z", "stack-size=1049600", "--max-memory=4294967296", "--export=__heap_base",
+LINK = ["--stack-first", "--max-memory=4294967296", "--export=__heap_base",
         "--export=__stack_pointer", "--gc-sections"]
 
 

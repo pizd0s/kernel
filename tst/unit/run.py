@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "dev"))
 import wasm
 import exe
 
-LINK = ["--stack-first", "-z", "stack-size=1049600", "--max-memory=4294967296",
+LINK = ["--stack-first", "--max-memory=4294967296",
         "--export=__heap_base", "--export=__stack_pointer", "--gc-sections"]
 DIRECTIVES = {"compile-flags", "aot-flags", "run-flags", "args", "env", "stdout", "stderr", "stderr-pattern", "exit-code", "host", "timeout", "freestanding", "max-memory", "root"}
 

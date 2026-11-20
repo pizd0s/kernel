@@ -55,6 +55,16 @@ func helperInterrupt() {
 	}
 }
 
+func helperStackGrow(sp uint32, n uint64) uint32 {
+	p, ok := current().host.(*Process)
+
+	if !ok {
+		panic(newTrap(trapStack, 1))
+	}
+
+	return p.stackGrow(sp, n)
+}
+
 func helperTableGrow(table, delta uint32, init uintptr) uint32 {
 	return math.MaxUint32
 }
@@ -134,6 +144,8 @@ func (c *Code) resolve(sym string, imports Imports) uintptr {
 		return morestackStub()
 	case symInterruptCall:
 		return interruptStub()
+	case symStackGrow:
+		return stackGrowStub()
 	case symTrap:
 		return c.keepFunc(helperTrap)
 	case symTrapAt:

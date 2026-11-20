@@ -50,7 +50,7 @@ import wasm  # noqa: E402
 
 CFLAGS = ["-O2", "-w", "-DHAVE_CONFIG_H"]
 
-LINK = ["--stack-first", "-z", "stack-size=1049600", "--max-memory=4294967296", "--export=__heap_base",
+LINK = ["--stack-first", "--max-memory=4294967296", "--export=__heap_base",
         "--export=__stack_pointer", "--gc-sections"]
 
 PCRE2 = """

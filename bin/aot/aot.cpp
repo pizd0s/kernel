@@ -3498,6 +3498,18 @@ namespace {
         Slice<i32> args{};
     };
 
+    // FrameShape is the frame a value takes below a stack pointer read,
+    // top: of size bytes, a value, or of the constant bytes without one,
+    // aligned down to align, inner the unaligned frame's value when it is
+    // aligned (frameShape).
+    struct FrameShape {
+        i32 top = -1;
+        i32 size = -1;
+        i64 bytes = 0;
+        i64 align = 1;
+        i32 inner = -1;
+    };
+
     struct GoFrame {
         Slice<GoLoc> params{};
         Slice<GoLoc> results{};
@@ -4735,6 +4747,14 @@ static constexpr Int handleBound = 8;
 
 static constexpr Int boundSlack = 1024;
 
+// The memory's stack grows in blocks of stackBlock bytes, each at an
+// address the size divides: the stack linked at 0 and the blocks the
+// kernel takes from the heap when a frame does not fit (Process.stackGrow
+// in vm). A frame keeps the lowest boundSlack bytes of its block free:
+// the red zone of a function that calls none below its stack pointer and
+// of a handler the kernel starts there.
+static constexpr Int stackBlock = 65536;
+
 // The tail profile counts in a counter of 8 bytes for each site, past
 // the instance's other slots (newLayout): the executions of a bounds
 // check, of a checked span's guard and of the fallbacks from it, the
@@ -5024,7 +5044,14 @@ static constexpr Op OpElemDrop = Op(92LL);
 
 static constexpr Op OpCopyForward = Op(93LL);
 
-static constexpr Op opCount = Op(94LL);
+// StackAlloc is a frame of the memory's stack: the address of size bytes,
+// its second argument, the function takes below the stack pointer it
+// read, its first, aligned down to aux. The frame lies below that stack
+// pointer when it fits in its block of the stack, else at the top of the
+// stack's next block (functionStackAllocs).
+static constexpr Op OpStackAlloc = Op(94LL);
+
+static constexpr Op opCount = Op(95LL);
 
 static constexpr ValType TNone = ValType(0LL);
 
@@ -5401,6 +5428,11 @@ static constexpr MOp mShadow = MOp(69LL);
 
 static constexpr MOp mTrapAt = MOp(70LL);
 
+// stackAlloc puts in dst a frame of the memory's stack below src (an
+// OpStackAlloc): of imm bytes, or of src2's without imm, aligned down to
+// 1 << aux; temps are its scratch (funcEmitterStackAlloc).
+static constexpr MOp mStackAlloc = MOp(71LL);
+
 // aluMemImm and aluMemReg update a memory operand with an immediate or a
 // register: mem op= imm, mem op= src.
 static constexpr MOp mAluMemImm = MOp(67LL);
@@ -5554,6 +5586,10 @@ static const String symMemoryGrow = String("w2o.memory_grow");
 static const String symTableGrow = String("w2o.table_grow");
 
 static const String symInterruptCall = String("w2o.interrupt_call");
+
+// symStackGrow is the stub a frame of the memory's stack calls when it
+// does not fit in its block (funcEmitterStackAlloc).
+static const String symStackGrow = String("w2o.stack_grow");
 
 // lib/str's functions the loader binds, those of the host's
 // configuration: memcpy and memmove take the destination, the source and
@@ -6024,6 +6060,8 @@ static void funcEmitterBlock(FuncEmitter* e, MBlock* blk, Int at);
 static void funcEmitterCheck(FuncEmitter* e, MInst* in);
 
 static void funcEmitterShadow(FuncEmitter* e, MInst* in);
+
+static void funcEmitterStackAlloc(FuncEmitter* e, MInst* in);
 
 static void funcEmitterTrapJccAt(FuncEmitter* e, u8 cc, i64 code, VReg reg, i32 disp, u8 width, u8 kind);
 
@@ -6534,6 +6572,12 @@ static Tuple2<Int, SortedHint> choosePivot_func(Data data, Int a, Int b);
 static Tuple2<i64, bool> constOffset(Slice<u8> expr);
 
 static bool moduleLowFree(Module* m);
+
+static i64 moduleStackPointer(Module* m);
+
+static FrameShape frameShape(Function* f, i32 v);
+
+static void functionStackAllocs(Function* f, i64 sp);
 
 static MInst copyMachineInst(MInst in);
 
@@ -7664,6 +7708,14 @@ static void mInstForEachOperand(MInst* in, F cb) {
             }
             break;
         }
+        case mStackAlloc: {
+            cb(&in->src, roleUse);
+            if (in->src2 != noReg) {
+                cb(&in->src2, roleUse);
+            }
+            cb(&in->dst, roleDef);
+            break;
+        }
         case mCmpMem: {
             mem();
             cb(&in->src, roleUse);
@@ -8619,7 +8671,8 @@ static i32 memoryLoopVersion(MemoryLoop* l) {
                     case OpMemCopy:
                     case OpMemFill:
                     case OpMemInit:
-                    case OpCopyForward: {
+                    case OpCopyForward:
+                    case OpStackAlloc: {
                         l->allowLoads = false;
                         break;
                     }
@@ -13963,6 +14016,70 @@ static void funcEmitterShadow(FuncEmitter* e, MInst* in) {
     funcEmitterTrapJccAt(e, ccNE, trapAsan, in->src, disp, in->size, in->aux);
 }
 
+// stackAlloc takes a frame of the memory's stack below the stack pointer
+// src: of imm bytes, or of src2's, aligned down to 1 << aux. It fits when
+// the block of the stack (stackBlock) holds it below src over its lowest
+// boundSlack bytes, with the alignment's slack: the offset in the block of
+// the byte below src, which a block holds whole, is compared. Else the
+// stack grows (w2oStackGrow in vm): the stub hands back, in place of the
+// stack pointer pushed, one the frame fits below.
+static void funcEmitterStackAlloc(FuncEmitter* e, MInst* in) {
+    Asm* a = e->a;
+    const VReg top = in->src;
+    const VReg size = in->src2;
+    const VReg d = in->dst;
+    const VReg t = mInstTemps(in)[0];
+    const i64 bytes = in->imm;
+    const i64 align = i64(1) << in->aux;
+    const i64 slack = align - 1 + boundSlack - 1;
+    asmLea(a, 4, t, baseAt(top, -1));
+    asmAluRI(a, aluAnd, 4, t, stackBlock - 1);
+    Slice<i32> slow = {};
+    if (size == noReg) {
+        if (bytes + slack >= stackBlock) {
+            slow = appendValues(slow, asmJmpRel(a));
+        } else {
+            asmAluRI(a, aluCmp, 4, t, bytes + slack);
+            slow = appendValues(slow, asmJccRel(a, ccB));
+        }
+    } else {
+        const VReg u = mInstTemps(in)[1];
+        asmAluRI(a, aluCmp, 4, size, stackBlock);
+        slow = appendValues(slow, asmJccRel(a, ccAE));
+        asmLea(a, 4, u, baseAt(size, convert<i32>(slack)));
+        asmAluRR(a, aluCmp, 4, t, u);
+        slow = appendValues(slow, asmJccRel(a, ccB));
+    }
+    asmMovRR(a, 4, t, top);
+    const i32 resume = asmPos(a);
+    if (size == noReg) {
+        asmAluRI(a, aluSub, 4, t, convert<i64>(convert<i32>(convert<u32>(bytes))));
+    } else {
+        asmAluRR(a, aluSub, 4, t, size);
+    }
+    if (align > 1) {
+        asmAluRI(a, aluAnd, 4, t, -align);
+    }
+    asmMovRR(a, 4, d, t);
+    e->late = appendValues(e->late, [=]() mutable -> void {
+        for (Int i = 0; i < length(slow); ++i) {
+            asmPatch32(a, slow[i], asmPos(a));
+        }
+        if (size == noReg) {
+            asmMovImm(a, 8, t, bytes + align - 1);
+        } else {
+            asmMovRR(a, 4, t, size);
+            asmAluRI(a, aluAdd, 8, t, align - 1);
+        }
+        asmPush(a, t);
+        asmPush(a, top);
+        asmCallMem(a, objCodeGotMem(e->oc, symStackGrow));
+        asmPop(a, t);
+        asmLea(a, 8, RSP, rspAt(8));
+        asmPatch32(a, asmJmpRel(a), resume);
+    });
+}
+
 static void funcEmitterCvtU64F(FuncEmitter* e, MInst* in) {
     Asm* a = e->a;
     VReg d = in->dst;
@@ -14293,6 +14410,10 @@ static void funcEmitterInst(FuncEmitter* e, MInst* in) {
         }
         case mShadow: {
             funcEmitterShadow(e, in);
+            break;
+        }
+        case mStackAlloc: {
+            funcEmitterStackAlloc(e, in);
             break;
         }
         case mTrapAt: {
@@ -16803,6 +16924,24 @@ static void lowererLowerValue(Lowerer* l, i32 v) {
             lowererGlobalSet(l, convert<i64>(val->aux), args[0]);
             break;
         }
+        case OpStackAlloc: {
+            MInst in = inst(mStackAlloc);
+            in.dst = lowererDef(l, v);
+            in.src = lowererUse(l, args[0]);
+            in.src2 = noReg;
+            in.aux = convert<u8>(bitsTrailingZeros64(convert<u64>(val->aux)));
+            Slice<VReg> temps = sliceOf<VReg>({mFuncNewReg(l->mf, classGPR)});
+            if (f->values[args[1]].op == OpConst) {
+                in.imm = convert<i64>(convert<u32>(f->values[args[1]].aux));
+            } else {
+                in.src2 = lowererUse(l, args[1]);
+                temps = appendValues(temps, mFuncNewReg(l->mf, classGPR));
+            }
+            mInstExtra(&in)->temps.assign(temps);
+            l->mf->hasCalls = true;
+            lowererEmit(l, in);
+            break;
+        }
         case OpCall: {
             lowererCall(l, v, convert<i64>(val->aux), args);
             break;
@@ -17104,6 +17243,7 @@ static bool lowererTransparent(Op op) {
         case OpTableInit:
         case OpElemDrop:
         case OpCopyForward:
+        case OpStackAlloc:
         case OpInvalid: {
             return false;
         }
@@ -20756,7 +20896,7 @@ static Slice<i32> objCodeStackCheckBlocks(MFunc* mf) {
         auto insts = mf->blocks[b].insts.view();
         bool calls = false;
         for (Int k = 0; k < length(insts) && !calls; ++k) {
-            calls = insts[k].op == mCall || insts[k].op == mCallInd;
+            calls = insts[k].op == mCall || insts[k].op == mCallInd || insts[k].op == mStackAlloc;
         }
         if (!calls) {
             continue;
@@ -23766,6 +23906,298 @@ static bool moduleLowFree(Module* m) {
     return !stack.v1 || stack.v0 >= boundSlack;
 }
 
+// stackPointer is the global wasm-ld's __stack_pointer is, which the
+// module exports, or -1. Its frames are frames of a stack that grows
+// (functionStackAllocs) only where the stack is linked first: a mutable
+// i32 starting at a constant every active data segment lies at or above,
+// so that the stack's first block, at 0, holds nothing but the stack.
+static i64 moduleStackPointer(Module* m) {
+    if (length(m->mems) == 0) {
+        return -1;
+    }
+    for (Int i = 0; i < length(m->exports); ++i) {
+        Export e = m->exports[i];
+        if (e.kind != 3 || e.name != String("__stack_pointer")) {
+            continue;
+        }
+        if (Int(e.index) >= length(m->globals)) {
+            return -1;
+        }
+        Global g = m->globals[e.index];
+        auto top = constOffset(g.init);
+        if (g.typ != I32 || !g.mutableValue || !top.v1) {
+            return -1;
+        }
+        for (Int k = 0; k < length(m->datas); ++k) {
+            Data d = m->datas[k];
+            if (d.mode != segmentActive) {
+                continue;
+            }
+            auto offset = constOffset(d.offset);
+            if (!offset.v1 || offset.v0 < top.v0) {
+                return -1;
+            }
+        }
+        return convert<i64>(e.index);
+    }
+    return -1;
+}
+
+// frameShape tells whether v, a value written to the stack pointer, takes
+// a frame below a stack pointer read: that less a size, the frame, or
+// that aligned down, a frame whose unaligned value is inner. Adding a
+// negative constant takes a frame; subtracting one, or adding any other
+// value, takes none.
+static FrameShape frameShape(Function* f, i32 v) {
+    const Value val = f->values[v];
+    FrameShape s;
+    if (val.typ != I32 || val.nargs != 2) {
+        return s;
+    }
+    auto args = functionArgs(f, v);
+    auto constant = [&](i32 w, i64* bits) mutable -> bool {
+        if (f->values[w].op != OpConst) {
+            return false;
+        }
+        *bits = i64(i32(f->values[w].aux));
+        return true;
+    };
+    i64 c = 0;
+    switch (val.op) {
+        case OpSub: {
+            if (constant(args[1], &c)) {
+                if (c < 0) {
+                    return s;
+                }
+                s.bytes = c;
+            } else {
+                s.size = args[1];
+            }
+            s.top = args[0];
+            return s;
+        }
+        case OpAdd: {
+            for (Int k = 0; k < 2; ++k) {
+                if (constant(args[1 - k], &c) && c < 0) {
+                    s.top = args[k];
+                    s.bytes = -c;
+                    return s;
+                }
+            }
+            return s;
+        }
+        case OpAnd: {
+            for (Int k = 0; k < 2; ++k) {
+                if (!constant(args[1 - k], &c) || c >= -1 || ((-c) & (-c - 1)) != 0) {
+                    continue;
+                }
+                FrameShape inner = frameShape(f, args[k]);
+                if (inner.top < 0 || inner.inner >= 0) {
+                    return s;
+                }
+                inner.align = -c;
+                inner.inner = args[k];
+                return inner;
+            }
+            return s;
+        }
+    }
+    return s;
+}
+
+// stackAllocs compiles the frames a function takes of the memory's stack,
+// sp the global of its stack pointer (moduleStackPointer), as frames of a
+// stack that grows: a value written to the stack pointer that takes a
+// frame (frameShape) becomes an OpStackAlloc, whose frame lies at the top
+// of another block when it does not fit in that of the stack pointer.
+// It runs before the optimizer, which then knows nothing of the frame's
+// address: no address of the frame comes from the stack pointer read,
+// which is where the frame would have been. Of the function it requires
+// what wasm-ld's code does: that it addresses a frame only by the value
+// it writes, the stack pointer read only to put it back or above it. A
+// function that computes an address below a stack pointer it took a frame
+// below otherwise, or writes a frame to it through a join, is rejected.
+static void functionStackAllocs(Function* f, i64 sp) {
+    const Int n = length(f->blocks);
+    Map<i32, FrameShape> frames = makeMap<i32, FrameShape>();
+    Slice<i32> order = {};
+    Slice<i32> others = {};
+    for (Int b = 0; b < n; ++b) {
+        if (f->blocks[b].dead) {
+            continue;
+        }
+        auto instrs = f->blocks[b].instrs.view();
+        for (Int i = 0; i < length(instrs); ++i) {
+            const i32 w = instrs[i];
+            if (f->values[w].op != OpGlobalSet || f->values[w].aux != sp) {
+                continue;
+            }
+            const i32 v = functionArgs(f, w)[0];
+            if (lookupMap(frames, v).v1) {
+                continue;
+            }
+            FrameShape s = frameShape(f, v);
+            if (s.top >= 0) {
+                setMap(frames, v, s);
+                order = appendValues(order, v);
+            } else if (f->values[v].op == OpParam) {
+                others = appendValues(others, v);
+            }
+        }
+    }
+    if (length(order) == 0 && length(others) == 0) {
+        return;
+    }
+    Map<i32, Slice<i32>> incoming = makeMap<i32, Slice<i32>>();
+    for (Int b = 0; b < n; ++b) {
+        if (f->blocks[b].dead) {
+            continue;
+        }
+        auto edges = f->blocks[b].term.edges;
+        for (Int k = 0; k < length(edges); ++k) {
+            auto params = f->blocks[edges[k].block].params;
+            for (Int j = 0; j < length(params) && j < length(edges[k].args); ++j) {
+                setMap(incoming, params[j], appendValues(incoming[params[j]], edges[k].args[j]));
+            }
+        }
+    }
+    // A value written to the stack pointer through parameters must not
+    // come from a value that takes a frame, which would then go unchecked.
+    for (Int i = 0; i < length(others); ++i) {
+        Map<i32, bool> seen = makeMap<i32, bool>();
+        Slice<i32> work = sliceOf<i32>({others[i]});
+        while (length(work) > 0) {
+            const i32 v = work[length(work) - 1];
+            work = subslice(work, 0, length(work) - 1);
+            if (lookupMap(seen, v).v1) {
+                continue;
+            }
+            setMap(seen, v, true);
+            if (!lookupMap(frames, v).v1 && frameShape(f, v).top >= 0) {
+                compilerError(String("unsupported: a frame of the stack written to the stack pointer through a join"));
+            }
+            if (f->values[v].op == OpParam) {
+                auto from = incoming[v];
+                for (Int k = 0; k < length(from); ++k) {
+                    work = appendValues(work, from[k]);
+                }
+            }
+        }
+    }
+    if (length(order) == 0) {
+        return;
+    }
+    // The stack pointers read that frames are taken below, with the
+    // parameters that carry one of them alone.
+    Map<i32, bool> tops = makeMap<i32, bool>();
+    Map<i32, bool> parts = makeMap<i32, bool>();
+    for (Int i = 0; i < length(order); ++i) {
+        FrameShape s = frames[order[i]];
+        const Value top = f->values[s.top];
+        if (top.op == OpGlobalGet && top.aux == sp) {
+            setMap(tops, s.top, true);
+        }
+        setMap(parts, order[i], true);
+        if (s.inner >= 0) {
+            setMap(parts, s.inner, true);
+        }
+    }
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (Int b = 0; b < n; ++b) {
+            auto params = f->blocks[b].params;
+            for (Int j = 0; j < length(params); ++j) {
+                const i32 p = params[j];
+                auto from = incoming[p];
+                bool carries = length(from) > 0 && !tops[p];
+                for (Int k = 0; carries && k < length(from); ++k) {
+                    carries = from[k] == p || tops[from[k]];
+                }
+                if (carries) {
+                    setMap(tops, p, true);
+                    changed = true;
+                }
+            }
+        }
+    }
+    auto below = [&](i32 u) mutable -> bool {
+        const Value val = f->values[u];
+        if (val.typ != I32 || val.nargs != 2 || parts[u]) {
+            return false;
+        }
+        auto args = functionArgs(f, u);
+        switch (val.op) {
+            case OpSub: {
+                return tops[args[0]];
+            }
+            case OpAnd: {
+                return tops[args[0]] || tops[args[1]];
+            }
+            case OpAdd: {
+                for (Int k = 0; k < 2; ++k) {
+                    if (!tops[args[k]]) {
+                        continue;
+                    }
+                    const Value other = f->values[args[1 - k]];
+                    if (other.op != OpConst || i32(other.aux) < 0) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+        return false;
+    };
+    // An unaligned frame is the operand of its frame alone.
+    auto unaligned = [&](i32 u, i32 user) mutable -> bool {
+        if (!parts[u] || lookupMap(frames, u).v1) {
+            return false;
+        }
+        return user < 0 || frames[user].inner != u;
+    };
+    for (Int b = 0; b < n; ++b) {
+        if (f->blocks[b].dead) {
+            continue;
+        }
+        auto instrs = f->blocks[b].instrs.view();
+        for (Int i = 0; i < length(instrs); ++i) {
+            const i32 u = instrs[i];
+            if (below(u)) {
+                compilerError(String("unsupported: an address below a stack pointer a frame is taken below, other than the frame"));
+            }
+            auto args = functionArgs(f, u);
+            for (Int k = 0; k < length(args); ++k) {
+                if (unaligned(args[k], lookupMap(frames, u).v1 ? u : -1)) {
+                    compilerError(String("unsupported: an unaligned frame of the stack used"));
+                }
+            }
+        }
+        const Term* t = &f->blocks[b].term;
+        bool used = t->kind == TermIf || t->kind == TermSwitch ? unaligned(t->value, -1) : false;
+        for (Int k = 0; k < length(t->values); ++k) {
+            used = used || unaligned(t->values[k], -1);
+        }
+        for (Int k = 0; k < length(t->edges); ++k) {
+            for (Int j = 0; j < length(t->edges[k].args); ++j) {
+                used = used || unaligned(t->edges[k].args[j], -1);
+            }
+        }
+        if (used) {
+            compilerError(String("unsupported: an unaligned frame of the stack used"));
+        }
+    }
+    for (Int i = 0; i < length(order); ++i) {
+        const i32 v = order[i];
+        FrameShape s = frames[v];
+        const i32 size = s.size >= 0 ? s.size : functionNewValue(f, OpConst, I32, -1, s.bytes, Span<const i32>({}));
+        auto args = functionArgs(f, v);
+        args[0] = s.top;
+        args[1] = size;
+        f->values[v].op = OpStackAlloc;
+        f->values[v].aux = s.align;
+    }
+}
+
 // constOffset evaluates a constant offset expression: i32.const or
 // i64.const.
 static Tuple2<i64, bool> constOffset(Slice<u8> expr) {
@@ -24612,6 +25044,7 @@ static bool hasEffect(Op op) {
         case OpMemInit:
         case OpDataDrop:
         case OpCopyForward:
+        case OpStackAlloc:
         case OpGlobalSet:
         case OpCall:
         case OpCallIndirect:
@@ -26884,11 +27317,15 @@ static void compileWithOptions(CompileOptions options) {
     }
     objCodeAddFixedBlobs(code);
     objCodeImportAdapters(code);
+    const i64 stackPointer = moduleStackPointer(module);
     for (Int i = module->importedFuncs; i < length(module->funcs); ++i) {
         Function* function;
         {
             PoolScope ssaScope(ssaPool);
             function = buildFunction(module, i);
+            if (stackPointer >= 0) {
+                functionStackAllocs(function, stackPointer);
+            }
             optimize(function);
         }
         PoolScope machineScope(machinePool);

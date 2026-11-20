@@ -36,7 +36,7 @@ UNUSED = ["llvm/test/", "llvm/unittests/", "clang/test/", "clang/unittests/"]
 
 # The 8 MiB stack ix links clang with, 1 KiB past it: a module keeps nothing
 # in its first 1 KiB.
-LINK = ["-nostdlib", "-Wl,--stack-first", "-Wl,-z,stack-size=8389632", "-Wl,--max-memory=4294967296",
+LINK = ["-nostdlib", "-Wl,--stack-first", "-Wl,--max-memory=4294967296",
         "-Wl,--export=__heap_base", "-Wl,--export=__stack_pointer", "-Wl,--gc-sections"]
 
 CONFIG = {
@@ -102,8 +102,10 @@ def extract(tarball, work):
 
 
 def patch(tree):
-    """One case: is_local has none for wasm, and the BSD statfs its default
-    reads is not lib/c's statvfs."""
+    """Two cases: is_local has none for wasm, and the BSD statfs its default
+    reads is not lib/c's statvfs; isStackNearlyExhausted takes the distance
+    from the bottom of the stack for its depth, which is none where the
+    kernel grows the stack in blocks wherever it has room."""
     path = tree / "llvm/lib/Support/Unix/Path.inc"
     anchor = "#elif defined(__EMSCRIPTEN__)\n  // Emscripten doesn't currently support remote filesystem mounts.\n  return true;\n"
     src = path.read_text()
@@ -112,6 +114,16 @@ def patch(tree):
         raise SystemExit("Path.inc's is_local_impl has no Emscripten case")
 
     case = "#elif defined(__wasm__)\n  // The kernel's files are the host's: whether one is remote it cannot tell.\n  return true;\n"
+    path.write_text(src.replace(anchor, anchor + case))
+
+    path = tree / "clang/lib/Basic/Stack.cpp"
+    anchor = "bool clang::isStackNearlyExhausted() {\n"
+    src = path.read_text()
+
+    if src.count(anchor) != 1:
+        raise SystemExit("Stack.cpp has no isStackNearlyExhausted")
+
+    case = "#if defined(__wasm__)\n  // The kernel grows the stack in blocks and limits its depth itself.\n  return false;\n#endif\n"
     path.write_text(src.replace(anchor, anchor + case))
 
 

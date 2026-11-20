@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Reject malformed control flow, segments and unsupported import addresses.
+"""Reject malformed control flow, segments, unsupported import addresses and
+uses of the stack pointer a frame of a growing stack cannot have.
 
     test_compiler_rejections.py <vm> <native-aot> <wazero> <rootfs>
 """
@@ -29,7 +30,7 @@ def section(kind, body):
     return bytes([kind]) + leb(len(body)) + body
 
 
-def program(code, *, elements=None, data=None, exports=None, import_name=None, addressable=False, global_import=False, globals=None, start=None, memory_import=False):
+def program(code, *, elements=None, data=None, exports=None, import_name=None, addressable=False, global_import=False, globals=None, start=None, memory_import=False, stack=False, locals=0):
     types = b"\2\x60\0\0" + (b"\x60\1\x7f\1\x7f" if import_name == "strlen" else b"\x60\0\1\x7f")
     module = b"\0asm\1\0\0\0" + section(1, types)
     if import_name:
@@ -43,15 +44,20 @@ def program(code, *, elements=None, data=None, exports=None, import_name=None, a
         module += section(5, b"\1\0\1")
     if globals is not None:
         module += section(6, globals)
+    elif stack:
+        # wasm-ld's __stack_pointer, linked first: 64 KiB.
+        module += section(6, b"\1\x7f\1\x41\x80\x80\4\x0b")
     exports = exports if exports is not None else text("_start") + b"\0" + leb(bool(import_name))
     if addressable:
         exports += text("alias") + b"\0\0"
-    module += section(7, leb(2 if addressable else 1) + exports)
+    if stack:
+        exports += text("__stack_pointer") + b"\3\0"
+    module += section(7, leb(1 + addressable + stack) + exports)
     if start is not None:
         module += section(8, leb(start))
     if elements is not None:
         module += section(9, elements)
-    body = b"\0" + code + b"\x0b"
+    body = (b"\1" + leb(locals) + b"\x7f" if locals else b"\0") + code + b"\x0b"
     module += section(10, b"\1" + leb(len(body)) + body)
     if data is not None:
         module += section(11, data)
@@ -86,7 +92,17 @@ def main():
              ("bad-export-kind", program(b"", exports=text("_start") + b"\4\0"), "malformed export kind"),
              ("duplicate-export", program(b"", exports=text("alias") + b"\0\0", addressable=True), "duplicate export name"),
              ("undeclared-import-reference", program(b"\x41\0\xd2\0\x26\0", import_name="getpid"), "ref.func of a function no element, export or global names"),
-             ("undeclared-compiled-import-reference", program(b"\x41\0\xd2\0\x26\0", import_name="strlen"), "ref.func of a function no element, export or global names")]
+             ("undeclared-compiled-import-reference", program(b"\x41\0\xd2\0\x26\0", import_name="strlen"), "ref.func of a function no element, export or global names"),
+             # A frame below the stack pointer read, and below that read
+             # an address of its own: where the frame would have been.
+             ("stack-address-below-frame", program(b"\x23\0\x22\0\x41\x10\x6b\x24\0\x20\0\x41\x08\x6b\x41\0\x36\2\0", stack=True, locals=1),
+              "unsupported: an address below a stack pointer a frame is taken below, other than the frame"),
+             # Either of two frames, written to the stack pointer after the join.
+             ("stack-frame-through-join", program(b"\x23\0\x04\x7f\x23\0\x41\x20\x6b\x05\x23\0\x41\x30\x6b\x0b\x24\0", stack=True),
+              "unsupported: a frame of the stack written to the stack pointer through a join"),
+             # An aligned frame, its unaligned address stored to as well.
+             ("stack-unaligned-frame", program(b"\x23\0\x41\x28\x6b\x22\0\x41\x70\x71\x24\0\x20\0\x41\0\x36\2\0", stack=True, locals=1),
+              "unsupported: an unaligned frame of the stack used")]
     env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-compiler-rejections-") as directory:
         work = Path(directory)
@@ -98,7 +114,7 @@ def main():
             env = dict(env, W2X_MEMORY_TAIL="optimized" if padded else "strict")
             source.write_bytes(data)
             reference = subprocess.run([wazero, "-compile", str(source)], capture_output=True, timeout=30)
-            if label not in ("imported-global", "low-data", "low-stack", "imported-memory"):
+            if label not in ("imported-global", "low-data", "low-stack", "imported-memory") and not label.startswith("stack-"):
                 assert reference.returncode != 0, (label, reference)
             else:
                 assert reference.returncode == 0, (label, reference)
@@ -123,7 +139,7 @@ def main():
         results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=dict(env, W2X_MEMORY_TAIL="strict"))
         for (label, _), result in zip(runs, results):
             assert result == (0, b"", b""), (label, result)
-    print(f"compiler rejections: {len(cases)} control, segment, index and import-address errors preserve output with both AOTs")
+    print(f"compiler rejections: {len(cases)} control, segment, index, import-address and stack errors preserve output with both AOTs")
 
 
 if __name__ == "__main__":

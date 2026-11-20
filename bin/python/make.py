@@ -56,7 +56,6 @@ FLAGS = [
 
 LINK = [
     "--stack-first",
-    "-z", "stack-size=8389632",
     "--max-memory=4294967296",
     "--export=__heap_base",
     "--export=__stack_pointer",
@@ -236,11 +235,34 @@ def build_date(newest):
     return f"{calendar.month_abbr[t.tm_mon]} {t.tm_mday:2d} {t.tm_year}", time.strftime("%H:%M:%S", t)
 
 
+def patch(tree):
+    """_Py_InitializeRecursionLimits bounds the C stack by addresses: those
+    from a guess at its top down to the stack's size. The kernel grows the
+    stack in blocks wherever it has room, so no address bounds it, and the
+    kernel limits its depth itself: the limits pass every check."""
+    path = tree / "Python" / "ceval.c"
+    anchor = "void\n_Py_InitializeRecursionLimits(PyThreadState *tstate)\n{\n"
+    src = path.read_text()
+
+    if src.count(anchor) != 1:
+        raise SystemExit("ceval.c has no _Py_InitializeRecursionLimits")
+
+    limits = """\
+    _PyThreadStateImpl *grown = (_PyThreadStateImpl *)tstate;
+    grown->c_stack_top = UINTPTR_MAX;
+    grown->c_stack_soft_limit = 1;
+    grown->c_stack_hard_limit = 1;
+    return;
+"""
+    path.write_text(src.replace(anchor, anchor + limits))
+
+
 def core(cc, ar, ld, tarball, pyconfig, libc_include, libc, libpython, freeze):
     work = Path(os.environ.get("TMPDIR") or "/tmp") / "python-core"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     tree, newest = extract(tarball, work)
+    patch(tree)
     include = work / "include"
     include.mkdir()
     shutil.copy(pyconfig, include / "pyconfig.h")

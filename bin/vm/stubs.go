@@ -8,6 +8,8 @@ func morestackStub() uintptr
 
 func interruptStub() uintptr
 
+func stackGrowStub() uintptr
+
 func landStub() uintptr
 
 func framesStub() uintptr

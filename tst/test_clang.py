@@ -57,7 +57,7 @@ int main() {
 }
 """
 
-LINK = ["-nostdlib", "-Wl,--stack-first", "-Wl,-z,stack-size=1049600", "-Wl,--max-memory=4294967296",
+LINK = ["-nostdlib", "-Wl,--stack-first", "-Wl,--max-memory=4294967296",
         "-Wl,--export=__heap_base", "-Wl,--export=__stack_pointer", "-Wl,--gc-sections"]
 
 

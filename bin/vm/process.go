@@ -218,6 +218,7 @@ type Process struct {
 	passwordAt uint32
 
 	heap   *Heap
+	stack  *Stack
 	static uint32
 	env    uint32
 	seed   uint64
@@ -510,7 +511,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 	if i == nil {
 		i = newInstance(img.code, runStack)
 		i.attach(p)
-		p.heap, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, 0, 0, 0, 0, 0
+		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
 		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0
 		p.regexes, p.constants, p.locale = map[uint32]*PosixRegex{}, map[string]uint32{}, [LC_ALL]string{}
 		p.envStrings, p.mappings = map[uint32]bool{}, map[uint32]Mapping{}
@@ -525,6 +526,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 
 			p.asanStart()
 			i.start()
+			p.stackStart()
 			p.asanInit()
 			i.startCommand()
 		}
@@ -2078,7 +2080,7 @@ func (p *Process) startVfork() uint32 {
 
 	c.setInstance(p.inst)
 	c.image, c.vfork = p.image, v
-	c.heap, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap, p.static, p.env, p.errnoAt, p.environAt, p.siginfo
+	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo
 	c.regexes, c.nextRegex, c.constants, c.jumps, c.stackAt = p.regexes, p.nextRegex, p.constants, p.jumps, p.stackAt
 	c.locale, c.envStrings, c.mappings, c.tzAt, c.herrnoAt, c.passwordAt = p.locale, p.envStrings, p.mappings, p.tzAt, p.herrnoAt, p.passwordAt
 	c.token.Store(p.token.Load())
@@ -2106,7 +2108,7 @@ func (p *Process) fork(setup func(c *Process)) (int32, error) {
 		return 0, ENOSYS
 	}
 
-	from := uint64(binary.LittleEndian.Uint32(p.inst.block[p.stackPointer():])) &^ 4095
+	from := p.stack.live(binary.LittleEndian.Uint32(p.inst.block[p.stackPointer():]))
 	to := p.inst.memory.pages * pageSize
 
 	if p.heap != nil {
@@ -2123,7 +2125,7 @@ func (p *Process) fork(setup func(c *Process)) (int32, error) {
 
 	inst.attach(c)
 	c.image = p.image
-	c.heap, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap.clone(), p.static, p.env, p.errnoAt, p.environAt, p.siginfo
+	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap.clone(), p.stack.clone(), p.static, p.env, p.errnoAt, p.environAt, p.siginfo
 	c.nextRegex, c.stackAt, c.locale, c.tzAt, c.herrnoAt, c.passwordAt = p.nextRegex, p.stackAt, p.locale, p.tzAt, p.herrnoAt, p.passwordAt
 	c.regexes, c.constants, c.jumps = map[uint32]*PosixRegex{}, map[string]uint32{}, map[uint32]*JmpBuf{}
 
@@ -4146,6 +4148,64 @@ func (p *Process) memalign(align, n uint32) uint32 {
 	p.shadowBlock(uint32(aligned), n, count<<heapPageShift)
 
 	return uint32(aligned)
+}
+
+func (p *Process) stackStart() {
+	if at, ok := p.inst.globalAt("__stack_pointer"); ok {
+		p.stack = newStack(binary.LittleEndian.Uint32(p.inst.block[at:]))
+	}
+}
+
+func (p *Process) stackGrow(sp uint32, n uint64) uint32 {
+	s := p.stack
+
+	if s == nil {
+		panic(newTrap(trapStack, 2))
+	}
+
+	block := (sp - 1) &^ (stackBlock - 1)
+	need := n + boundSlack
+
+	if at, ok := s.next[block]; ok {
+		if uint64(s.sizes[at]) >= need {
+			return at + s.sizes[at]
+		}
+
+		delete(s.next, block)
+		p.stackRelease(at)
+	}
+
+	size := (need + stackBlock - 1) &^ (stackBlock - 1)
+
+	if s.total+size > stackLimit {
+		panic(newTrap(trapStack, 2))
+	}
+
+	at := p.memalign(stackBlock, uint32(size))
+
+	if at == 0 {
+		panic(newTrap(trapStack, 2))
+	}
+
+	s.next[block], s.sizes[at], s.total = at, uint32(size), s.total+size
+
+	return at + uint32(size)
+}
+
+func (p *Process) stackRelease(at uint32) {
+	s := p.stack
+	size := s.sizes[at]
+
+	for block := at; block < at+size; block += stackBlock {
+		if next, ok := s.next[block]; ok {
+			delete(s.next, block)
+			p.stackRelease(next)
+		}
+	}
+
+	delete(s.sizes, at)
+	s.total -= uint64(size)
+	p.free(at)
 }
 
 type Mapping struct {

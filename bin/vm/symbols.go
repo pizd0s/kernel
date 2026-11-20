@@ -18,6 +18,7 @@ const (
 	symMemoryGrow    = "w2o.memory_grow"
 	symTableGrow     = "w2o.table_grow"
 	symInterruptCall = "w2o.interrupt_call"
+	symStackGrow     = "w2o.stack_grow"
 	symStr           = "str."
 )
 

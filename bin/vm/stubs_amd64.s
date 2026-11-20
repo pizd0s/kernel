@@ -193,6 +193,96 @@ based:
 	POPQ	BP
 	RET
 
+// w2oStackGrow is called by a frame of the memory's stack that does not
+// fit below the stack pointer, with the stack pointer and the bytes the
+// frame takes pushed: it puts in place of the stack pointer the one the
+// frame fits below (Process.stackGrow). Every register comes back as it
+// was, but the bound and the base, which follow a move of the memory as
+// in w2oInterruptCall.
+TEXT ·w2oStackGrow(SB), NOSPLIT|NOFRAME, $0-0
+	NO_LOCAL_POINTERS
+	PUSHQ	BP
+	MOVQ	SP, BP
+	PUSHFQ
+	PUSHQ	AX
+	PUSHQ	BX
+	PUSHQ	CX
+	PUSHQ	DX
+	PUSHQ	SI
+	PUSHQ	DI
+	PUSHQ	R8
+	PUSHQ	R9
+	PUSHQ	R10
+	PUSHQ	R11
+	PUSHQ	R12
+	PUSHQ	R13
+	ADJSP	$160
+	MOVSD	X0, 40(SP)
+	MOVSD	X1, 48(SP)
+	MOVSD	X2, 56(SP)
+	MOVSD	X3, 64(SP)
+	MOVSD	X4, 72(SP)
+	MOVSD	X5, 80(SP)
+	MOVSD	X6, 88(SP)
+	MOVSD	X7, 96(SP)
+	MOVSD	X8, 104(SP)
+	MOVSD	X9, 112(SP)
+	MOVSD	X10, 120(SP)
+	MOVSD	X11, 128(SP)
+	MOVSD	X12, 136(SP)
+	MOVSD	X13, 144(SP)
+	MOVSD	X14, 152(SP)
+	MOVQ	R15, 24(SP)
+	MOVQ	472(R14), AX
+	MOVQ	0(AX), BX
+	MOVQ	BX, 32(SP)
+	MOVL	16(BP), AX
+	MOVQ	AX, 0(SP)
+	MOVQ	24(BP), AX
+	MOVQ	AX, 8(SP)
+	CALL	·helperStackGrow(SB)
+	MOVL	16(SP), AX
+	MOVQ	AX, 16(BP)
+	MOVQ	472(R14), AX
+	MOVQ	8(AX), CX
+	MOVQ	CX, 160(SP)
+	MOVQ	24(SP), R15
+	CMPQ	R15, 32(SP)
+	JNE	based
+	MOVQ	0(AX), R15
+based:
+	MOVSD	40(SP), X0
+	MOVSD	48(SP), X1
+	MOVSD	56(SP), X2
+	MOVSD	64(SP), X3
+	MOVSD	72(SP), X4
+	MOVSD	80(SP), X5
+	MOVSD	88(SP), X6
+	MOVSD	96(SP), X7
+	MOVSD	104(SP), X8
+	MOVSD	112(SP), X9
+	MOVSD	120(SP), X10
+	MOVSD	128(SP), X11
+	MOVSD	136(SP), X12
+	MOVSD	144(SP), X13
+	MOVSD	152(SP), X14
+	ADJSP	$-160
+	POPQ	R13
+	POPQ	R12
+	POPQ	R11
+	POPQ	R10
+	POPQ	R9
+	POPQ	R8
+	POPQ	DI
+	POPQ	SI
+	POPQ	DX
+	POPQ	CX
+	POPQ	BX
+	POPQ	AX
+	POPFQ
+	POPQ	BP
+	RET
+
 // w2oLand is what longjmp calls, func(jump uintptr, val uint32, inst
 // uintptr) uint32 with AX, BX and CX: inst is the Instance; jump is a Jump
 // (jump.go), its frame,
@@ -476,6 +566,11 @@ TEXT ·asanRangeStub(SB), NOSPLIT, $0-8
 
 TEXT ·interruptStub(SB), NOSPLIT, $0-8
 	LEAQ	·w2oInterruptCall(SB), AX
+	MOVQ	AX, ret+0(FP)
+	RET
+
+TEXT ·stackGrowStub(SB), NOSPLIT, $0-8
+	LEAQ	·w2oStackGrow(SB), AX
 	MOVQ	AX, ret+0(FP)
 	RET
 

@@ -6,11 +6,12 @@ pipes, a pseudoterminal, signals, timers, locks, mappings written back,
 the user database, locales and the tokenizer's positions. Then a set of
 CPython's own tests, from the release tarball's Lib/test, the image of the
 tests' /lib/python3.14/test, which python searches after its file, runs
-with its regrtest. Each boots rootfs from the image of the tests and runs
-in /tmp.
+with its regrtest, but for the cases XFAIL names, which run apart and
+must fail. Each boots rootfs from the image of the tests and runs in /tmp.
 
     test_python.py <vm> <rootfs> <tests.img>
 """
+import shlex
 import subprocess
 import sys
 
@@ -21,6 +22,12 @@ TESTS = [
     "test_glob", "test_grammar", "test_grp", "test_list", "test_long", "test_pwd", "test_re", "test_resource",
     "test_scope", "test_select", "test_set", "test_str", "test_string", "test_struct", "test_time", "test_tuple",
 ]
+
+# Cases that expect RecursionError of a recursion in C deeper than a C stack
+# of a fixed size holds. The system's stack grows in blocks up to the
+# kernel's limit, which their recursion stays within, so python checks the
+# depth of none: they fail, and the run checks that they still do.
+XFAIL = ["*test_dict.DictTest.test_repr_deep", "*test_list.ListTest.test_repr_deep", "*test_tuple.TupleTest.test_hash_deeply_nested"]
 
 SCRIPT = r'''
 import errno, fcntl, hashlib, io, json, locale, math, mmap, os, pty, pwd, random, re, resource, select, signal
@@ -153,10 +160,17 @@ def main():
     if r.returncode != 0 or r.stdout != EXPECTED:
         failures.append(f"check.py: exit {r.returncode}\n--- stdout\n{r.stdout}\n--- expected\n{EXPECTED}\n--- stderr\n{r.stderr[-3000:]}")
 
-    r = python(vm, rootfs, image, ["-m", "test", *TESTS], 1800)
+    r = python(vm, rootfs, image, ["-m", "test", *TESTS, *(shlex.quote("--ignore=" + x) for x in XFAIL)], 1800)
 
     if r.returncode != 0 or "Result: SUCCESS" not in r.stdout:
         failures.append(f"regrtest: exit {r.returncode}\n{r.stdout[-5000:]}\n{r.stderr[-2000:]}")
+
+    r = python(vm, rootfs, image, ["-m", "test", "test_dict", "test_list", "test_tuple", *(shlex.quote("--match=" + x) for x in XFAIL)], 600)
+
+    n = len(XFAIL)
+
+    if "Result: FAILURE" not in r.stdout or f"run={n}/{n}" not in r.stdout or f"failed={n}" not in r.stdout or (r.stdout + r.stderr).count("RecursionError not raised") != n:
+        failures.append(f"expected failures: exit {r.returncode}\n{r.stdout[-5000:]}\n{r.stderr[-2000:]}")
 
     for f in failures:
         print(f"FAIL {f}")
@@ -164,7 +178,7 @@ def main():
     if failures:
         sys.exit(1)
 
-    print(f"python: the check script and {len(TESTS)} of CPython's tests pass")
+    print(f"python: the check script and {len(TESTS)} of CPython's tests pass, {len(XFAIL)} of their cases fail as expected")
 
 
 if __name__ == "__main__":

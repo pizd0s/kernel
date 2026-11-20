@@ -29,7 +29,7 @@ VERSION = "1.47.4"
 CFLAGS = ["-O2", "-std=gnu11", "-w", "-DHAVE_CONFIG_H"]
 CXXFLAGS = ["-O2", "-std=c++23", "-fno-exceptions", "-fno-rtti", "-nostdinc++", "-Wall", "-Wextra", "-Werror"]
 
-LINK = ["--stack-first", "-z", "stack-size=1049600", "--max-memory=4294967296", "--export=__heap_base",
+LINK = ["--stack-first", "--max-memory=4294967296", "--export=__heap_base",
         "--export=__stack_pointer", "--gc-sections"]
 
 EXT2FS = """

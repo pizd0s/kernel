@@ -164,10 +164,41 @@ static int loopsMoved(void) {
     return 0;
 }
 
+// The stack grows into blocks the kernel takes from the heap, each block a
+// growth of the memory, which the rule moves: the frames of every block,
+// of a descent that took them and of one that finds them taken, keep the
+// arrays they hold.
+static volatile int broken;
+
+__attribute__((noinline)) static unsigned climb(int depth, unsigned seed) {
+    volatile unsigned a[64];
+    for (int i = 0; i < 64; i++) {
+        a[i] = mix(seed + (unsigned)i);
+    }
+    unsigned r = depth > 0 ? climb(depth - 1, a[depth % 64]) : seed;
+    for (int i = 0; i < 64; i++) {
+        if (a[i] != mix(seed + (unsigned)i)) {
+            broken = 1;
+        }
+    }
+    return r + a[63];
+}
+
+static int stacksMoved(void) {
+    unsigned first = climb(4000, 3);
+    unsigned again = climb(4000, 3);
+    if (broken || first != again) {
+        fprintf(stderr, "stacks: %#x, then %#x, broken %d\n", first, again, broken);
+        return 1;
+    }
+    return 0;
+}
+
 static int attempt(const char* operation) {
     if (strcmp(operation, "memory-move") == 0) {
         int wrong = loopsMoved();
         wrong |= waitsMoved();
+        wrong |= stacksMoved();
         return wrong;
     }
     if (strcmp(operation, "system") == 0) {
