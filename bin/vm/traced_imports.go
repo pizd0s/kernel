@@ -110,8 +110,6 @@ var callFormats = func() map[string]string {
 }()
 
 type TracedImports struct {
-	FunctionImports
-
 	k       *Kernel
 	classes uint32
 }

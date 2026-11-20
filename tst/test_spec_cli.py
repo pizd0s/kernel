@@ -50,10 +50,10 @@ def base_module(start=False):
     return module + section(10, b"\2\4\0\x20\0\x0b\3\0\0\x0b")
 
 
-def importing(kind, owner, name, signature=False):
+def importing(kind, owner, name):
     module = b"\0asm\1\0\0\0"
     if kind == 0:
-        module += section(1, b"\1\x60\0\0" if signature else b"\1\x60\1\x7f\1\x7f")
+        module += section(1, b"\1\x60\1\x7f\1\x7f")
     entity = {0: b"\0", 1: b"\x70\1\0\4", 2: b"\1\1\2", 3: b"\x7f\0"}[kind]
     module += section(2, b"\1" + text(owner) + text(name) + bytes([kind]) + entity)
     return module + section(7, b"\1" + exported("alias", kind, 0))
@@ -69,32 +69,28 @@ def main():
     env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-spec-cli-") as directory:
         work = Path(directory)
-        modules = {"base": base_module(), "start-trap": base_module(True),
-                   "global-alias": importing(3, "shared", "gi32"),
-                   "memory-alias": importing(2, "shared", "memory"),
-                   "spectest-table": importing(1, "spectest", "table")}
-        for kind in range(4):
-            modules[f"missing-module-{kind}"] = importing(kind, "unknown", "missing")
-            modules[f"missing-field-{kind}"] = importing(kind, "shared", "missing")
-            modules[f"missing-spectest-{kind}"] = importing(kind, "spectest", "missing")
-        modules["wrong-signature"] = importing(0, "shared", "id", True)
-        # No module imports a memory: both compilers reject one.
-        imported_memory = b"unsupported: an imported memory"
-        memory_importers = {"memory-alias", *(f"missing-{owner}-2" for owner in ("module", "field", "spectest"))}
+        modules = {"base": base_module(), "start-trap": base_module(True)}
+        for owner in ("unknown", "spectest"):
+            for kind in range(4):
+                modules[f"missing-{owner}-{kind}"] = importing(kind, owner, "missing")
+        # A module imports functions only: both compilers reject a table,
+        # a memory or a global.
+        rejected = {1: b"unsupported: an imported table", 2: b"unsupported: an imported memory",
+                    3: b"unsupported: an imported global"}
         for name, data in modules.items():
             source, embedded = work / f"{name}.wasm", work / "embedded.o"
             source.write_bytes(data)
             compiled = subprocess.run([native, "--strict"], input=data, capture_output=True, env=env, timeout=60)
             result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
-            if name in memory_importers:
-                assert compiled.returncode != 0 and imported_memory in compiled.stderr, (name, compiled)
-                assert result.returncode == 1 and imported_memory in result.stderr, (name, result)
+            kind = int(name[-1]) if name.startswith("missing-") else 0
+            if kind in rejected:
+                assert compiled.returncode != 0 and rejected[kind] in compiled.stderr, (name, compiled)
+                assert result.returncode == 1 and rejected[kind] in result.stderr, (name, result)
                 continue
             assert compiled.returncode == 0, (name, compiled.stderr)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.stdout, (name, result)
 
-        base = [{"type": "module", "name": "main", "filename": "base.wasm"},
-                {"type": "register", "name": "main", "as": "shared"}]
+        base = [{"type": "module", "name": "main", "filename": "base.wasm"}]
 
         def run(commands, counts, diagnostics=()):
             document = work / "commands.json"
@@ -131,13 +127,8 @@ def main():
         run([{"type": "assert_uninstantiable", "filename": "base.wasm"}], (0, 1, 0), ["instantiation did not trap"])
         run([{"type": "module", "filename": "start-trap.wasm"}], (0, 1, 0), ["instantiation trapped"])
         run([{"type": "assert_uninstantiable", "filename": "start-trap.wasm"}], (1, 0, 0))
-        run([{"type": "module", "name": "alias", "filename": "global-alias.wasm"},
-             {"type": "assert_return", "action": {"type": "get", "module": "alias", "field": "alias"},
-              "expected": [{"type": "i32", "value": "7"}]}], (2, 0, 0))
-        run([{"type": "module", "name": "spectest-table", "filename": "spectest-table.wasm"}], (1, 0, 0))
-        run([{"type": "module", "name": "memory-alias", "filename": "memory-alias.wasm"}], (0, 0, 1), [imported_memory.decode()])
         for name in modules:
-            if name.startswith("missing-") or name == "wrong-signature":
+            if name.startswith("missing-"):
                 run([{"type": "module", "filename": name + ".wasm"}], (0, 0, 1), ["UNSUPPORTED"])
     print("spec CLI: native/Wasm objects agree, globals, imports, results, traps and malformed actions checked")
 

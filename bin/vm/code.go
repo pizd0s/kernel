@@ -24,18 +24,6 @@ type Code struct {
 	thunkOf map[string]uintptr
 }
 
-func bindContext(code, ctx uintptr) uintptr {
-	stub := mmap(4096, syscall.PROT_READ|syscall.PROT_WRITE)
-
-	stub = append(stub[:0], 0x48, 0xb8)
-	stub = binary.LittleEndian.AppendUint64(stub, uint64(ctx))
-	stub = append(stub, 0xff, 0x25, 0, 0, 0, 0)
-	stub = binary.LittleEndian.AppendUint64(stub, uint64(code))
-	throw(syscall.Mprotect(stub[:4096], syscall.PROT_READ|syscall.PROT_EXEC))
-
-	return uintptr(unsafe.Pointer(unsafe.SliceData(stub)))
-}
-
 func helperTrap(ctx uintptr, code uint32) {
 	panic(newTrap(code, 1))
 }

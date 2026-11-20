@@ -4,9 +4,10 @@
     vm_spec.py <vm> <wast2json> <testsuite.tar.gz> <stamp> [native-aot]
 
 Every top-level .wast is converted by wast2json and run by vm, which
-compiles and loads its modules and counts its checks. A file that does not
-convert is not counted. The test fails when a file crashes or fails more
-checks than KNOWN allows, and prints the totals.
+compiles and loads its modules and counts its checks, but those about
+linking modules to each other: a process imports the kernel's functions
+only. A file that does not convert is not counted. The test fails when a
+file crashes or fails more checks than KNOWN allows, and prints the totals.
 """
 import concurrent.futures
 import os
@@ -18,15 +19,15 @@ import tempfile
 from pathlib import Path
 
 # Failures of what vm does not implement, by file: table.grow, which
-# fails; modules of two memories or of an imported one, skipped, which were
-# to fill memory or a table that other modules read.
+# fails.
 KNOWN = {
-    "linking0.wast": 1,
-    "linking3.wast": 2,
-    "load1.wast": 5,
-    "table_grow.wast": 30,
+    "table_grow.wast": 28,
     "table_size.wast": 15,
 }
+
+
+def linking(wast):
+    return wast.name.startswith(("linking", "imports")) or wast.name in ("instance.wast", "load1.wast")
 
 
 def run(vm, wast2json, wast, work, native=None):
@@ -82,7 +83,7 @@ def main():
             members = [m for m in tf.getmembers() if m.name.count("/") == 1 and m.name.endswith(".wast")]
             tf.extractall(tmp / "src", members=members, filter="data")
 
-        wasts = sorted((tmp / "src").glob("*/*.wast"))
+        wasts = sorted(w for w in (tmp / "src").glob("*/*.wast") if not linking(w))
         totals = [0, 0, 0]
         bad = []
         compiled = 0

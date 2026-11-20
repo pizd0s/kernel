@@ -62,7 +62,7 @@ func compileOptions() CompileOptions {
 	return options
 }
 
-type CompilerImports struct{ FunctionImports }
+type CompilerImports struct{}
 
 type CompilerIO struct {
 	input      io.Reader
@@ -136,8 +136,7 @@ func compilerExit(ctx uintptr, code uint32) {
 }
 
 func compileStreams(input io.Reader, output func(p []byte) (int, error), options CompileOptions) {
-	imports := CompilerImports{}
-	i := newInstance(compilerCode(), imports, runStack)
+	i := newInstance(compilerCode(), runStack)
 
 	defer i.release()
 

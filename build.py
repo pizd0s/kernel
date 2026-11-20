@@ -1015,7 +1015,6 @@ E2E_TESTED = {
     "float_permutations": [vm, aot_native, wazero, rootfs],
     "debug_lines": [vm, aot_native, rootfs],
     "debug_names": [vm, aot_native, rootfs],
-    "import_abi": [vm, aot_native],
     "import_errors": [vm, aot_native, wazero],
     "initializers": [vm, aot_native, wazero, rootfs],
     "interleaved_float_selects": [vm, aot_native, wazero, rootfs],

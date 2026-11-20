@@ -504,7 +504,7 @@ func (p *Process) runFrom(img *ExecImage, i *Instance, enter func()) {
 
 func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *ExecImage, status int) {
 	if i == nil {
-		i = newInstance(img.code, p.k, runStack)
+		i = newInstance(img.code, runStack)
 		i.attach(p)
 		p.heap, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, 0, 0, 0, 0, 0
 		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0
@@ -2115,7 +2115,7 @@ func (p *Process) fork(setup func(c *Process)) (int32, error) {
 		return 0, err
 	}
 
-	inst := p.inst.clone(p.k, runStack, from, to)
+	inst := p.inst.clone(runStack, from, to)
 
 	inst.attach(c)
 	c.image = p.image

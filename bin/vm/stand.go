@@ -41,14 +41,6 @@ func (StandImports) function(*ImportMeta) any {
 	return nil
 }
 
-func (StandImports) global(*ImportMeta) uintptr {
-	return 0
-}
-
-func (StandImports) table(*ImportMeta) uintptr {
-	return 0
-}
-
 type Module struct {
 	i       *Instance
 	malloc  func(uintptr, uint32) uint32
@@ -220,7 +212,7 @@ func standCommand(args []string) int {
 			m.i.release()
 		}
 
-		i := newInstance(code, StandImports{}, runStack)
+		i := newInstance(code, runStack)
 
 		i.start()
 

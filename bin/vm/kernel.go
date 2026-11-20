@@ -27,8 +27,6 @@ var hostSignals = map[syscall.Signal]int{
 }
 
 type Kernel struct {
-	FunctionImports
-
 	root    Dir
 	user    Cred
 	console *Console

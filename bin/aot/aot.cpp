@@ -3466,7 +3466,6 @@ namespace {
     struct Global {
         ValType typ{};
         bool mutableValue{};
-        bool imported{};
         Slice<u8> init{};
     };
 
@@ -3532,8 +3531,6 @@ namespace {
         Slice<Data> datas{};
         i64 dataCount{};
         Int importedFuncs{};
-        Int importedTables{};
-        Int importedGlobals{};
         bool batchData{};
     };
 
@@ -3792,7 +3789,6 @@ namespace {
         u32 offset{};
         u64 min{};
         u64 max{};
-        bool imported{};
     };
 
     struct LoadRangeLoop_version741 {
@@ -4219,7 +4215,6 @@ namespace {
         u32 offset{};
         ValType typ{};
         bool mutableValue{};
-        bool imported{};
     };
 
     struct ValueRanges {
@@ -4476,7 +4471,6 @@ namespace {
     struct Table {
         ValType elem{};
         Limits limits{};
-        bool imported{};
     };
 
     struct MInstExtra {
@@ -9050,7 +9044,7 @@ static Int moduleAddInitFunction(Module* m) {
         steps++;
     };
     {
-        Int i = m->importedGlobals;
+        Int i = 0;
         for (; i < length(m->globals); i++) {
             next();
             Global* g = &m->globals[i];
@@ -9220,10 +9214,8 @@ static void moduleImportSection(Module* m, Reader* r) {
                 break;
             }
             case externTable: {
-                imp.index = convert<u32>(length(m->tables));
-                ValType elem = readerRefType(r);
-                m->tables = appendValues(m->tables, Table{elem, readerLimits(r, false), true});
-                m->importedTables++;
+                // A process imports functions of the kernel's only.
+                compilerError(String("unsupported: an imported table"));
                 break;
             }
             case externMemory: {
@@ -9232,11 +9224,7 @@ static void moduleImportSection(Module* m, Reader* r) {
                 break;
             }
             case externGlobal: {
-                imp.index = convert<u32>(length(m->globals));
-                Global g = Global{readerValType(r), {}, true, {}};
-                g.mutableValue = globalMutability(r);
-                m->globals = appendValues(m->globals, g);
-                m->importedGlobals++;
+                compilerError(String("unsupported: an imported global"));
                 break;
             }
             default: {
@@ -16243,16 +16231,6 @@ static VReg lowererFloatBits(Lowerer* l, i32 v, u8 size) {
 }
 
 static Mem lowererGlobalAddr(Lowerer* l, Int index) {
-    if (l->m->globals[index].imported) {
-        VReg p = mFuncNewReg(l->mf, classGPR);
-        MInst in = inst(mLoad);
-        in.dst = p;
-        in.mem = instanceMem(l->lay->globals[index]);
-        in.size = 8;
-        in.dsize = 8;
-        lowererEmit(l, in);
-        return memAt(p, 0);
-    }
     return instanceMem(l->lay->globals[index]);
 }
 
@@ -19675,12 +19653,12 @@ static Meta* objCodeDescription(ObjCode* oc) {
         if (t.limits.hasMax) {
             max = t.limits.max;
         }
-        meta->tables = appendValues(meta->tables, TableMeta{convert<u32>(lay->tables[i]), t.limits.min, max, t.imported});
+        meta->tables = appendValues(meta->tables, TableMeta{convert<u32>(lay->tables[i]), t.limits.min, max});
     }
     auto globals = m->globals;
     for (Int i = 0; i < length(globals); ++i) {
         Global g = globals[i];
-        meta->globals = appendValues(meta->globals, GlobalMeta{convert<u32>(lay->globals[i]), g.typ, g.mutableValue, g.imported});
+        meta->globals = appendValues(meta->globals, GlobalMeta{convert<u32>(lay->globals[i]), g.typ, g.mutableValue});
     }
     auto imports = m->imports;
     for (Int i = 0; i < length(imports); ++i) {
@@ -23690,7 +23668,7 @@ static bool moduleLowFree(Module* m) {
         return true;
     }
     Global g = m->globals[0];
-    if (g.imported || g.typ != I32 || !g.mutableValue) {
+    if (g.typ != I32 || !g.mutableValue) {
         return true;
     }
     auto stack = constOffset(g.init);
@@ -23739,7 +23717,7 @@ static i32 dataLabel(Int seg) {
 
 static Module* decodeModule(Slice<u8> data) {
     Reader* r = activePool->make<Reader>(Reader{data, {}});
-    Module* m = activePool->make<Module>(Module{{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, i64(-1LL), {}, {}, i64(-1LL), {}, {}, {}, {}});
+    Module* m = activePool->make<Module>(Module{{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, i64(-1LL), {}, {}, i64(-1LL), {}, {}});
     if ((asString(readerBytes(r, 4)) != String("\000asm"))) {
         compilerError(String("magic header not detected"));
     }
@@ -23786,7 +23764,7 @@ static Module* decodeModule(Slice<u8> data) {
                 u32 i = 0;
                 for (; i < n; i++) {
                     ValType elem = readerRefType(body);
-                    m->tables = appendValues(m->tables, Table{elem, readerLimits(body, false), {}});
+                    m->tables = appendValues(m->tables, Table{elem, readerLimits(body, false)});
                 }
                 break;
             }
@@ -23802,7 +23780,7 @@ static Module* decodeModule(Slice<u8> data) {
                 u32 n = readerU32(body);
                 u32 i = 0;
                 for (; i < n; i++) {
-                    Global g = Global{readerValType(body), {}, {}, {}};
+                    Global g = Global{readerValType(body), {}, {}};
                     g.mutableValue = globalMutability(body);
                     g.init = readerConstExpr(body);
                     m->globals = appendValues(m->globals, g);
@@ -23969,7 +23947,6 @@ static Slice<u8> encodeNote(Meta* m) {
         metaWriterU(w, convert<u64>(t.offset));
         metaWriterU(w, t.min);
         metaWriterU(w, t.max);
-        metaWriterFlag(w, t.imported);
     }
     metaWriterU(w, convert<u64>(length(m->globals)));
     auto globals = m->globals;
@@ -23978,7 +23955,6 @@ static Slice<u8> encodeNote(Meta* m) {
         metaWriterU(w, convert<u64>(g.offset));
         metaWriterU(w, convert<u64>(g.typ));
         metaWriterFlag(w, g.mutableValue);
-        metaWriterFlag(w, g.imported);
     }
     metaWriterU(w, convert<u64>(length(m->imports)));
     auto imports = m->imports;
@@ -24965,7 +24941,7 @@ static Layout* newLayout(Module* m) {
         }
         l->globals = appendValues(l->globals, off);
         off += 8;
-        if (g.typ == V128 && !g.imported) {
+        if (g.typ == V128) {
             off += 8;
         }
     }

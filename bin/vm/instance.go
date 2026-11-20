@@ -122,10 +122,10 @@ func instanceAt(ctx uintptr) *Instance {
 }
 
 func instantiate(name string, obj *ElfObject, imports Imports, stack uint64) *Instance {
-	return newInstance(link(name, obj, imports), imports, stack)
+	return newInstance(link(name, obj, imports), stack)
 }
 
-func newInstance(c *Code, imports Imports, stack uint64) *Instance {
+func newInstance(c *Code, stack uint64) *Instance {
 	meta := c.obj.meta
 	below, distance := profileBytes(meta), distanceOf(meta.instanceSize)
 	region := newRegion(below, distance, meta.memory)
@@ -145,29 +145,6 @@ func newInstance(c *Code, imports Imports, stack uint64) *Instance {
 	i.put64(offHost, uint64(uintptr(unsafe.Pointer(i))))
 	i.put64(offStackLimit, stack)
 
-	for k := range meta.imports {
-		imp := &meta.imports[k]
-
-		switch imp.kind {
-		case externGlobal:
-			at := imports.global(imp)
-
-			if at == 0 {
-				throwFmt("unresolved import %s.%s", imp.module, imp.name)
-			}
-
-			i.put64(meta.globals[imp.index].offset, uint64(at))
-		case externTable:
-			at := imports.table(imp)
-
-			if at == 0 {
-				throwFmt("unresolved import %s.%s", imp.module, imp.name)
-			}
-
-			copy(i.block[meta.tables[imp.index].offset:], unsafe.Slice((*byte)(unsafe.Pointer(at)), tableBytes))
-		}
-	}
-
 	if meta.memory != nil {
 		i.memory = newMemory(region[below+distance:], meta.memory.min, meta.memory.max, meta.memory.shadow != 0)
 
@@ -183,10 +160,6 @@ func newInstance(c *Code, imports Imports, stack uint64) *Instance {
 	}
 
 	for _, t := range meta.tables {
-		if t.imported {
-			continue
-		}
-
 		if t.min > 1<<24 {
 			throwFmt("table of %d elements", t.min)
 		}
@@ -204,8 +177,8 @@ func newInstance(c *Code, imports Imports, stack uint64) *Instance {
 	return i
 }
 
-func (i *Instance) clone(imports *Kernel, stack uint64, from, to uint64) *Instance {
-	c := newInstance(i.code, imports, stack)
+func (i *Instance) clone(stack uint64, from, to uint64) *Instance {
+	c := newInstance(i.code, stack)
 
 	if i.memory != nil {
 		c.memory.grow(uint32(i.memory.pages - c.memory.pages))
@@ -454,7 +427,7 @@ func (i *Instance) resume(f *Frames) uint64 {
 
 func (i *Instance) globalAt(name string) (uint32, bool) {
 	for _, e := range i.obj.meta.exports {
-		if e.kind == externGlobal && e.name == name && !i.obj.meta.globals[e.index].imported {
+		if e.kind == externGlobal && e.name == name {
 			return i.obj.meta.globals[e.index].offset, true
 		}
 	}

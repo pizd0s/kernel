@@ -33,14 +33,12 @@ func (m *Meta) asan() bool {
 type TableMeta struct {
 	offset   uint32
 	min, max uint64
-	imported bool
 }
 
 type GlobalMeta struct {
-	offset uint32
-	typ    ValType
-
-	mutable, imported bool
+	offset  uint32
+	typ     ValType
+	mutable bool
 }
 
 type ImportMeta struct {
@@ -155,13 +153,13 @@ func decodeNote(data []byte) *Meta {
 	m.tables = make([]TableMeta, r.count())
 
 	for i := range m.tables {
-		m.tables[i] = TableMeta{offset: r.u32(), min: r.u(), max: r.u(), imported: r.flag()}
+		m.tables[i] = TableMeta{offset: r.u32(), min: r.u(), max: r.u()}
 	}
 
 	m.globals = make([]GlobalMeta, r.count())
 
 	for i := range m.globals {
-		m.globals[i] = GlobalMeta{offset: r.u32(), typ: ValType(r.u()), mutable: r.flag(), imported: r.flag()}
+		m.globals[i] = GlobalMeta{offset: r.u32(), typ: ValType(r.u()), mutable: r.flag()}
 	}
 
 	m.imports = make([]ImportMeta, r.count())

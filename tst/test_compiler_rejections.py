@@ -77,7 +77,7 @@ def main():
              ("bad-data-mode", program(b"", data=b"\1\3"), "malformed data segment kind"),
              ("bad-simd-constant", program(b"", globals=b"\1\x7b\0\xfd\x0d" + b"\0" * 16 + b"\x0b"), "constant expression required at offset"),
              ("bad-global-mutability", program(b"", globals=b"\1\x7f\2\x41\0\x0b"), "malformed mutability"),
-             ("computed-element-offset", program(b"", global_import=True, elements=b"\1\0\x23\0\x0b\1\0"), "unsupported: element segment"),
+             ("imported-global", program(b"", global_import=True), "unsupported: an imported global"),
              ("low-data", program(b"", data=b"\1\0\x41\0\x0b\1x"), "unsupported: data or the stack in the first KiB"),
              ("low-stack", program(b"", globals=b"\1\x7f\1\x41\x10\x0b"), "unsupported: data or the stack in the first KiB"),
              ("imported-memory", program(b"", memory_import=True), "unsupported: an imported memory"),
@@ -94,11 +94,11 @@ def main():
         runs = []
         for label, data, diagnostic in cases:
             low_memory = label in ("low-data", "low-stack")
-            padded = low_memory or label == "computed-element-offset"
+            padded = low_memory
             env = dict(env, W2X_MEMORY_TAIL="optimized" if padded else "strict")
             source.write_bytes(data)
             reference = subprocess.run([wazero, "-compile", str(source)], capture_output=True, timeout=30)
-            if label not in ("computed-element-offset", "low-data", "low-stack", "imported-memory"):
+            if label not in ("imported-global", "low-data", "low-stack", "imported-memory"):
                 assert reference.returncode != 0, (label, reference)
             else:
                 assert reference.returncode == 0, (label, reference)

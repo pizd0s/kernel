@@ -56,7 +56,6 @@ type SpecCmd struct {
 	Line       int         `json:"line"`
 	Filename   string      `json:"filename"`
 	Name       string      `json:"name"`
-	As         string      `json:"as"`
 	Action     *SpecAction `json:"action"`
 	Expected   []SpecValue `json:"expected"`
 	Text       string      `json:"text"`
@@ -64,18 +63,13 @@ type SpecCmd struct {
 }
 
 type SpecRunner struct {
-	dir        string
-	current    *Instance
-	named      map[string]*Instance
-	registered map[string]*Instance
+	dir     string
+	current *Instance
+	named   map[string]*Instance
 
 	live                    map[*Instance]bool
 	passed, failed, skipped int
 	unsupported             map[string]bool
-
-	testTable   []uintptr
-	testHeader  *[2]uint64
-	testGlobals map[string]*uint64
 }
 
 func specCommand(args []string) int {
@@ -89,9 +83,7 @@ func specCommand(args []string) int {
 
 	throw(json.Unmarshal(throw2(os.ReadFile(args[0])), &file))
 
-	r := &SpecRunner{dir: filepath.Dir(args[0]), named: map[string]*Instance{}, registered: map[string]*Instance{}, live: map[*Instance]bool{}, unsupported: map[string]bool{}}
-
-	r.spectest()
+	r := &SpecRunner{dir: filepath.Dir(args[0]), named: map[string]*Instance{}, live: map[*Instance]bool{}, unsupported: map[string]bool{}}
 
 	for i := range file.Commands {
 		r.command(&file.Commands[i])
@@ -120,24 +112,6 @@ func (r *SpecRunner) fail(line int, format string, args ...any) {
 	fmt.Printf("FAIL line %d: %s\n", line, fmt.Sprintf(format, args...))
 }
 
-func (r *SpecRunner) spectest() {
-	r.testTable = make([]uintptr, 21)
-	r.testHeader = &[2]uint64{uint64(uintptr(unsafe.Pointer(&r.testTable[0]))), 10 | 20<<32}
-
-	cell := func(bits uint64) *uint64 {
-		return &bits
-	}
-
-	r.testGlobals = map[string]*uint64{
-		"global_i32": cell(666), "global_i64": cell(666),
-		"global_f32": cell(uint64(math.Float32bits(666.6))), "global_f64": cell(math.Float64bits(666.6)),
-	}
-}
-
-func (r *SpecRunner) exporter(module string) *Instance {
-	return r.registered[module]
-}
-
 func findExport(i *Instance, name string, kind byte) *ExportMeta {
 	for k := range i.obj.meta.exports {
 		if e := &i.obj.meta.exports[k]; e.name == name && e.kind == kind {
@@ -148,83 +122,16 @@ func findExport(i *Instance, name string, kind byte) *ExportMeta {
 	return nil
 }
 
-func sameTypes(a, b []ValType) bool {
-	return reflect.DeepEqual(append([]ValType{}, a...), append([]ValType{}, b...))
-}
-
 func (r *SpecRunner) function(imp *ImportMeta) any {
 	if imp.module == "spectest" {
 		return spectestFunctions[imp.name]
 	}
 
-	src := r.exporter(imp.module)
-
-	if src == nil {
-		return nil
-	}
-
-	e := findExport(src, imp.name, externFunc)
-
-	if e == nil || !sameTypes(e.params, imp.params) || !sameTypes(e.results, imp.results) {
-		return nil
-	}
-
-	return bindContext(src.symbol(e.sym), src.ctx())
+	return nil
 }
 
 func globalAddr(i *Instance, index uint32) uintptr {
-	g := i.obj.meta.globals[index]
-	at := i.ctx() + uintptr(g.offset)
-
-	if g.imported {
-		return uintptr(*(*uint64)(unsafe.Pointer(at)))
-	}
-
-	return at
-}
-
-func (r *SpecRunner) global(imp *ImportMeta) uintptr {
-	if imp.module == "spectest" {
-		if g := r.testGlobals[imp.name]; g != nil {
-			return uintptr(unsafe.Pointer(g))
-		}
-
-		return 0
-	}
-
-	src := r.exporter(imp.module)
-
-	if src == nil {
-		return 0
-	}
-
-	e := findExport(src, imp.name, externGlobal)
-
-	if e == nil {
-		return 0
-	}
-
-	return globalAddr(src, e.index)
-}
-
-func (r *SpecRunner) table(imp *ImportMeta) uintptr {
-	if imp.module == "spectest" && imp.name == "table" {
-		return uintptr(unsafe.Pointer(r.testHeader))
-	}
-
-	src := r.exporter(imp.module)
-
-	if src == nil {
-		return 0
-	}
-
-	e := findExport(src, imp.name, externTable)
-
-	if e == nil {
-		return 0
-	}
-
-	return src.ctx() + uintptr(src.obj.meta.tables[e.index].offset)
+	return i.ctx() + uintptr(i.obj.meta.globals[index].offset)
 }
 
 func specCompile(data []byte) []byte {
@@ -281,16 +188,6 @@ func (r *SpecRunner) command(c *SpecCmd) {
 
 		r.live[i] = true
 		r.passed++
-	case "register":
-		i := r.current
-
-		if c.Name != "" {
-			i = r.named[c.Name]
-		}
-
-		if i != nil && r.live[i] {
-			r.registered[c.As] = i
-		}
 	case "assert_return", "action":
 		r.assertReturn(c)
 	case "assert_trap", "assert_exhaustion":

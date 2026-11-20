@@ -81,13 +81,13 @@ def wide_program(kinds, named, keep_all=False):
 
 def main():
     vm, native, wazero = sys.argv[1:]
-    # No module imports a memory: both compilers reject one, and so does the
-    # kernel, which compiles an executable's module.
-    memory = "unsupported: an imported memory"
-    cases = [("kernel-" + str(kind), program(kind, "kernel"), False, memory if kind == 2 else "unresolved import kernel.value") for kind in (1, 2, 3)]
-    cases += [("wasi-" + str(kind), program(kind, "wasi_snapshot_preview1"), False,
-               memory if kind == 2 else "unresolved import wasi_snapshot_preview1.value") for kind in (1, 2, 3)]
-    cases += [("stand-" + str(kind), program(kind, "foreign"), True, memory if kind == 2 else "unresolved import foreign.value") for kind in range(4)]
+    # A module imports functions only: both compilers reject a table, a
+    # memory or a global, and so does the kernel, which compiles an
+    # executable's module.
+    rejected = {1: "unsupported: an imported table", 2: "unsupported: an imported memory", 3: "unsupported: an imported global"}
+    cases = [("kernel-" + str(kind), program(kind, "kernel"), False, rejected[kind]) for kind in (1, 2, 3)]
+    cases += [("wasi-" + str(kind), program(kind, "wasi_snapshot_preview1"), False, rejected[kind]) for kind in (1, 2, 3)]
+    cases += [("stand-" + str(kind), program(kind, "foreign"), True, rejected.get(kind, "unresolved import foreign.value")) for kind in range(4)]
     cases += [("wasi-foreign-function", program(0, "foreign"), False, "unresolved import foreign.value"),
               ("kernel-foreign-function", program(0, "foreign", kernel=True), False, "unresolved import foreign.value"),
               ("kernel-signature", program(0, "kernel", "getpid", parameter=True), False, "import kernel.getpid is"),
@@ -110,13 +110,13 @@ def main():
             result = subprocess.run([wazero, "-compile", str(source)], capture_output=True, timeout=30)
             assert result.returncode == 0, (label, result)
             result = subprocess.run([native, "--strict"], input=data, capture_output=True, env=env, timeout=60)
-            if diagnostic == memory:
-                assert result.returncode != 0 and memory.encode() in result.stderr, (label, result)
+            if diagnostic in rejected.values():
+                assert result.returncode != 0 and diagnostic.encode() in result.stderr, (label, result)
                 result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
-                assert result.returncode == 1 and memory.encode() in result.stderr, (label, result)
+                assert result.returncode == 1 and diagnostic.encode() in result.stderr, (label, result)
                 if not stand:
                     result = subprocess.run([vm, "run", "--", str(executable)], capture_output=True, env=env, timeout=30)
-                    assert result.returncode == 1 and result.stdout == b"" and memory.encode() in result.stderr, (label, result)
+                    assert result.returncode == 1 and result.stdout == b"" and diagnostic.encode() in result.stderr, (label, result)
                     assert b"panic:" not in result.stderr, (label, result)
                 continue
             assert result.returncode == 0, (label, result.stderr)
@@ -129,7 +129,7 @@ def main():
                 result = subprocess.run([vm, *args], capture_output=True, env=env, timeout=30)
                 assert result.returncode == 1 and result.stdout == b"" and diagnostic.encode() in result.stderr, (label, result)
                 assert b"panic:" not in result.stderr, (label, result)
-    print(f"import errors: {len(cases)} kernel/WASI/stand import kinds, imported memories, foreign modules and signature mismatches rejected with both AOTs")
+    print(f"import errors: {len(cases)} kernel/WASI/stand import kinds, imported tables, memories and globals, foreign modules and signature mismatches rejected with both AOTs")
 
 
 if __name__ == "__main__":
