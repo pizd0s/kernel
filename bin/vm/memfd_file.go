@@ -142,8 +142,16 @@ func (f *MemfdFile) bytes() []byte {
 	return b[start:end]
 }
 
+func (f *MemfdFile) size() int64 {
+	f.mem.enter()
+
+	defer f.mem.leave()
+
+	return int64(len(f.bytes()))
+}
+
 func (f *MemfdFile) stat(p *Process, st *Stat) error {
-	*st = Stat{Ino: f.ino, Mode: S_IFREG | 0o777, Nlink: 1, Size: int64(len(f.bytes())),
+	*st = Stat{Ino: f.ino, Mode: S_IFREG | 0o777, Nlink: 1, Size: f.size(),
 		Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
 
 	st.Atim = nsecToTimespec(f.made.UnixNano())
@@ -195,6 +203,10 @@ func (f *MemfdFile) write(p *Process, from Transfer, n int, mode IoMode) (int, e
 }
 
 func (f *MemfdFile) pread(p *Process, into Transfer, n int, off int64) (int, error) {
+	f.mem.enter()
+
+	defer f.mem.leave()
+
 	b := f.bytes()
 	size := int64(len(b))
 
@@ -217,6 +229,10 @@ func (f *MemfdFile) pread(p *Process, into Transfer, n int, off int64) (int, err
 }
 
 func (f *MemfdFile) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
+	f.mem.enter()
+
+	defer f.mem.leave()
+
 	b := f.bytes()
 	size := int64(len(b))
 
@@ -250,7 +266,7 @@ func (f *MemfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 	case 1:
 		off += f.off
 	case 2:
-		off += int64(len(f.bytes()))
+		off += f.size()
 	default:
 		return 0, EINVAL
 	}
@@ -265,7 +281,7 @@ func (f *MemfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 }
 
 func (f *MemfdFile) splice(at int64, n int, mode int) Transfer {
-	size := int64(len(f.bytes()))
+	size := f.size()
 
 	at = min(max(at, 0), size)
 
@@ -273,6 +289,10 @@ func (f *MemfdFile) splice(at int64, n int, mode int) Transfer {
 }
 
 func (f *MemfdFile) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
+	f.mem.enter()
+
+	defer f.mem.leave()
+
 	b := f.bytes()
 	size := int64(len(b))
 
@@ -289,7 +309,7 @@ func (f *MemfdFile) with(at int64, n int, writes bool, fn func(b []byte) (int, e
 }
 
 func (f *MemfdFile) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
-	size := int64(len(f.bytes()))
+	size := f.size()
 
 	switch {
 	case out == Transfer(f):
@@ -311,7 +331,7 @@ func (f *MemfdFile) copyTo(p *Process, out Transfer, from, to int64, n int) (int
 }
 
 func (f *MemfdFile) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
-	size := int64(len(f.bytes()))
+	size := f.size()
 
 	switch {
 	case n == 0:

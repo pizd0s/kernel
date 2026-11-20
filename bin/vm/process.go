@@ -2651,9 +2651,19 @@ func (p *Process) setInstance(i *Instance) {
 }
 
 func (p *Process) setInterrupt(v uint32) {
-	if p.inst != nil && !p.sig.dead {
-		atomic.StoreUint32((*uint32)(unsafe.Pointer(&p.inst.block[offInterrupt])), v)
+	i := p.inst
+
+	if i == nil || p.sig.dead {
+		return
 	}
+
+	if m := i.memory; m != nil {
+		m.enter()
+
+		defer m.leave()
+	}
+
+	atomic.StoreUint32((*uint32)(unsafe.Pointer(&i.block[offInterrupt])), v)
 }
 
 func (p *Process) raiseInterrupt() {
@@ -2884,7 +2894,6 @@ func (p *Process) runHandler(sig int, act SigAction) {
 	p.sig.mu.Unlock()
 
 	errno := p.errno()
-	ctx := p.inst.ctx()
 	sp := binary.LittleEndian.Uint32(p.inst.block[p.stackPointer():])
 	moved := act.flags&SA_ONSTACK != 0 && alt.size != 0 && sp-alt.sp > alt.size
 
@@ -2905,11 +2914,11 @@ func (p *Process) runHandler(sig int, act SigAction) {
 
 		f, _ := p.inst.export("__call_signal_action")
 
-		f.Interface().(func(uintptr, uint32, uint32, uint32, uint32))(ctx, act.handler, uint32(sig), p.siginfo, 0)
+		f.Interface().(func(uintptr, uint32, uint32, uint32, uint32))(p.inst.ctx(), act.handler, uint32(sig), p.siginfo, 0)
 	} else {
 		f, _ := p.inst.export("__call_signal_handler")
 
-		f.Interface().(func(uintptr, uint32, uint32))(ctx, act.handler, uint32(sig))
+		f.Interface().(func(uintptr, uint32, uint32))(p.inst.ctx(), act.handler, uint32(sig))
 	}
 
 	if moved {

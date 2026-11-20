@@ -60,6 +60,38 @@ func (i *Instance) anchor() {
 	binary.LittleEndian.PutUint64(i.region[i.below+distance-8:], uint64(ctx))
 }
 
+func (i *Instance) move(pages uint64) {
+	m := i.memory
+	distance := distanceOf(i.obj.meta.instanceSize)
+	region := regionOf(i.below, distance, pages)
+	used := min(uint64(len(i.region)), i.below+distance+m.pages*pageSize+boundSlack)
+
+	m.shut()
+	copy(region, i.region[:used])
+
+	old, from := i.region, i.ctx()
+
+	i.region = region
+	i.block = region[i.below : i.below+uint64(len(i.block))]
+
+	m.data = region[i.below+distance:]
+
+	moved := i.ctx() - from
+
+	for _, entries := range i.tables {
+		for e, v := range entries {
+			if v != 0 {
+				entries[e] = v + moved
+			}
+		}
+	}
+
+	i.anchor()
+	i.setMemory()
+	throw(syscall.Munmap(old))
+	m.open()
+}
+
 func (i *Instance) ctx() uintptr {
 	return uintptr(unsafe.Pointer(unsafe.SliceData(i.block)))
 }

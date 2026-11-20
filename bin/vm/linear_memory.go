@@ -4,6 +4,8 @@ package main
 
 import (
 	"math"
+	"runtime"
+	"sync"
 	"syscall"
 )
 
@@ -21,6 +23,10 @@ type LinearMemory struct {
 	shadow []byte
 
 	owner *Instance
+
+	gate    sync.Mutex
+	readers int
+	moving  bool
 }
 
 func mmap(size int, prot int) []byte {
@@ -44,17 +50,19 @@ func profileBytes(meta *Meta) uint64 {
 }
 
 func newRegion(below, distance uint64, memory *MemoryMeta) []byte {
-	size := below + distance
-
-	if memory != nil {
-		if memory.max > 65536 || memory.min > memory.max {
-			throwFmt("memory of %d..%d pages", memory.min, memory.max)
-		}
-
-		size += memory.max*pageSize + boundSlack + 1
+	if memory == nil {
+		return mmap(int(below+distance), syscall.PROT_READ|syscall.PROT_WRITE)
 	}
 
-	return mmap(int(size), syscall.PROT_READ|syscall.PROT_WRITE)
+	if memory.max > 65536 || memory.min > memory.max {
+		throwFmt("memory of %d..%d pages", memory.min, memory.max)
+	}
+
+	return regionOf(below, distance, memory.min)
+}
+
+func regionOf(below, distance, pages uint64) []byte {
+	return mmap(int(below+distance+pages*pageSize+boundSlack+1), syscall.PROT_READ|syscall.PROT_WRITE)
 }
 
 func newMemory(data []byte, least, most uint64, shadow bool) *LinearMemory {
@@ -75,11 +83,60 @@ func (m *LinearMemory) bytes() []byte {
 	return m.data
 }
 
+func (m *LinearMemory) enter() {
+	m.gate.Lock()
+
+	for m.moving {
+		m.gate.Unlock()
+		runtime.Gosched()
+		m.gate.Lock()
+	}
+
+	m.readers++
+	m.gate.Unlock()
+}
+
+func (m *LinearMemory) leave() {
+	m.gate.Lock()
+	m.readers--
+	m.gate.Unlock()
+}
+
+func (m *LinearMemory) shut() {
+	for {
+		m.gate.Lock()
+
+		if m.readers == 0 {
+			m.moving = true
+			m.gate.Unlock()
+
+			return
+		}
+
+		m.gate.Unlock()
+		runtime.Gosched()
+	}
+}
+
+func (m *LinearMemory) open() {
+	m.gate.Lock()
+	m.moving = false
+	m.gate.Unlock()
+}
+
+func (m *LinearMemory) room() uint64 {
+	return (uint64(len(m.data)) - boundSlack - 1) / pageSize
+}
+
 func (m *LinearMemory) grow(delta uint32) uint32 {
 	old := m.pages
 
 	if old+uint64(delta) > m.max {
 		return math.MaxUint32
+	}
+
+	if need := old + uint64(delta); need > m.room() {
+		m.owner.move(min(max(need, 2*m.room()), m.max))
 	}
 
 	if delta != 0 && m.tailUsed {
