@@ -93,12 +93,15 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 	p.own.signal.run = (*Process).takeSignals
 
 	if parent == nil {
-		p.pgid, p.sid = p.pid, p.pid
+		p.pgid.Store(p.pid)
+		p.sid.Store(p.pid)
 		p.limits = hostLimits()
 		p.root, p.cwd = k.root, k.root
 		p.cred = k.user.clone()
 	} else {
-		p.ppid, p.pgid, p.sid = parent.pid, parent.pgid, parent.sid
+		p.ppid = parent.pid
+		p.pgid.Store(parent.pgid.Load())
+		p.sid.Store(parent.sid.Load())
 		p.nice, p.policy = parent.nice, parent.policy
 		p.comm, p.undumpable, p.noNewPrivs = parent.comm, parent.undumpable, parent.noNewPrivs
 		p.cwd, p.umask, p.limits, p.seed = parent.cwd, parent.umask, parent.limits, parent.seed
@@ -324,12 +327,12 @@ func (k *Kernel) signalTargets(from *Process, pid int32) []*Process {
 		case pid > 0:
 			return q.pid == pid
 		case pid == 0:
-			return q.pgid == from.pgid
+			return q.pgid.Load() == from.pgid.Load()
 		case pid == -1:
 			return q.pid != 1 && q != from
 		}
 
-		return q.pgid == -pid
+		return q.pgid.Load() == -pid
 	})
 }
 
@@ -367,7 +370,7 @@ func (k *Kernel) routeSignals() {
 
 				k.mu.Unlock()
 
-				for _, q := range k.processes(func(q *Process) bool { return q.pgid == fg }) {
+				for _, q := range k.processes(func(q *Process) bool { return q.pgid.Load() == fg }) {
 					q.send(sig)
 				}
 			default:
@@ -389,11 +392,11 @@ func (k *Kernel) orphaned(pgid int32) bool {
 
 func (k *Kernel) orphanedLocked(pgid int32) bool {
 	for _, q := range k.procs {
-		if q.pgid != pgid || q.zombie {
+		if q.pgid.Load() != pgid || q.zombie {
 			continue
 		}
 
-		if parent := k.procs[q.ppid]; parent != nil && parent.pgid != pgid && parent.sid == q.sid {
+		if parent := k.procs[q.ppid]; parent != nil && parent.pgid.Load() != pgid && parent.sid.Load() == q.sid.Load() {
 			return false
 		}
 	}
@@ -412,7 +415,7 @@ func (k *Kernel) orphans(groups []int32) {
 		stopped := false
 
 		for _, q := range k.procs {
-			stopped = stopped || q.pgid == pgid && !q.zombie && q.halted
+			stopped = stopped || q.pgid.Load() == pgid && !q.zombie && q.halted
 		}
 
 		hangs := stopped && k.orphanedLocked(pgid)
@@ -432,7 +435,7 @@ func (k *Kernel) signalGroup(pgid int32, sig int) {
 	var targets []*Process
 
 	for _, q := range k.procs {
-		if q.pgid == pgid && !q.zombie {
+		if q.pgid.Load() == pgid && !q.zombie {
 			targets = append(targets, q)
 		}
 	}

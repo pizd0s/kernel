@@ -584,7 +584,7 @@ static usize packetFdCount;
 
 // A reply: the header, then the parts where they are.
 static void reply(int fd, u32 op, u32 arg, const iovec* parts, usize count, const int* fds = nullptr, usize fdCount = 0) {
-    Header head{op, arg, 0, 0};
+    Header head{op, arg, 0, 0, 0, 0};
     iovec iov[3] = {{&head, sizeof head}};
     if (count > 2 || fdCount > maxFds) {
         fatal("rootfs: a reply of %zu parts and %zu descriptors", count, fdCount);
@@ -1299,7 +1299,7 @@ namespace {
 static Ask asking(const Place& p, const Header& h, u32 op, Name name) {
     Ask a;
     a.fs = p.m->fs;
-    a.head = {op, 0, h.uid, h.gid};
+    a.head = {op, 0, h.uid, h.gid, h.pgrp, h.sid};
     memcpy(a.body, &p.node, 8);
     memcpy(a.body + 8, name.at, MIN(name.length, usize(NAME_MAX)));
     a.size = 8 + MIN(name.length, usize(NAME_MAX));
@@ -1476,7 +1476,7 @@ static void openHandle(int fd, const Place& at, int flags) {
 // on: the node of a place, then what follows it in the call. EIO when
 // the file system is gone, EAGAIN when it does not keep up.
 static bool hand(const Place& p, const Header& h, u32 op, u32 arg, const void* args, usize size, Name name, int fd, int extra = -1) {
-    const Header head{op, arg, h.uid, h.gid};
+    const Header head{op, arg, h.uid, h.gid, h.pgrp, h.sid};
     const iovec parts[] = {part(&head, sizeof head), part(&p.node, 8), part(args, size), part(name.at, name.length)};
     const int fds[] = {extra, fd};
     Endpoint* channel = p.m->fs->channel;
@@ -2547,7 +2547,7 @@ static Task mountCall(Header h, int fd, Place root, Place from, int conn, Name t
         connection.fd = -1; // the channel's now
         Ask ask;
         ask.fs = fs;
-        ask.head = {fsRoot, 0, h.uid, h.gid};
+        ask.head = {fsRoot, 0, h.uid, h.gid, h.pgrp, h.sid};
         const Answer got = co_await ask;
         Stat st;
         if (got.error != 0 || !statIn(got.body, st)) {
@@ -3313,7 +3313,7 @@ static Task boot() {
     {
         Ask ask;
         ask.fs = rootMount->fs;
-        ask.head = {fsRoot, 0, 0, 0};
+        ask.head = {fsRoot, 0, 0, 0, 0, 0};
         const Answer a = co_await ask;
         if (a.error != 0 || !statIn(a.body, rootMount->rootStat)) {
             fatal("rootfs: erofs serves no root: errno %d", a.error);
@@ -3369,7 +3369,7 @@ static Task boot() {
         Held held(rootOf(m));
         Ask ask;
         ask.fs = m->fs;
-        ask.head = {fsRoot, 0, 0, 0};
+        ask.head = {fsRoot, 0, 0, 0, 0, 0};
         const Answer a = co_await ask;
         Stat st;
         if (!m->gone && a.error == 0 && statIn(a.body, st)) {

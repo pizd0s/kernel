@@ -107,13 +107,13 @@ type Terminal interface {
 
 	device() FileKey
 
-	jobs() (foreground int32, tostop, hungUp bool)
 	getattr(p *Process) ([]byte, error)
 
 	setattr(p *Process, when uint32, termios []byte) error
 	flush(p *Process, queue uint32) error
 	flow(p *Process, action uint32) error
 	drain(p *Process) error
+	brk(p *Process) error
 	window(p *Process) ([]byte, error)
 	setWindow(p *Process, size []byte) error
 
@@ -121,10 +121,10 @@ type Terminal interface {
 	unsent(p *Process) (uint32, error)
 
 	name(p *Process, peer bool) (string, error)
-	foreground(p *Process) (uint32, error)
+	foreground(p *Process) (uint32, uint32, error)
 	setForeground(p *Process, pgrp uint32) error
 
-	control(p *Process, sid, pgrp int32) error
+	control(p *Process, how uint32) error
 
 	reopen(p *Process, flags int) (Terminal, error)
 }

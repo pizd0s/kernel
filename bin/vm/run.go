@@ -171,7 +171,7 @@ func runKernel(path string, argv []string, asan bool, data []byte, obj *ElfObjec
 	}
 
 	k.first = p
-	k.fg = p.pgid
+	k.fg = p.pgid.Load()
 
 	go p.run(&ExecImage{code: code, argv: argv, envp: env})
 

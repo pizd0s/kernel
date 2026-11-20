@@ -32,6 +32,8 @@ struct Header {
     uint32_t arg;
     uint32_t uid;
     uint32_t gid;
+    uint32_t pgrp;
+    uint32_t sid;
 };
 
 struct Opened {
@@ -121,7 +123,7 @@ static int device(const char* name) {
     struct {
         Header h;
         char name[48];
-    } request{{opRegister, S_IFCHR | 0666, uint32_t(geteuid()), uint32_t(getegid())}, {}};
+    } request{{opRegister, S_IFCHR | 0666, uint32_t(geteuid()), uint32_t(getegid()), 0, 0}, {}};
 
     memcpy(request.name, registered, strlen(registered));
     sendWith(registry, &request, sizeof(Header) + strlen(registered), pair[1]);
@@ -168,7 +170,7 @@ static int opened(int channel, Opened what, int& end) {
     struct {
         Header h;
         Opened what;
-    } ok{{opOk, 0, 0, 0}, what};
+    } ok{{opOk, 0, 0, 0, 0, 0}, what};
 
     sendWith(reply, &ok, sizeof ok, pair[1]);
     close(pair[1]);

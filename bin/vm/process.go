@@ -192,8 +192,8 @@ type Process struct {
 	k    *Kernel
 	pid  int32
 	ppid int32
-	pgid int32
-	sid  int32
+	pgid atomic.Int32
+	sid  atomic.Int32
 
 	nice      int32
 	policy    int32
@@ -634,8 +634,8 @@ func (p *Process) terminate(status int) {
 	var bereaved []*Process
 	var joined []int32
 
-	if parent != nil && parent.pgid != p.pgid && parent.sid == p.sid {
-		joined = append(joined, p.pgid)
+	if parent != nil && parent.pgid.Load() != p.pgid.Load() && parent.sid.Load() == p.sid.Load() {
+		joined = append(joined, p.pgid.Load())
 	}
 
 	for _, q := range k.procs {
@@ -647,8 +647,8 @@ func (p *Process) terminate(status int) {
 				bereaved = append(bereaved, q)
 			}
 
-			if !q.zombie && q.pgid != p.pgid && q.sid == p.sid {
-				joined = append(joined, q.pgid)
+			if !q.zombie && q.pgid.Load() != p.pgid.Load() && q.sid.Load() == p.sid.Load() {
+				joined = append(joined, q.pgid.Load())
 			}
 		}
 	}
@@ -1300,7 +1300,7 @@ func (p *Process) libcGetpgrp() uint32 {
 
 	defer p.k.mu.Unlock()
 
-	return uint32(p.pgid)
+	return uint32(p.pgid.Load())
 }
 
 func (p *Process) libcGetuid() uint32 {
@@ -1592,7 +1592,7 @@ func (p *Process) groupExists(pgid int32) bool {
 	defer p.k.mu.Unlock()
 
 	for _, q := range p.k.procs {
-		if q.pgid == pgid && q.sid == p.sid {
+		if q.pgid.Load() == pgid && q.sid.Load() == p.sid.Load() {
 			return true
 		}
 	}
@@ -1629,7 +1629,7 @@ func (p *Process) libcSetpgid(pid, pgid uint32) uint32 {
 	}
 
 	p.k.mu.Lock()
-	target.pgid = group
+	target.pgid.Store(group)
 	p.k.mu.Unlock()
 
 	return p.result(0, nil)
@@ -1725,10 +1725,10 @@ func (p *Process) prioTargets(which, who uint32) ([]*Process, error) {
 		pgid := int32(who)
 
 		if pgid == 0 {
-			pgid = p.pgid
+			pgid = p.pgid.Load()
 		}
 
-		return p.k.processes(func(q *Process) bool { return q.pgid == pgid && !q.zombie }), nil
+		return p.k.processes(func(q *Process) bool { return q.pgid.Load() == pgid && !q.zombie }), nil
 	case PRIO_USER:
 		if who == 0 {
 			who = p.cred.uid()
@@ -1794,12 +1794,13 @@ func (p *Process) libcSetsid() uint32 {
 	defer p.k.mu.Unlock()
 
 	for _, q := range p.k.procs {
-		if q.pgid == p.pid {
+		if q.pgid.Load() == p.pid {
 			return p.result(0, EPERM)
 		}
 	}
 
-	p.sid, p.pgid = p.pid, p.pid
+	p.sid.Store(p.pid)
+	p.pgid.Store(p.pid)
 
 	return p.result(int(p.pid), nil)
 }
@@ -1815,7 +1816,7 @@ func (p *Process) libcGetsid(pid uint32) uint32 {
 
 	defer p.k.mu.Unlock()
 
-	return p.result(int(q.sid), nil)
+	return p.result(int(q.sid.Load()), nil)
 }
 
 func (p *Process) libcGetpgid(pid uint32) uint32 {
@@ -1829,7 +1830,7 @@ func (p *Process) libcGetpgid(pid uint32) uint32 {
 
 	defer p.k.mu.Unlock()
 
-	return p.result(int(q.pgid), nil)
+	return p.result(int(q.pgid.Load()), nil)
 }
 
 func (p *Process) libcSetpgrp() uint32 {
@@ -2091,7 +2092,7 @@ func (p *Process) startVfork() uint32 {
 	return c.result(0, nil)
 }
 
-func (p *Process) fork(setup func(c *Process)) (int32, error) {
+func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 	if p.chaosFail("fork") {
 		return 0, EAGAIN
 	}
@@ -2168,6 +2169,11 @@ func (p *Process) fork(setup func(c *Process)) (int32, error) {
 
 	go c.runFrom(p.image, inst, func() {
 		c.trace(TRACE_PROCESS, fmt.Sprintf("child of %d", parent))
+
+		if begin != nil {
+			begin(c)
+		}
+
 		inst.resume(frames)
 	})
 
@@ -2227,14 +2233,14 @@ func (p *Process) pidSelector(pid int32) func(q *Process) bool {
 	case pid > 0:
 		return func(q *Process) bool { return q.pid == pid }
 	case pid == 0:
-		pgid := p.pgid
+		pgid := p.pgid.Load()
 
-		return func(q *Process) bool { return q.pgid == pgid }
+		return func(q *Process) bool { return q.pgid.Load() == pgid }
 	case pid == -1:
 		return func(*Process) bool { return true }
 	}
 
-	return func(q *Process) bool { return q.pgid == -pid }
+	return func(q *Process) bool { return q.pgid.Load() == -pid }
 }
 
 func (p *Process) reap(selects func(*Process) bool, options uint32) (int32, int, bool) {
@@ -2343,10 +2349,10 @@ func (p *Process) waitid(idtype, id, info, options uint32) uint32 {
 		pgid := int32(id)
 
 		if pgid == 0 {
-			pgid = p.pgid
+			pgid = p.pgid.Load()
 		}
 
-		selects = func(q *Process) bool { return q.pgid == pgid }
+		selects = func(q *Process) bool { return q.pgid.Load() == pgid }
 	default:
 		return p.result(0, EINVAL)
 	}
@@ -2464,7 +2470,7 @@ func (p *Process) waitEvent(ready func() bool) error {
 }
 
 func (p *Process) libcFork() uint32 {
-	pid, err := p.fork(nil)
+	pid, err := p.fork(nil, nil)
 
 	return p.result(int(pid), err)
 }
@@ -8008,11 +8014,13 @@ func (p *Process) opened(pk *Packet) (Object, bool, error) {
 	return obj, kind == openedTerminal, nil
 }
 
-func (p *Process) head(data []byte, op, arg uint32) {
+func (p *Process) head(data []byte, op, arg, group uint32) {
 	binary.LittleEndian.PutUint32(data, op)
 	binary.LittleEndian.PutUint32(data[4:], arg)
 	binary.LittleEndian.PutUint32(data[8:], p.cred.euid())
 	binary.LittleEndian.PutUint32(data[12:], p.cred.egid())
+	binary.LittleEndian.PutUint32(data[16:], group)
+	binary.LittleEndian.PutUint32(data[20:], uint32(p.sid.Load()))
 }
 
 func (p *Process) permits(st *Stat, want uint32) bool {
@@ -8047,7 +8055,7 @@ func sameTerminal(a, b Terminal) bool {
 func (p *Process) isCtty(t Terminal) bool {
 	p.k.mu.Lock()
 
-	c := p.k.cttys[p.sid]
+	c := p.k.cttys[p.sid.Load()]
 
 	p.k.mu.Unlock()
 
@@ -8057,7 +8065,7 @@ func (p *Process) isCtty(t Terminal) bool {
 func (p *Process) openControlling(flags int) (Object, error) {
 	p.k.mu.Lock()
 
-	c := p.k.cttys[p.sid]
+	c := p.k.cttys[p.sid.Load()]
 
 	if c != nil {
 		c.ref()
@@ -8071,18 +8079,14 @@ func (p *Process) openControlling(flags int) (Object, error) {
 
 	defer c.unref()
 
-	if _, _, hungUp := c.jobs(); hungUp {
-		return nil, ENXIO
-	}
-
 	return c.reopen(p, flags)
 }
 
 func (p *Process) acquire(t Terminal) {
 	p.k.mu.Lock()
 
-	_, has := p.k.cttys[p.sid]
-	leads := p.sid == p.pid
+	_, has := p.k.cttys[p.sid.Load()]
+	leads := p.sid.Load() == p.pid
 
 	p.k.mu.Unlock()
 
@@ -8099,58 +8103,42 @@ func (p *Process) shrugs(sig int) bool {
 	return p.sig.actions[sig].handler == SIG_IGN || p.sig.blocked&sigBit(sig) != 0
 }
 
-func (p *Process) background(t Terminal, sig int) error {
-	for {
-		foreground, _, _ := t.jobs()
-
-		p.k.mu.Lock()
-
-		pgid := p.pgid
-
-		p.k.mu.Unlock()
-
-		if foreground == 0 || foreground == pgid || !p.isCtty(t) {
-			return nil
-		}
-
-		if p.shrugs(sig) {
-			if sig == SIGTTIN {
-				return EIO
-			}
-
-			return nil
-		}
-
-		if p.k.orphaned(pgid) {
-			return EIO
-		}
-
-		p.k.signalGroup(pgid, sig)
-
-		if !p.interrupted() {
-			return EINTR
-		}
-	}
+func (p *Process) group() uint32 {
+	return uint32(p.pgid.Load())
 }
 
-func (p *Process) changeAt(fd uint32) (Terminal, error) {
-	t, err := p.terminalAt(fd)
+func (p *Process) background(sig int) (bool, error) {
+	if p.shrugs(sig) {
+		if sig == SIGTTIN {
+			return false, EIO
+		}
 
-	if err == nil {
-		err = p.background(t, SIGTTOU)
+		return true, nil
 	}
 
-	return t, err
+	pgid := p.pgid.Load()
+
+	if p.k.orphaned(pgid) {
+		return false, EIO
+	}
+
+	p.k.signalGroup(pgid, sig)
+
+	if !p.interrupted() {
+		return false, EINTR
+	}
+
+	return false, nil
 }
 
 func (p *Process) leaveSession(going bool) {
 	p.k.mu.Lock()
 
-	t := p.k.cttys[p.sid]
-	leads := p.sid == p.pid
+	t := p.k.cttys[p.sid.Load()]
+	leads := p.sid.Load() == p.pid
 
 	if leads && t != nil {
-		delete(p.k.cttys, p.sid)
+		delete(p.k.cttys, p.sid.Load())
 	}
 
 	p.k.mu.Unlock()
@@ -8159,18 +8147,13 @@ func (p *Process) leaveSession(going bool) {
 		return
 	}
 
-	foreground, _, _ := t.jobs()
+	how := uint32(cttyDropped)
 
-	t.control(p, 0, 0)
-
-	if foreground > 0 {
-		p.k.signalGroup(foreground, SIGHUP)
-
-		if !going {
-			p.k.signalGroup(foreground, SIGCONT)
-		}
+	if going {
+		how = cttyGone
 	}
 
+	t.control(p, how)
 	t.unref()
 }
 
@@ -8235,7 +8218,7 @@ func (p *Process) tcsetattr(fd, action, at uint32) error {
 		return EINVAL
 	}
 
-	t, err := p.changeAt(fd)
+	t, err := p.terminalAt(fd)
 
 	if err != nil {
 		return err
@@ -8245,7 +8228,7 @@ func (p *Process) tcsetattr(fd, action, at uint32) error {
 }
 
 func (p *Process) libcTcflow(fd, action uint32) uint32 {
-	t, err := p.changeAt(fd)
+	t, err := p.terminalAt(fd)
 
 	if err == nil {
 		err = t.flow(p, action)
@@ -8255,7 +8238,7 @@ func (p *Process) libcTcflow(fd, action uint32) uint32 {
 }
 
 func (p *Process) libcTcflush(fd, queue uint32) uint32 {
-	t, err := p.changeAt(fd)
+	t, err := p.terminalAt(fd)
 
 	if err == nil {
 		err = t.flush(p, queue)
@@ -8265,7 +8248,7 @@ func (p *Process) libcTcflush(fd, queue uint32) uint32 {
 }
 
 func (p *Process) libcTcdrain(fd uint32) uint32 {
-	t, err := p.changeAt(fd)
+	t, err := p.terminalAt(fd)
 
 	if err == nil {
 		err = t.drain(p)
@@ -8275,22 +8258,22 @@ func (p *Process) libcTcdrain(fd uint32) uint32 {
 }
 
 func (p *Process) libcTcsendbreak(fd, duration uint32) uint32 {
-	_, err := p.changeAt(fd)
+	t, err := p.terminalAt(fd)
+
+	if err == nil {
+		err = t.brk(p)
+	}
 
 	return p.result(0, err)
 }
 
 func (p *Process) libcTcgetpgrp(fd uint32) uint32 {
 	if t, err := p.terminalAt(fd); err != ENOTTY {
-		if err == nil && !p.isCtty(t) && !isMaster(p, t) {
-			err = ENOTTY
-		}
-
 		if err != nil {
 			return p.result(0, err)
 		}
 
-		group, err := t.foreground(p)
+		group, _, err := t.foreground(p)
 
 		return p.result(int(group), err)
 	}
@@ -8305,14 +8288,9 @@ func (p *Process) libcTcgetpgrp(fd uint32) uint32 {
 func (p *Process) libcTcsetpgrp(fd, pgrp uint32) uint32 {
 	t, err := p.terminalAt(fd)
 
-	switch {
-	case err == ENOTTY:
+	if err == ENOTTY {
 		err = p.consoleAt(fd)
 		t = nil
-	case err == nil && !p.isCtty(t):
-		err = ENOTTY
-	case err == nil:
-		err = p.background(t, SIGTTOU)
 	}
 
 	switch {
@@ -8336,31 +8314,24 @@ func (p *Process) libcTcsetpgrp(fd, pgrp uint32) uint32 {
 func (p *Process) libcTcgetsid(fd uint32) uint32 {
 	t, err := p.terminalAt(fd)
 
-	if err == nil && !p.isCtty(t) {
-		err = ENOTTY
-	}
-
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	p.k.mu.Lock()
+	_, sid, err := t.foreground(p)
 
-	defer p.k.mu.Unlock()
+	if err == nil && sid == 0 {
+		err = ENOTTY
+	}
 
-	return p.result(int(p.sid), nil)
-}
-
-func isMaster(p *Process, t Terminal) bool {
-	_, err := t.name(p, true)
-
-	return err == nil
+	return p.result(int(sid), err)
 }
 
 func (p *Process) controls(t Terminal) error {
 	p.k.mu.Lock()
 
-	sid, pgid, leads := p.sid, p.pgid, p.sid == p.pid
+	sid := p.sid.Load()
+	leads := sid == p.pid
 	c := p.k.cttys[sid]
 
 	p.k.mu.Unlock()
@@ -8372,7 +8343,7 @@ func (p *Process) controls(t Terminal) error {
 		return EPERM
 	}
 
-	if err := t.control(p, sid, pgid); err != nil {
+	if err := t.control(p, cttyTake); err != nil {
 		return err
 	}
 
@@ -8407,8 +8378,8 @@ func (p *Process) terminalIoctl(t Terminal, fd, req, va uint32) (uint32, bool) {
 	case TCXONC:
 		return p.libcTcflow(fd, arg), true
 	case TCSBRK:
-		if err := p.background(t, SIGTTOU); err != nil || arg == 0 {
-			return p.result(0, err), true
+		if arg == 0 {
+			return p.result(0, t.brk(p)), true
 		}
 
 		return p.result(0, t.drain(p)), true
@@ -8624,15 +8595,9 @@ func (p *Process) libcForkpty(amaster, name, termp, winp uint32) uint32 {
 
 	pid, err := p.fork(func(c *Process) {
 		c.k.mu.Lock()
-		c.sid, c.pgid = c.pid, c.pid
+		c.sid.Store(c.pid)
+		c.pgid.Store(c.pid)
 		c.k.mu.Unlock()
-
-		if t.control(p, c.pid, c.pid) == nil {
-			t.ref()
-			c.k.mu.Lock()
-			c.k.cttys[c.pid] = t
-			c.k.mu.Unlock()
-		}
 
 		for fd := range 3 {
 			c.closeFd(fd)
@@ -8642,6 +8607,8 @@ func (p *Process) libcForkpty(amaster, name, termp, winp uint32) uint32 {
 
 		c.closeFd(master)
 		c.closeFd(slave)
+	}, func(c *Process) {
+		c.controls(t)
 	})
 
 	p.closeFd(slave)
@@ -9883,7 +9850,9 @@ func (p *Process) daemon(nochdir, noclose uint32) uint32 {
 
 	k.lastPid++
 	delete(k.procs, old)
-	p.pid, p.pgid, p.sid, p.ppid = k.lastPid, k.lastPid, k.lastPid, k.first.pid
+	p.pid, p.ppid = k.lastPid, k.first.pid
+	p.pgid.Store(k.lastPid)
+	p.sid.Store(k.lastPid)
 	k.procs[p.pid] = p
 
 	for _, q := range k.procs {
@@ -9896,7 +9865,12 @@ func (p *Process) daemon(nochdir, noclose uint32) uint32 {
 
 	if parent != nil && !parent.discardsChildren() {
 		k.mu.Lock()
-		k.procs[old] = &Process{k: k, pid: old, ppid: parent.pid, pgid: parent.pgid, sid: parent.sid, zombie: true}
+
+		zombie := &Process{k: k, pid: old, ppid: parent.pid, zombie: true}
+
+		zombie.pgid.Store(parent.pgid.Load())
+		zombie.sid.Store(parent.sid.Load())
+		k.procs[old] = zombie
 		k.mu.Unlock()
 		parent.childChanged(SIGCHLD)
 	}

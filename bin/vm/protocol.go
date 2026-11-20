@@ -12,10 +12,10 @@ const (
 	openedDir              = 3
 	openedPath             = 4
 	sizeofOpened           = 40
-	readyTostop            = 1
 	rOk             uint32 = 128
 	rErr            uint32 = 129
-	remoteHeader           = 16
+	rBackground     uint32 = 130
+	remoteHeader           = 24
 	remoteStat             = 64
 	remoteStatfs           = 52
 	whenAtimeNow           = 2
@@ -27,6 +27,9 @@ const (
 	ioNonblock             = 2
 	ioAt                   = 4
 	openControlling        = 4
+	cttyTake               = 1
+	cttyGone               = 2
+	cttyDropped            = 3
 )
 
 const (
@@ -58,6 +61,7 @@ const (
 	rGetPgrp
 	rSetPgrp
 	rSetCtty
+	rTcsbrk
 )
 
 const (
@@ -123,11 +127,17 @@ func replyOf(pk *Packet, eof bool) error {
 		return EIO
 	}
 
-	if binary.LittleEndian.Uint32(pk.data) == rErr {
+	switch binary.LittleEndian.Uint32(pk.data) {
+	case rErr:
 		dropFiles(pk.files)
 		pk.files = nil
 
 		return Errno(binary.LittleEndian.Uint32(pk.data[4:]))
+	case rBackground:
+		dropFiles(pk.files)
+		pk.files = nil
+
+		return Background(binary.LittleEndian.Uint32(pk.data[4:]))
 	}
 
 	pk.arg = binary.LittleEndian.Uint32(pk.data[4:])

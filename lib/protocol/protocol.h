@@ -47,10 +47,13 @@
 //
 // A packet is a Header and a body; descriptors ride with it (SCM_RIGHTS).
 //
-//   Header { op u32, arg u32, uid u32, gid u32 }
+//   Header { op u32, arg u32, uid u32, gid u32, pgrp u32, sid u32 }
 //
-// uid and gid are who asks: the kernel puts its process's ids, rootfs
-// the ids of the call it makes a file system's for. A reply's are zero.
+// uid, gid, pgrp and sid are who asks: the kernel puts its process's ids,
+// its process group and its session, rootfs and devfs those of the call
+// they hand on. pgrp 0 is a call no job control holds back: the kernel's
+// own, and one whose process may go on out of the foreground (BACKGROUND).
+// A reply's are zero.
 //
 //   The VFS's, on a handle: a directory of the VFS's tree, or what O_PATH
 //   opened; the root, the working directory and the directory descriptors
@@ -160,21 +163,23 @@
 //   and from the server, on its end of an open file, the file's readiness
 //   when it changes, which select, poll and epoll find: the OPEN's OK said
 //   it first (opened's events), the last READY counts.
-//     READY     arg events  foreground u32, flags u32
-//                                         events: POLLIN, POLLPRI, POLLOUT,
-//                                         POLLERR and POLLHUP, Linux's bits;
-//                                         a terminal's foreground group and
-//                                         readyTostop for its TOSTOP, which
-//                                         the kernel's job control needs,
-//                                         zeros of any other file. Sent as
-//                                         they change, the first right
-//                                         after the OK, and before the
-//                                         answer to a call that changed them
+//     READY     arg events            events: POLLIN, POLLPRI, POLLOUT,
+//                                     POLLERR and POLLHUP, Linux's bits
 //
 //   A terminal's, on a terminal's open file (openedTerminal): the server
 //   keeps all of the terminal, its settings and its discipline
 //   (bin/tools/pty.cpp). termios is lib/c's struct termios, winsize its
 //   struct winsize; a master's are its slave's, as Linux's are.
+//   The server keeps its job control too: which session the terminal
+//   controls and which of the session's groups is in the foreground.
+//   A call that a group out of the foreground may not make, on the
+//   session's controlling terminal, a slave, is answered BACKGROUND with
+//   the signal its group gets, and goes no further: a READ, SIGTTIN; a
+//   WRITE while TOSTOP is set, a TCSETATTR, TCFLUSH, TCFLOW, TCDRAIN,
+//   TCSBRK or SETPGRP, SIGTTOU. What follows is the kernel's, which knows
+//   the process: EIO, or the call again with pgrp 0 where the process
+//   ignores the signal or blocks it, EIO where its group is orphaned, else
+//   the signal to the group.
 //     TCGETATTR                           OK termios
 //     TCSETATTR arg when  termios         TCSANOW, TCSADRAIN, TCSAFLUSH; a
 //                                         slave's that drains waits for the
@@ -183,6 +188,7 @@
 //     TCFLOW    arg action                TCOOFF, TCOON, TCIOFF, TCION
 //     TCDRAIN                             waits for the output to go, and
 //                                         may hear CANCEL
+//     TCSBRK                              a break, none on a pseudoterminal
 //     GETWINSIZE                          OK winsize
 //     SETWINSIZE          winsize         SIGWINCH to the foreground group
 //                                         when it changes
@@ -193,15 +199,25 @@
 //     NAME      arg peer                  OK the path of the terminal's
 //                                         device; with peer a master's
 //                                         slave's
-//     GETPGRP                             OK pgrp u32: the foreground
-//                                         group, 0 for none
+//     GETPGRP                             OK pgrp u32, sid u32: the
+//                                         foreground group and the session
+//                                         the terminal controls, 0 for none;
+//                                         ENOTTY on a slave not the caller's
+//                                         session's controlling terminal
 //     SETPGRP   arg pgrp                  the foreground group, which the
 //                                         kernel found in the caller's
-//                                         session
-//     SETCTTY   arg sid   pgrp u32        a slave controls the session of
-//                                         sid, pgrp its foreground group;
+//                                         session; ENOTTY as GETPGRP, and on
+//                                         a master
+//     SETCTTY   arg how                   on a slave, how its control of the
+//                                         caller's session goes: cttyTake,
+//                                         the slave controls it now, the
+//                                         caller's group in the foreground,
 //                                         EPERM when it controls another;
-//                                         sid 0: it controls none now
+//                                         cttyGone, the session's leader went,
+//                                         its foreground group hears SIGHUP;
+//                                         cttyDropped, the leader gave it up
+//                                         (TIOCNOTTY), SIGHUP and SIGCONT. It
+//                                         controls no session then
 //     OPEN      arg flags                 on a slave's: another open file of
 //                                         the slave, as its device's OPEN
 //
@@ -236,7 +252,8 @@
 //   fsNocache: rootfs keeps nothing of its answers. Its atime is none of
 //   rootfs's: the system is noatime.
 //
-//   replies: OK, ERR with arg the errno
+//   replies: OK, ERR with arg the errno, BACKGROUND with arg the signal
+//   of a call out of the foreground (a terminal's)
 //   opened { kind u32, flags u32, dev u64, ino u64, id u64, events u32 }   kind:
 //          openedFile, an open file; openedTerminal, a terminal's, which
 //          takes a terminal's calls too; openedDir, a handle of a directory
@@ -345,9 +362,11 @@ enum : uint32_t {
     opGetPgrp,
     opSetPgrp,
     opSetCtty,
+    opTcsbrk,
     // Replies.
     opOk = 128,
     opErr,
+    opBackground,
 };
 
 // The most descriptors a packet brings: a READ's or WRITE's memfd and,
@@ -358,8 +377,10 @@ constexpr uint32_t fsNocache = 1;     // ROOT's flags: the file system changes b
 // An OPEN's OK's arg: the open is of the opener's controlling terminal,
 // which the kernel opens.
 constexpr uint32_t openControlling = 4;
-// READY's flags: the terminal's TOSTOP.
-constexpr uint32_t readyTostop = 1;
+// SETCTTY's how.
+constexpr uint32_t cttyTake = 1;
+constexpr uint32_t cttyGone = 2;
+constexpr uint32_t cttyDropped = 3;
 // Io's flags.
 constexpr uint32_t ioAppend = 1;
 constexpr uint32_t ioNonblock = 2;
@@ -375,6 +396,8 @@ struct Header {
     uint32_t arg;
     uint32_t uid;
     uint32_t gid;
+    uint32_t pgrp;
+    uint32_t sid;
 };
 
 // What the end an OPEN's OK brings is: the OK's body.
@@ -422,7 +445,7 @@ struct [[gnu::packed]] Statfs {
     uint32_t flags;
 };
 
-static_assert(sizeof(Header) == 16);
+static_assert(sizeof(Header) == 24);
 static_assert(sizeof(Opened) == 40);
 static_assert(sizeof(Io) == 12);
 static_assert(sizeof(Stat) == 64 && offsetof(Stat, atime) == 40);

@@ -24,8 +24,6 @@ type RemoteFD struct {
 	nonblock bool
 	pos      int64
 	ready    int16
-	group    int32
-	tostop   bool
 
 	locks  *LockTable
 	locked atomic.Bool
@@ -167,10 +165,8 @@ func (f *RemoteFD) deliver(pk *Packet) {
 		return
 	}
 
-	if len(pk.data) >= remoteHeader+8 && binary.LittleEndian.Uint32(pk.data) == rReady {
+	if len(pk.data) >= remoteHeader && binary.LittleEndian.Uint32(pk.data) == rReady {
 		f.mu.Lock()
-		f.group = int32(binary.LittleEndian.Uint32(pk.data[remoteHeader:]))
-		f.tostop = binary.LittleEndian.Uint32(pk.data[remoteHeader+4:])&readyTostop != 0
 		f.ready = readiness(binary.LittleEndian.Uint32(pk.data[4:]))
 		f.watchers.tell()
 		f.mu.Unlock()
@@ -241,14 +237,14 @@ func (f *RemoteFD) exchange(p *Process, data []byte, files []Object, interruptib
 	return a.taken(), cancelled, nil
 }
 
-func (f *RemoteFD) waiting(p *Process, op, arg uint32, body []byte, files []Object) (pk Packet, restart bool, err error) {
+func (f *RemoteFD) waiting(p *Process, group, op, arg uint32, body []byte, files []Object) (pk Packet, restart bool, err error) {
 	if p.interrupts(true) {
 		return Packet{}, false, EINTR
 	}
 
 	data := make([]byte, remoteHeader+len(body))
 
-	p.head(data, op, arg)
+	p.head(data, op, arg, group)
 	copy(data[remoteHeader:], body)
 
 	pk, cancelled, err := f.exchange(p, data, files, true)
@@ -265,10 +261,10 @@ func (f *RemoteFD) waiting(p *Process, op, arg uint32, body []byte, files []Obje
 	return pk, cancelled && !p.interrupts(true), err
 }
 
-func (f *RemoteFD) call(p *Process, op, arg uint32, body []byte, files []Object) (Packet, error) {
+func (f *RemoteFD) call(p *Process, group, op, arg uint32, body []byte, files []Object) (Packet, error) {
 	data := make([]byte, remoteHeader+len(body))
 
-	p.head(data, op, arg)
+	p.head(data, op, arg, group)
 	copy(data[remoteHeader:], body)
 
 	return f.asked(p, op, data, files)
@@ -297,7 +293,7 @@ func (f *RemoteFD) asked(p *Process, op uint32, data []byte, files []Object) (Pa
 }
 
 func (f *RemoteFD) on(p *Process, op, arg uint32, body []byte) (Packet, error) {
-	return f.call(p, op, arg, body, nil)
+	return f.call(p, p.group(), op, arg, body, nil)
 }
 
 func (f *RemoteFD) simple(p *Process, op, arg uint32, body []byte) error {
@@ -306,9 +302,9 @@ func (f *RemoteFD) simple(p *Process, op, arg uint32, body []byte) error {
 	return err
 }
 
-func (f *RemoteFD) waits(p *Process, op, arg uint32, body []byte) error {
+func (f *RemoteFD) waits(p *Process, group, op, arg uint32, body []byte) error {
 	for {
-		_, restart, err := f.waiting(p, op, arg, body, nil)
+		_, restart, err := f.waiting(p, group, op, arg, body, nil)
 
 		if err == EINTR && restart {
 			continue
@@ -321,7 +317,7 @@ func (f *RemoteFD) waits(p *Process, op, arg uint32, body []byte) error {
 func (f *RemoteFD) vfs(p *Process, id uint64, op, arg uint32, body []byte, files ...Object) (Packet, error) {
 	data := make([]byte, remoteHeader+8+len(body))
 
-	p.head(data, op, arg)
+	p.head(data, op, arg, p.group())
 	binary.LittleEndian.PutUint64(data[remoteHeader:], p.rootID(id))
 	copy(data[remoteHeader+8:], body)
 
@@ -500,7 +496,7 @@ func (f *RemoteFD) ioFlags(at bool) uint32 {
 	return flags
 }
 
-func (f *RemoteFD) readAt(p *Process, into Transfer, size int, off int64, at bool) (int, error) {
+func (f *RemoteFD) readAt(p *Process, into Transfer, size int, off int64, at bool, group uint32) (int, error) {
 	if off < 0 || size < 0 {
 		return 0, EINVAL
 	}
@@ -512,7 +508,7 @@ func (f *RemoteFD) readAt(p *Process, into Transfer, size int, off int64, at boo
 	body := ioBody(off, f.ioFlags(at))
 
 	for {
-		pk, cancelled, err := f.waiting(p, rRead, uint32(size), body[:], []Object{into})
+		pk, cancelled, err := f.waiting(p, group, rRead, uint32(size), body[:], []Object{into})
 
 		if err == EINTR && cancelled && p.interrupted() {
 			continue
@@ -530,7 +526,7 @@ func (f *RemoteFD) readAt(p *Process, into Transfer, size int, off int64, at boo
 	}
 }
 
-func (f *RemoteFD) put(p *Process, from Transfer, size int, off int64, atEnd, at bool) (int, int64, error) {
+func (f *RemoteFD) put(p *Process, from Transfer, size int, off int64, atEnd, at bool, group uint32) (int, int64, error) {
 	if off < 0 || size < 0 {
 		return 0, 0, EINVAL
 	}
@@ -548,7 +544,7 @@ func (f *RemoteFD) put(p *Process, from Transfer, size int, off int64, atEnd, at
 	body := ioBody(off, flags)
 
 	for {
-		pk, cancelled, err := f.waiting(p, rWrite, uint32(size), body[:], []Object{from})
+		pk, cancelled, err := f.waiting(p, group, rWrite, uint32(size), body[:], []Object{from})
 
 		if err == EINTR && cancelled && p.interrupted() {
 			continue
@@ -566,16 +562,51 @@ func (f *RemoteFD) put(p *Process, from Transfer, size int, off int64, atEnd, at
 	}
 }
 
+func (f *RemoteFD) job(p *Process, fn func(group uint32) (int, error)) (int, error) {
+	free := false
+
+	for {
+		group := uint32(0)
+
+		if !free {
+			group = p.group()
+		}
+
+		n, err := fn(group)
+		sig, held := err.(Background)
+
+		if !held {
+			return n, err
+		}
+
+		if free, err = p.background(int(sig)); err != nil {
+			return 0, err
+		}
+	}
+}
+
+func (f *RemoteFD) change(p *Process, op, arg uint32, body []byte, waits bool) error {
+	_, err := f.job(p, func(group uint32) (int, error) {
+		if waits {
+			return 0, f.waits(p, group, op, arg, body)
+		}
+
+		_, err := f.call(p, group, op, arg, body, nil)
+
+		return 0, err
+	})
+
+	return err
+}
+
 func (f *RemoteFD) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
 		return 0, EIO
 	}
 
-	if err := p.background(f, SIGTTIN); err != nil {
-		return 0, err
-	}
-
-	count, err := f.readAt(p, into, n, f.position(), false)
+	count, err := f.job(p, func(group uint32) (int, error) {
+		return f.readAt(p, into, n, f.position(), false, group)
+	})
 
 	f.advance(count)
 
@@ -587,19 +618,22 @@ func (f *RemoteFD) write(p *Process, from Transfer, n int, mode IoMode) (int, er
 		return 0, EIO
 	}
 
-	if _, tostop, _ := f.jobs(); tostop {
-		if err := p.background(f, SIGTTOU); err != nil {
-			return 0, err
-		}
-	}
+	var off, end int64
+	var atEnd bool
 
-	f.mu.Lock()
+	count, err := f.job(p, func(group uint32) (int, error) {
+		f.mu.Lock()
 
-	off, atEnd := f.pos, f.append
+		off, atEnd = f.pos, f.append
 
-	f.mu.Unlock()
+		f.mu.Unlock()
 
-	count, end, err := f.put(p, from, n, off, atEnd, false)
+		wrote, at, err := f.put(p, from, n, off, atEnd, false, group)
+
+		end = at
+
+		return wrote, err
+	})
 
 	if err == nil {
 		if !atEnd {
@@ -615,11 +649,11 @@ func (f *RemoteFD) write(p *Process, from Transfer, n int, mode IoMode) (int, er
 }
 
 func (f *RemoteFD) pread(p *Process, into Transfer, n int, off int64) (int, error) {
-	return f.readAt(p, into, n, off, true)
+	return f.readAt(p, into, n, off, true, p.group())
 }
 
 func (f *RemoteFD) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
-	count, _, err := f.put(p, from, n, off, false, true)
+	count, _, err := f.put(p, from, n, off, false, true, p.group())
 
 	return count, err
 }
@@ -1020,14 +1054,6 @@ func (f *RemoteFD) device() FileKey {
 	return f.key
 }
 
-func (f *RemoteFD) jobs() (int32, bool, bool) {
-	f.mu.Lock()
-
-	defer f.mu.Unlock()
-
-	return f.group, f.tostop, f.ready&POLLHUP != 0
-}
-
 func (f *RemoteFD) getattr(p *Process) ([]byte, error) {
 	pk, err := f.on(p, rTcgetattr, 0, nil)
 
@@ -1039,23 +1065,23 @@ func (f *RemoteFD) getattr(p *Process) ([]byte, error) {
 }
 
 func (f *RemoteFD) setattr(p *Process, when uint32, termios []byte) error {
-	if when == 0 {
-		return f.simple(p, rTcsetattr, when, termios)
-	}
-
-	return f.waits(p, rTcsetattr, when, termios)
+	return f.change(p, rTcsetattr, when, termios, when != 0)
 }
 
 func (f *RemoteFD) flush(p *Process, queue uint32) error {
-	return f.simple(p, rTcflush, queue, nil)
+	return f.change(p, rTcflush, queue, nil, false)
 }
 
 func (f *RemoteFD) flow(p *Process, action uint32) error {
-	return f.simple(p, rTcflow, action, nil)
+	return f.change(p, rTcflow, action, nil, false)
 }
 
 func (f *RemoteFD) drain(p *Process) error {
-	return f.waits(p, rTcdrain, 0, nil)
+	return f.change(p, rTcdrain, 0, nil, true)
+}
+
+func (f *RemoteFD) brk(p *Process) error {
+	return f.change(p, rTcsbrk, 0, nil, false)
 }
 
 func (f *RemoteFD) window(p *Process) ([]byte, error) {
@@ -1080,24 +1106,30 @@ func (f *RemoteFD) unsent(p *Process) (uint32, error) {
 	return f.count(p, rOutq)
 }
 
-func (f *RemoteFD) foreground(p *Process) (uint32, error) {
-	return f.count(p, rGetPgrp)
+func (f *RemoteFD) foreground(p *Process) (uint32, uint32, error) {
+	pk, err := f.on(p, rGetPgrp, 0, nil)
+
+	if err == nil && len(pk.data) != 8 {
+		err = EIO
+	}
+
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return binary.LittleEndian.Uint32(pk.data), binary.LittleEndian.Uint32(pk.data[4:]), nil
 }
 
 func (f *RemoteFD) setForeground(p *Process, pgrp uint32) error {
-	return f.simple(p, rSetPgrp, pgrp, nil)
+	return f.change(p, rSetPgrp, pgrp, nil, false)
 }
 
-func (f *RemoteFD) control(p *Process, sid, pgrp int32) error {
-	var body [4]byte
-
-	binary.LittleEndian.PutUint32(body[:], uint32(pgrp))
-
-	return f.simple(p, rSetCtty, uint32(sid), body[:])
+func (f *RemoteFD) control(p *Process, how uint32) error {
+	return f.simple(p, rSetCtty, how, nil)
 }
 
 func (f *RemoteFD) reopen(p *Process, flags int) (Terminal, error) {
-	pk, err := f.call(p, rOpen, uint32(flags), nil, nil)
+	pk, err := f.call(p, p.group(), rOpen, uint32(flags), nil, nil)
 
 	if err != nil {
 		return nil, err

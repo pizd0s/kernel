@@ -37,6 +37,8 @@ struct Header {
     uint32_t arg;
     uint32_t uid;
     uint32_t gid;
+    uint32_t pgrp;
+    uint32_t sid;
 };
 
 struct Opened {
@@ -126,7 +128,7 @@ static int device(const char* name) {
     struct {
         Header h;
         char name[48];
-    } request{{opRegister, S_IFCHR | 0666, uint32_t(geteuid()), uint32_t(getegid())}, {}};
+    } request{{opRegister, S_IFCHR | 0666, uint32_t(geteuid()), uint32_t(getegid()), 0, 0}, {}};
 
     memcpy(request.name, registered, strlen(registered));
     sendWith(registry, &request, sizeof(Header) + strlen(registered), pair[1]);
@@ -173,7 +175,7 @@ static int opened(int channel, Opened what, int& end) {
     struct {
         Header h;
         Opened what;
-    } ok{{opOk, 0, 0, 0}, what};
+    } ok{{opOk, 0, 0, 0, 0, 0}, what};
 
     sendWith(reply, &ok, sizeof ok, pair[1]);
     close(pair[1]);
@@ -225,7 +227,7 @@ static void answerFstat(int reply) {
     struct {
         Header h;
         Stat st;
-    } answer{{opOk, 0, 0, 0}, {1, 5, 0, S_IFREG | 0644, 1, 0, 0, 0, 1, 0}};
+    } answer{{opOk, 0, 0, 0, 0, 0}, {1, 5, 0, S_IFREG | 0644, 1, 0, 0, 0, 1, 0}};
 
     assert(send(reply, &answer, sizeof answer, MSG_NOSIGNAL) == ssize_t(sizeof answer));
     close(reply);
@@ -254,7 +256,7 @@ enum : char { answered = 'a', dropped = 'd', handed = 'h', died = 'x' };
             Header h;
             assert(recv(kept, &h, sizeof h, 0) == ssize_t(sizeof h) && h.op == opCancel);
             ++counts.cancels;
-            const Header interrupted{opErr, EINTR, 0, 0};
+            const Header interrupted{opErr, EINTR, 0, 0, 0, 0};
             assert(send(kept, &interrupted, sizeof interrupted, MSG_NOSIGNAL) == ssize_t(sizeof interrupted));
             close(kept);
             kept = -1;
@@ -407,7 +409,7 @@ int main() {
     struct {
         Header h;
         Opened what;
-    } ok{{opOk, 0, 0, 0}, {openedFile, O_RDWR, 0, 0, 0, POLLIN | POLLOUT}};
+    } ok{{opOk, 0, 0, 0, 0, 0}, {openedFile, O_RDWR, 0, 0, 0, POLLIN | POLLOUT}};
 
     sendWith(reply, &ok, sizeof ok, pair[1]);
     close(pair[1]);

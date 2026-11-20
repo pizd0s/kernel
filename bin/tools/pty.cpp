@@ -8,7 +8,11 @@
 // open of the slave, /dev/tty's.
 // The service keeps all of a terminal: its settings, which the master's
 // calls get and set too, as Linux's do, its window's size, the session it
-// controls and its foreground group, and its discipline, Linux's N_TTY:
+// controls and its foreground group, by which it holds back the calls of
+// a group out of the foreground (BACKGROUND, lib/protocol/protocol.h), the
+// group and the session of the caller's each call's header says, and the
+// SIGHUP of the foreground group as the session lets the terminal go, and
+// its discipline, Linux's N_TTY:
 // what the master writes goes through the slave's input processing, its
 // line editing, echo and special characters, to what the slave reads;
 // what the slave writes, and the echo, go through its output processing
@@ -73,8 +77,7 @@ namespace {
     struct Terminal;
 
     // An open file of a terminal, its master's or its slave's: its
-    // endpoint, which hears its readiness, and what it heard last: the
-    // events, the foreground group and the flags.
+    // endpoint, which hears its readiness, and the events it heard last.
     struct Open {
         Terminal* terminal;
         bool master;
@@ -82,8 +85,6 @@ namespace {
         bool writes;
         int fd;
         uint32_t told;
-        uint32_t toldForeground;
-        uint32_t toldFlags;
     };
 
     enum class Wait {
@@ -662,22 +663,35 @@ static uint32_t eventsOf(const Open& o) {
     return events;
 }
 
-// Tells every open file of the terminal what changed of its readiness,
-// its foreground group and its TOSTOP.
+// Tells every open file of the terminal what changed of its readiness.
 static void tellAll(const Terminal& t) {
-    const uint32_t foreground = uint32_t(t.foreground);
-    const uint32_t flags = (t.settings.c_lflag & TOSTOP) != 0 ? readyTostop : 0;
     for (Open& o : opens) {
         if (o.terminal == &t) {
             const uint32_t events = eventsOf(o);
-            if (events != o.told || foreground != o.toldForeground || flags != o.toldFlags) {
-                tell(o.fd, events, foreground, flags);
+            if (events != o.told) {
+                tell(o.fd, events);
                 o.told = events;
-                o.toldForeground = foreground;
-                o.toldFlags = flags;
             }
         }
     }
+}
+
+// Whether a call is of a group out of the foreground of the session whose
+// controlling terminal the open file is, a slave's: one job control holds
+// back. pgrp 0 is a call it does not.
+static bool background(const Open& o, const Header& h) {
+    const Terminal& t = *o.terminal;
+    return !o.master && h.pgrp != 0 && t.session != 0 && t.session == pid_t(h.sid) && t.foreground != 0 && t.foreground != pid_t(h.pgrp);
+}
+
+// Whether a call out of the foreground is held back: answered BACKGROUND
+// with the signal its group gets, which the kernel sends, or not.
+static bool heldBack(const Open& o, const Request& r, int sig) {
+    if (!background(o, r.h)) {
+        return false;
+    }
+    answer(r.reply(), opBackground, uint32_t(sig));
+    return true;
 }
 
 static void answerCount(int fd, uint32_t count) {
@@ -1093,22 +1107,64 @@ static void name(const Open& o, const Request& r) {
     answer(r.reply(), opOk, 0, path, strlen(path));
 }
 
+// The slave's control of the caller's session: it takes it, its group in
+// the foreground, or the session lets go of it, its leader gone or giving
+// it up (TIOCNOTTY), and its foreground group hears SIGHUP, and SIGCONT
+// as the leader gives it up, as Linux's does.
 static void controls(Open& o, const Request& r) {
     Terminal& t = *o.terminal;
-    uint32_t group;
+    const pid_t session = pid_t(r.h.sid);
     if (o.master) {
         return fail(r.reply(), ENOTTY);
     }
-    if (r.size != sizeof group) {
-        return fail(r.reply(), EINVAL);
+    switch (r.h.arg) {
+        case cttyTake:
+            if (t.session != 0 && t.session != session) {
+                return fail(r.reply(), EPERM);
+            }
+            t.session = session;
+            t.foreground = pid_t(r.h.pgrp);
+            break;
+        case cttyGone:
+        case cttyDropped:
+            if (t.session == session && session != 0) {
+                signalGroup(t.foreground, SIGHUP);
+                if (r.h.arg == cttyDropped) {
+                    signalGroup(t.foreground, SIGCONT);
+                }
+                t.session = 0;
+                t.foreground = 0;
+            }
+            break;
+        default:
+            return fail(r.reply(), EINVAL);
     }
-    memcpy(&group, r.body, sizeof group);
-    if (r.h.arg != 0 && t.session != 0 && t.session != pid_t(r.h.arg)) {
-        return fail(r.reply(), EPERM);
+    answer(r.reply(), opOk, 0);
+}
+
+// The foreground group and the session the terminal controls, for
+// tcgetpgrp and tcgetsid: on a slave, of the caller's session's
+// controlling terminal only.
+static void controlled(const Open& o, const Request& r) {
+    const Terminal& t = *o.terminal;
+    if (!o.master && t.session != pid_t(r.h.sid)) {
+        return fail(r.reply(), ENOTTY);
     }
-    t.session = pid_t(r.h.arg);
-    t.foreground = r.h.arg != 0 ? pid_t(group) : 0;
-    tellAll(t);
+    const uint32_t jobs[] = {uint32_t(t.foreground), uint32_t(t.session)};
+    answer(r.reply(), opOk, 0, jobs, sizeof jobs);
+}
+
+// tcsetpgrp: the foreground group of the caller's session's controlling
+// terminal, a group the kernel found in the session.
+static void putForeground(Open& o, const Request& r) {
+    Terminal& t = *o.terminal;
+    if (o.master || t.session == 0 || t.session != pid_t(r.h.sid)) {
+        return fail(r.reply(), ENOTTY);
+    }
+    if (heldBack(o, r, SIGTTOU)) {
+        return;
+    }
+    t.foreground = pid_t(r.h.arg);
     answer(r.reply(), opOk, 0);
 }
 
@@ -1123,7 +1179,7 @@ static void reopened(const Open& o, Request& r) {
         return fail(r.reply(), EINVAL);
     }
     if (t.hungUp) {
-        return fail(r.reply(), EIO);
+        return fail(r.reply(), ENXIO);
     }
     opened(t, false, r);
 }
@@ -1132,9 +1188,26 @@ static void fileCall(Open& o, Request& r) {
     Terminal& t = *o.terminal;
     switch (r.h.op) {
         case opRead:
+            if (heldBack(o, r, SIGTTIN)) {
+                return;
+            }
             return readFile(o, r);
         case opWrite:
+            if ((t.settings.c_lflag & TOSTOP) != 0 && heldBack(o, r, SIGTTOU)) {
+                return;
+            }
             return writeFile(o, r);
+        case opTcsetattr:
+        case opTcflush:
+        case opTcflow:
+        case opTcdrain:
+        case opTcsbrk:
+            if (heldBack(o, r, SIGTTOU)) {
+                return;
+            }
+            break;
+    }
+    switch (r.h.op) {
         case opFstat:
             return answer(r.reply(), opOk, 0, o.master ? &device.st : &t.slave.st, sizeof device.st);
         case opFsync:
@@ -1159,6 +1232,8 @@ static void fileCall(Open& o, Request& r) {
                 progress(t);
             }
             return;
+        case opTcsbrk:
+            return answer(r.reply(), opOk, 0);
         case opGetWinsize:
             return answer(r.reply(), opOk, 0, &t.size, sizeof t.size);
         case opSetWinsize:
@@ -1170,11 +1245,9 @@ static void fileCall(Open& o, Request& r) {
         case opName:
             return name(o, r);
         case opGetPgrp:
-            return answerCount(r.reply(), uint32_t(t.foreground));
+            return controlled(o, r);
         case opSetPgrp:
-            t.foreground = pid_t(r.h.arg);
-            tellAll(t);
-            return answer(r.reply(), opOk, 0);
+            return putForeground(o, r);
         case opSetCtty:
             return controls(o, r);
         case opOpen:
@@ -1185,14 +1258,13 @@ static void fileCall(Open& o, Request& r) {
 }
 
 // An open of a terminal's end: a new open file, whose OK says its
-// readiness as the open makes it, and READY each change from then on. The
-// kernel has no foreground group nor TOSTOP of it before its first READY.
+// readiness as the open makes it, and READY each change from then on.
 static void opened(Terminal& t, bool master, Request& r) {
     const uint32_t access = r.h.arg & O_ACCMODE;
     for (Open& o : opens) {
         if (!o.terminal) {
             const Stat& st = master ? device.st : t.slave.st;
-            o = {&t, master, access != O_WRONLY, access != O_RDONLY, -1, 0, 0, 0};
+            o = {&t, master, access != O_WRONLY, access != O_RDONLY, -1, 0};
             ++(master ? t.masters : t.slaves);
             o.told = eventsOf(o);
             const Endpoint* e = answerOpen(epoll, r, {openedTerminal, 0, st.dev, st.ino, 0, o.told}, &o);

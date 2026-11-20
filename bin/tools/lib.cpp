@@ -167,7 +167,7 @@ usize tools::packetFdCount;
 u8 tools::out[maxPacket - sizeof(Header)];
 
 void tools::reply(int fd, u32 op, u32 arg, const iovec* parts, usize count, const int* fds, usize fdCount) {
-    Header head{op, arg, 0, 0};
+    Header head{op, arg, 0, 0, 0, 0};
     iovec iov[3] = {{&head, sizeof head}};
     if (count > 2 || fdCount > maxFds) {
         fatal("%s: a reply of %zu parts and %zu descriptors", program_invocation_short_name, count, fdCount);

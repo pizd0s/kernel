@@ -27,7 +27,7 @@ void fatal(const char* format, ...) {
 }
 
 void answer(int fd, uint32_t op, uint32_t arg, const void* data, size_t size) {
-    Header h{op, arg, 0, 0};
+    Header h{op, arg, 0, 0, 0, 0};
     const iovec parts[] = {{&h, sizeof h}, {const_cast<void*>(data), size}};
     sendPacket(fd, parts, size ? 2 : 1, nullptr, 0);
 }
@@ -36,9 +36,8 @@ void fail(int fd, int e) {
     answer(fd, opErr, uint32_t(e));
 }
 
-void tell(int fd, uint32_t events, uint32_t foreground, uint32_t flags) {
-    const uint32_t state[] = {foreground, flags};
-    answer(fd, opReady, events, state, sizeof state);
+void tell(int fd, uint32_t events) {
+    answer(fd, opReady, events);
 }
 
 Endpoint* answerOpen(int epoll, const Request& r, Opened what, void* of) {
@@ -50,7 +49,7 @@ Endpoint* answerOpen(int epoll, const Request& r, Opened what, void* of) {
     }
     const uint32_t access = r.h.arg & O_ACCMODE;
     Endpoint* e = watch(epoll, {pair[0], false, access != O_WRONLY, access != O_RDONLY, of});
-    Header h{opOk, 0, 0, 0};
+    Header h{opOk, 0, 0, 0, 0, 0};
     const iovec parts[] = {{&h, sizeof h}, {&what, sizeof what}};
     sendPacket(r.reply(), parts, 2, &pair[1], 1); // a gone asker is its own loss
     close(pair[1]);
@@ -62,7 +61,7 @@ int enroll(int registry, const char* name, uint32_t mode, uint32_t uid, uint32_t
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         return errno;
     }
-    Header h{opRegister, mode, uid, gid};
+    Header h{opRegister, mode, uid, gid, 0, 0};
     const iovec parts[] = {{&h, sizeof h}, {const_cast<char*>(name), strlen(name)}};
     const bool sent = sendPacket(registry, parts, 2, &pair[1], 1) >= 0;
     const int e = errno;

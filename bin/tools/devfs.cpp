@@ -244,14 +244,14 @@ static void openNode(Node& n, Request& r) {
                 return fail(r.reply(), errno);
             }
             watch(epoll, {pair[0], false, reads, writes, &registryTag, false, true});
-            const Header h{opOk, 0, 0, 0};
+            const Header h{opOk, 0, 0, 0, 0, 0};
             const iovec part{const_cast<Header*>(&h), sizeof h};
             sendPacket(r.reply(), &part, 1, &pair[1], 1);
             close(pair[1]);
             return;
         }
         default: {
-            const Header h{opOpen, r.h.arg, r.h.uid, r.h.gid};
+            const Header h{opOpen, r.h.arg, r.h.uid, r.h.gid, r.h.pgrp, r.h.sid};
             const uint32_t mode = 0;
             const iovec parts[] = {{const_cast<Header*>(&h), sizeof h}, {const_cast<uint32_t*>(&mode), sizeof mode}};
             const int reply = r.reply();
@@ -412,7 +412,7 @@ static void fsCall(Request& r) {
             if (!may(*n, r.h, 2)) {
                 return fail(r.reply(), EACCES);
             }
-            const Header ok{opOk, 0, 0, 0};
+            const Header ok{opOk, 0, 0, 0, 0, 0};
             const iovec parts[] = {{const_cast<Header*>(&ok), sizeof ok}};
             sendPacket(r.reply(), parts, 1, &n->fd, 1);
             return;

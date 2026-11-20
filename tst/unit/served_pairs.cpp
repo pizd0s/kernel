@@ -37,6 +37,8 @@ struct Header {
     uint32_t arg;
     uint32_t uid;
     uint32_t gid;
+    uint32_t pgrp;
+    uint32_t sid;
 };
 
 struct Opened {
@@ -126,7 +128,7 @@ static int device(const char* name) {
     struct {
         Header h;
         char name[48];
-    } request{{opRegister, S_IFCHR | 0666, uint32_t(geteuid()), uint32_t(getegid())}, {}};
+    } request{{opRegister, S_IFCHR | 0666, uint32_t(geteuid()), uint32_t(getegid()), 0, 0}, {}};
 
     memcpy(request.name, registered, strlen(registered));
     sendWith(registry, &request, sizeof(Header) + strlen(registered), pair[1]);
@@ -173,7 +175,7 @@ static int opened(int channel, Opened what, int& end) {
     struct {
         Header h;
         Opened what;
-    } ok{{opOk, 0, 0, 0}, what};
+    } ok{{opOk, 0, 0, 0, 0, 0}, what};
 
     sendWith(reply, &ok, sizeof ok, pair[1]);
     close(pair[1]);
@@ -268,7 +270,7 @@ static void serveRead(int end, const char* bytes) {
     struct {
         Header h;
         uint32_t count;
-    } answer{{opOk, 0, 0, 0}, uint32_t(length)};
+    } answer{{opOk, 0, 0, 0, 0, 0}, uint32_t(length)};
 
     assert(send(reply, &answer, sizeof answer, 0) == ssize_t(sizeof answer));
     close(memfd);
@@ -314,11 +316,11 @@ static pid_t directoryServer(int end, int other) {
             struct {
                 Header h;
                 Stat st;
-            } answer{{opOk, 0, 0, 0}, {1, 0, 0, S_IFDIR | 0755, 2, 0, 0, 0, 1, 0}};
+            } answer{{opOk, 0, 0, 0, 0, 0}, {1, 0, 0, S_IFDIR | 0755, 2, 0, 0, 0, 1, 0}};
 
             assert(send(reply, &answer, sizeof answer, 0) == ssize_t(sizeof answer));
         } else {
-            const Header none{opErr, ENOENT, 0, 0};
+            const Header none{opErr, ENOENT, 0, 0, 0, 0};
             assert(send(reply, &none, sizeof none, 0) == ssize_t(sizeof none));
         }
         close(reply);
@@ -351,7 +353,7 @@ static pid_t noDirectories(int a, int b, int aFile, int bFile) {
                 e.fd = -1;
                 continue;
             }
-            const Header no{opErr, ENOTDIR, 0, 0};
+            const Header no{opErr, ENOTDIR, 0, 0, 0, 0};
             assert(send(reply, &no, sizeof no, 0) == ssize_t(sizeof no));
             close(reply);
         }
@@ -379,11 +381,7 @@ int main() {
     assert(poll(&ready, 1, 0) == 1);
     const short first = ready.revents;
 
-    struct {
-        Header h;
-        uint32_t foreground;
-        uint32_t flags;
-    } told{{opReady, POLLIN | POLLOUT, 0, 0}, 0, 0};
+    const Header told{opReady, POLLIN | POLLOUT, 0, 0, 0, 0};
 
     assert(send(end, &told, sizeof told, 0) == ssize_t(sizeof told));
     assert(poll(&ready, 1, 1000) == 1);

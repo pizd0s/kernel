@@ -1,5 +1,5 @@
 //@ compile-flags: -D_GNU_SOURCE
-//@ stdout: "no controlling terminal: /dev/tty ENXIO\ncontrolling terminal: /dev/tty opened, wrote 1\nread: stopped by SIGTTIN\nread, SIGTTIN ignored: EIO\nread, SIGTTIN blocked: EIO\nwrite: 1\nwrite, TOSTOP: stopped by SIGTTOU\nwrite, TOSTOP, SIGTTOU ignored: 1\ntcsetattr: stopped by SIGTTOU\ntcsetpgrp, SIGTTOU ignored: 0\norphaned read: EIO\norphaned write, TOSTOP: EIO\norphaned, stopped: SIGHUP 1 SIGCONT 1\nleader gone, foreground: SIGHUP 1 SIGCONT 0, /dev/tty ENXIO\nnotty, foreground: SIGHUP 1 SIGCONT 1, /dev/tty ENXIO\nnotty: 0, /dev/tty ENXIO\nhangup: read EIO, SIGHUP 1 SIGCONT 1, /dev/tty ENXIO\n"
+//@ stdout: "no controlling terminal: /dev/tty ENXIO\ncontrolling terminal: /dev/tty opened, wrote 1\nread: stopped by SIGTTIN\nread, SIGTTIN ignored: EIO\nread, SIGTTIN blocked: EIO\nwrite: 1\nwrite, TOSTOP: stopped by SIGTTOU\nwrite, TOSTOP, SIGTTOU ignored: 1\ntcsetattr: stopped by SIGTTOU\ntcsetpgrp, SIGTTOU ignored: 0\ntcgetsid: the session, tcgetpgrp: the leader's group\nanother terminal: its slave's tcgetpgrp ENOTTY, tcgetsid ENOTTY, its master's tcgetpgrp 0\ntcsetpgrp, a group of another session: EPERM\norphaned read: EIO\norphaned write, TOSTOP: EIO\norphaned, stopped: SIGHUP 1 SIGCONT 1\nleader gone, foreground: SIGHUP 1 SIGCONT 0, /dev/tty ENXIO\nnotty, foreground: SIGHUP 1 SIGCONT 1, /dev/tty ENXIO\nnotty: 0, /dev/tty ENXIO\nhangup: read EIO, SIGHUP 1 SIGCONT 1, /dev/tty ENXIO\n"
 
 // Job control on a session's controlling terminal, a pseudoterminal, as
 // Linux's: what a group out of the foreground gets of a read, a write and
@@ -40,6 +40,8 @@ static const char* errorName(int e) {
             return "EINTR";
         case EPERM:
             return "EPERM";
+        case ENOTTY:
+            return "ENOTTY";
         default:
             return "another error";
     }
@@ -58,6 +60,11 @@ static const char* signalName(int sig) {
         default:
             return "another signal";
     }
+}
+
+// What a call gave: 0 or the error, as a name.
+static const char* outcome(int r) {
+    return r == 0 ? "0" : errorName(errno);
 }
 
 // What a call of the case named what gave: its count, or its error.
@@ -318,6 +325,28 @@ static void leaderLetsGo() {
     tell(line);
 }
 
+// Who the controlling terminal says is the session and its foreground,
+// and that a terminal no session controls is no one's to ask but by its
+// master; a group of another session cannot be the foreground.
+static void sessionCalls() {
+    char line[256];
+    const char* sid = tcgetsid(STDIN_FILENO) == getsid(0) ? "the session" : "another";
+    const char* group = tcgetpgrp(STDIN_FILENO) == getpgrp() ? "the leader's group" : "another";
+    snprintf(line, sizeof line, "tcgetsid: %s, tcgetpgrp: %s\n", sid, group);
+    tell(line);
+    int master, slave;
+    assert(openpty(&master, &slave, nullptr, nullptr, nullptr) == 0);
+    const char* slaveGroup = tcgetpgrp(slave) < 0 ? errorName(errno) : "a group";
+    const char* slaveSession = tcgetsid(slave) < 0 ? errorName(errno) : "a session";
+    snprintf(line, sizeof line, "another terminal: its slave's tcgetpgrp %s, tcgetsid %s, its master's tcgetpgrp %d\n", slaveGroup, slaveSession,
+             int(tcgetpgrp(master)));
+    tell(line);
+    close(slave);
+    close(master);
+    snprintf(line, sizeof line, "tcsetpgrp, a group of another session: %s\n", outcome(tcsetpgrp(STDIN_FILENO, 1)));
+    tell(line);
+}
+
 static void noTerminal() {
     char line[128];
     snprintf(line, sizeof line, "no controlling terminal: /dev/tty %s\n", openTerminal());
@@ -418,6 +447,7 @@ int main() {
     alarm(60);
     runCase(noTerminal, false);
     runCase(backgroundCalls, true);
+    runCase(sessionCalls, true);
     runCase(orphanedCalls, true);
     runCase(orphanedStopped, true);
     runCase(leaderGoes, true);
