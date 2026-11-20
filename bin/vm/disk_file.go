@@ -248,10 +248,10 @@ func (f *DiskFile) statfs(p *Process, st *Statfs) error {
 	return nil
 }
 
-func (f *DiskFile) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
-	if out == Transfer(f) && in != out {
-		return in.copyFileRange(p, in, out, from, to, n)
-	}
+func (f *DiskFile) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+	return out.copyFrom(p, f, from, to, n)
+}
 
-	return copyThrough(p, in, out, from, to, n)
+func (f *DiskFile) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
+	return copyThrough(p, in, f, from, to, n)
 }

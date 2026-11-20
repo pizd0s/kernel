@@ -684,12 +684,12 @@ func (f *RemoteFD) seek(p *Process, off int64, whence int) (int64, error) {
 	return base + off, nil
 }
 
-func (f *RemoteFD) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
-	if out == Transfer(f) && in != out {
-		return in.copyFileRange(p, in, out, from, to, n)
-	}
+func (f *RemoteFD) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+	return out.copyFrom(p, f, from, to, n)
+}
 
-	return copyThrough(p, in, out, from, to, n)
+func (f *RemoteFD) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
+	return copyThrough(p, in, f, from, to, n)
 }
 
 func (f *RemoteFD) readdir(p *Process, b []byte) (int, error) {

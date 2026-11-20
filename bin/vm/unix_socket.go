@@ -464,6 +464,10 @@ func (s *UnixSocket) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (s *UnixSocket) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
+func (s *UnixSocket) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+	return 0, EINVAL
+}
+
+func (s *UnixSocket) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }

@@ -59,7 +59,8 @@ type Transfer interface {
 	write(p *Process, b []byte, mode IoMode) (int, error)
 	pread(p *Process, b []byte, off int64) (int, error)
 	pwrite(p *Process, b []byte, off int64) (int, error)
-	copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error)
+	copyTo(p *Process, out Transfer, from, to int64, n int) (int, error)
+	copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error)
 }
 
 type Seeker interface {

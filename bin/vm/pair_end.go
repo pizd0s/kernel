@@ -745,7 +745,11 @@ func (e *PairEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (e *PairEnd) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
+func (e *PairEnd) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+	return 0, EINVAL
+}
+
+func (e *PairEnd) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 

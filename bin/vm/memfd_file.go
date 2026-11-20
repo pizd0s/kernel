@@ -215,27 +215,28 @@ func (f *MemfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 	return off, nil
 }
 
-func (f *MemfdFile) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
-	if in == out {
-		return 0, EINVAL
-	}
-
+func (f *MemfdFile) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
 	size := int64(len(f.mem))
 
-	if out == Transfer(f) {
-		switch {
-		case n == 0:
-			return 0, nil
-		case to >= size:
-			return 0, ENOSPC
-		}
-
-		return in.pread(p, f.mem[to:to+min(int64(n), size-to)], from)
-	}
-
-	if n == 0 || from >= size {
+	switch {
+	case out == Transfer(f):
+		return 0, EINVAL
+	case n == 0 || from >= size:
 		return 0, nil
 	}
 
 	return out.pwrite(p, f.mem[from:from+min(int64(n), size-from)], to)
+}
+
+func (f *MemfdFile) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
+	size := int64(len(f.mem))
+
+	switch {
+	case n == 0:
+		return 0, nil
+	case to >= size:
+		return 0, ENOSPC
+	}
+
+	return in.pread(p, f.mem[to:to+min(int64(n), size-to)], from)
 }

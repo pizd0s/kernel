@@ -275,7 +275,11 @@ func (ep *Epoll) pwrite(p *Process, b []byte, off int64) (int, error) {
 	return 0, EINVAL
 }
 
-func (ep *Epoll) copyFileRange(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
+func (ep *Epoll) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+	return 0, EINVAL
+}
+
+func (ep *Epoll) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 

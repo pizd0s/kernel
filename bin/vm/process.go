@@ -5224,13 +5224,9 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 		return p.result(0, err)
 	}
 
-	count, err := w.copyFileRange(p, r, w, from, to, int(n))
+	count, err := r.copyTo(p, w, from, to, int(n))
 
 	if count == 0 && err != nil {
-		if err == ESPIPE {
-			err = EINVAL
-		}
-
 		return p.result(0, err)
 	}
 
