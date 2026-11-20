@@ -31,8 +31,20 @@ func mmap(size int, prot int) []byte {
 	return throw2(syscall.Mmap(-1, 0, size, prot, syscall.MAP_PRIVATE|syscall.MAP_ANON|syscall.MAP_NORESERVE))
 }
 
-func newRegion(memory *MemoryMeta) []byte {
-	size := uint64(instanceDistance)
+func distanceOf(size uint32) uint64 {
+	return (uint64(size) + 8 + 4095) &^ 4095
+}
+
+func profileBytes(meta *Meta) uint64 {
+	if meta.memory == nil || meta.memory.profile == 0 {
+		return 0
+	}
+
+	return (uint64(len(meta.memory.sites))*profileCounterBytes + 4095) &^ 4095
+}
+
+func newRegion(below, distance uint64, memory *MemoryMeta) []byte {
+	size := below + distance
 
 	if memory != nil {
 		if memory.max > 65536 || memory.min > memory.max {

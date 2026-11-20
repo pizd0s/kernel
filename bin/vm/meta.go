@@ -144,7 +144,7 @@ func decodeNote(data []byte) *Meta {
 	r := &MetaReader{data: data}
 	m := &Meta{instanceSize: r.u32()}
 
-	if uint64(m.instanceSize) > instanceDistance-boundSlack {
+	if m.instanceSize > 1<<30 {
 		throwFmt("instance of %d bytes", m.instanceSize)
 	}
 
@@ -203,7 +203,7 @@ func decodeNote(data []byte) *Meta {
 			}
 		}
 
-		if m.memory.tail == 0 || m.memory.profile < headerSize || m.memory.profile&7 != 0 || uint64(m.memory.profile)+uint64(len(m.memory.sites))*profileCounterBytes > uint64(m.instanceSize) {
+		if m.memory.tail == 0 || m.memory.profile != 1 {
 			throwFmt("invalid memory tail profile")
 		}
 	}

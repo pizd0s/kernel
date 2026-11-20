@@ -3,11 +3,13 @@
 
 // The stubs the code calls (symbols.go). Their arguments come in registers
 // as Go's ABIInternal places them, and the code keeps the memory's bound
-// in R13 and its base in R15 across them; the instance lies 1<<30 below the
-// base (instanceDistance, abi.go), and g.instance holds it too; R14 is g.
-// Go never preempts assembly. Offsets: g.stack.hi 8, g.stackguard0 16,
-// g.instance 472 (lib/goruntime); the instance's memory 0, bound 16, stack
-// limit 24, jump frame 48, base 120 (abi.go). The stack moves by PUSH, POP
+// in R13 and its base in R15 across them; the instance lies below the base,
+// the module's distance, the word just below the base its address, and
+// g.instance holds its cell, the word of the kernel's that holds its
+// address as it moves (offCell, abi.go); R14 is g. Go never preempts
+// assembly. Offsets: g.stack.hi 8, g.stackguard0 16, g.instance 472
+// (lib/goruntime); the instance's memory 0, bound 16, stack limit 24, jump
+// frame 48, base 120, cell 136 (abi.go). The stack moves by PUSH, POP
 // and ADJSP, which the assembler puts in the stack pointer table: Go
 // unwinds through these frames when it grows the stack. A function that
 // writes the stack pointer cannot be unwound through, so none of these
@@ -56,7 +58,7 @@ TEXT ·w2oMorestack(SB), NOSPLIT|NOFRAME, $0-0
 	JA	fits
 	MOVQ	8(R14), AX
 	SUBQ	SP, AX
-	LEAQ	-1073741824(R15), BX
+	MOVQ	-8(R15), BX
 	CMPQ	AX, 24(BX)
 	JBE	grow
 	// Past the limit: the trap. The assembler's stack pointer table follows
@@ -106,10 +108,12 @@ fits:
 // w2oInterruptCall is the call Go's runtime injects where it interrupts the
 // code (lib/goruntime), and the call a return from an import makes while
 // the instance's interrupt word is set. It calls helperInterrupt with the
-// instance g.instance holds: Go may interrupt the code just after a call of
-// Go, while it reads the base again, where R15 is not the base yet. It
-// comes back with every register and flag as it was, but the memory's
-// bound, read again: a handler may have grown it. The base never moves.
+// instance g.instance's cell holds: Go may interrupt the code just after a
+// call of Go, while it reads the base again, where R15 is the cell or the
+// instance yet. A handler may move the memory, and the instance with it:
+// it comes back with every register and flag as it was, but the memory's
+// bound, read again, and R15 where it was the base or the instance, which
+// becomes the new one.
 TEXT ·w2oInterruptCall(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 	PUSHQ	BP
@@ -127,7 +131,7 @@ TEXT ·w2oInterruptCall(SB), NOSPLIT|NOFRAME, $0-0
 	PUSHQ	R11
 	PUSHQ	R12
 	PUSHQ	R13
-	ADJSP	$136
+	ADJSP	$152
 	MOVSD	X0, 16(SP)
 	MOVSD	X1, 24(SP)
 	MOVSD	X2, 32(SP)
@@ -145,9 +149,24 @@ TEXT ·w2oInterruptCall(SB), NOSPLIT|NOFRAME, $0-0
 	MOVSD	X14, 128(SP)
 	MOVQ	R15, 8(SP)
 	MOVQ	472(R14), AX
+	MOVQ	(AX), AX
 	MOVQ	AX, 0(SP)
+	MOVQ	AX, 136(SP)
+	MOVQ	(AX), AX
+	MOVQ	AX, 144(SP)
 	CALL	·helperInterrupt(SB)
+	MOVQ	472(R14), AX
+	MOVQ	(AX), AX
 	MOVQ	8(SP), R15
+	CMPQ	R15, 144(SP)
+	JNE	notbase
+	MOVQ	(AX), R15
+	JMP	placed
+notbase:
+	CMPQ	R15, 136(SP)
+	JNE	placed
+	MOVQ	AX, R15
+placed:
 	MOVSD	16(SP), X0
 	MOVSD	24(SP), X1
 	MOVSD	32(SP), X2
@@ -163,7 +182,7 @@ TEXT ·w2oInterruptCall(SB), NOSPLIT|NOFRAME, $0-0
 	MOVSD	112(SP), X12
 	MOVSD	120(SP), X13
 	MOVSD	128(SP), X14
-	ADJSP	$-136
+	ADJSP	$-152
 	POPQ	R13
 	POPQ	R12
 	POPQ	R11
@@ -177,6 +196,7 @@ TEXT ·w2oInterruptCall(SB), NOSPLIT|NOFRAME, $0-0
 	POPQ	BX
 	POPQ	AX
 	MOVQ	472(R14), R13
+	MOVQ	(R13), R13
 	MOVQ	16(R13), R13
 	POPFQ
 	POPQ	BP
@@ -216,7 +236,8 @@ found:
 	MOVQ	-8(SI), R8
 	CMPQ	R8, 64(AX)
 	JNE	fail
-	MOVQ	CX, 472(R14)
+	MOVQ	136(CX), R8
+	MOVQ	R8, 472(R14)
 	MOVQ	16(CX), R13
 	MOVQ	(CX), R15
 	MOVQ	R9, R8
@@ -326,7 +347,8 @@ TEXT ·w2oResume(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 start:
 	MOVQ	0(AX), R13
-	MOVQ	R13, 472(R14)
+	MOVQ	136(R13), R15
+	MOVQ	R15, 472(R14)
 	MOVQ	(R13), R15
 	LEAQ	-512(SP), DX
 	SUBQ	16(AX), DX

@@ -3779,7 +3779,6 @@ namespace {
 
     struct Layout {
         i32 memoryEnd{};
-        i32 tailProfile{};
         // shadow is the slot holding the shadow map's base, in an asan object.
         i32 shadow{};
         Slice<i32> globals{};
@@ -4677,8 +4676,11 @@ static constexpr Int offMemSize = 8;
 static constexpr Int offMemBound = 16;
 
 // instanceDistance is how far below the memory's base the instance lies:
-// the code reaches the instance's words through memReg (instanceAt).
-static constexpr Int instanceDistance = Int(1) << 30;
+// the code reaches the instance's words through memReg (instanceAt). It is
+// the module's: its layout's size and the word below the base, which keeps
+// the instance's address, up to a page (distanceOf); the tail profile's
+// counters lie below the instance.
+static Int instanceDistance = 0;
 
 static constexpr Int offStackLimit = 24;
 
@@ -4705,7 +4707,12 @@ static constexpr Int offBase = offJump + 8 * jumpWords;
 
 static constexpr Int offInterrupt = offBase + 8;
 
-static constexpr Int headerSize = offInterrupt + 8;
+// offCell is the instance's word that holds where the cell is: the word
+// of the kernel's that holds the instance's address as it moves, which the
+// entry thunks put in g.instance.
+static constexpr Int offCell = offInterrupt + 8;
+
+static constexpr Int headerSize = offCell + 8;
 
 static constexpr Int boundSlack = 1024;
 
@@ -18959,7 +18966,7 @@ static MInst lowererTailCounter(Lowerer* l, u8 kind, i64 amount, u32 pos) {
 // wasm instruction pos of the function being lowered: its slot.
 static Mem lowererProfileCounter(Lowerer* l, u8 kind, u32 pos) {
     ObjCode* oc = l->oc;
-    const i32 slot = l->lay->tailProfile + convert<i32>(length(oc->sites)) * 8;
+    const i32 slot = -8 * (convert<i32>(length(oc->sites)) + 1);
     const u32 offset = pos ? convert<u32>(l->m->codeOffset) + pos : 0;
     oc->sites = appendValues(oc->sites, ProfileSite{convert<u32>(l->f->index), offset, kind});
     return instanceMem(slot);
@@ -19654,7 +19661,7 @@ static Meta* objCodeDescription(ObjCode* oc) {
             meta->memory->tailEnd = convert<u32>(lay->memoryEnd);
         }
         if (m->tailProfile) {
-            meta->memory->profile = convert<u32>(lay->tailProfile);
+            meta->memory->profile = 1;
             meta->memory->sites = oc->sites;
         }
         if (m->asan) {
@@ -20735,8 +20742,8 @@ static i32 objCodeThunk(ObjCode* oc, String name, Slice<ValType> params, Slice<V
     Slice<VReg> rregs = temporary1103.v0;
     Slice<Int> rslots = temporary1103.v1;
     Int nall = temporary1103.v2;
-    // The frame's last word keeps the instance g had: the thunk's own
-    // takes its place while the code runs.
+    // The frame's last word keeps the cell g had: the instance's own takes
+    // its place while the code runs.
     i32 saved = convert<i32>(8 * nall);
     i32 frame = saved + 8;
     i32 total = 8 + frame;
@@ -20750,7 +20757,8 @@ static i32 objCodeThunk(ObjCode* oc, String name, Slice<ValType> params, Slice<V
     asmAluRI(a, aluSub, 8, RSP, convert<i64>(frame));
     asmLoad(a, 8, 8, false, RDX, baseAt(R14, gInstance));
     asmStore(a, 8, RDX, rspAt(saved));
-    asmStore(a, 8, RAX, baseAt(R14, gInstance));
+    asmLoad(a, 8, 8, false, RDX, baseAt(RAX, offCell));
+    asmStore(a, 8, RDX, baseAt(R14, gInstance));
     asmLoad(a, 8, 8, false, boundReg, baseAt(RAX, offMemBound));
     i32 goArgs = total + 8;
     // The parameters move from Go's convention to the internal one, as
@@ -23196,12 +23204,13 @@ static Mem instanceMem(i32 off) {
 }
 
 // reloadAfterGo loads what the code keeps in registers again after a
-// call of Go, which keeps none of them: the instance from g, where the
-// entry thunk put it, then the memory's bound, which the call may have
-// moved by growing the memory, and base.
+// call of Go, which keeps none of them: the instance from the cell g
+// holds, where the entry thunk put it, then the memory's bound and base,
+// which the call may have moved by growing the memory.
 static void objCodeReloadAfterGo(ObjCode* oc) {
     Asm* a = &oc->a;
     asmLoad(a, 8, 8, false, memReg, baseAt(R14, gInstance));
+    asmLoad(a, 8, 8, false, memReg, baseAt(memReg, 0));
     asmLoad(a, 8, 8, false, boundReg, baseAt(memReg, offMemBound));
     asmLoad(a, 8, 8, false, memReg, baseAt(memReg, offMem));
 }
@@ -24938,7 +24947,7 @@ static Bitset newBitset(Int n) {
 }
 
 static Layout* newLayout(Module* m) {
-    Layout* l = activePool->make<Layout>(Layout{offMemSize, {}, {}, {}, {}, {}, {}});
+    Layout* l = activePool->make<Layout>(Layout{offMemSize, {}, {}, {}, {}, {}});
     i32 off = headerSize;
     if (m->memoryTail != 0) {
         l->memoryEnd = off;
@@ -24969,14 +24978,14 @@ static Layout* newLayout(Module* m) {
     off += convert<i32>(length(m->funcs)) * descBytes;
     l->dropped = off;
     off += convert<i32>(length(m->datas) + length(m->elems));
-    // The tail profile's counters close the instance: the functions make
-    // them as they are lowered, and compileWithOptions sizes it after.
-    if (m->tailProfile) {
-        off = (off + 7) & ~7;
-        l->tailProfile = off;
-    }
     l->size = (off + 15) & ~15;
     return l;
+}
+
+// distanceOf is how far below the memory's base an instance of size bytes
+// lies: its words and the word that keeps its address, up to a page.
+static Int distanceOf(Int size) {
+    return (size + 8 + 4095) & ~Int(4095);
 }
 
 static Uint nextPowerOfTwo(Int lengthValue) {
@@ -26788,6 +26797,7 @@ static void compileWithOptions(CompileOptions options) {
     code->sites = makeSlice<ProfileSite>(0);
     code->initFn = moduleAddInitFunction(module);
     code->lay = newLayout(module);
+    instanceDistance = distanceOf(code->lay->size);
     code->funcAt = makeSlice<i32>(length(module->funcs));
     code->importSyms = makeSlice<String>(module->importedFuncs);
     code->importIntrinsics = makeSlice<Int>(module->importedFuncs);
@@ -26812,11 +26822,7 @@ static void compileWithOptions(CompileOptions options) {
         objCodeEmitFunction(code, i, machine, allocation);
         machinePool.clear();
     }
-    if (module->tailProfile) {
-        code->lay->size = (code->lay->tailProfile + convert<i32>(length(code->sites)) * 8 + 15) & ~15;
-    }
-    if (code->lay->size > instanceDistance - boundSlack) {
-        // The instance ends below the boundSlack bytes before the memory.
+    if (code->lay->size > (Int(1) << 30)) {
         compilerError(String("unsupported: an instance larger than 1 GiB"));
     }
     objCodeExportThunks(code);

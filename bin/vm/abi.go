@@ -10,8 +10,8 @@ const (
 	offJump             = 48
 	offBase             = offJump + 8*jumpWords
 	offInterrupt        = offBase + 8
-	headerSize          = offInterrupt + 8
-	instanceDistance    = 1 << 30
+	offCell             = offInterrupt + 8
+	headerSize          = offCell + 8
 	gInstance           = 472
 	jumpPC              = 0
 	jumpSP              = 1

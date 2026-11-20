@@ -27,6 +27,8 @@ type Instance struct {
 	code *Code
 
 	region []byte
+	below  uint64
+	cell   uintptr
 	holds  atomic.Int32
 	block  []byte
 	memory *LinearMemory
@@ -46,6 +48,16 @@ func (i *Instance) attach(host any) {
 
 func (i *Instance) memoryBytes() []byte {
 	return i.mem
+}
+
+func (i *Instance) anchor() {
+	distance := distanceOf(i.obj.meta.instanceSize)
+	ctx := i.ctx()
+
+	i.cell = ctx
+	i.put64(offCell, uint64(uintptr(unsafe.Pointer(&i.cell))))
+	i.put64(offMem, uint64(ctx)+distance)
+	binary.LittleEndian.PutUint64(i.region[i.below+distance-8:], uint64(ctx))
 }
 
 func (i *Instance) ctx() uintptr {
@@ -83,8 +95,9 @@ func instantiate(name string, obj *ElfObject, imports Imports, stack uint64) *In
 
 func newInstance(c *Code, imports Imports, stack uint64) *Instance {
 	meta := c.obj.meta
-	region := newRegion(meta.memory)
-	i := &Instance{name: c.name, obj: c.obj, code: c, region: region, block: region[:max(meta.instanceSize, headerSize)]}
+	below, distance := profileBytes(meta), distanceOf(meta.instanceSize)
+	region := newRegion(below, distance, meta.memory)
+	i := &Instance{name: c.name, obj: c.obj, code: c, region: region, below: below, block: region[below : below+uint64(max(meta.instanceSize, headerSize))]}
 
 	i.holds.Store(1)
 
@@ -96,7 +109,7 @@ func newInstance(c *Code, imports Imports, stack uint64) *Instance {
 		}
 	}()
 
-	i.put64(offMem, uint64(i.ctx())+instanceDistance)
+	i.anchor()
 	i.put64(offHost, uint64(uintptr(unsafe.Pointer(i))))
 	i.put64(offStackLimit, stack)
 
@@ -124,7 +137,7 @@ func newInstance(c *Code, imports Imports, stack uint64) *Instance {
 	}
 
 	if meta.memory != nil {
-		i.memory = newMemory(region[instanceDistance:], meta.memory.min, meta.memory.max, meta.memory.shadow != 0)
+		i.memory = newMemory(region[below+distance:], meta.memory.min, meta.memory.max, meta.memory.shadow != 0)
 
 		if meta.memory.tail != 0 {
 			i.memory.tailUsed = true
@@ -180,10 +193,6 @@ func (i *Instance) clone(imports *Kernel, stack uint64, from, to uint64) *Instan
 	}
 
 	copy(c.block[headerSize:], i.block[headerSize:])
-
-	if meta := i.obj.meta.memory; meta != nil && meta.profile != 0 {
-		clear(c.block[meta.profile : uint64(meta.profile)+uint64(len(meta.sites))*profileCounterBytes])
-	}
 
 	if meta := i.obj.meta.memory; meta != nil && meta.shadow != 0 {
 		c.put64(meta.shadow, uint64(uintptr(unsafe.Pointer(unsafe.SliceData(c.memory.shadow)))))
@@ -486,8 +495,8 @@ func (i *Instance) tailProfile() TailProfile {
 	rows := make(map[int]*TailProfileRow)
 
 	for k, site := range meta.sites {
-		p := int(meta.profile) + k*profileCounterBytes
-		count := binary.LittleEndian.Uint64(i.block[p : p+profileCounterBytes])
+		at := int(i.below) - (k+1)*profileCounterBytes
+		count := binary.LittleEndian.Uint64(i.region[at : at+profileCounterBytes])
 
 		if count == 0 {
 			continue
