@@ -42,7 +42,6 @@ const (
 	pageTail      = 0xfd
 	pageSlab      = 0xfc
 	noPage        = -1
-	segmentHops   = 8
 )
 
 type Heap struct {
@@ -51,7 +50,7 @@ type Heap struct {
 	pages    []HeapPage
 	segments []HeapSegment
 
-	free    int32
+	runs    [segmentPages + 1]int32
 	classes [smallClasses]HeapClass
 }
 
@@ -69,10 +68,10 @@ type HeapPage struct {
 }
 
 type HeapSegment struct {
-	mask   uint32
-	linked bool
-	prev   int32
-	next   int32
+	mask    uint32
+	longest uint8
+	prev    int32
+	next    int32
 }
 
 type HeapClass struct {
@@ -96,7 +95,11 @@ func pagesFor(n uint64) uint32 {
 
 func newHeap(base uint32) *Heap {
 	first := (uint64(base) + heapPageSize - 1) &^ (heapPageSize - 1)
-	h := &Heap{base: uint32(first), top: uint32(first), free: noPage}
+	h := &Heap{base: uint32(first), top: uint32(first)}
+
+	for i := range h.runs {
+		h.runs[i] = noPage
+	}
 
 	for i := range h.classes {
 		h.classes[i] = HeapClass{noPage, noPage}
@@ -109,45 +112,57 @@ func (h *Heap) address(page int32) uint32 {
 	return h.base + uint32(page)<<heapPageShift
 }
 
-func (h *Heap) link(s int32) {
-	seg := &h.segments[s]
+func longestRun(mask uint32) uint8 {
+	n := uint8(0)
 
-	seg.linked, seg.prev, seg.next = true, noPage, h.free
-
-	if h.free != noPage {
-		h.segments[h.free].prev = s
+	for ; mask != 0; n++ {
+		mask &= mask >> 1
 	}
 
-	h.free = s
+	return n
 }
 
-func (h *Heap) unlink(s int32) {
+func (h *Heap) file(s int32) {
 	seg := &h.segments[s]
+	longest := longestRun(seg.mask)
 
-	seg.linked = false
-
-	if seg.prev != noPage {
-		h.segments[seg.prev].next = seg.next
-	} else {
-		h.free = seg.next
+	if longest == seg.longest {
+		return
 	}
 
-	if seg.next != noPage {
-		h.segments[seg.next].prev = seg.prev
+	if seg.longest != 0 {
+		if seg.prev != noPage {
+			h.segments[seg.prev].next = seg.next
+		} else {
+			h.runs[seg.longest] = seg.next
+		}
+
+		if seg.next != noPage {
+			h.segments[seg.next].prev = seg.prev
+		}
+	}
+
+	seg.longest = longest
+
+	if longest != 0 {
+		seg.prev, seg.next = noPage, h.runs[longest]
+
+		if seg.next != noPage {
+			h.segments[seg.next].prev = s
+		}
+
+		h.runs[longest] = s
 	}
 }
 
 func (h *Heap) releasePages(first int32, count uint32) {
 	for q := first; q < first+int32(count); q++ {
 		h.pages[q].kind = pageFree
+		h.segments[q/segmentPages].mask |= 1 << (q % segmentPages)
+	}
 
-		s := q / segmentPages
-
-		h.segments[s].mask |= 1 << (q % segmentPages)
-
-		if !h.segments[s].linked {
-			h.link(s)
-		}
+	for s := first / segmentPages; s <= (first+int32(count)-1)/segmentPages; s++ {
+		h.file(s)
 	}
 }
 

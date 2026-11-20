@@ -3676,13 +3676,13 @@ func (p *Process) heapGrow(h *Heap) bool {
 		return false
 	}
 
-	h.segments = append(h.segments, HeapSegment{mask: math.MaxUint32})
+	h.segments = append(h.segments, HeapSegment{mask: math.MaxUint32, prev: noPage, next: noPage})
 
 	for range segmentPages {
 		h.pages = append(h.pages, HeapPage{kind: pageFree})
 	}
 
-	h.link(int32(len(h.segments) - 1))
+	h.file(int32(len(h.segments) - 1))
 
 	return true
 }
@@ -3713,18 +3713,18 @@ func (p *Process) takePages(h *Heap, count uint32) (int32, bool) {
 	}
 
 	for {
-		hops := 0
+		for k := count; k <= segmentPages; k++ {
+			s := h.runs[k]
 
-		for s := h.free; s != noPage && hops < segmentHops; s, hops = h.segments[s].next, hops+1 {
+			if s == noPage {
+				continue
+			}
+
 			seg := &h.segments[s]
 			runs := seg.mask
 
-			for i := uint32(1); i < count && runs != 0; i++ {
+			for i := uint32(1); i < count; i++ {
 				runs &= runs >> 1
-			}
-
-			if runs == 0 {
-				continue
 			}
 
 			start := bits.TrailingZeros32(runs)
@@ -3735,10 +3735,7 @@ func (p *Process) takePages(h *Heap, count uint32) (int32, bool) {
 			}
 
 			seg.mask &^= need << start
-
-			if seg.mask == 0 {
-				h.unlink(s)
-			}
+			h.file(s)
 
 			return first, true
 		}
@@ -3795,9 +3792,7 @@ func (p *Process) takeSegments(h *Heap, count uint32) (int32, bool) {
 			seg.mask &^= 1<<n - 1
 		}
 
-		if seg.mask == 0 && seg.linked {
-			h.unlink(int32(s))
-		}
+		h.file(int32(s))
 
 		left -= n
 	}
@@ -4035,13 +4030,11 @@ func (p *Process) resizeRun(page int32, n uint64) bool {
 	}
 
 	for q := page + int32(run); q < end; q++ {
-		s := q / segmentPages
+		h.segments[q/segmentPages].mask &^= 1 << (q % segmentPages)
+	}
 
-		h.segments[s].mask &^= 1 << (q % segmentPages)
-
-		if h.segments[s].mask == 0 && h.segments[s].linked {
-			h.unlink(s)
-		}
+	for s := (page + int32(run)) / segmentPages; s <= (end-1)/segmentPages; s++ {
+		h.file(s)
 	}
 
 	h.markRun(page, count)
