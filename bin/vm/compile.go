@@ -6,6 +6,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -94,12 +95,21 @@ func (k *Kernel) compileObject(module []byte, options CompileOptions) ([]byte, e
 
 	status := p.run(&ExecImage{code: code, argv: append([]string{"aot"}, options.arguments()...), envp: compilerEnv()})
 	text := strings.TrimSpace(string(diagnostic.bytes()))
+	failed := ""
 
 	switch {
 	case status&0x7f != 0:
-		return nil, fmt.Errorf("aot killed by %s: %s", signalName(status&0x7f), text)
+		failed = fmt.Sprintf("aot killed by %s: %s", signalName(status&0x7f), text)
 	case status != 0:
-		return nil, fmt.Errorf("aot exited with code %d: %s", status>>8&0xff, text)
+		failed = fmt.Sprintf("aot exited with code %d: %s", status>>8&0xff, text)
+	}
+
+	if failed != "" && p.starved {
+		return nil, fmt.Errorf("%s: %w", failed, ENOMEM)
+	}
+
+	if failed != "" {
+		return nil, errors.New(failed)
 	}
 
 	b := out.bytes()
@@ -176,8 +186,12 @@ func (k *Kernel) compileModule(data []byte, options CompileOptions) (obj *ElfObj
 	if e := try(func() {
 		b, failed := k.compileObject(data, options)
 
+		if failed != nil && !errors.Is(failed, ENOMEM) {
+			failed = fmt.Errorf("%s: %w", failed, ENOEXEC)
+		}
+
 		if failed != nil {
-			err = fmt.Errorf("%s: %w", failed, ENOEXEC)
+			err = failed
 
 			return
 		}

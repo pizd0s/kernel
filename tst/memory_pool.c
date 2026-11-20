@@ -12,12 +12,21 @@
 // fifth's, has to move for. With the argument "running" it runs a loop
 // that makes no call as it moves, else it waits in a read. Every child
 // keeps what it holds, and what the growth gives reads zero.
+//
+// With the argument "exec" a child takes the program on descriptor 3, a
+// disk, into its memory as a memfd, and once the filler holds all the
+// memory execs it: the kernel has not compiled it, its compiler finds no
+// room, and the exec fails with ENOMEM, not ENOEXEC, which a shell takes
+// for a script.
 
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -100,7 +109,53 @@ static void filler(int in, int out) {
     _exit(0);
 }
 
+static int execNoRoom(void) {
+    int go[2], back[2];
+    assert(pipe(go) == 0 && pipe(back) == 0);
+    pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        struct stat st;
+        assert(fstat(3, &st) == 0 && st.st_size > 0);
+        char* image = malloc((size_t)st.st_size);
+        assert(image);
+        for (off_t at = 0; at < st.st_size;) {
+            ssize_t n = pread(3, image + at, (size_t)(st.st_size - at), at);
+            assert(n > 0);
+            at += n;
+        }
+        int fd = memfd_create(image, (size_t)st.st_size, O_RDONLY);
+        assert(fd >= 0);
+        hear(go[0]);
+        char* args[] = {"busybox", "true", NULL};
+        char* env[] = {NULL};
+        fexecve(fd, args, env);
+        int error = errno;
+        assert(write(back[1], &error, sizeof error) == sizeof error);
+        _exit(0);
+    }
+    int in[2], out[2];
+    assert(pipe(in) == 0 && pipe(out) == 0);
+    pid_t full = fork();
+    assert(full >= 0);
+    if (full == 0) {
+        filler(in[0], out[1]);
+    }
+    size_t taken;
+    assert(read(out[0], &taken, sizeof taken) == sizeof taken);
+    tell(go[1], 'e');
+    int error, status;
+    assert(read(back[0], &error, sizeof error) == sizeof error);
+    say(error == ENOMEM ? "exec with no room: ENOMEM\n" : error == ENOEXEC ? "exec with no room: ENOEXEC\n" : "exec with no room: another error\n");
+    tell(in[1], 'x');
+    assert(waitpid(full, &status, 0) == full && waitpid(child, &status, 0) == child);
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 1 && strcmp(argv[1], "exec") == 0) {
+        return execNoRoom();
+    }
     int running = argc > 1 && strcmp(argv[1], "running") == 0;
     int in[count + 1][2], out[count + 1][2];
     pid_t pid[count + 1];

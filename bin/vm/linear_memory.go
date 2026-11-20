@@ -112,6 +112,10 @@ func (m *LinearMemory) grow(delta uint32, by *Process) uint32 {
 	old := m.pages
 
 	if old+uint64(delta) > m.max || !m.owner.reach(old+uint64(delta), by, true) {
+		if q := m.owner.proc; q != nil {
+			q.starved = true
+		}
+
 		return math.MaxUint32
 	}
 

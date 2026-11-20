@@ -267,6 +267,7 @@ type Process struct {
 	turns    SpareWaiters[Turn]
 
 	unwound bool
+	starved bool
 
 	asking    *Answer
 	cancelled bool
@@ -514,7 +515,14 @@ func (p *Process) runFrom(img *ExecImage, i *Instance, enter func()) int {
 
 func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *ExecImage, status int) {
 	if i == nil {
-		i = throw2(newInstance(p.k.pool, p, img.code, runStack))
+		var err error
+
+		if i, err = newInstance(p.k.pool, p, img.code, runStack); err != nil {
+			p.starved = true
+
+			throw(err)
+		}
+
 		i.attach(p)
 		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
 		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0

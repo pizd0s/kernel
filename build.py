@@ -1012,7 +1012,7 @@ E2E_TESTED = {
     "asan_bounds": [vm, aot_native, wazero, rootfs],
     "bounded_copy_loops": [vm, aot_native, wazero, rootfs],
     "chaos": [vm, vm_chaos, aot_native, aot_native_chaos, chaos_check, rootfs, tests_image],
-    "memory_pool": [vm, memory_pool],
+    "memory_pool": [vm, memory_pool, busybox_exe],
     "cli_errors": [vm, aot_native],
     "compiled_calls": [vm, rootfs, busybox],
     "compiler_modes": [vm, aot_native, rootfs],
