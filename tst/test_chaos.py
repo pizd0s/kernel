@@ -10,7 +10,8 @@ counts what failed, which the chaos build's rule fails once and the
 production build's never. memory-move is a rule that holds: the chaos
 build moves a process's memory at every grow and as every signal handler
 starts, under waits a handler interrupts, and nothing they bring is
-lost.
+lost. memory-compact holds too: every growth packs the guests' memory,
+moving the regions of all processes that can move.
 """
 import os
 from pathlib import Path
@@ -114,6 +115,12 @@ def main():
         # heap: nothing is lost.
         for binary, rule in ((vm, "memory-move@0"), (vm_chaos, ""), (vm_chaos, "memory-move@0")):
             run_guest(binary, "memory-move", 0, rule)
+
+        # With memory-compact every growth packs the guests' memory: every
+        # process of the system, the check's children waiting in a read and
+        # running a loop among them, moves, and nothing is lost.
+        for binary, rule in ((vm, "memory-compact@0"), (vm_chaos, ""), (vm_chaos, "memory-compact@0")):
+            run_guest(binary, "memory-compact", 0, rule)
 
     print("chaos: native/Wasm AOT and VM faults, the kernel's faults a guest recovers from, atomic output and production no-ops passed")
 

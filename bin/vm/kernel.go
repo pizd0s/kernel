@@ -47,11 +47,12 @@ type Kernel struct {
 	exit      chan int
 	functions map[string]any
 	compiler  func() *Code
+	pool      *Pool
 }
 
-func newKernel(user Cred) *Kernel {
+func newKernel(user Cred, memory uint64) *Kernel {
 	k := &Kernel{procs: map[int32]*Process{}, codes: map[CodeKey]*CodeEntry{}, fifos: map[FileKey]*Pipe{},
-		exit: make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]Terminal{}}
+		exit: make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]Terminal{}, pool: newPool(memory)}
 
 	k.locks.files = map[FileKey]*LockedFile{}
 	k.names.host, k.names.domain = "pizdos", "(none)"
@@ -96,7 +97,7 @@ func (k *Kernel) process(pid int32, parent *Process) *Process {
 		events: EventQueue{bell: make(chan struct{}, 1)}}
 
 	p.own.signal.kind, p.own.continued.kind = eventSignal, eventContinued
-	p.own.child.kind, p.own.compiled.kind = eventChild, eventCompiled
+	p.own.child.kind, p.own.compiled.kind, p.own.pool.kind = eventChild, eventCompiled, eventPool
 	p.own.signal.run = (*Process).takeSignals
 
 	if parent == nil {

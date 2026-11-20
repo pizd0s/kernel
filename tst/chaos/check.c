@@ -194,7 +194,68 @@ static int stacksMoved(void) {
     return 0;
 }
 
+// With memory-compact every growth of a memory slides every region of the
+// guests' memory that can move toward its start, each by the process that
+// runs on it: a child that waits in a read and one that runs a loop which
+// makes no call move as the parent grows its memory, and keep what they
+// hold.
+static int compactMoved(void) {
+    enum { size = 1 << 20 };
+    int ready[2], go[2];
+    assert(pipe(ready) == 0 && pipe(go) == 0);
+    pid_t children[2];
+    for (int k = 0; k < 2; ++k) {
+        children[k] = fork();
+        assert(children[k] >= 0);
+        if (children[k] == 0) {
+            unsigned char* block = malloc(size);
+            assert(block);
+            for (int i = 0; i < size; ++i) {
+                block[i] = (unsigned char)mix((unsigned)(i + k));
+            }
+            assert(write(ready[1], "r", 1) == 1);
+            int kept = 1;
+            if (k == 0) {
+                char c;
+                assert(read(go[0], &c, 1) == 1);
+            } else {
+                for (int round = 0; round < 64; ++round) {
+                    for (int i = 0; i < size; ++i) {
+                        kept &= block[i] == (unsigned char)mix((unsigned)(i + k));
+                    }
+                }
+            }
+            for (int i = 0; i < size; ++i) {
+                kept &= block[i] == (unsigned char)mix((unsigned)(i + k));
+            }
+            _exit(kept ? 0 : 1);
+        }
+    }
+    char c;
+    for (int k = 0; k < 2; ++k) {
+        assert(read(ready[0], &c, 1) == 1);
+    }
+    for (int k = 0; k < 8; ++k) {
+        assert(__builtin_wasm_memory_grow(0, 1) != (size_t)-1);
+    }
+    assert(write(go[1], "g", 1) == 1);
+    int wrong = 0;
+    for (int k = 0; k < 2; ++k) {
+        int status;
+        assert(waitpid(children[k], &status, 0) == children[k]);
+        wrong |= !WIFEXITED(status) || WEXITSTATUS(status) != 0;
+    }
+    assert(close(ready[0]) == 0 && close(ready[1]) == 0 && close(go[0]) == 0 && close(go[1]) == 0);
+    if (wrong) {
+        fprintf(stderr, "compaction: a child's block changed as it moved\n");
+    }
+    return wrong;
+}
+
 static int attempt(const char* operation) {
+    if (strcmp(operation, "memory-compact") == 0) {
+        return compactMoved();
+    }
     if (strcmp(operation, "memory-move") == 0) {
         int wrong = loopsMoved();
         wrong |= waitsMoved();

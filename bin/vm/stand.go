@@ -204,6 +204,7 @@ func standCommand(args []string) int {
 	kind, path, files := args[0], args[1], args[2:]
 	obj := readObject(throw2(os.ReadFile(path)))
 	code := link(path, obj, StandImports{})
+	pool := newPool(defaultMemory)
 
 	var m *Module
 
@@ -212,7 +213,7 @@ func standCommand(args []string) int {
 			m.i.release()
 		}
 
-		i := newInstance(code, runStack)
+		i := throw2(newInstance(pool, nil, code, runStack))
 
 		i.start()
 

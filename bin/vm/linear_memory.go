@@ -49,22 +49,6 @@ func profileBytes(meta *Meta) uint64 {
 	return (uint64(len(meta.memory.sites))*profileCounterBytes + 4095) &^ 4095
 }
 
-func newRegion(below, distance uint64, memory *MemoryMeta) []byte {
-	if memory == nil {
-		return mmap(int(below+distance), syscall.PROT_READ|syscall.PROT_WRITE)
-	}
-
-	if memory.max > 65536 || memory.min > memory.max {
-		throwFmt("memory of %d..%d pages", memory.min, memory.max)
-	}
-
-	return regionOf(below, distance, memory.min)
-}
-
-func regionOf(below, distance, pages uint64) []byte {
-	return mmap(int(below+distance+pages*pageSize+boundSlack+1), syscall.PROT_READ|syscall.PROT_WRITE)
-}
-
 func newMemory(data []byte, least, most uint64, shadow bool) *LinearMemory {
 	m := &LinearMemory{data: data, pages: least, max: most}
 
@@ -124,21 +108,11 @@ func (m *LinearMemory) open() {
 	m.gate.Unlock()
 }
 
-func (m *LinearMemory) room() uint64 {
-	return (uint64(len(m.data)) - boundSlack - 1) / pageSize
-}
-
-func (m *LinearMemory) grow(delta uint32) uint32 {
+func (m *LinearMemory) grow(delta uint32, by *Process) uint32 {
 	old := m.pages
 
-	if old+uint64(delta) > m.max {
+	if old+uint64(delta) > m.max || !m.owner.reach(old+uint64(delta), by, true) {
 		return math.MaxUint32
-	}
-
-	if need := old + uint64(delta); need > m.room() {
-		m.owner.move(min(max(need, 2*m.room()), m.max))
-	} else if m.owner.proc.chaosMoves() {
-		m.owner.move(m.room())
 	}
 
 	if delta != 0 && m.tailUsed {

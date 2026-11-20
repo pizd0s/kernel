@@ -475,6 +475,10 @@ func (p *Process) chaosMoves() bool {
 	return p != nil && p.chaos.holds("memory-move")
 }
 
+func (p *Process) chaosCompacts() bool {
+	return p != nil && p.chaos.holds("memory-compact")
+}
+
 func (p *Process) firstCwd() (Dir, string) {
 	p.root.ref()
 
@@ -510,7 +514,7 @@ func (p *Process) runFrom(img *ExecImage, i *Instance, enter func()) int {
 
 func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *ExecImage, status int) {
 	if i == nil {
-		i = newInstance(img.code, runStack)
+		i = throw2(newInstance(p.k.pool, p, img.code, runStack))
 		i.attach(p)
 		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
 		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0
@@ -2115,13 +2119,19 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 		to = uint64(p.heap.top)
 	}
 
-	c, err := p.k.newProcess(p)
+	inst, err := p.inst.clone(p, runStack, from, to)
 
 	if err != nil {
 		return 0, err
 	}
 
-	inst := p.inst.clone(runStack, from, to)
+	c, err := p.k.newProcess(p)
+
+	if err != nil {
+		inst.release()
+
+		return 0, err
+	}
 
 	inst.attach(c)
 	c.image = p.image
@@ -2891,7 +2901,7 @@ func (p *Process) stop(sig int) {
 
 func (p *Process) runHandler(sig int, act SigAction) {
 	if p.chaosMoves() && p.inst.memory != nil {
-		p.inst.move(p.inst.memory.room())
+		p.inst.move()
 	}
 
 	p.sig.mu.Lock()
@@ -3652,11 +3662,11 @@ func (p *Process) ensure(end uint64) bool {
 	need := (end - size + pageSize - 1) / pageSize
 	more := max(need, min(m.pages/8, 256))
 
-	if m.grow(uint32(more)) != math.MaxUint32 {
+	if m.grow(uint32(more), p) != math.MaxUint32 {
 		return true
 	}
 
-	return m.grow(uint32(need)) != math.MaxUint32
+	return m.grow(uint32(need), p) != math.MaxUint32
 }
 
 func (p *Process) heapInit() *Heap {

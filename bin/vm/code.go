@@ -42,7 +42,7 @@ func helperMemoryGrow(delta uint32) uint32 {
 		return math.MaxUint32
 	}
 
-	return i.memory.grow(delta)
+	return i.memory.grow(delta, i.proc)
 }
 
 type Interruptible interface {

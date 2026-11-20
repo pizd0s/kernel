@@ -895,6 +895,16 @@ chaos_check = command(
     descr="CC", color="green",
 )
 chaos_check_exe = executable("chaos_check_exe", chaos_check, "$(B)/tst/chaos/check")
+# The first process of test_memory_pool.py's vm, whose guests' memory it
+# makes small.
+memory_pool = executable("memory_pool_exe", command(
+    name="memory_pool_module",
+    inputs=[*LIBC_HEADERS, "$(S)/tst/memory_pool.c", "$(S)/tst/libc/make.py", "$(S)/dev/wasm.py"],
+    outputs=["$(B)/tst/memory_pool.wasm"],
+    deps=[libc],
+    cmd=["python3", "$(S)/tst/libc/make.py", CLANG, WASM_LD, "$(S)/tst/memory_pool.c", "$(S)/lib/c/include", libc.outputs[0], "$(B)/tst/memory_pool.wasm"],
+    descr="CC", color="green",
+), "$(B)/tst/memory_pool")
 host_syscalls_filter = command(
     name="host_syscalls_filter",
     inputs=["$(S)/tst/host_syscalls/filter.c"],
@@ -1002,6 +1012,7 @@ E2E_TESTED = {
     "asan_bounds": [vm, aot_native, wazero, rootfs],
     "bounded_copy_loops": [vm, aot_native, wazero, rootfs],
     "chaos": [vm, vm_chaos, aot_native, aot_native_chaos, chaos_check, rootfs, tests_image],
+    "memory_pool": [vm, memory_pool],
     "cli_errors": [vm, aot_native],
     "compiled_calls": [vm, rootfs, busybox],
     "compiler_modes": [vm, aot_native, rootfs],

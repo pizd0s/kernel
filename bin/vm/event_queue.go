@@ -15,6 +15,8 @@ const (
 	eventCompiled
 	eventDeadline
 	eventTimer
+	eventRelocate
+	eventPool
 )
 
 type EventKind uint8
@@ -36,7 +38,7 @@ type EventQueue struct {
 }
 
 type OwnEvents struct {
-	signal, continued, child, compiled Event
+	signal, continued, child, compiled, pool Event
 }
 
 func (q *EventQueue) unlink(e *Event) {
@@ -74,12 +76,16 @@ func (q *EventQueue) next() *Event {
 	return e
 }
 
-func (q *EventQueue) drop(e *Event) {
+func (q *EventQueue) drop(e *Event) bool {
 	q.mu.Lock()
 
-	if e.queued {
-		q.unlink(e)
+	defer q.mu.Unlock()
+
+	if !e.queued {
+		return false
 	}
 
-	q.mu.Unlock()
+	q.unlink(e)
+
+	return true
 }

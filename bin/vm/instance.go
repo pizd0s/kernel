@@ -30,12 +30,15 @@ type Instance struct {
 	obj  *ElfObject
 	code *Code
 
-	region []byte
-	below  uint64
-	holds  atomic.Int32
-	block  []byte
-	memory *LinearMemory
-	tables [][]uintptr
+	pool       *Pool
+	extent     *Extent
+	relocation Event
+	region     []byte
+	below      uint64
+	holds      atomic.Int32
+	block      []byte
+	memory     *LinearMemory
+	tables     [][]uintptr
 
 	mem   []byte
 	memfd *MemfdFile
@@ -45,8 +48,14 @@ type Instance struct {
 }
 
 func (i *Instance) attach(host any) {
+	q, _ := host.(*Process)
+
 	i.host = host
-	i.proc, _ = host.(*Process)
+
+	if was := i.pool.runner(i, q); was != nil && was != q && was.events.drop(&i.relocation) && q != nil {
+		q.post(&i.relocation)
+		q.raiseInterrupt()
+	}
 }
 
 func (i *Instance) memoryBytes() []byte {
@@ -66,26 +75,93 @@ func (i *Instance) handle() uintptr {
 	return uintptr(unsafe.Pointer(i))
 }
 
-func (i *Instance) move(pages uint64) {
+func (i *Instance) usedFor(pages uint64) uint64 {
+	n := i.below + distanceOf(i.obj.meta.instanceSize)
+
+	if i.obj.meta.memory != nil {
+		n += pages*pageSize + boundSlack + 1
+	}
+
+	return grain(n)
+}
+
+func (i *Instance) shift(at, keep, used uint64) {
 	m := i.memory
-	distance := distanceOf(i.obj.meta.instanceSize)
-	region := regionOf(i.below, distance, pages)
-	used := min(uint64(len(i.region)), i.below+distance+m.pages*pageSize+boundSlack)
+	region := i.pool.mem[at : at+used : at+used]
 
-	m.shut()
-	copy(region, i.region[:used])
+	if m != nil {
+		m.shut()
+	}
 
-	old := i.region
+	copy(region, i.region[:keep])
 
 	i.region = region
-	i.block = region[i.below : i.below+uint64(len(i.block))]
-
-	m.data = region[i.below+distance:]
+	i.block = region[i.below : i.below+uint64(len(i.block)) : i.below+uint64(len(i.block))]
 
 	i.anchor()
-	i.setMemory()
-	throw(syscall.Munmap(old))
-	m.open()
+
+	if m != nil {
+		m.data = region[i.below+distanceOf(i.obj.meta.instanceSize):]
+
+		i.setMemory()
+		m.open()
+	}
+}
+
+func (i *Instance) relocate() {
+	at := i.pool.target(i.extent)
+
+	if at == noMove || i.block == nil {
+		return
+	}
+
+	used := uint64(len(i.region))
+
+	i.shift(at, used, used)
+	i.pool.settle(i.extent, used)
+}
+
+func (i *Instance) move() {
+	if at, ok := i.pool.elsewhere(i.extent); ok {
+		used := uint64(len(i.region))
+
+		i.shift(at, used, used)
+		i.pool.settle(i.extent, used)
+	}
+}
+
+func (i *Instance) reach(pages uint64, by *Process, zero bool) bool {
+	keep, used := uint64(len(i.region)), i.usedFor(pages)
+
+	if used <= keep {
+		if i.proc.chaosMoves() {
+			i.move()
+		}
+
+		return true
+	}
+
+	at, moving, err := i.pool.grow(by, i.extent, used, i.usedFor(i.memory.max))
+
+	if err != nil {
+		return false
+	}
+
+	keep = uint64(len(i.region))
+
+	if moving {
+		i.shift(at, keep, used)
+		i.pool.settle(i.extent, used)
+	} else {
+		i.region = i.pool.mem[at : at+used : at+used]
+		i.memory.data = i.region[i.below+distanceOf(i.obj.meta.instanceSize):]
+	}
+
+	if zero {
+		clear(i.region[keep:])
+	}
+
+	return true
 }
 
 func (i *Instance) ctx() uintptr {
@@ -118,16 +194,41 @@ func current() *Instance {
 	return (*Instance)(unsafe.Pointer(runtime.Instance()))
 }
 
-func instantiate(name string, obj *ElfObject, imports Imports, stack uint64) *Instance {
-	return newInstance(link(name, obj, imports), stack)
+func instantiate(pool *Pool, name string, obj *ElfObject, imports Imports, stack uint64) *Instance {
+	return throw2(newInstance(pool, nil, link(name, obj, imports), stack))
 }
 
-func newInstance(c *Code, stack uint64) *Instance {
+func newInstance(pool *Pool, by *Process, c *Code, stack uint64) (*Instance, error) {
 	meta := c.obj.meta
 	below, distance := profileBytes(meta), distanceOf(meta.instanceSize)
-	region := newRegion(below, distance, meta.memory)
-	i := &Instance{name: c.name, obj: c.obj, code: c, region: region, below: below, block: region[below : below+uint64(max(meta.instanceSize, headerSize))]}
+	pages := uint64(0)
 
+	if memory := meta.memory; memory != nil {
+		if memory.max > 65536 || memory.min > memory.max {
+			throwFmt("memory of %d..%d pages", memory.min, memory.max)
+		}
+
+		pages = memory.min
+	}
+
+	i := &Instance{name: c.name, obj: c.obj, code: c, pool: pool, below: below}
+
+	i.relocation = Event{kind: eventRelocate, run: func(*Process) { i.relocate() }}
+
+	used := i.usedFor(pages)
+	x, err := pool.take(by, i, used)
+
+	if err != nil {
+		return nil, err
+	}
+
+	size := below + uint64(max(meta.instanceSize, headerSize))
+
+	i.extent = x
+	i.region = pool.mem[x.at : x.at+used : x.at+used]
+	i.block = i.region[below:size:size]
+
+	clear(i.region)
 	i.holds.Store(1)
 
 	initialized := false
@@ -143,7 +244,7 @@ func newInstance(c *Code, stack uint64) *Instance {
 	i.put64(offStackLimit, stack)
 
 	if meta.memory != nil {
-		i.memory = newMemory(region[below+distance:], meta.memory.min, meta.memory.max, meta.memory.shadow != 0)
+		i.memory = newMemory(i.region[below+distance:], meta.memory.min, meta.memory.max, meta.memory.shadow != 0)
 
 		if meta.memory.tail != 0 {
 			i.memory.tailUsed = true
@@ -171,15 +272,31 @@ func newInstance(c *Code, stack uint64) *Instance {
 
 	initialized = true
 
-	return i
+	return i, nil
 }
 
-func (i *Instance) clone(stack uint64, from, to uint64) *Instance {
-	c := newInstance(i.code, stack)
+func (i *Instance) clone(by *Process, stack uint64, from, to uint64) (*Instance, error) {
+	c, err := newInstance(i.pool, by, i.code, stack)
+
+	if err != nil {
+		return nil, err
+	}
 
 	if i.memory != nil {
-		c.memory.grow(uint32(i.memory.pages - c.memory.pages))
+		clean := uint64(len(c.memory.data))
+
+		if !c.reach(i.memory.pages, by, false) {
+			c.release()
+
+			return nil, ENOMEM
+		}
+
+		c.memory.pages = i.memory.pages
+		c.setMemory()
+
 		copy(c.memory.data[from:to], i.memory.data[from:to])
+		clear(c.memory.data[min(clean, from):from])
+		clear(c.memory.data[max(clean, to):])
 
 		if i.memory.tailUsed {
 			c.memory.tailUsed = true
@@ -209,7 +326,7 @@ func (i *Instance) clone(stack uint64, from, to uint64) *Instance {
 		c.put64(t.offset+tableEntries, uint64(uintptr(unsafe.Pointer(unsafe.SliceData(entries)))))
 	}
 
-	return c
+	return c, nil
 }
 
 func (i *Instance) release() {
@@ -220,13 +337,17 @@ func (i *Instance) release() {
 		throw(syscall.Munmap(i.memory.shadow))
 	}
 
+	if was := i.pool.runner(i, nil); was != nil {
+		was.events.drop(&i.relocation)
+	}
+
 	i.block, i.memory, i.tables = nil, nil, nil
 	i.unhold()
 }
 
 func (i *Instance) unhold() {
 	if i.holds.Add(-1) == 0 {
-		throw(syscall.Munmap(i.region))
+		i.pool.give(i.extent)
 	}
 }
 

@@ -13,7 +13,7 @@ import (
 )
 
 func usage() {
-	throwFmt("usage: vm [-v] [--asan] -o output.o input.wasm\n       vm run [-a argv0] [--asan] [--user uid[:gid]] [--disk name=file]... -- module.wasm [arg...]\n       vm spec test.json\n       vm stand [--repeat N] im|pdf|djvu|svg|magic object.o file...")
+	throwFmt("usage: vm [-v] [--asan] -o output.o input.wasm\n       vm run [-a argv0] [--asan] [--user uid[:gid]] [--memory size] [--disk name=file]... -- module.wasm [arg...]\n       vm spec test.json\n       vm stand [--repeat N] im|pdf|djvu|svg|magic object.o file...")
 }
 
 func main() {
@@ -105,7 +105,7 @@ func compileCommand(args []string) {
 
 	options := programOptions(asan)
 	start := time.Now()
-	object := throw2(newKernel(Cred{}).compileObject(source, options))
+	object := throw2(newKernel(Cred{}, defaultMemory).compileObject(source, options))
 	elapsed := time.Since(start)
 
 	throw2(destination.Write(object))
@@ -119,7 +119,7 @@ func compileCommand(args []string) {
 }
 
 func runCommand(args []string) int {
-	argv0, asan := "", false
+	argv0, asan, memory := "", false, uint64(defaultMemory)
 
 	var disks []Disk
 	var user Cred
@@ -140,6 +140,15 @@ func runCommand(args []string) int {
 			args = args[2:]
 		case len(args) > 1 && args[0] == "-a":
 			argv0 = args[1]
+			args = args[2:]
+		case len(args) > 1 && args[0] == "--memory":
+			size, ok := parseSize(args[1])
+
+			if !ok {
+				usage()
+			}
+
+			memory = size
 			args = args[2:]
 		case len(args) > 1 && args[0] == "--disk":
 			name, path, ok := strings.Cut(args[1], "=")
@@ -167,7 +176,24 @@ func runCommand(args []string) int {
 
 	argv := append([]string{argv0}, args[1:]...)
 
-	return runModule(args[0], argv, asan, disks, user)
+	return runModule(args[0], argv, asan, disks, user, memory)
+}
+
+func parseSize(text string) (uint64, bool) {
+	units := map[byte]uint64{'K': 1 << 10, 'M': 1 << 20, 'G': 1 << 30}
+	unit := uint64(1)
+
+	if n := len(text); n > 0 && units[text[n-1]] != 0 {
+		unit, text = units[text[n-1]], text[:n-1]
+	}
+
+	n, err := strconv.ParseUint(text, 10, 64)
+
+	if err != nil || n == 0 || n > (1<<46)/unit {
+		return 0, false
+	}
+
+	return n * unit, true
 }
 
 func parseUser(text string) (uid, gid uint32, ok bool) {

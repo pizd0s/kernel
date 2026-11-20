@@ -84,7 +84,7 @@ func specCommand(args []string) int {
 
 	throw(json.Unmarshal(throw2(os.ReadFile(args[0])), &file))
 
-	r := &SpecRunner{k: newKernel(Cred{}), dir: filepath.Dir(args[0]), named: map[string]*Instance{}, live: map[*Instance]bool{},
+	r := &SpecRunner{k: newKernel(Cred{}, defaultMemory), dir: filepath.Dir(args[0]), named: map[string]*Instance{}, live: map[*Instance]bool{},
 		unsupported: map[string]bool{}}
 
 	for i := range file.Commands {
@@ -143,7 +143,7 @@ func (r *SpecRunner) load(filename string) *Instance {
 		data := throw2(os.ReadFile(filepath.Join(r.dir, filename)))
 		obj := readObject(throw2(r.k.compileObject(data, CompileOptions{})))
 
-		i = instantiate(filename, obj, r, specStack)
+		i = instantiate(r.k.pool, filename, obj, r, specStack)
 	}); e != nil {
 		r.unsupported[e.error()] = true
 

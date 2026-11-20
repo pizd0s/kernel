@@ -11,14 +11,14 @@ import (
 
 const imageDisk = "image"
 
-func runModule(path string, argv []string, asan bool, disks []Disk, user Cred) int {
+func runModule(path string, argv []string, asan bool, disks []Disk, user Cred, memory uint64) int {
 	data, exe, tail, err := hostProgram(path)
 
 	if err != nil {
 		throwFmt("%s: %v", path, err)
 	}
 
-	k := newKernel(user)
+	k := newKernel(user, memory)
 	options := programOptions(asan)
 
 	var obj *ElfObject
