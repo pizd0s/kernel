@@ -182,11 +182,11 @@ func (c *ConsoleEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 	return c.out.write(p, b, mode)
 }
 
-func (c *ConsoleEnd) pread(p *Process, b []byte, off int64) (int, error) {
+func (c *ConsoleEnd) pread(p *Process, m Span, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (c *ConsoleEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
+func (c *ConsoleEnd) pwrite(p *Process, m Span, off int64) (int, error) {
 	return 0, ESPIPE
 }
 

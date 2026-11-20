@@ -284,9 +284,9 @@ func vectored(ctx uintptr, fd, iovs, count uint32, offset uint64, positioned, wr
 
 		switch {
 		case positioned && write:
-			n, err = t.pwrite(p, b, int64(offset)+int64(total))
+			n, err = t.pwrite(p, Span{b, p.inst}, int64(offset)+int64(total))
 		case positioned:
-			n, err = t.pread(p, b, int64(offset)+int64(total))
+			n, err = t.pread(p, Span{b, p.inst}, int64(offset)+int64(total))
 		case write:
 			n, err = t.write(p, b, IoMode{})
 		default:

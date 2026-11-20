@@ -500,13 +500,13 @@ func (f *RemoteFD) ioFlags(at bool) uint32 {
 	return flags
 }
 
-func (f *RemoteFD) readAt(p *Process, b []byte, off int64, at bool) (int, error) {
-	if off < 0 || len(b) == 0 {
+func (f *RemoteFD) readAt(p *Process, m Span, off int64, at bool) (int, error) {
+	if off < 0 || len(m.b) == 0 {
 		return f.readInto(p, nil, 0, off, at)
 	}
 
-	w := newMemfd(p.inst, b, O_WRONLY)
-	count, err := f.readInto(p, w, len(b), off, at)
+	w := newMemfd(m.owner, m.b, O_WRONLY)
+	count, err := f.readInto(p, w, len(m.b), off, at)
 
 	w.unref()
 
@@ -543,19 +543,19 @@ func (f *RemoteFD) readInto(p *Process, w *MemfdFile, size int, off int64, at bo
 	}
 }
 
-func (f *RemoteFD) writeAt(p *Process, b []byte, off int64) (int, error) {
-	count, _, err := f.put(p, b, off, false, true)
+func (f *RemoteFD) writeAt(p *Process, m Span, off int64) (int, error) {
+	count, _, err := f.put(p, m, off, false, true)
 
 	return count, err
 }
 
-func (f *RemoteFD) put(p *Process, b []byte, off int64, atEnd, at bool) (int, int64, error) {
-	if off < 0 || len(b) == 0 {
+func (f *RemoteFD) put(p *Process, m Span, off int64, atEnd, at bool) (int, int64, error) {
+	if off < 0 || len(m.b) == 0 {
 		return f.writeFrom(p, nil, 0, off, atEnd, at)
 	}
 
-	w := newMemfd(p.inst, b, O_RDONLY)
-	count, end, err := f.writeFrom(p, w, len(b), off, atEnd, at)
+	w := newMemfd(m.owner, m.b, O_RDONLY)
+	count, end, err := f.writeFrom(p, w, len(m.b), off, atEnd, at)
 
 	w.unref()
 
@@ -607,7 +607,7 @@ func (f *RemoteFD) read(p *Process, b []byte, mode IoMode) (int, error) {
 		return 0, err
 	}
 
-	count, err := f.readAt(p, b, f.position(), false)
+	count, err := f.readAt(p, Span{b, p.inst}, f.position(), false)
 
 	f.advance(count)
 
@@ -631,7 +631,7 @@ func (f *RemoteFD) write(p *Process, b []byte, mode IoMode) (int, error) {
 
 	f.mu.Unlock()
 
-	count, end, err := f.put(p, b, off, atEnd, false)
+	count, end, err := f.put(p, Span{b, p.inst}, off, atEnd, false)
 
 	if err == nil {
 		if !atEnd {
@@ -646,12 +646,12 @@ func (f *RemoteFD) write(p *Process, b []byte, mode IoMode) (int, error) {
 	return count, err
 }
 
-func (f *RemoteFD) pread(p *Process, b []byte, off int64) (int, error) {
-	return f.readAt(p, b, off, true)
+func (f *RemoteFD) pread(p *Process, m Span, off int64) (int, error) {
+	return f.readAt(p, m, off, true)
 }
 
-func (f *RemoteFD) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return f.writeAt(p, b, off)
+func (f *RemoteFD) pwrite(p *Process, m Span, off int64) (int, error) {
+	return f.writeAt(p, m, off)
 }
 
 func (f *RemoteFD) seek(p *Process, off int64, whence int) (int64, error) {

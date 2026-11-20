@@ -267,11 +267,11 @@ func (ep *Epoll) write(p *Process, b []byte, mode IoMode) (int, error) {
 	return 0, EINVAL
 }
 
-func (ep *Epoll) pread(p *Process, b []byte, off int64) (int, error) {
+func (ep *Epoll) pread(p *Process, m Span, off int64) (int, error) {
 	return 0, EINVAL
 }
 
-func (ep *Epoll) pwrite(p *Process, b []byte, off int64) (int, error) {
+func (ep *Epoll) pwrite(p *Process, m Span, off int64) (int, error) {
 	return 0, EINVAL
 }
 

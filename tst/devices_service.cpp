@@ -12,17 +12,26 @@
 // files tell their readiness: readable while there is mail; a READ that
 // must not wait finds EAGAIN.
 //
+// keep makes the device's reads keep the memfd they brought, after their
+// answer: a WRITE then writes the text into every memfd kept, and is EIO
+// when that fails.
+//
 // copy reads n bytes of a device at off into a memfd of 16 bytes of its
 // memory, at to, with copy_file_range, and prints the count, the offsets
 // after it and the bytes; put writes a text from a memfd of its memory to
 // a device with copy_file_range and prints the count. wait reads a
 // mailbox with a SIGALRM due in a second, its handler SA_RESTART or not,
-// and prints what the read gave and whether the handler ran.
+// and prints what the read gave and whether the handler ran. pass makes a
+// memfd of 16 bytes of its memory, and a child of it, which has the memfd
+// with the fork, copies a device's bytes into it with copy_file_range and
+// prints the count; it waits for the child and ends, the memfd's memory
+// with it as far as it is its own.
 //
-//     devices_service <name> <mode> <text> [ro|wait]
+//     devices_service <name> <mode> <text> [ro|wait|keep]
 //     devices_service copy <device> <off> <to> <n>
 //     devices_service put <device> <text>
 //     devices_service wait <device> <restart>
+//     devices_service pass <device>
 
 #include <lib/protocol/service.h>
 
@@ -36,6 +45,7 @@
 #include <sys/epoll.h>
 #include <sys/mman.h>
 #include <sys/param.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static const char* text;
@@ -59,6 +69,11 @@ namespace {
 
 static Reader reader{};
 static int readerTag;
+
+// The memfds the reads of a device that keeps them brought.
+static bool keeping = false;
+static int kept[16];
+static size_t keptCount = 0;
 
 // The endpoints of the mailbox's open files, which hear its readiness.
 static int opens[16];
@@ -166,6 +181,36 @@ static void readText(const Endpoint& e, const Request& r) {
     answer(r.reply(), opOk, 0, &done, sizeof done);
 }
 
+static void readKept(const Endpoint& e, Request& r) {
+    readText(e, r);
+    if (r.memfd() >= 0 && keptCount < sizeof kept / sizeof kept[0]) {
+        kept[keptCount++] = r.memfd();
+        r.fds[0] = -1;
+    }
+}
+
+static void writeKept(const Endpoint& e, const Request& r) {
+    Io io;
+    if (!e.writes) {
+        return fail(r.reply(), EBADF);
+    }
+    if (r.memfd() < 0 || !r.io(io)) {
+        return fail(r.reply(), EINVAL);
+    }
+    for (size_t i = 0; i < keptCount; ++i) {
+        if (pwrite(kept[i], text, length, 0) != ssize_t(length)) {
+            return fail(r.reply(), EIO);
+        }
+    }
+
+    struct {
+        uint32_t count;
+        uint64_t at;
+    } __attribute__((packed)) done{r.h.arg, io.off};
+
+    answer(r.reply(), opOk, 0, &done, sizeof done);
+}
+
 static void handle(Endpoint& e, Request& r) {
     if (e.channel) {
         if (!mailbox) {
@@ -193,15 +238,19 @@ static void handle(Endpoint& e, Request& r) {
         case opRead:
             if (mailbox) {
                 readMail(e, r);
+            } else if (keeping) {
+                readKept(e, r);
             } else {
                 readText(e, r);
             }
             break;
         case opWrite:
-            if (!mailbox) {
-                fail(r.reply(), EINVAL);
-            } else {
+            if (mailbox) {
                 writeMail(e, r);
+            } else if (keeping) {
+                writeKept(e, r);
+            } else {
+                fail(r.reply(), EINVAL);
             }
             break;
         case opFstat:
@@ -228,6 +277,23 @@ static int put(const char* path, const char* bytes) {
     const int target = open(path, O_WRONLY);
     const int memfd = memfd_create(const_cast<char*>(bytes), strlen(bytes), O_RDONLY);
     printf("%zd\n", copy_file_range(memfd, nullptr, target, nullptr, strlen(bytes), 0));
+    return 0;
+}
+
+static int pass(const char* path) {
+    char bytes[16];
+    const int memfd = memfd_create(bytes, sizeof bytes, O_RDWR);
+    fflush(stdout);
+    const pid_t child = fork();
+    if (child == 0) {
+        const int source = open(path, O_RDONLY);
+        off_t from = 0;
+        off_t to = 0;
+        printf("%zd\n", copy_file_range(source, &from, memfd, &to, sizeof bytes, 0));
+        exit(0);
+    }
+    int status;
+    waitpid(child, &status, 0);
     return 0;
 }
 
@@ -266,6 +332,9 @@ int main(int argc, char** argv) {
     if (argc == 4 && strcmp(argv[1], "put") == 0) {
         return put(argv[2], argv[3]);
     }
+    if (argc == 3 && strcmp(argv[1], "pass") == 0) {
+        return pass(argv[2]);
+    }
     if (argc < 4) {
         dprintf(STDERR_FILENO, "usage: devices_service <name> <mode> <text> [ro]\n");
         return 2;
@@ -274,6 +343,7 @@ int main(int argc, char** argv) {
     text = argv[3];
     length = strlen(text);
     mailbox = argc > 4 && strcmp(argv[4], "wait") == 0;
+    keeping = argc > 4 && strcmp(argv[4], "keep") == 0;
     const bool readOnly = argc > 4 && strcmp(argv[4], "ro") == 0;
     const int registry = open("/dev/init", readOnly ? O_RDONLY : O_RDWR);
     const int e = registry < 0 ? errno : enroll(registry, name, uint32_t(strtoul(argv[2], nullptr, 8)), uint32_t(geteuid()), uint32_t(getegid()), device);

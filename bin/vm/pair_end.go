@@ -737,11 +737,11 @@ func (e *PairEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 	return len(b), nil
 }
 
-func (e *PairEnd) pread(p *Process, b []byte, off int64) (int, error) {
+func (e *PairEnd) pread(p *Process, m Span, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (e *PairEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
+func (e *PairEnd) pwrite(p *Process, m Span, off int64) (int, error) {
 	return 0, ESPIPE
 }
 

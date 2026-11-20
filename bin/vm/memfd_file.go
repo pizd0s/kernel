@@ -136,7 +136,7 @@ func (f *MemfdFile) read(p *Process, b []byte, mode IoMode) (int, error) {
 
 	defer f.mu.Unlock()
 
-	n, err := f.pread(p, b, f.off)
+	n, err := f.pread(p, Span{b: b}, f.off)
 
 	f.off += int64(n)
 
@@ -148,14 +148,16 @@ func (f *MemfdFile) write(p *Process, b []byte, mode IoMode) (int, error) {
 
 	defer f.mu.Unlock()
 
-	n, err := f.pwrite(p, b, f.off)
+	n, err := f.pwrite(p, Span{b: b}, f.off)
 
 	f.off += int64(n)
 
 	return n, err
 }
 
-func (f *MemfdFile) pread(p *Process, b []byte, off int64) (int, error) {
+func (f *MemfdFile) pread(p *Process, m Span, off int64) (int, error) {
+	b := m.b
+
 	switch {
 	case f.mode == O_WRONLY:
 		return 0, EBADF
@@ -172,7 +174,9 @@ func (f *MemfdFile) pread(p *Process, b []byte, off int64) (int, error) {
 	return n, nil
 }
 
-func (f *MemfdFile) pwrite(p *Process, b []byte, off int64) (int, error) {
+func (f *MemfdFile) pwrite(p *Process, m Span, off int64) (int, error) {
+	b := m.b
+
 	switch {
 	case f.mode == O_RDONLY:
 		return 0, EBADF
@@ -225,7 +229,7 @@ func (f *MemfdFile) copyTo(p *Process, out Transfer, from, to int64, n int) (int
 		return 0, nil
 	}
 
-	return out.pwrite(p, f.mem[from:from+min(int64(n), size-from)], to)
+	return out.pwrite(p, Span{f.mem[from : from+min(int64(n), size-from)], f.inst}, to)
 }
 
 func (f *MemfdFile) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
@@ -238,5 +242,5 @@ func (f *MemfdFile) copyFrom(p *Process, in Transfer, from, to int64, n int) (in
 		return 0, ENOSPC
 	}
 
-	return in.pread(p, f.mem[to:to+min(int64(n), size-to)], from)
+	return in.pread(p, Span{f.mem[to : to+min(int64(n), size-to)], f.inst}, from)
 }

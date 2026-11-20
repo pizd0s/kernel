@@ -411,11 +411,11 @@ func (s *UnixDgram) write(p *Process, b []byte, mode IoMode) (int, error) {
 	return s.send(p, slices.Clone(b), nil, nil, mode.nonblock, "")
 }
 
-func (s *UnixDgram) pread(p *Process, b []byte, off int64) (int, error) {
+func (s *UnixDgram) pread(p *Process, m Span, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (s *UnixDgram) pwrite(p *Process, b []byte, off int64) (int, error) {
+func (s *UnixDgram) pwrite(p *Process, m Span, off int64) (int, error) {
 	return 0, ESPIPE
 }
 

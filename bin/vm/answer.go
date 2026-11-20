@@ -244,11 +244,11 @@ func (a *Answer) write(p *Process, b []byte, mode IoMode) (int, error) {
 	}, nil)
 }
 
-func (a *Answer) pread(p *Process, b []byte, off int64) (int, error) {
+func (a *Answer) pread(p *Process, m Span, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (a *Answer) pwrite(p *Process, b []byte, off int64) (int, error) {
+func (a *Answer) pwrite(p *Process, m Span, off int64) (int, error) {
 	return 0, ESPIPE
 }
 

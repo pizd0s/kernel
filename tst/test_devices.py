@@ -7,7 +7,9 @@ signal: the kernel sends CANCEL, and the read restarts if the handler
 says so, or dies with the process for SIGKILL. A service's file may tell
 its readiness, which select, poll and epoll find; one that does not is
 ready whenever asked. copy_file_range between such a file and
-a memfd brings the memfd itself in the READ or WRITE, at its offset. The system's own, null, zero, random
+a memfd brings a memfd of that memfd's bytes in the READ or WRITE, which
+keeps their memory while the service keeps it, past the end of the
+process the memory is of. The system's own, null, zero, random
 and urandom, are /bin/devices', there before the shell starts. A service
 here is a program the test brings: it registers a device whose bytes
 are a text and serves its opens (tst/devices_service.cpp, which the test
@@ -50,6 +52,9 @@ except OSError as e: print(e.strerror)
 '
 /tmp/service copy /dev/hello 7 3 5
 /tmp/service put /dev/null hello
+/tmp/service kept 020644 'kept' keep
+/tmp/service pass /dev/kept
+printf x > /dev/kept && echo written
 /tmp/service hello 020644 again
 /tmp/service a/b/c 020644 bad
 /tmp/service fifo 010644 bad
@@ -121,6 +126,9 @@ b'world' True
 Bad file descriptor
 5 12 8 ...world........
 5
+registered kept
+4
+written
 register hello: File exists
 register a/b/c: Invalid argument
 register fifo: Invalid argument

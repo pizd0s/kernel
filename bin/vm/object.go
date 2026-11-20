@@ -57,8 +57,8 @@ type Transfer interface {
 	Object
 	read(p *Process, b []byte, mode IoMode) (int, error)
 	write(p *Process, b []byte, mode IoMode) (int, error)
-	pread(p *Process, b []byte, off int64) (int, error)
-	pwrite(p *Process, b []byte, off int64) (int, error)
+	pread(p *Process, m Span, off int64) (int, error)
+	pwrite(p *Process, m Span, off int64) (int, error)
 	copyTo(p *Process, out Transfer, from, to int64, n int) (int, error)
 	copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error)
 }

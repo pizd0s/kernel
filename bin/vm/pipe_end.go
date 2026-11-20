@@ -294,11 +294,11 @@ func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 	return 0, err
 }
 
-func (e *PipeEnd) pread(p *Process, b []byte, off int64) (int, error) {
+func (e *PipeEnd) pread(p *Process, m Span, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (e *PipeEnd) pwrite(p *Process, b []byte, off int64) (int, error) {
+func (e *PipeEnd) pwrite(p *Process, m Span, off int64) (int, error) {
 	return 0, ESPIPE
 }
 

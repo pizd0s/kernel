@@ -1031,7 +1031,7 @@ func (p *Process) loadFrom(path string, first Object, argv []string) (*ExecImage
 		}
 
 		head := make([]byte, 256)
-		n, _ := t.pread(p, head, 0)
+		n, _ := t.pread(p, Span{b: head}, 0)
 
 		head = head[:max(n, 0)]
 
@@ -4161,7 +4161,7 @@ func (p *Process) writeBack(at uint32, m Mapping, from, n uint32) error {
 			j++
 		}
 
-		if _, err := m.file.pwrite(p, now[i:j], m.offset+int64(from)+int64(i)); err != nil {
+		if _, err := m.file.pwrite(p, Span{now[i:j], p.inst}, m.offset+int64(from)+int64(i)); err != nil {
 			return err
 		}
 
@@ -4303,7 +4303,7 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 			} else {
 				f = t
 
-				if _, err = f.pread(p, b, int64(off)); err == ESPIPE {
+				if _, err = f.pread(p, Span{b, p.inst}, int64(off)); err == ESPIPE {
 					err = ENODEV
 				}
 			}
@@ -4379,7 +4379,7 @@ func (p *Process) libcMadvise(addr, n, advice uint32) uint32 {
 		in := b[:min(n, m.length-(addr-at))]
 
 		clear(in)
-		m.file.pread(p, in, m.offset+int64(addr-at))
+		m.file.pread(p, Span{in, p.inst}, m.offset+int64(addr-at))
 	}
 
 	return p.result(0, nil)
@@ -5005,7 +5005,7 @@ func (p *Process) vectored(fd, iovs, count uint32, events int16, positioned bool
 		}
 
 		if positioned {
-			return p.result(t.pwrite(p, buf, int64(off)))
+			return p.result(t.pwrite(p, Span{b: buf}, int64(off)))
 		}
 
 		return p.result(t.write(p, buf, IoMode{}))
@@ -5015,7 +5015,7 @@ func (p *Process) vectored(fd, iovs, count uint32, events int16, positioned bool
 	var n int
 
 	if positioned {
-		n, err = t.pread(p, buf, int64(off))
+		n, err = t.pread(p, Span{b: buf}, int64(off))
 	} else {
 		n, err = t.read(p, buf, IoMode{})
 	}
@@ -5174,7 +5174,7 @@ func (p *Process) libcPread(fd, buf, n uint32, off uint64) uint32 {
 		return p.result(0, err)
 	}
 
-	return p.result(t.pread(p, p.span(buf, n), int64(off)))
+	return p.result(t.pread(p, Span{p.span(buf, n), p.inst}, int64(off)))
 }
 
 func (p *Process) libcPwrite(fd, buf, n uint32, off uint64) uint32 {
@@ -5184,7 +5184,7 @@ func (p *Process) libcPwrite(fd, buf, n uint32, off uint64) uint32 {
 		return p.result(0, err)
 	}
 
-	return p.result(t.pwrite(p, p.span(buf, n), int64(off)))
+	return p.result(t.pwrite(p, Span{p.span(buf, n), p.inst}, int64(off)))
 }
 
 func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) uint32 {
@@ -5294,7 +5294,7 @@ func copyThrough(p *Process, in, out Transfer, from, to int64, n int) (int, erro
 
 	for done < n {
 		chunk := buf[:min(len(buf), n-done)]
-		got, err := in.pread(p, chunk, from+int64(done))
+		got, err := in.pread(p, Span{b: chunk}, from+int64(done))
 
 		if err != nil || got == 0 {
 			if done > 0 {
@@ -5304,7 +5304,7 @@ func copyThrough(p *Process, in, out Transfer, from, to int64, n int) (int, erro
 			return done, err
 		}
 
-		put, err := out.pwrite(p, chunk[:got], to+int64(done))
+		put, err := out.pwrite(p, Span{b: chunk[:got]}, to+int64(done))
 
 		done += put
 

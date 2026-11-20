@@ -160,12 +160,12 @@ func (f *DiskFile) at(b []byte, off int64, write bool) (int, error) {
 	}
 }
 
-func (f *DiskFile) pread(p *Process, b []byte, off int64) (int, error) {
-	return f.at(b, off, false)
+func (f *DiskFile) pread(p *Process, m Span, off int64) (int, error) {
+	return f.at(m.b, off, false)
 }
 
-func (f *DiskFile) pwrite(p *Process, b []byte, off int64) (int, error) {
-	return f.at(b, off, true)
+func (f *DiskFile) pwrite(p *Process, m Span, off int64) (int, error) {
+	return f.at(m.b, off, true)
 }
 
 func (f *DiskFile) read(p *Process, b []byte, mode IoMode) (int, error) {
