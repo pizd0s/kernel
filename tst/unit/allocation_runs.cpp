@@ -19,10 +19,13 @@ int main() {
     // Already backed linear memory must remain usable by later allocations.
     assert(__builtin_wasm_memory_grow(0, 256) != size_t(-1));
 #endif
-    constexpr size_t segment = 2 * 1024 * 1024;
+    // The heap's segment, 32 pages of 4 KiB: sizes about its boundaries
+    // and its pages'.
+    constexpr size_t page = 4096;
+    constexpr size_t segment = 32 * page;
     const size_t sizes[] = {
-        segment - 1, segment + 1, 2 * segment, 2 * segment + 65537,
-        3 * segment + 17, segment + 65535, 2 * segment - 1, segment + 131073,
+        segment - 1, segment + 1, 2 * segment, 2 * segment + page + 1,
+        3 * segment + 17, segment + page - 1, 2 * segment - 1, segment + 2 * page + 1,
     };
     unsigned char* blocks[8];
     for (unsigned pass = 0; pass < 3; ++pass) {

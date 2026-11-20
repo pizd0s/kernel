@@ -7,7 +7,7 @@ import (
 	"slices"
 )
 
-var classSizes, classSlots = func() (sizes [smallClasses]uint32, slots [smallClasses]uint16) {
+var classSizes, classSlots, classPages = func() (sizes [smallClasses]uint32, slots [smallClasses]uint16, pages [smallClasses]uint8) {
 	for i := range sizes {
 		if i < 16 {
 			sizes[i] = uint32(i+1) * 16
@@ -17,14 +17,20 @@ var classSizes, classSlots = func() (sizes [smallClasses]uint32, slots [smallCla
 			sizes[i] = base + base/4*uint32((i-16)%4+1)
 		}
 
-		slots[i] = uint16(heapPageSize / sizes[i])
+		n := uint32(1)
+
+		for n*heapPageSize < sizes[i] || n*heapPageSize%sizes[i] > n*heapPageSize/8 {
+			n++
+		}
+
+		pages[i], slots[i] = uint8(n), uint16(n*heapPageSize/sizes[i])
 	}
 
 	return
 }()
 
 const (
-	heapPageShift = 16
+	heapPageShift = 12
 	heapPageSize  = 1 << heapPageShift
 	segmentPages  = 32
 	segmentSize   = segmentPages * heapPageSize
@@ -34,6 +40,7 @@ const (
 	pageFree      = 0xff
 	pageRun       = 0xfe
 	pageTail      = 0xfd
+	pageSlab      = 0xfc
 	noPage        = -1
 	segmentHops   = 8
 )

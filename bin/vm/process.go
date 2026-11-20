@@ -3810,10 +3810,14 @@ func (p *Process) refill(h *Heap, cls int) bool {
 		return true
 	}
 
-	page, ok := p.takePages(h, 1)
+	page, ok := p.takePages(h, uint32(classPages[cls]))
 
 	if !ok {
 		return false
+	}
+
+	for q := page + 1; q < page+int32(classPages[cls]); q++ {
+		h.pages[q].kind, h.pages[q].run = pageSlab, uint32(page)
 	}
 
 	pg := &h.pages[page]
@@ -3918,7 +3922,11 @@ func (p *Process) usedBlock(ptr uint32) (page int32, slot, size uint32, ok bool)
 
 	page = int32((ptr - h.base) >> heapPageShift)
 
-	off := (ptr - h.base) & (heapPageSize - 1)
+	if h.pages[page].kind == pageSlab {
+		page = int32(h.pages[page].run)
+	}
+
+	off := ptr - h.address(page)
 	pg := &h.pages[page]
 
 	switch {
@@ -3980,7 +3988,7 @@ func (p *Process) free(ptr uint32) {
 			h.unlist(cls, page)
 		}
 
-		h.releasePages(page, 1)
+		h.releasePages(page, uint32(classPages[cls]))
 	} else if !pg.listed {
 		h.list(cls, page)
 	}
@@ -4126,7 +4134,7 @@ func (p *Process) memalign(align, n uint32) uint32 {
 		return 0
 	}
 
-	if size := max(n, align); size <= smallLimit {
+	if size := max(n, align); size <= smallLimit && align <= heapPageSize {
 		cls := classOf(1 << bits.Len32(size-1))
 		at := p.mallocSmall(h, cls)
 
@@ -4137,7 +4145,7 @@ func (p *Process) memalign(align, n uint32) uint32 {
 		return at
 	}
 
-	count := pagesFor(uint64(n))
+	count := pagesFor(uint64(max(n, 1)))
 
 	if align <= heapPageSize {
 		at := p.mallocRun(h, uint64(n))
@@ -4768,6 +4776,10 @@ func (p *Process) blockAround(addr uint32) (start, asked, size uint32, ok bool) 
 	}
 
 	page := int32((addr - h.base) >> heapPageShift)
+
+	if h.pages[page].kind == pageSlab {
+		page = int32(h.pages[page].run)
+	}
 
 	for h.pages[page].kind == pageTail && page > 0 {
 		page--
