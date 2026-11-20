@@ -14076,6 +14076,7 @@ static void funcEmitterStackAlloc(FuncEmitter* e, MInst* in) {
         asmCallMem(a, objCodeGotMem(e->oc, symStackGrow));
         asmPop(a, t);
         asmLea(a, 8, RSP, rspAt(8));
+        require(a->sp == e->body, "internal error: a frame's slow path moves the stack pointer");
         asmPatch32(a, asmJmpRel(a), resume);
     });
 }
@@ -20779,23 +20780,26 @@ static void objCodeResolve(ObjCode* oc) {
 }
 
 // slowPath grows the stack and starts the region again at entry. It
-// passes the morestack stub what stackCheck compared, on the stack.
+// passes the morestack stub what stackCheck compared, on the stack. The
+// jump back has the stack pointer the check had, which an interrupt there
+// unwinds by.
 static void objCodeSlowPath(ObjCode* oc, i32 at, i32 entry, i32 total, VReg temp) {
     Asm* a = &oc->a;
     asmPatch32(a, at, asmPos(a));
+    const i32 sp = a->sp;
     asmPush(a, total <= stackSmall ? RSP : temp);
     asmCallMem(a, objCodeGotMem(oc, symMorestackStub));
     objCodeDropWord(oc);
+    require(a->sp == sp, "internal error: the stack check's slow path moves the stack pointer");
     asmPatch32(a, asmJmpRel(a), entry);
 }
 
 // dropWord takes a word off the stack without touching a register or
-// the flags. The SP delta at a call's return address must still count
-// what the caller pushed for the callee, so the callee cannot pop it.
+// the flags; the lea moves the SP delta. The SP delta at a call's return
+// address must still count what the caller pushed for the callee, so the
+// callee cannot pop it.
 static void objCodeDropWord(ObjCode* oc) {
-    Asm* a = &oc->a;
-    asmLea(a, 8, RSP, rspAt(8));
-    asmMoveSP(a, -8);
+    asmLea(&oc->a, 8, RSP, rspAt(8));
 }
 
 // stackCheck compares the stack pointer, less total-stackSmall for a large
