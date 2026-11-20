@@ -160,28 +160,40 @@ func (f *DiskFile) at(b []byte, off int64, write bool) (int, error) {
 	}
 }
 
-func (f *DiskFile) pread(p *Process, m Span, off int64) (int, error) {
-	return f.at(m.b, off, false)
+func (f *DiskFile) pread(p *Process, into Transfer, n int, off int64) (int, error) {
+	return into.with(0, n, true, func(b []byte) (int, error) {
+		return f.at(b, off, false)
+	})
 }
 
-func (f *DiskFile) pwrite(p *Process, m Span, off int64) (int, error) {
-	return f.at(m.b, off, true)
+func (f *DiskFile) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
+	return from.with(0, n, false, func(b []byte) (int, error) {
+		return f.at(b, off, true)
+	})
 }
 
-func (f *DiskFile) read(p *Process, b []byte, mode IoMode) (int, error) {
-	n, err := f.at(b, f.pos.Load(), false)
-
-	f.pos.Add(int64(n))
-
-	return n, err
+func (f *DiskFile) splice(at int64, n int, mode int) Transfer {
+	return newSpliced(f, at, n, mode)
 }
 
-func (f *DiskFile) write(p *Process, b []byte, mode IoMode) (int, error) {
-	n, err := f.at(b, f.pos.Load(), true)
+func (f *DiskFile) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
+	return 0, EINVAL
+}
 
-	f.pos.Add(int64(n))
+func (f *DiskFile) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
+	count, err := f.pread(p, into, n, f.pos.Load())
 
-	return n, err
+	f.pos.Add(int64(count))
+
+	return count, err
+}
+
+func (f *DiskFile) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
+	count, err := f.pwrite(p, from, n, f.pos.Load())
+
+	f.pos.Add(int64(count))
+
+	return count, err
 }
 
 func (f *DiskFile) seek(p *Process, off int64, whence int) (int64, error) {

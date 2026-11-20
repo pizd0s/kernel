@@ -259,19 +259,27 @@ func (ep *Epoll) setFlags(fl int) error {
 	return nil
 }
 
-func (ep *Epoll) read(p *Process, b []byte, mode IoMode) (int, error) {
+func (ep *Epoll) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
 	return 0, EINVAL
 }
 
-func (ep *Epoll) write(p *Process, b []byte, mode IoMode) (int, error) {
+func (ep *Epoll) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
 	return 0, EINVAL
 }
 
-func (ep *Epoll) pread(p *Process, m Span, off int64) (int, error) {
+func (ep *Epoll) pread(p *Process, into Transfer, n int, off int64) (int, error) {
 	return 0, EINVAL
 }
 
-func (ep *Epoll) pwrite(p *Process, m Span, off int64) (int, error) {
+func (ep *Epoll) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
+	return 0, EINVAL
+}
+
+func (ep *Epoll) splice(at int64, n int, mode int) Transfer {
+	return newSpliced(ep, at, n, mode)
+}
+
+func (ep *Epoll) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
 	return 0, EINVAL
 }
 

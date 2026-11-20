@@ -153,7 +153,7 @@ func runKernel(path string, argv []string, asan bool, data []byte, obj *ElfObjec
 			names[i] = d.name
 
 			if d.mem != nil {
-				p.files.put(max(p.files.size(), 3), newMemfd(nil, d.mem, O_RDONLY), false)
+				p.files.put(max(p.files.size(), 3), newMemfd(&LinearMemory{data: d.mem}, 0, int64(len(d.mem)), O_RDONLY), false)
 
 				continue
 			}

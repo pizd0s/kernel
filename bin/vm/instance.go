@@ -32,7 +32,8 @@ type Instance struct {
 	memory *LinearMemory
 	tables [][]uintptr
 
-	mem []byte
+	mem   []byte
+	memfd *MemfdFile
 
 	host any
 	proc *Process
@@ -131,6 +132,9 @@ func newInstance(c *Code, imports Imports, stack uint64) *Instance {
 
 		i.memory.owner = i
 		i.setMemory()
+
+		i.memfd = &MemfdFile{mem: i.memory, n: -1, mode: O_RDWR, ino: memfdInodes.Add(1)}
+		i.memfd.refs.Store(1)
 	}
 
 	for _, t := range meta.tables {

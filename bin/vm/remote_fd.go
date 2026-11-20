@@ -500,21 +500,8 @@ func (f *RemoteFD) ioFlags(at bool) uint32 {
 	return flags
 }
 
-func (f *RemoteFD) readAt(p *Process, m Span, off int64, at bool) (int, error) {
-	if off < 0 || len(m.b) == 0 {
-		return f.readInto(p, nil, 0, off, at)
-	}
-
-	w := newMemfd(m.owner, m.b, O_WRONLY)
-	count, err := f.readInto(p, w, len(m.b), off, at)
-
-	w.unref()
-
-	return count, err
-}
-
-func (f *RemoteFD) readInto(p *Process, w *MemfdFile, size int, off int64, at bool) (int, error) {
-	if off < 0 {
+func (f *RemoteFD) readAt(p *Process, into Transfer, size int, off int64, at bool) (int, error) {
+	if off < 0 || size < 0 {
 		return 0, EINVAL
 	}
 
@@ -525,7 +512,7 @@ func (f *RemoteFD) readInto(p *Process, w *MemfdFile, size int, off int64, at bo
 	body := ioBody(off, f.ioFlags(at))
 
 	for {
-		pk, cancelled, err := f.waiting(p, rRead, uint32(size), body[:], []Object{w})
+		pk, cancelled, err := f.waiting(p, rRead, uint32(size), body[:], []Object{into})
 
 		if err == EINTR && cancelled && p.interrupted() {
 			continue
@@ -543,27 +530,8 @@ func (f *RemoteFD) readInto(p *Process, w *MemfdFile, size int, off int64, at bo
 	}
 }
 
-func (f *RemoteFD) writeAt(p *Process, m Span, off int64) (int, error) {
-	count, _, err := f.put(p, m, off, false, true)
-
-	return count, err
-}
-
-func (f *RemoteFD) put(p *Process, m Span, off int64, atEnd, at bool) (int, int64, error) {
-	if off < 0 || len(m.b) == 0 {
-		return f.writeFrom(p, nil, 0, off, atEnd, at)
-	}
-
-	w := newMemfd(m.owner, m.b, O_RDONLY)
-	count, end, err := f.writeFrom(p, w, len(m.b), off, atEnd, at)
-
-	w.unref()
-
-	return count, end, err
-}
-
-func (f *RemoteFD) writeFrom(p *Process, w *MemfdFile, size int, off int64, atEnd, at bool) (int, int64, error) {
-	if off < 0 {
+func (f *RemoteFD) put(p *Process, from Transfer, size int, off int64, atEnd, at bool) (int, int64, error) {
+	if off < 0 || size < 0 {
 		return 0, 0, EINVAL
 	}
 
@@ -580,7 +548,7 @@ func (f *RemoteFD) writeFrom(p *Process, w *MemfdFile, size int, off int64, atEn
 	body := ioBody(off, flags)
 
 	for {
-		pk, cancelled, err := f.waiting(p, rWrite, uint32(size), body[:], []Object{w})
+		pk, cancelled, err := f.waiting(p, rWrite, uint32(size), body[:], []Object{from})
 
 		if err == EINTR && cancelled && p.interrupted() {
 			continue
@@ -598,7 +566,7 @@ func (f *RemoteFD) writeFrom(p *Process, w *MemfdFile, size int, off int64, atEn
 	}
 }
 
-func (f *RemoteFD) read(p *Process, b []byte, mode IoMode) (int, error) {
+func (f *RemoteFD) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
 		return 0, EIO
 	}
@@ -607,14 +575,14 @@ func (f *RemoteFD) read(p *Process, b []byte, mode IoMode) (int, error) {
 		return 0, err
 	}
 
-	count, err := f.readAt(p, Span{b, p.inst}, f.position(), false)
+	count, err := f.readAt(p, into, n, f.position(), false)
 
 	f.advance(count)
 
 	return count, err
 }
 
-func (f *RemoteFD) write(p *Process, b []byte, mode IoMode) (int, error) {
+func (f *RemoteFD) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
 	if p.chaosFail("write") {
 		return 0, EIO
 	}
@@ -631,7 +599,7 @@ func (f *RemoteFD) write(p *Process, b []byte, mode IoMode) (int, error) {
 
 	f.mu.Unlock()
 
-	count, end, err := f.put(p, Span{b, p.inst}, off, atEnd, false)
+	count, end, err := f.put(p, from, n, off, atEnd, false)
 
 	if err == nil {
 		if !atEnd {
@@ -646,12 +614,22 @@ func (f *RemoteFD) write(p *Process, b []byte, mode IoMode) (int, error) {
 	return count, err
 }
 
-func (f *RemoteFD) pread(p *Process, m Span, off int64) (int, error) {
-	return f.readAt(p, m, off, true)
+func (f *RemoteFD) pread(p *Process, into Transfer, n int, off int64) (int, error) {
+	return f.readAt(p, into, n, off, true)
 }
 
-func (f *RemoteFD) pwrite(p *Process, m Span, off int64) (int, error) {
-	return f.writeAt(p, m, off)
+func (f *RemoteFD) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
+	count, _, err := f.put(p, from, n, off, false, true)
+
+	return count, err
+}
+
+func (f *RemoteFD) splice(at int64, n int, mode int) Transfer {
+	return newSpliced(f, at, n, mode)
+}
+
+func (f *RemoteFD) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
+	return 0, EINVAL
 }
 
 func (f *RemoteFD) seek(p *Process, off int64, whence int) (int64, error) {

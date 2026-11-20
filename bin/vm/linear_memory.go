@@ -55,6 +55,14 @@ func newMemory(data []byte, least, most uint64, shadow bool) *LinearMemory {
 	return m
 }
 
+func (m *LinearMemory) bytes() []byte {
+	if m.owner != nil {
+		return m.owner.mem
+	}
+
+	return m.data
+}
+
 func (m *LinearMemory) grow(delta uint32) uint32 {
 	old := m.pages
 

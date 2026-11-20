@@ -347,7 +347,7 @@ func (p *Process) traces(class uint32) bool {
 
 func (p *Process) sinkWrite(b []byte) {
 	for p.sink != nil {
-		_, err := p.sink.write(p, b, IoMode{quiet: true})
+		_, err := p.sink.write(p, bytesFile(b), len(b), IoMode{quiet: true})
 
 		if err == nil || err == EAGAIN {
 			return
@@ -789,6 +789,12 @@ func oob() {
 	panic(newTrap(trapMemoryOOB, 1))
 }
 
+func (p *Process) memory(at, n uint32, mode int) Transfer {
+	p.span(at, n)
+
+	return p.inst.memfd.splice(int64(at), int(n), mode)
+}
+
 func (p *Process) span(at, n uint32) []byte {
 	m := p.mem()
 
@@ -1031,7 +1037,7 @@ func (p *Process) loadFrom(path string, first Object, argv []string) (*ExecImage
 		}
 
 		head := make([]byte, 256)
-		n, _ := t.pread(p, Span{b: head}, 0)
+		n, _ := t.pread(p, bytesFile(head), len(head), 0)
 
 		head = head[:max(n, 0)]
 
@@ -4060,7 +4066,7 @@ func (p *Process) crash(msg string, stack []uintptr) {
 	}
 
 	if t, err := p.transferAt(2, false); err == nil {
-		if _, err := t.write(p, []byte(b.String()), IoMode{quiet: true}); err == nil {
+		if _, err := t.write(p, bytesFile([]byte(b.String())), b.Len(), IoMode{quiet: true}); err == nil {
 			return
 		}
 	}
@@ -4161,7 +4167,12 @@ func (p *Process) writeBack(at uint32, m Mapping, from, n uint32) error {
 			j++
 		}
 
-		if _, err := m.file.pwrite(p, Span{now[i:j], p.inst}, m.offset+int64(from)+int64(i)); err != nil {
+		w := p.memory(at+from+uint32(i), uint32(j-i), O_RDONLY)
+		_, err := m.file.pwrite(p, w, j-i, m.offset+int64(from)+int64(i))
+
+		w.unref()
+
+		if err != nil {
 			return err
 		}
 
@@ -4303,7 +4314,13 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 			} else {
 				f = t
 
-				if _, err = f.pread(p, Span{b, p.inst}, int64(off)); err == ESPIPE {
+				w := p.memory(at, n, O_WRONLY)
+
+				_, err = f.pread(p, w, int(n), int64(off))
+
+				w.unref()
+
+				if err == ESPIPE {
 					err = ENODEV
 				}
 			}
@@ -4379,7 +4396,11 @@ func (p *Process) libcMadvise(addr, n, advice uint32) uint32 {
 		in := b[:min(n, m.length-(addr-at))]
 
 		clear(in)
-		m.file.pread(p, Span{in, p.inst}, m.offset+int64(addr-at))
+
+		w := p.memory(addr, uint32(len(in)), O_WRONLY)
+
+		m.file.pread(p, w, len(in), m.offset+int64(addr-at))
+		w.unref()
 	}
 
 	return p.result(0, nil)
@@ -5005,20 +5026,22 @@ func (p *Process) vectored(fd, iovs, count uint32, events int16, positioned bool
 		}
 
 		if positioned {
-			return p.result(t.pwrite(p, Span{b: buf}, int64(off)))
+			return p.result(t.pwrite(p, bytesFile(buf), len(buf), int64(off)))
 		}
 
-		return p.result(t.write(p, buf, IoMode{}))
+		return p.result(t.write(p, bytesFile(buf), len(buf), IoMode{}))
 	}
 
 	buf = buf[:total]
 	var n int
 
 	if positioned {
-		n, err = t.pread(p, Span{b: buf}, int64(off))
+		n, err = t.pread(p, bytesFile(buf), total, int64(off))
 	} else {
-		n, err = t.read(p, buf, IoMode{})
+		n, err = t.read(p, bytesFile(buf), total, IoMode{})
 	}
+
+	spans, _ = p.ioSpans(iovs, count)
 
 	at := 0
 
@@ -5154,7 +5177,12 @@ func (p *Process) libcRead(fd, buf, n uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	return p.result(t.read(p, p.span(buf, n), IoMode{}))
+	w := p.memory(buf, n, O_WRONLY)
+	count, err := t.read(p, w, int(n), IoMode{})
+
+	w.unref()
+
+	return p.result(count, err)
 }
 
 func (p *Process) libcWrite(fd, buf, n uint32) uint32 {
@@ -5164,7 +5192,12 @@ func (p *Process) libcWrite(fd, buf, n uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	return p.result(t.write(p, p.span(buf, n), IoMode{}))
+	w := p.memory(buf, n, O_RDONLY)
+	count, err := t.write(p, w, int(n), IoMode{})
+
+	w.unref()
+
+	return p.result(count, err)
 }
 
 func (p *Process) libcPread(fd, buf, n uint32, off uint64) uint32 {
@@ -5174,7 +5207,12 @@ func (p *Process) libcPread(fd, buf, n uint32, off uint64) uint32 {
 		return p.result(0, err)
 	}
 
-	return p.result(t.pread(p, Span{p.span(buf, n), p.inst}, int64(off)))
+	w := p.memory(buf, n, O_WRONLY)
+	count, err := t.pread(p, w, int(n), int64(off))
+
+	w.unref()
+
+	return p.result(count, err)
 }
 
 func (p *Process) libcPwrite(fd, buf, n uint32, off uint64) uint32 {
@@ -5184,7 +5222,12 @@ func (p *Process) libcPwrite(fd, buf, n uint32, off uint64) uint32 {
 		return p.result(0, err)
 	}
 
-	return p.result(t.pwrite(p, Span{p.span(buf, n), p.inst}, int64(off)))
+	w := p.memory(buf, n, O_RDONLY)
+	count, err := t.pwrite(p, w, int(n), int64(off))
+
+	w.unref()
+
+	return p.result(count, err)
 }
 
 func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) uint32 {
@@ -5290,11 +5333,12 @@ func copyThrough(p *Process, in, out Transfer, from, to int64, n int) (int, erro
 	}
 
 	buf := make([]byte, min(n, packetMax))
+	file := bytesFile(buf)
 	done := 0
 
 	for done < n {
 		chunk := buf[:min(len(buf), n-done)]
-		got, err := in.pread(p, Span{b: chunk}, from+int64(done))
+		got, err := in.pread(p, file, len(chunk), from+int64(done))
 
 		if err != nil || got == 0 {
 			if done > 0 {
@@ -5304,7 +5348,7 @@ func copyThrough(p *Process, in, out Transfer, from, to int64, n int) (int, erro
 			return done, err
 		}
 
-		put, err := out.pwrite(p, Span{b: chunk[:got]}, to+int64(done))
+		put, err := out.pwrite(p, file, got, to+int64(done))
 
 		done += put
 
@@ -6085,9 +6129,10 @@ func (p *Process) readPath(path string, max int) ([]byte, error) {
 	var data []byte
 
 	buf := make([]byte, 65536)
+	file := bytesFile(buf)
 
 	for len(data) < max {
-		n, err := t.read(p, buf, IoMode{})
+		n, err := t.read(p, file, len(buf), IoMode{})
 
 		if err != nil || n == 0 {
 			break
@@ -7232,7 +7277,7 @@ func (p *Process) libcMemfd_create(at, n, flags uint32) uint32 {
 		return p.result(0, EFAULT)
 	}
 
-	f := newMemfd(i, i.memory.data[at:at+n:at+n], mode)
+	f := newMemfd(i.memory, int64(at), int64(n), mode)
 	fd, err := p.install(f, 0, flags&O_CLOEXEC != 0)
 
 	if err != nil {
@@ -8551,9 +8596,17 @@ func (p *Process) libcGetpass(prompt uint32) uint32 {
 	le.PutUint32(quiet, le.Uint32(quiet)&^(INLCR|IGNCR)|ICRNL)
 	le.PutUint32(quiet[12:], le.Uint32(quiet[12:])&^(ECHO|ISIG)|ICANON)
 	t.setattr(p, 2, quiet)
-	t.write(p, p.span(prompt, uint32(len(p.str(prompt)))), IoMode{})
 
-	n, err := t.read(p, p.span(at, passwordSize), IoMode{})
+	asked := uint32(len(p.str(prompt)))
+	shown := p.memory(prompt, asked, O_RDONLY)
+
+	t.write(p, shown, int(asked), IoMode{})
+	shown.unref()
+
+	typed := p.memory(at, passwordSize, O_WRONLY)
+	n, err := t.read(p, typed, passwordSize, IoMode{})
+
+	typed.unref()
 
 	if err == nil {
 		if n > 0 && p.span(at, passwordSize)[n-1] == '\n' || n == passwordSize {
@@ -8565,10 +8618,7 @@ func (p *Process) libcGetpass(prompt uint32) uint32 {
 
 	t.setattr(p, 2, saved)
 
-	newline := p.span(at+passwordSize, 1)
-
-	newline[0] = '\n'
-	t.write(p, newline, IoMode{})
+	t.write(p, bytesFile([]byte{'\n'}), 1, IoMode{})
 
 	if err != nil {
 		p.setErrno(errnoOf(err))
@@ -9233,7 +9283,7 @@ func (p *Process) syslog(priority, message uint32) {
 	}
 
 	if t, err := p.transferAt(2, false); err == nil {
-		t.write(p, []byte(line), IoMode{})
+		t.write(p, bytesFile([]byte(line)), len(line), IoMode{})
 	}
 }
 
@@ -9928,7 +9978,7 @@ func (p *Process) libc__assert_fail(expr, file, line, function uint32) {
 	msg := fmt.Sprintf("Assertion failed: %s (%s: %s: %d)\n", p.str(expr), p.str(file), p.str(function), int32(line))
 
 	if t, err := p.transferAt(2, false); err == nil {
-		t.write(p, []byte(msg), IoMode{})
+		t.write(p, bytesFile([]byte(msg)), len(msg), IoMode{})
 	}
 
 	p.abort()
@@ -9940,7 +9990,7 @@ func (p *Process) complain(prefix uint32, msg string) {
 	}
 
 	if t, err := p.transferAt(2, false); err == nil {
-		t.write(p, []byte(msg+"\n"), IoMode{})
+		t.write(p, bytesFile([]byte(msg+"\n")), len(msg)+1, IoMode{})
 	}
 }
 

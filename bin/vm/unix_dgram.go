@@ -401,22 +401,36 @@ func (s *UnixDgram) dontwait() uint32 {
 	return 0
 }
 
-func (s *UnixDgram) read(p *Process, b []byte, mode IoMode) (int, error) {
-	n, _, _, _, err := s.inbox.receive(p, [][]byte{b}, s.dontwait()|bit(mode.nonblock)*MSG_DONTWAIT, 0, 0)
+func (s *UnixDgram) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
+	got, _, _, _, err := s.inbox.receive(p, putInto(into), n, s.dontwait()|bit(mode.nonblock)*MSG_DONTWAIT, 0, 0)
 
-	return n, err
+	return got, err
 }
 
-func (s *UnixDgram) write(p *Process, b []byte, mode IoMode) (int, error) {
-	return s.send(p, slices.Clone(b), nil, nil, mode.nonblock, "")
+func (s *UnixDgram) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
+	if n > packetMax {
+		return 0, EMSGSIZE
+	}
+
+	data := make([]byte, n)
+
+	return s.send(p, data[:takeFrom(from)(0, data)], nil, nil, mode.nonblock, "")
 }
 
-func (s *UnixDgram) pread(p *Process, m Span, off int64) (int, error) {
+func (s *UnixDgram) pread(p *Process, into Transfer, n int, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (s *UnixDgram) pwrite(p *Process, m Span, off int64) (int, error) {
+func (s *UnixDgram) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
 	return 0, ESPIPE
+}
+
+func (s *UnixDgram) splice(at int64, n int, mode int) Transfer {
+	return newSpliced(s, at, n, mode)
+}
+
+func (s *UnixDgram) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
+	return 0, EINVAL
 }
 
 func (s *UnixDgram) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {

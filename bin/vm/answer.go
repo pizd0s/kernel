@@ -230,26 +230,40 @@ func (a *Answer) unsubscribe(s *Subscription) {
 	a.mu.Unlock()
 }
 
-func (a *Answer) read(p *Process, b []byte, mode IoMode) (int, error) {
-	return a.heard(b)
+func (a *Answer) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
+	return into.with(0, n, true, a.heard)
 }
 
-func (a *Answer) write(p *Process, b []byte, mode IoMode) (int, error) {
+func (a *Answer) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
 	return a.put(func(small []byte) ([]byte, error) {
-		if len(b) <= len(small) {
-			return small[:copy(small, b)], nil
+		data := small[:0]
+
+		if n > len(small) {
+			data = make([]byte, n)
 		}
 
-		return append([]byte(nil), b...), nil
+		got, err := from.with(0, n, false, func(b []byte) (int, error) {
+			return copy(data[:len(b)], b), nil
+		})
+
+		return data[:got], err
 	}, nil)
 }
 
-func (a *Answer) pread(p *Process, m Span, off int64) (int, error) {
+func (a *Answer) pread(p *Process, into Transfer, n int, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (a *Answer) pwrite(p *Process, m Span, off int64) (int, error) {
+func (a *Answer) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
 	return 0, ESPIPE
+}
+
+func (a *Answer) splice(at int64, n int, mode int) Transfer {
+	return newSpliced(a, at, n, mode)
+}
+
+func (a *Answer) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
+	return 0, EINVAL
 }
 
 func (a *Answer) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
@@ -323,7 +337,15 @@ func (a *Answer) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, erro
 		return 0, EISCONN
 	}
 
-	return a.write(p, p.span(buf, n), IoMode{})
+	return a.put(func(small []byte) ([]byte, error) {
+		b := p.span(buf, n)
+
+		if len(b) <= len(small) {
+			return small[:copy(small, b)], nil
+		}
+
+		return append([]byte(nil), b...), nil
+	}, nil)
 }
 
 func (a *Answer) recvmsg(p *Process, at, flags uint32) (int, error) {

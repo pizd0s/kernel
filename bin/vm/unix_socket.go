@@ -436,32 +436,40 @@ func (s *UnixSocket) recvfrom(p *Process, buf, n, flags uint32) (int, []byte, er
 	return c.recvfrom(p, buf, n, flags)
 }
 
-func (s *UnixSocket) read(p *Process, b []byte, mode IoMode) (int, error) {
+func (s *UnixSocket) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
 	c, err := s.connection()
 
 	if err != nil {
 		return 0, err
 	}
 
-	return c.read(p, b, mode)
+	return c.read(p, into, n, mode)
 }
 
-func (s *UnixSocket) write(p *Process, b []byte, mode IoMode) (int, error) {
+func (s *UnixSocket) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
 	c, err := s.connection()
 
 	if err != nil {
 		return 0, err
 	}
 
-	return c.write(p, b, mode)
+	return c.write(p, from, n, mode)
 }
 
-func (s *UnixSocket) pread(p *Process, m Span, off int64) (int, error) {
+func (s *UnixSocket) pread(p *Process, into Transfer, n int, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (s *UnixSocket) pwrite(p *Process, m Span, off int64) (int, error) {
+func (s *UnixSocket) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
 	return 0, ESPIPE
+}
+
+func (s *UnixSocket) splice(at int64, n int, mode int) Transfer {
+	return newSpliced(s, at, n, mode)
+}
+
+func (s *UnixSocket) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
+	return 0, EINVAL
 }
 
 func (s *UnixSocket) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {

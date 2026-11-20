@@ -55,10 +55,12 @@ type IoMode struct {
 
 type Transfer interface {
 	Object
-	read(p *Process, b []byte, mode IoMode) (int, error)
-	write(p *Process, b []byte, mode IoMode) (int, error)
-	pread(p *Process, m Span, off int64) (int, error)
-	pwrite(p *Process, m Span, off int64) (int, error)
+	read(p *Process, into Transfer, n int, mode IoMode) (int, error)
+	write(p *Process, from Transfer, n int, mode IoMode) (int, error)
+	pread(p *Process, into Transfer, n int, off int64) (int, error)
+	pwrite(p *Process, from Transfer, n int, off int64) (int, error)
+	splice(at int64, n int, mode int) Transfer
+	with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error)
 	copyTo(p *Process, out Transfer, from, to int64, n int) (int, error)
 	copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error)
 }

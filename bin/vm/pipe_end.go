@@ -209,7 +209,7 @@ func (e *PipeEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
 	return nil
 }
 
-func (e *PipeEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
+func (e *PipeEnd) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
 		return 0, EIO
 	}
@@ -218,7 +218,7 @@ func (e *PipeEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 		return 0, EBADF
 	}
 
-	if len(b) == 0 {
+	if n == 0 {
 		return 0, nil
 	}
 
@@ -227,12 +227,20 @@ func (e *PipeEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 	pp.mu.Lock()
 
 	for {
-		n, eof := pp.take(b)
+		eof := false
 
-		if n > 0 || eof {
+		got, err := into.with(0, n, true, func(b []byte) (int, error) {
+			taken, ended := pp.take(b)
+
+			eof = ended
+
+			return taken, nil
+		})
+
+		if err != nil || got > 0 || eof {
 			pp.mu.Unlock()
 
-			return n, nil
+			return got, err
 		}
 
 		if mode.nonblock || e.nonblock.Load() {
@@ -249,7 +257,7 @@ func (e *PipeEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
 	}
 }
 
-func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
+func (e *PipeEnd) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
 	if p.chaosFail("write") {
 		return 0, EIO
 	}
@@ -265,15 +273,28 @@ func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 
 	pp.mu.Lock()
 
-	for total < len(b) && err == nil {
-		chunk := b[total:min(len(b), total+pipeChunk)]
-		full, gone := pp.put(chunk)
+	for total < n && err == nil {
+		var full, gone bool
+
+		put, failed := from.with(int64(total), min(n-total, pipeChunk), false, func(b []byte) (int, error) {
+			if full, gone = pp.put(b); full || gone {
+				return 0, nil
+			}
+
+			return len(b), nil
+		})
 
 		switch {
+		case failed != nil:
+			err = failed
 		case gone:
 			err = EPIPE
 		case !full:
-			total += len(chunk)
+			total += put
+
+			if put == 0 {
+				n = total
+			}
 		case mode.nonblock || e.nonblock.Load():
 			err = EAGAIN
 		default:
@@ -294,12 +315,20 @@ func (e *PipeEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
 	return 0, err
 }
 
-func (e *PipeEnd) pread(p *Process, m Span, off int64) (int, error) {
+func (e *PipeEnd) pread(p *Process, into Transfer, n int, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (e *PipeEnd) pwrite(p *Process, m Span, off int64) (int, error) {
+func (e *PipeEnd) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
 	return 0, ESPIPE
+}
+
+func (e *PipeEnd) splice(at int64, n int, mode int) Transfer {
+	return newSpliced(e, at, n, mode)
+}
+
+func (e *PipeEnd) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
+	return 0, EINVAL
 }
 
 func (e *PipeEnd) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {

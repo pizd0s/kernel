@@ -186,7 +186,7 @@ func readProgram(size int64, readAt func(b []byte, off int64) error, module bool
 
 func readAt(p *Process, t Transfer, b []byte, off int64) error {
 	for at := 0; at < len(b); {
-		n, err := t.pread(p, Span{b: b[at:]}, off+int64(at))
+		n, err := t.pread(p, bytesFile(b[at:]), len(b)-at, off+int64(at))
 
 		if err != nil {
 			return err

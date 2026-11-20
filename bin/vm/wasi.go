@@ -275,23 +275,33 @@ func vectored(ctx uintptr, fd, iovs, count uint32, offset uint64, positioned, wr
 
 	total := 0
 
-	for _, b := range bufs {
+	for i, b := range bufs {
 		if len(b) == 0 {
 			continue
 		}
 
 		var n int
 
+		mode := O_WRONLY
+
+		if write {
+			mode = O_RDONLY
+		}
+
+		w := p.memory(binary.LittleEndian.Uint32(m[iovs+8*uint32(i):]), uint32(len(b)), mode)
+
 		switch {
 		case positioned && write:
-			n, err = t.pwrite(p, Span{b, p.inst}, int64(offset)+int64(total))
+			n, err = t.pwrite(p, w, len(b), int64(offset)+int64(total))
 		case positioned:
-			n, err = t.pread(p, Span{b, p.inst}, int64(offset)+int64(total))
+			n, err = t.pread(p, w, len(b), int64(offset)+int64(total))
 		case write:
-			n, err = t.write(p, b, IoMode{})
+			n, err = t.write(p, w, len(b), IoMode{})
 		default:
-			n, err = t.read(p, b, IoMode{})
+			n, err = t.read(p, w, len(b), IoMode{})
 		}
+
+		w.unref()
 
 		total += n
 

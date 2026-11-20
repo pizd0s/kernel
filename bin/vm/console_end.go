@@ -162,32 +162,40 @@ func (c *ConsoleEnd) setFlags(fl int) error {
 	return nil
 }
 
-func (c *ConsoleEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
+func (c *ConsoleEnd) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
 	if c.in == nil {
 		return 0, EBADF
 	}
 
 	mode.nonblock = mode.nonblock || c.nonblock.Load()
 
-	return c.in.read(p, b, mode)
+	return c.in.read(p, into, n, mode)
 }
 
-func (c *ConsoleEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
+func (c *ConsoleEnd) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
 	if c.out == nil {
 		return 0, EBADF
 	}
 
 	mode.nonblock = mode.nonblock || c.nonblock.Load()
 
-	return c.out.write(p, b, mode)
+	return c.out.write(p, from, n, mode)
 }
 
-func (c *ConsoleEnd) pread(p *Process, m Span, off int64) (int, error) {
+func (c *ConsoleEnd) pread(p *Process, into Transfer, n int, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (c *ConsoleEnd) pwrite(p *Process, m Span, off int64) (int, error) {
+func (c *ConsoleEnd) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
 	return 0, ESPIPE
+}
+
+func (c *ConsoleEnd) splice(at int64, n int, mode int) Transfer {
+	return newSpliced(c, at, n, mode)
+}
+
+func (c *ConsoleEnd) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
+	return 0, EINVAL
 }
 
 func (c *ConsoleEnd) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {

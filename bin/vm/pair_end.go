@@ -309,27 +309,18 @@ func (e *PairEnd) sendCred(p *Process, data []byte, files []Object, cred *Ucred,
 	return err
 }
 
-func (e *PairEnd) sendStream(p *Process, spans [][]byte, files []Object, cred *Ucred, mode IoMode) (int, error) {
+func (e *PairEnd) sendStream(p *Process, take func(at int, b []byte) int, total int, files []Object, cred *Ucred, mode IoMode) (int, error) {
 	sent := 0
 
-	for len(spans) > 0 {
-		chunk := make([]byte, 0, min(totalLength(spans), packetMax))
+	for sent < total {
+		chunk := make([]byte, min(total-sent, packetMax))
+		c := take(sent, chunk)
 
-		for len(spans) > 0 && len(chunk) < cap(chunk) {
-			c := min(len(spans[0]), cap(chunk)-len(chunk))
-
-			chunk = append(chunk, spans[0][:c]...)
-
-			if spans[0] = spans[0][c:]; len(spans[0]) == 0 {
-				spans = spans[1:]
-			}
+		if c == 0 {
+			break
 		}
 
-		if len(chunk) == 0 {
-			continue
-		}
-
-		if err := e.sendCred(p, chunk, files, cred, mode); err != nil {
+		if err := e.sendCred(p, chunk[:c], files, cred, mode); err != nil {
 			if err == EPIPE && !mode.quiet {
 				p.sendSelf(SIGPIPE)
 			}
@@ -341,7 +332,7 @@ func (e *PairEnd) sendStream(p *Process, spans [][]byte, files []Object, cred *U
 			return 0, err
 		}
 
-		sent += len(chunk)
+		sent += c
 		files, cred = nil, nil
 	}
 
@@ -518,9 +509,9 @@ func (e *PairEnd) awaitInput(p *Process) (timedOut bool, err error) {
 	return timedOut, err
 }
 
-func (e *PairEnd) receive(p *Process, bufs [][]byte, flags uint32, control, room uint32) (int, uint32, uint32, []byte, error) {
+func (e *PairEnd) receive(p *Process, put func(at int, data []byte) int, want int, flags uint32, control, room uint32) (int, uint32, uint32, []byte, error) {
 	if e.shared.kind == SOCK_STREAM {
-		n, written, out, err := e.receiveStream(p, bufs, flags, control, room)
+		n, written, out, err := e.receiveStream(p, put, want, flags, control, room)
 
 		return n, written, out, nil, err
 	}
@@ -532,17 +523,10 @@ func (e *PairEnd) receive(p *Process, bufs [][]byte, flags uint32, control, room
 		return 0, 0, 0, nil, err
 	}
 
-	n, out := 0, uint32(0)
-	data := pk.data
+	out := uint32(0)
+	n := put(0, pk.data[:min(len(pk.data), want)])
 
-	for _, b := range bufs {
-		c := copy(b, data)
-
-		data = data[c:]
-		n += c
-	}
-
-	if len(data) > 0 {
+	if n < len(pk.data) {
 		out |= MSG_TRUNC
 	}
 
@@ -559,9 +543,8 @@ func (e *PairEnd) receive(p *Process, bufs [][]byte, flags uint32, control, room
 	return n, written, out | cut, pk.addr, nil
 }
 
-func (e *PairEnd) receiveStream(p *Process, bufs [][]byte, flags uint32, control, room uint32) (int, uint32, uint32, error) {
+func (e *PairEnd) receiveStream(p *Process, put func(at int, data []byte) int, want int, flags uint32, control, room uint32) (int, uint32, uint32, error) {
 	nonblock := flags&MSG_DONTWAIT != 0 || e.nonblock.Load()
-	want := totalLength(bufs)
 	got := 0
 
 	var written, cut uint32
@@ -571,7 +554,7 @@ func (e *PairEnd) receiveStream(p *Process, bufs [][]byte, flags uint32, control
 	}
 
 	for {
-		n, files, cred, eof, ended := e.streamTake(advance(bufs, got), flags&MSG_PEEK != 0)
+		n, files, cred, eof, ended := e.streamTake(put, got, want-got, flags&MSG_PEEK != 0)
 
 		if got == 0 && n > 0 && flags&MSG_PEEK == 0 {
 			written, cut = e.putControl(p, files, cred, control, room, flags&MSG_CMSG_CLOEXEC != 0)
@@ -609,12 +592,10 @@ func (e *PairEnd) receiveStream(p *Process, bufs [][]byte, flags uint32, control
 	}
 }
 
-func (e *PairEnd) streamTake(bufs [][]byte, peek bool) (n int, files []Object, cred *Ucred, eof, ended bool) {
+func (e *PairEnd) streamTake(put func(at int, data []byte) int, at, room int, peek bool) (n int, files []Object, cred *Ucred, eof, ended bool) {
 	e.mu.Lock()
 
 	defer e.mu.Unlock()
-
-	room := totalLength(bufs)
 
 	for n < room {
 		pk, ok := e.in.peek()
@@ -628,7 +609,7 @@ func (e *PairEnd) streamTake(bufs [][]byte, peek bool) (n int, files []Object, c
 			return n, files, cred, false, true
 		}
 
-		c := scatterInto(advance(bufs, n), pk.data)
+		c := put(at+n, pk.data[:min(len(pk.data), room-n)])
 
 		if peek {
 			return n + c, nil, nil, false, true
@@ -667,6 +648,20 @@ func advance(bufs [][]byte, n int) [][]byte {
 	}
 
 	return append([][]byte{bufs[0][n:]}, bufs[1:]...)
+}
+
+func gatherFrom(spans [][]byte, b []byte) int {
+	n := 0
+
+	for _, s := range spans {
+		if n == len(b) {
+			break
+		}
+
+		n += copy(b[n:], s)
+	}
+
+	return n
 }
 
 func scatterInto(bufs [][]byte, data []byte) int {
@@ -711,38 +706,73 @@ func (e *PairEnd) putControl(p *Process, files []Object, cred *Ucred, control, r
 	return written + min(guestAlign(size), room-written), cut
 }
 
-func (e *PairEnd) read(p *Process, b []byte, mode IoMode) (int, error) {
+func (e *PairEnd) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
 		return 0, EIO
 	}
 
-	n, _, _, _, err := e.receive(p, [][]byte{b}, 0, 0, 0)
+	got, _, _, _, err := e.receive(p, putInto(into), n, 0, 0, 0)
 
-	return n, err
+	return got, err
 }
 
-func (e *PairEnd) write(p *Process, b []byte, mode IoMode) (int, error) {
+func (e *PairEnd) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
 	if p.chaosFail("write") {
 		return 0, EIO
 	}
 
 	if e.shared.kind == SOCK_STREAM {
-		return e.sendStream(p, [][]byte{b}, nil, nil, mode)
+		return e.sendStream(p, takeFrom(from), n, nil, nil, mode)
 	}
 
-	if err := e.send(p, b, nil, mode); err != nil {
+	if n > packetMax {
+		return 0, EMSGSIZE
+	}
+
+	data := make([]byte, n)
+	got := takeFrom(from)(0, data)
+
+	if err := e.sendCred(p, data[:got], nil, nil, mode); err != nil {
 		return 0, err
 	}
 
-	return len(b), nil
+	return got, nil
 }
 
-func (e *PairEnd) pread(p *Process, m Span, off int64) (int, error) {
+func putInto(into Transfer) func(at int, data []byte) int {
+	return func(at int, data []byte) int {
+		n, _ := into.with(int64(at), len(data), true, func(b []byte) (int, error) {
+			return copy(b, data), nil
+		})
+
+		return n
+	}
+}
+
+func takeFrom(from Transfer) func(at int, b []byte) int {
+	return func(at int, b []byte) int {
+		n, _ := from.with(int64(at), len(b), false, func(src []byte) (int, error) {
+			return copy(b, src), nil
+		})
+
+		return n
+	}
+}
+
+func (e *PairEnd) pread(p *Process, into Transfer, n int, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (e *PairEnd) pwrite(p *Process, m Span, off int64) (int, error) {
+func (e *PairEnd) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
 	return 0, ESPIPE
+}
+
+func (e *PairEnd) splice(at int64, n int, mode int) Transfer {
+	return newSpliced(e, at, n, mode)
+}
+
+func (e *PairEnd) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
+	return 0, EINVAL
 }
 
 func (e *PairEnd) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
@@ -817,7 +847,9 @@ func (e *PairEnd) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, err
 	mode := IoMode{nonblock: flags&MSG_DONTWAIT != 0, quiet: flags&MSG_NOSIGNAL != 0}
 
 	if e.shared.kind == SOCK_STREAM {
-		return e.sendStream(p, [][]byte{p.span(buf, n)}, nil, nil, mode)
+		return e.sendStream(p, func(at int, b []byte) int {
+			return copy(b, p.span(buf+uint32(at), n-uint32(at)))
+		}, int(n), nil, nil, mode)
 	}
 
 	if err := e.send(p, p.span(buf, n), nil, mode); err != nil {
@@ -828,7 +860,9 @@ func (e *PairEnd) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, err
 }
 
 func (e *PairEnd) recvfrom(p *Process, buf, n, flags uint32) (int, []byte, error) {
-	got, _, _, from, err := e.receive(p, [][]byte{p.span(buf, n)}, flags, 0, 0)
+	got, _, _, from, err := e.receive(p, func(at int, data []byte) int {
+		return copy(p.span(buf+uint32(at), n-uint32(at)), data)
+	}, int(n), flags, 0, 0)
 
 	return got, senderAddress(from), err
 }
@@ -857,13 +891,18 @@ func (e *PairEnd) sendmsg(p *Process, at, flags uint32) (int, error) {
 	mode := IoMode{nonblock: flags&MSG_DONTWAIT != 0, quiet: flags&MSG_NOSIGNAL != 0}
 
 	if e.shared.kind == SOCK_STREAM {
-		spans, err := p.ioSpans(binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]))
+		iov, count := binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:])
+		spans, err := p.ioSpans(iov, count)
 
 		if err != nil {
 			return 0, err
 		}
 
-		return e.sendStream(p, spans, files, cred, mode)
+		return e.sendStream(p, func(at int, b []byte) int {
+			spans, _ := p.ioSpans(iov, count)
+
+			return gatherFrom(advance(spans, at), b)
+		}, totalLength(spans), files, cred, mode)
 	}
 
 	data, err := p.gather(binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]), packetMax)
@@ -882,13 +921,18 @@ func (e *PairEnd) sendmsg(p *Process, at, flags uint32) (int, error) {
 func (e *PairEnd) recvmsg(p *Process, at, flags uint32) (int, error) {
 	var few [4][]byte
 
-	spans, err := p.ioSpansIn(few[:0], p.u32(at+8), p.u32(at+12))
+	iov, count := p.u32(at+8), p.u32(at+12)
+	spans, err := p.ioSpansIn(few[:0], iov, count)
 
 	if err != nil {
 		return 0, err
 	}
 
-	n, written, out, from, err := e.receive(p, spans, flags, p.u32(at+16), p.u32(at+20))
+	n, written, out, from, err := e.receive(p, func(at int, data []byte) int {
+		spans, _ := p.ioSpansIn(few[:0], iov, count)
+
+		return scatterInto(advance(spans, at), data)
+	}, totalLength(spans), flags, p.u32(at+16), p.u32(at+20))
 
 	if err != nil {
 		return 0, err
