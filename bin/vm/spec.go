@@ -28,13 +28,13 @@ var specTraps = []struct {
 }
 
 var spectestFunctions = map[string]any{
-	"print":         func(ctx uintptr) {},
-	"print_i32":     func(ctx uintptr, x uint32) {},
-	"print_i64":     func(ctx uintptr, x uint64) {},
-	"print_f32":     func(ctx uintptr, x float32) {},
-	"print_f64":     func(ctx uintptr, x float64) {},
-	"print_i32_f32": func(ctx uintptr, x uint32, y float32) {},
-	"print_f64_f64": func(ctx uintptr, x, y float64) {},
+	"print":         func() {},
+	"print_i32":     func(x uint32) {},
+	"print_i64":     func(x uint64) {},
+	"print_f32":     func(x float32) {},
+	"print_f64":     func(x float64) {},
+	"print_i32_f32": func(x uint32, y float32) {},
+	"print_f64_f64": func(x, y float64) {},
 }
 
 const specStack = 8 << 20
@@ -314,7 +314,7 @@ func (r *SpecRunner) invoke(a *SpecAction) (func() []reflect.Value, bool) {
 	}
 
 	f, _ := i.export(e.name)
-	args := []reflect.Value{reflect.ValueOf(i.ctx())}
+	args := []reflect.Value{reflect.ValueOf(i.handle())}
 
 	if len(a.Args) != len(e.params) {
 		return nil, false

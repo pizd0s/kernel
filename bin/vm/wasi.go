@@ -106,8 +106,8 @@ func isWASI(obj *ElfObject) bool {
 	return false
 }
 
-func guest(ctx uintptr) []byte {
-	return instanceAt(ctx).memoryBytes()
+func guest() []byte {
+	return current().memoryBytes()
 }
 
 func span(m []byte, at uint32, n uint64) []byte {
@@ -168,20 +168,20 @@ func stringsGet(m []byte, list []string, ptrs, buf uint32) uint32 {
 	return wasiOK
 }
 
-func wasiArgsGet(ctx uintptr, argv, buf uint32) uint32 {
-	return stringsGet(guest(ctx), proc(ctx).image.argv, argv, buf)
+func wasiArgsGet(argv, buf uint32) uint32 {
+	return stringsGet(guest(), proc().image.argv, argv, buf)
 }
 
-func wasiArgsSizesGet(ctx uintptr, count, size uint32) uint32 {
-	return stringsSizes(guest(ctx), proc(ctx).image.argv, count, size)
+func wasiArgsSizesGet(count, size uint32) uint32 {
+	return stringsSizes(guest(), proc().image.argv, count, size)
 }
 
-func wasiEnvironGet(ctx uintptr, env, buf uint32) uint32 {
-	return stringsGet(guest(ctx), proc(ctx).image.envp, env, buf)
+func wasiEnvironGet(env, buf uint32) uint32 {
+	return stringsGet(guest(), proc().image.envp, env, buf)
 }
 
-func wasiEnvironSizesGet(ctx uintptr, count, size uint32) uint32 {
-	return stringsSizes(guest(ctx), proc(ctx).image.envp, count, size)
+func wasiEnvironSizesGet(count, size uint32) uint32 {
+	return stringsSizes(guest(), proc().image.envp, count, size)
 }
 
 func clock(p *Process, id uint32, res bool) (uint64, uint32) {
@@ -202,20 +202,20 @@ func clock(p *Process, id uint32, res bool) (uint64, uint32) {
 	return uint64(t), wasiOK
 }
 
-func wasiClockTimeGet(ctx uintptr, id uint32, precision uint64, at uint32) uint32 {
-	t, e := clock(proc(ctx), id, false)
+func wasiClockTimeGet(id uint32, precision uint64, at uint32) uint32 {
+	t, e := clock(proc(), id, false)
 
-	if e == wasiOK && !put64(guest(ctx), at, t) {
+	if e == wasiOK && !put64(guest(), at, t) {
 		return wasiEfault
 	}
 
 	return e
 }
 
-func wasiClockResGet(ctx uintptr, id uint32, at uint32) uint32 {
-	t, e := clock(proc(ctx), id, true)
+func wasiClockResGet(id uint32, at uint32) uint32 {
+	t, e := clock(proc(), id, true)
 
-	if e == wasiOK && !put64(guest(ctx), at, t) {
+	if e == wasiOK && !put64(guest(), at, t) {
 		return wasiEfault
 	}
 
@@ -249,8 +249,8 @@ func iovecs(m []byte, iovs, count uint32) ([][]byte, uint32) {
 	return out, wasiOK
 }
 
-func vectored(ctx uintptr, fd, iovs, count uint32, offset uint64, positioned, write bool, done uint32) uint32 {
-	p, m := proc(ctx), guest(ctx)
+func vectored(fd, iovs, count uint32, offset uint64, positioned, write bool, done uint32) uint32 {
+	p, m := proc(), guest()
 	obj, err := p.fd(fd)
 
 	if err != nil {
@@ -319,24 +319,24 @@ func vectored(ctx uintptr, fd, iovs, count uint32, offset uint64, positioned, wr
 	return wasiOK
 }
 
-func wasiFdWrite(ctx uintptr, fd, iovs, count, written uint32) uint32 {
-	return vectored(ctx, fd, iovs, count, 0, false, true, written)
+func wasiFdWrite(fd, iovs, count, written uint32) uint32 {
+	return vectored(fd, iovs, count, 0, false, true, written)
 }
 
-func wasiFdRead(ctx uintptr, fd, iovs, count, read uint32) uint32 {
-	return vectored(ctx, fd, iovs, count, 0, false, false, read)
+func wasiFdRead(fd, iovs, count, read uint32) uint32 {
+	return vectored(fd, iovs, count, 0, false, false, read)
 }
 
-func wasiFdPwrite(ctx uintptr, fd, iovs, count uint32, offset uint64, written uint32) uint32 {
-	return vectored(ctx, fd, iovs, count, offset, true, true, written)
+func wasiFdPwrite(fd, iovs, count uint32, offset uint64, written uint32) uint32 {
+	return vectored(fd, iovs, count, offset, true, true, written)
 }
 
-func wasiFdPread(ctx uintptr, fd, iovs, count uint32, offset uint64, read uint32) uint32 {
-	return vectored(ctx, fd, iovs, count, offset, true, false, read)
+func wasiFdPread(fd, iovs, count uint32, offset uint64, read uint32) uint32 {
+	return vectored(fd, iovs, count, offset, true, false, read)
 }
 
-func wasiFdClose(ctx uintptr, fd uint32) uint32 {
-	p := proc(ctx)
+func wasiFdClose(fd uint32) uint32 {
+	p := proc()
 
 	if !p.closeFd(int(fd)) {
 		return wasiEbadf
@@ -349,8 +349,8 @@ func wasiFdClose(ctx uintptr, fd uint32) uint32 {
 	return wasiOK
 }
 
-func wasiFdSeek(ctx uintptr, fd uint32, offset uint64, whence uint32, result uint32) uint32 {
-	p := proc(ctx)
+func wasiFdSeek(fd uint32, offset uint64, whence uint32, result uint32) uint32 {
+	p := proc()
 	obj, err := p.fd(fd)
 
 	if err != nil {
@@ -373,15 +373,15 @@ func wasiFdSeek(ctx uintptr, fd uint32, offset uint64, whence uint32, result uin
 		return wasiErrno(err)
 	}
 
-	if !put64(guest(ctx), result, uint64(at)) {
+	if !put64(guest(), result, uint64(at)) {
 		return wasiEfault
 	}
 
 	return wasiOK
 }
 
-func wasiFdSync(ctx uintptr, fd uint32) uint32 {
-	p := proc(ctx)
+func wasiFdSync(fd uint32) uint32 {
+	p := proc()
 	a, err := p.attrsAt(fd)
 
 	if err == EBADF {
@@ -414,15 +414,15 @@ func filetype(mode uint32) byte {
 	return 0
 }
 
-func wasiFdFdstatGet(ctx uintptr, fd, at uint32) uint32 {
-	p := proc(ctx)
+func wasiFdFdstatGet(fd, at uint32) uint32 {
+	p := proc()
 	obj, err := p.fileAt(fd)
 
 	if err != nil {
 		return wasiEbadf
 	}
 
-	b := span(guest(ctx), at, 24)
+	b := span(guest(), at, 24)
 
 	if b == nil {
 		return wasiEfault
@@ -459,8 +459,8 @@ func wasiFdFdstatGet(ctx uintptr, fd, at uint32) uint32 {
 	return wasiOK
 }
 
-func wasiFdFdstatSetFlags(ctx uintptr, fd, flags uint32) uint32 {
-	p := proc(ctx)
+func wasiFdFdstatSetFlags(fd, flags uint32) uint32 {
+	p := proc()
 	obj, err := p.fileAt(fd)
 
 	if err != nil {
@@ -502,15 +502,15 @@ func filestat(b []byte, st *Stat) {
 	binary.LittleEndian.PutUint64(b[56:], nanos(st.Ctim))
 }
 
-func wasiFdFilestatGet(ctx uintptr, fd, at uint32) uint32 {
-	p := proc(ctx)
+func wasiFdFilestatGet(fd, at uint32) uint32 {
+	p := proc()
 	obj, err := p.fileAt(fd)
 
 	if err != nil {
 		return wasiEbadf
 	}
 
-	b := span(guest(ctx), at, 64)
+	b := span(guest(), at, 64)
 
 	if b == nil {
 		return wasiEfault
@@ -527,8 +527,8 @@ func wasiFdFilestatGet(ctx uintptr, fd, at uint32) uint32 {
 	return wasiOK
 }
 
-func wasiFdFilestatSetSize(ctx uintptr, fd uint32, size uint64) uint32 {
-	p := proc(ctx)
+func wasiFdFilestatSetSize(fd uint32, size uint64) uint32 {
+	p := proc()
 	a, err := p.attrsAt(fd)
 
 	if err == EBADF {
@@ -542,12 +542,12 @@ func wasiFdFilestatSetSize(ctx uintptr, fd uint32, size uint64) uint32 {
 	return wasiErrno(a.truncate(p, int64(size)))
 }
 
-func wasiFdPrestatGet(ctx uintptr, fd, at uint32) uint32 {
-	if int(fd) != proc(ctx).wasiRoot {
+func wasiFdPrestatGet(fd, at uint32) uint32 {
+	if int(fd) != proc().wasiRoot {
 		return wasiEbadf
 	}
 
-	m := guest(ctx)
+	m := guest()
 
 	if !put32(m, at, 0) || !put32(m, at+4, 1) {
 		return wasiEfault
@@ -556,12 +556,12 @@ func wasiFdPrestatGet(ctx uintptr, fd, at uint32) uint32 {
 	return wasiOK
 }
 
-func wasiFdPrestatDirName(ctx uintptr, fd, path, n uint32) uint32 {
-	if int(fd) != proc(ctx).wasiRoot {
+func wasiFdPrestatDirName(fd, path, n uint32) uint32 {
+	if int(fd) != proc().wasiRoot {
 		return wasiEbadf
 	}
 
-	b := span(guest(ctx), path, uint64(n))
+	b := span(guest(), path, uint64(n))
 
 	if b == nil {
 		return wasiEfault
@@ -595,8 +595,8 @@ func direntType(t byte) byte {
 	return 0
 }
 
-func wasiFdReaddir(ctx uintptr, fd, buf, n uint32, cookie uint64, used uint32) uint32 {
-	p, m := proc(ctx), guest(ctx)
+func wasiFdReaddir(fd, buf, n uint32, cookie uint64, used uint32) uint32 {
+	p, m := proc(), guest()
 	obj, err := p.fd(fd)
 
 	if err != nil {
@@ -624,9 +624,10 @@ func wasiFdReaddir(ctx uintptr, fd, buf, n uint32, cookie uint64, used uint32) u
 	index := uint64(0)
 	written := 0
 	raw := make([]byte, 64<<10)
+	file := bytesFile(raw)
 
 	for written < len(out) {
-		got, err := d.readdir(p, raw)
+		got, err := d.readdir(p, file, len(raw))
 
 		if err != nil {
 			return wasiErrno(err)
@@ -694,8 +695,8 @@ func dirfd(p *Process, fd uint32) (int32, uint32) {
 	return int32(fd), wasiOK
 }
 
-func wasiPathFilestatGet(ctx uintptr, fd, flags, path, n, at uint32) uint32 {
-	p, m := proc(ctx), guest(ctx)
+func wasiPathFilestatGet(fd, flags, path, n, at uint32) uint32 {
+	p, m := proc(), guest()
 	dir, e := dirfd(p, fd)
 
 	if e != wasiOK {
@@ -725,8 +726,8 @@ func wasiPathFilestatGet(ctx uintptr, fd, flags, path, n, at uint32) uint32 {
 	return wasiOK
 }
 
-func wasiPathOpen(ctx uintptr, fd, dirflags, path, n, oflags uint32, rights, inheriting uint64, fdflags, opened uint32) uint32 {
-	p, m := proc(ctx), guest(ctx)
+func wasiPathOpen(fd, dirflags, path, n, oflags uint32, rights, inheriting uint64, fdflags, opened uint32) uint32 {
+	p, m := proc(), guest()
 	dir, e := dirfd(p, fd)
 
 	if e != wasiOK {
@@ -800,15 +801,15 @@ func wasiPathOpen(ctx uintptr, fd, dirflags, path, n, oflags uint32, rights, inh
 	return wasiOK
 }
 
-func wasiPathCreateDirectory(ctx uintptr, fd, path, n uint32) uint32 {
-	p := proc(ctx)
+func wasiPathCreateDirectory(fd, path, n uint32) uint32 {
+	p := proc()
 	dir, e := dirfd(p, fd)
 
 	if e != wasiOK {
 		return e
 	}
 
-	name, e := wasiPath(guest(ctx), path, n)
+	name, e := wasiPath(guest(), path, n)
 
 	if e != wasiOK {
 		return e
@@ -817,23 +818,23 @@ func wasiPathCreateDirectory(ctx uintptr, fd, path, n uint32) uint32 {
 	return wasiErrno(p.mkdir(dir, name, 0o777))
 }
 
-func wasiPathRemoveDirectory(ctx uintptr, fd, path, n uint32) uint32 {
-	return wasiRemove(ctx, fd, path, n, true)
+func wasiPathRemoveDirectory(fd, path, n uint32) uint32 {
+	return wasiRemove(fd, path, n, true)
 }
 
-func wasiPathUnlinkFile(ctx uintptr, fd, path, n uint32) uint32 {
-	return wasiRemove(ctx, fd, path, n, false)
+func wasiPathUnlinkFile(fd, path, n uint32) uint32 {
+	return wasiRemove(fd, path, n, false)
 }
 
-func wasiRemove(ctx uintptr, fd, path, n uint32, directory bool) uint32 {
-	p := proc(ctx)
+func wasiRemove(fd, path, n uint32, directory bool) uint32 {
+	p := proc()
 	dir, e := dirfd(p, fd)
 
 	if e != wasiOK {
 		return e
 	}
 
-	name, e := wasiPath(guest(ctx), path, n)
+	name, e := wasiPath(guest(), path, n)
 
 	if e != wasiOK {
 		return e
@@ -842,8 +843,8 @@ func wasiRemove(ctx uintptr, fd, path, n uint32, directory bool) uint32 {
 	return wasiErrno(p.remove(dir, name, directory))
 }
 
-func wasiPathRename(ctx uintptr, fd, path, n, fd2, path2, n2 uint32) uint32 {
-	p, m := proc(ctx), guest(ctx)
+func wasiPathRename(fd, path, n, fd2, path2, n2 uint32) uint32 {
+	p, m := proc(), guest()
 	dir, e := dirfd(p, fd)
 	dir2, e2 := dirfd(p, fd2)
 
@@ -866,8 +867,8 @@ func wasiPathRename(ctx uintptr, fd, path, n, fd2, path2, n2 uint32) uint32 {
 	return wasiErrno(p.rename(dir, old, dir2, new))
 }
 
-func wasiPathReadlink(ctx uintptr, fd, path, n, buf, size, used uint32) uint32 {
-	p, m := proc(ctx), guest(ctx)
+func wasiPathReadlink(fd, path, n, buf, size, used uint32) uint32 {
+	p, m := proc(), guest()
 	dir, e := dirfd(p, fd)
 
 	if e != wasiOK {
@@ -895,12 +896,12 @@ func wasiPathReadlink(ctx uintptr, fd, path, n, buf, size, used uint32) uint32 {
 	return wasiOK
 }
 
-func wasiPollOneoff(ctx uintptr, in, out, count, events uint32) uint32 {
+func wasiPollOneoff(in, out, count, events uint32) uint32 {
 	if count == 0 {
 		return wasiEinval
 	}
 
-	p, m := proc(ctx), guest(ctx)
+	p, m := proc(), guest()
 	subs := span(m, in, 48*uint64(count))
 	evs := span(m, out, 32*uint64(count))
 
@@ -962,8 +963,8 @@ func wasiPollOneoff(ctx uintptr, in, out, count, events uint32) uint32 {
 	return wasiOK
 }
 
-func wasiRandomGet(ctx uintptr, buf, n uint32) uint32 {
-	b := span(guest(ctx), buf, uint64(n))
+func wasiRandomGet(buf, n uint32) uint32 {
+	b := span(guest(), buf, uint64(n))
 
 	if b == nil {
 		return wasiEfault
@@ -974,12 +975,12 @@ func wasiRandomGet(ctx uintptr, buf, n uint32) uint32 {
 	return wasiOK
 }
 
-func wasiSchedYield(ctx uintptr) uint32 {
+func wasiSchedYield() uint32 {
 	runtime.Gosched()
 
 	return wasiOK
 }
 
-func wasiProcExit(ctx uintptr, code uint32) {
-	proc(ctx).exitWith(int(code&0xff) << 8)
+func wasiProcExit(code uint32) {
+	proc().exitWith(int(code&0xff) << 8)
 }

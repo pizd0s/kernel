@@ -3,8 +3,9 @@
 // another goroutine asks, the next preemption signal that finds it at an
 // asynchronous safe point in that code injects a call of the stub there,
 // as one of asyncPreempt would be. The stub saves what the code needs and
-// may run Go: the code keeps neither stack addresses nor Go pointers in
-// its registers, so its frames move with the stack.
+// may run Go: the code keeps no stack addresses in its registers, and Go
+// pointers only to what Go keeps alive elsewhere, so its frames move with
+// the stack.
 
 package runtime
 
@@ -72,4 +73,12 @@ func interruptG(gp *g, ctxt *sigctxt) bool {
 	ctxt.pushCall(in.stub, resume)
 
 	return true
+}
+
+// Instance is the instance of vm's code the calling goroutine runs, which
+// the entry thunks put in g.instance.
+//
+//go:nosplit
+func Instance() uintptr {
+	return getg().instance
 }

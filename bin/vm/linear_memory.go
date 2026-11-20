@@ -137,6 +137,8 @@ func (m *LinearMemory) grow(delta uint32) uint32 {
 
 	if need := old + uint64(delta); need > m.room() {
 		m.owner.move(min(max(need, 2*m.room()), m.max))
+	} else if m.owner.proc.chaosMoves() {
+		m.owner.move(m.room())
 	}
 
 	if delta != 0 && m.tailUsed {

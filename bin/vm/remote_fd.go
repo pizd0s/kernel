@@ -670,7 +670,7 @@ func (f *RemoteFD) copyFrom(p *Process, in Transfer, from, to int64, n int) (int
 	return copyThrough(p, in, f, from, to, n)
 }
 
-func (f *RemoteFD) readdir(p *Process, b []byte) (int, error) {
+func (f *RemoteFD) readdir(p *Process, into Transfer, size int) (int, error) {
 	var after [8]byte
 
 	binary.LittleEndian.PutUint64(after[:], uint64(f.position()))
@@ -682,6 +682,7 @@ func (f *RemoteFD) readdir(p *Process, b []byte) (int, error) {
 	}
 
 	data := pk.data
+	b := make([]byte, size)
 	n := 0
 	le := binary.LittleEndian
 
@@ -716,7 +717,9 @@ func (f *RemoteFD) readdir(p *Process, b []byte) (int, error) {
 		data = data[min(end+1, len(data)):]
 	}
 
-	return n, nil
+	return into.with(0, n, true, func(dst []byte) (int, error) {
+		return copy(dst, b[:n]), nil
+	})
 }
 
 func (f *RemoteFD) readlink(p *Process) (string, error) {

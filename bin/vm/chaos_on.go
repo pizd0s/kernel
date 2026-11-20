@@ -11,7 +11,7 @@ import (
 
 var (
 	vmPoints      = map[string]uint32{"mmap": 0, "compile-read": 0, "compile-write": 0}
-	processPoints = map[string]uint32{"openat": 0, "read": 0, "write": 0, "fork": 0, "file-stat": 0, "readlink": 0, "memory-grow": 0}
+	processPoints = map[string]uint32{"openat": 0, "read": 0, "write": 0, "fork": 0, "file-stat": 0, "readlink": 0, "memory-grow": 0, "memory-move": 0}
 )
 
 var chaosState struct {
@@ -126,6 +126,30 @@ func (c *ChaosRulesOf) fail(point string) bool {
 	return true
 }
 
+func (c *ChaosRulesOf) holds(point string) bool {
+	if c == nil {
+		return false
+	}
+
+	c.mu.Lock()
+
+	defer c.mu.Unlock()
+
+	n, ok := c.rules[point]
+
+	if !ok {
+		return false
+	}
+
+	if n > 0 {
+		c.rules[point] = n - 1
+
+		return false
+	}
+
+	return true
+}
+
 func setupCompilerChaos(i *Instance) {
 	points := map[string]uint32{"read": 0, "write": 1, "grow": 2}
 	rules := chaosRules(os.Getenv("PIZDOS_AOT_CHAOS"), points)
@@ -133,6 +157,6 @@ func setupCompilerChaos(i *Instance) {
 	for _, rule := range rules {
 		entry, _ := i.export("chaosConfigure")
 
-		entry.Interface().(func(uintptr, uint32, uint32))(i.ctx(), points[rule.name], rule.skip)
+		entry.Interface().(func(uintptr, uint32, uint32))(i.handle(), points[rule.name], rule.skip)
 	}
 }

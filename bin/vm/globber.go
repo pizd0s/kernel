@@ -57,7 +57,7 @@ func (g *Globber) failed(dir string, err error) bool {
 
 		if path != 0 {
 			f, _ := p.inst.export("__call_glob_error")
-			stop := f.Interface().(func(uintptr, uint32, uint32, uint32) uint32)(p.inst.ctx(), g.errfunc, path, uint32(errnoOf(err)))
+			stop := f.Interface().(func(uintptr, uint32, uint32, uint32) uint32)(p.inst.handle(), g.errfunc, path, uint32(errnoOf(err)))
 
 			p.free(path)
 
@@ -97,9 +97,10 @@ func (g *Globber) names(dir string) ([]string, error) {
 
 	names := []string{".", ".."}
 	buf := make([]byte, 4096)
+	file := bytesFile(buf)
 
 	for {
-		n, err := d.readdir(g.p, buf)
+		n, err := d.readdir(g.p, file, len(buf))
 
 		if err != nil || n == 0 {
 			return names, err

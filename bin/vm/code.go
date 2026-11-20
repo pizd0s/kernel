@@ -24,19 +24,19 @@ type Code struct {
 	thunkOf map[string]uintptr
 }
 
-func helperTrap(ctx uintptr, code uint32) {
+func helperTrap(code uint32) {
 	panic(newTrap(code, 1))
 }
 
-func helperTrapAt(ctx uintptr, code uint32, addr uint64, info uint32) {
+func helperTrapAt(code uint32, addr uint64, info uint32) {
 	t := newTrap(code, 1)
 
 	t.addr, t.width, t.kind = addr, uint8(info), uint8(info>>8)
 	panic(t)
 }
 
-func helperMemoryGrow(ctx uintptr, delta uint32) uint32 {
-	i := instanceAt(ctx)
+func helperMemoryGrow(delta uint32) uint32 {
+	i := current()
 
 	if _, compiler := i.host.(*CompilerIO); !compiler && i.proc.chaosFail("memory-grow") {
 		return math.MaxUint32
@@ -49,13 +49,13 @@ type Interruptible interface {
 	interrupt()
 }
 
-func helperInterrupt(ctx uintptr) {
-	if h, ok := instanceAt(ctx).host.(Interruptible); ok {
+func helperInterrupt() {
+	if h, ok := current().host.(Interruptible); ok {
 		h.interrupt()
 	}
 }
 
-func helperTableGrow(ctx uintptr, table, delta uint32, init uintptr) uint32 {
+func helperTableGrow(table, delta uint32, init uintptr) uint32 {
 	return math.MaxUint32
 }
 
@@ -83,8 +83,14 @@ func goType(t ValType) reflect.Type {
 }
 
 func goFuncType(params, results []ValType) reflect.Type {
-	in := []reflect.Type{reflect.TypeFor[uintptr]()}
+	return funcType(nil, params, results)
+}
 
+func exportType(params, results []ValType) reflect.Type {
+	return funcType([]reflect.Type{reflect.TypeFor[uintptr]()}, params, results)
+}
+
+func funcType(in []reflect.Type, params, results []ValType) reflect.Type {
 	for _, t := range params {
 		in = append(in, goType(t))
 	}

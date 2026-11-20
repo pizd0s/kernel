@@ -22,13 +22,16 @@ import (
 const runStack = 64 << 20
 
 type Instance struct {
+	memBase  uintptr
+	memBound uint64
+	blockAt  uintptr
+
 	name string
 	obj  *ElfObject
 	code *Code
 
 	region []byte
 	below  uint64
-	cell   uintptr
 	holds  atomic.Int32
 	block  []byte
 	memory *LinearMemory
@@ -54,10 +57,13 @@ func (i *Instance) anchor() {
 	distance := distanceOf(i.obj.meta.instanceSize)
 	ctx := i.ctx()
 
-	i.cell = ctx
-	i.put64(offCell, uint64(uintptr(unsafe.Pointer(&i.cell))))
-	i.put64(offMem, uint64(ctx)+distance)
+	i.memBase, i.blockAt = ctx+uintptr(distance), ctx
+	i.put64(offMem, uint64(i.memBase))
 	binary.LittleEndian.PutUint64(i.region[i.below+distance-8:], uint64(ctx))
+}
+
+func (i *Instance) handle() uintptr {
+	return uintptr(unsafe.Pointer(i))
 }
 
 func (i *Instance) move(pages uint64) {
@@ -69,22 +75,12 @@ func (i *Instance) move(pages uint64) {
 	m.shut()
 	copy(region, i.region[:used])
 
-	old, from := i.region, i.ctx()
+	old := i.region
 
 	i.region = region
 	i.block = region[i.below : i.below+uint64(len(i.block))]
 
 	m.data = region[i.below+distance:]
-
-	moved := i.ctx() - from
-
-	for _, entries := range i.tables {
-		for e, v := range entries {
-			if v != 0 {
-				entries[e] = v + moved
-			}
-		}
-	}
 
 	i.anchor()
 	i.setMemory()
@@ -104,8 +100,9 @@ func (i *Instance) setMemory() {
 	size := i.memory.pages * pageSize
 
 	i.mem = i.memory.data[:size+i.obj.meta.memory.tail]
+	i.memBound = uint64(int64(size+i.obj.meta.memory.tail) - boundSlack)
 	i.put64(offMemSize, size)
-	i.put64(offMemBound, uint64(int64(size+i.obj.meta.memory.tail)-boundSlack))
+	i.put64(offMemBound, i.memBound)
 
 	if i.obj.meta.memory.tail != 0 {
 		i.put64(i.obj.meta.memory.tailEnd, size+i.obj.meta.memory.tail)
@@ -117,8 +114,8 @@ func (i *Instance) setMemory() {
 }
 
 //go:nocheckptr
-func instanceAt(ctx uintptr) *Instance {
-	return *(**Instance)(unsafe.Pointer(ctx + offHost))
+func current() *Instance {
+	return (*Instance)(unsafe.Pointer(runtime.Instance()))
 }
 
 func instantiate(name string, obj *ElfObject, imports Imports, stack uint64) *Instance {
@@ -205,17 +202,10 @@ func (i *Instance) clone(stack uint64, from, to uint64) *Instance {
 
 	c.put64(offTokens, binary.LittleEndian.Uint64(i.block[offTokens:]))
 
-	moved := c.ctx() - i.ctx()
-
 	for k, t := range i.obj.meta.tables {
 		entries := c.tables[k]
 
-		for e, v := range i.tables[k] {
-			if v != 0 {
-				entries[e] = v + moved
-			}
-		}
-
+		copy(entries, i.tables[k])
 		c.put64(t.offset+tableEntries, uint64(uintptr(unsafe.Pointer(unsafe.SliceData(entries)))))
 	}
 
@@ -259,7 +249,7 @@ func (i *Instance) symbol(name string) uintptr {
 }
 
 func (i *Instance) start() {
-	nativeFunc(reflect.TypeFor[func(uintptr)](), i.symbol(i.obj.meta.init)).Interface().(func(uintptr))(i.ctx())
+	nativeFunc(reflect.TypeFor[func(uintptr)](), i.symbol(i.obj.meta.init)).Interface().(func(uintptr))(i.handle())
 }
 
 func (i *Instance) startCommand() {
@@ -269,7 +259,7 @@ func (i *Instance) startCommand() {
 		throwFmt("_start must have no parameters or results")
 	}
 
-	start.Interface().(func(uintptr))(i.ctx())
+	start.Interface().(func(uintptr))(i.handle())
 }
 
 func (i *Instance) export(name string) (reflect.Value, *ExportMeta) {
@@ -277,7 +267,7 @@ func (i *Instance) export(name string) (reflect.Value, *ExportMeta) {
 		e := &i.obj.meta.exports[k]
 
 		if e.name == name && e.kind == externFunc {
-			return nativeFunc(goFuncType(e.params, e.results), i.symbol(e.sym)), e
+			return nativeFunc(exportType(e.params, e.results), i.symbol(e.sym)), e
 		}
 	}
 
@@ -305,7 +295,7 @@ func (i *Instance) longjmp(j *Jump, val uint32) {
 
 	land := nativeFunc(reflect.TypeFor[func(uintptr, uint32, uintptr) uint32](), landStub())
 
-	land.Interface().(func(uintptr, uint32, uintptr) uint32)(uintptr(unsafe.Pointer(j)), val, i.ctx())
+	land.Interface().(func(uintptr, uint32, uintptr) uint32)(uintptr(unsafe.Pointer(j)), val, i.handle())
 	runtime.KeepAlive(j)
 }
 
@@ -317,8 +307,8 @@ type FramesRequest struct {
 }
 
 type ResumeRequest struct {
-	ctx, buf, size, top, bp, sp, pc uint64
-	regs                            [jumpSaved]uint64
+	inst, buf, size, top, bp, sp, pc uint64
+	regs                             [jumpSaved]uint64
 }
 
 type Frames struct {
@@ -414,7 +404,7 @@ func (i *Instance) resume(f *Frames) uint64 {
 	j := &f.jump.frame
 	req := &f.req
 
-	*req = ResumeRequest{ctx: uint64(i.ctx()), buf: uint64(uintptr(unsafe.Pointer(unsafe.SliceData(f.bytes)))), size: uint64(len(f.bytes)),
+	*req = ResumeRequest{inst: uint64(i.handle()), buf: uint64(uintptr(unsafe.Pointer(unsafe.SliceData(f.bytes)))), size: uint64(len(f.bytes)),
 		top: f.top, bp: j[jumpSP] - j[jumpBP], sp: j[jumpSP], pc: j[jumpPC], regs: [jumpSaved]uint64(j[jumpRegs : jumpRegs+jumpSaved])}
 
 	stub := nativeFunc(reflect.TypeFor[func(uintptr) uint64](), resumeStub()).Interface().(func(uintptr) uint64)
@@ -458,7 +448,7 @@ func (i *Instance) specFunctionRef(index uint64) (uintptr, bool) {
 		return 0, false
 	}
 
-	return i.ctx() + uintptr(at), true
+	return uintptr(at), true
 }
 
 type TailProfileSite struct {

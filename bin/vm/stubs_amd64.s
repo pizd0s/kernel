@@ -3,13 +3,14 @@
 
 // The stubs the code calls (symbols.go). Their arguments come in registers
 // as Go's ABIInternal places them, and the code keeps the memory's bound
-// in R13 and its base in R15 across them; the instance lies below the base,
-// the module's distance, the word just below the base its address, and
-// g.instance holds its cell, the word of the kernel's that holds its
-// address as it moves (offCell, abi.go); R14 is g. Go never preempts
+// in R13 and its base in R15 across them; the instance's block lies below
+// the base, the module's distance, the word just below the base its
+// address. g.instance holds the Instance of Go's (instance.go), which does
+// not move: its first words are the memory's base, the bound and the
+// block's address, which a move rewrites. R14 is g. Go never preempts
 // assembly. Offsets: g.stack.hi 8, g.stackguard0 16, g.instance 472
-// (lib/goruntime); the instance's memory 0, bound 16, stack limit 24, jump
-// frame 48, base 120, cell 136 (abi.go). The stack moves by PUSH, POP
+// (lib/goruntime); the Instance's base 0, bound 8, block 16; the block's
+// stack limit 24, jump frame 48, base 120 (abi.go). The stack moves by PUSH, POP
 // and ADJSP, which the assembler puts in the stack pointer table: Go
 // unwinds through these frames when it grows the stack. A function that
 // writes the stack pointer cannot be unwound through, so none of these
@@ -65,8 +66,7 @@ TEXT ·w2oMorestack(SB), NOSPLIT|NOFRAME, $0-0
 	// the text, so this comes before the registers come back, and the
 	// adjustment after the trap, never run, keeps the table right.
 	ADJSP	$16
-	MOVQ	BX, 0(SP)
-	MOVL	$9, 8(SP)
+	MOVL	$9, 0(SP)
 	CALL	·helperTrap(SB)
 	UD2
 	ADJSP	$-16
@@ -107,13 +107,14 @@ fits:
 
 // w2oInterruptCall is the call Go's runtime injects where it interrupts the
 // code (lib/goruntime), and the call a return from an import makes while
-// the instance's interrupt word is set. It calls helperInterrupt with the
-// instance g.instance's cell holds: Go may interrupt the code just after a
-// call of Go, while it reads the base again, where R15 is the cell or the
-// instance yet. A handler may move the memory, and the instance with it:
-// it comes back with every register and flag as it was, but the memory's
-// bound, read again, and R15 where it was the base or the instance, which
-// becomes the new one.
+// the instance's interrupt word is set. It calls helperInterrupt, which
+// finds the instance in g.instance. A handler may move the memory, and the
+// block with it. Where the code may be interrupted, only R15 and R13 hold
+// what a move changes: R13 the bound, R15 the base, but just after a call
+// of Go, where they are read again from the Instance (objCodeReloadAfterGo),
+// R15 holding the Instance meanwhile, which no address in the memory
+// equals. The stub comes back with every register and flag as it was, but
+// R13, the new bound, and R15 where it was the old base: the new base.
 TEXT ·w2oInterruptCall(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 	PUSHQ	BP
@@ -131,7 +132,7 @@ TEXT ·w2oInterruptCall(SB), NOSPLIT|NOFRAME, $0-0
 	PUSHQ	R11
 	PUSHQ	R12
 	PUSHQ	R13
-	ADJSP	$152
+	ADJSP	$144
 	MOVSD	X0, 16(SP)
 	MOVSD	X1, 24(SP)
 	MOVSD	X2, 32(SP)
@@ -149,24 +150,17 @@ TEXT ·w2oInterruptCall(SB), NOSPLIT|NOFRAME, $0-0
 	MOVSD	X14, 128(SP)
 	MOVQ	R15, 8(SP)
 	MOVQ	472(R14), AX
-	MOVQ	(AX), AX
-	MOVQ	AX, 0(SP)
-	MOVQ	AX, 136(SP)
-	MOVQ	(AX), AX
-	MOVQ	AX, 144(SP)
+	MOVQ	0(AX), BX
+	MOVQ	BX, 0(SP)
 	CALL	·helperInterrupt(SB)
 	MOVQ	472(R14), AX
-	MOVQ	(AX), AX
+	MOVQ	8(AX), CX
+	MOVQ	CX, 144(SP)
 	MOVQ	8(SP), R15
-	CMPQ	R15, 144(SP)
-	JNE	notbase
-	MOVQ	(AX), R15
-	JMP	placed
-notbase:
-	CMPQ	R15, 136(SP)
-	JNE	placed
-	MOVQ	AX, R15
-placed:
+	CMPQ	R15, 0(SP)
+	JNE	based
+	MOVQ	0(AX), R15
+based:
 	MOVSD	16(SP), X0
 	MOVSD	24(SP), X1
 	MOVSD	32(SP), X2
@@ -182,7 +176,7 @@ placed:
 	MOVSD	112(SP), X12
 	MOVSD	120(SP), X13
 	MOVSD	128(SP), X14
-	ADJSP	$-152
+	ADJSP	$-144
 	POPQ	R13
 	POPQ	R12
 	POPQ	R11
@@ -195,15 +189,13 @@ placed:
 	POPQ	CX
 	POPQ	BX
 	POPQ	AX
-	MOVQ	472(R14), R13
-	MOVQ	(R13), R13
-	MOVQ	16(R13), R13
 	POPFQ
 	POPQ	BP
 	RET
 
-// w2oLand is what longjmp calls, func(jump uintptr, val uint32, ctx
-// uintptr) uint32 with AX, BX and CX: jump is a Jump (jump.go), its frame,
+// w2oLand is what longjmp calls, func(jump uintptr, val uint32, inst
+// uintptr) uint32 with AX, BX and CX: inst is the Instance; jump is a Jump
+// (jump.go), its frame,
 // then the code of the caller's function, [start, end). It returns from
 // the call that wrote the frame again, with val, when the caller's RBP is
 // on the chain of frame pointers from its own caller, the frame below
@@ -213,7 +205,8 @@ TEXT ·w2oLand(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 	MOVQ	8(R14), DX
 	MOVQ	DX, R9
-	SUBQ	120(CX), R9
+	MOVQ	16(CX), R10
+	SUBQ	120(R10), R9
 	MOVQ	R9, SI
 	SUBQ	16(AX), SI
 	MOVQ	BP, DI
@@ -236,9 +229,8 @@ found:
 	MOVQ	-8(SI), R8
 	CMPQ	R8, 64(AX)
 	JNE	fail
-	MOVQ	136(CX), R8
-	MOVQ	R8, 472(R14)
-	MOVQ	16(CX), R13
+	MOVQ	CX, 472(R14)
+	MOVQ	8(CX), R13
 	MOVQ	(CX), R15
 	MOVQ	R9, R8
 	SUBQ	8(AX), R8
@@ -347,8 +339,7 @@ TEXT ·w2oResume(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 start:
 	MOVQ	0(AX), R13
-	MOVQ	136(R13), R15
-	MOVQ	R15, 472(R14)
+	MOVQ	R13, 472(R14)
 	MOVQ	(R13), R15
 	LEAQ	-512(SP), DX
 	SUBQ	16(AX), DX
@@ -391,8 +382,9 @@ last:
 	MOVQ	8(R14), DI
 	SUBQ	DX, DI
 	SUBQ	40(AX), DI
-	MOVQ	DI, 120(R13)
-	MOVQ	16(R13), R13
+	MOVQ	16(R13), CX
+	MOVQ	DI, 120(CX)
+	MOVQ	8(R13), R13
 	MOVQ	56(AX), BX
 	MOVQ	64(AX), R9
 	MOVQ	72(AX), R10

@@ -115,7 +115,7 @@ func (r *NoRoot) setFlags(fl int) error {
 	return nil
 }
 
-func (r *NoRoot) readdir(p *Process, b []byte) (int, error) {
+func (r *NoRoot) readdir(p *Process, into Transfer, n int) (int, error) {
 	return 0, nil
 }
 

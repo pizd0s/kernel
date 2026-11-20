@@ -3006,6 +3006,8 @@ namespace {
 
     struct CallFixup;
 
+    struct Trampoline;
+
     struct CfgInfo;
 
     struct CheckUndo;
@@ -4396,6 +4398,22 @@ namespace {
         i32 fn{};
     };
 
+    // A trampoline lies between the module's functions and a function of
+    // lib/str, sym, which reads and writes the memory by host addresses:
+    // it adds the memory's base to the arguments guests marks, bit i for
+    // the argument in the i-th of AX, CX, DX and SI, calls the function
+    // and, with pointer, makes the host address it returns an address in
+    // the memory again. It lies outside the functions' code, where the
+    // code is never interrupted, so no register of a function ever holds
+    // a host address of the memory, which a move of the memory would leave
+    // behind (w2oInterruptCall). An empty sym is the forward copy, by
+    // DI, SI and CX.
+    struct Trampoline {
+        String sym{};
+        u8 guests{};
+        bool pointer{};
+    };
+
     struct Anonymous24 {
         Int index{};
         String name{};
@@ -4438,6 +4456,10 @@ namespace {
         Slice<CallFixup> calls{};
         Map<i32, i32> jumpAt{};
         Slice<CallFixup> jumpCalls{};
+        Slice<Trampoline> trampolines{};
+        Map<String, i32> trampolineIx{};
+        Slice<i32> trampolineAt{};
+        Slice<CallFixup> trampolineCalls{};
         Slice<CodeBlob> blobs{};
         Slice<i32> blobAt{};
         u64 rodataSize{};
@@ -4701,12 +4723,15 @@ static constexpr Int offBase = offJump + 8 * jumpWords;
 
 static constexpr Int offInterrupt = offBase + 8;
 
-// offCell is the instance's word that holds where the cell is: the word
-// of the kernel's that holds the instance's address as it moves, which the
-// entry thunks put in g.instance.
-static constexpr Int offCell = offInterrupt + 8;
+static constexpr Int headerSize = offInterrupt + 8;
 
-static constexpr Int headerSize = offCell + 8;
+// handleBase and handleBound are the words of the Instance of Go's (vm's
+// instance.go), which g.instance holds and Go passes the entry thunks,
+// that hold the memory's base and bound: it never moves, and a move of the
+// memory rewrites them.
+static constexpr Int handleBase = 0;
+
+static constexpr Int handleBound = 8;
 
 static constexpr Int boundSlack = 1024;
 
@@ -5065,11 +5090,15 @@ static constexpr Int calleeJump = 2;
 
 // calleeGo calls a Go function of the VM, imm the index of its extern
 // symbol: an import's. calleeStr calls a function of lib/str, imm its
-// symbol's index, as the module's functions call each other, with host
-// addresses.
+// symbol's index, as the module's functions call each other, with no
+// address of the memory among its arguments. calleeTrampoline calls
+// trampoline imm (Trampoline), which calls one with addresses in the
+// memory.
 static constexpr Int calleeGo = 3;
 
 static constexpr Int calleeStr = 4;
+
+static constexpr Int calleeTrampoline = 5;
 
 // The kernel's functions of libc the code compiles itself at a direct
 // call of one, memcpy and the like: it does there what the kernel's
@@ -5219,7 +5248,7 @@ static constexpr VReg noReg = VReg(-1LL);
 
 static constexpr VReg firstVirtual = VReg(32LL);
 
-// boundReg holds the memory's bound, the instance's word at offMemBound,
+// boundReg holds the memory's bound, the Instance's word at handleBound,
 // wherever the module's functions run: what enters them loads it, and
 // what returns into them from Go, which may have grown the memory, loads
 // it again.
@@ -5742,6 +5771,8 @@ static void asmCallMem(Asm* a, Amem m);
 
 static void asmCallReg(Asm* a, VReg r);
 
+static void asmJmpMem(Asm* a, Amem m);
+
 static i32 asmCallRel(Asm* a);
 
 static void asmCmov(Asm* a, u8 cc, u8 size, VReg dst, VReg src);
@@ -6078,11 +6109,11 @@ static void lowererGoResult(Lowerer* l, GoLoc loc, ValType type, VReg d);
 
 static bool lowererIntrinsic(Lowerer* l, i32 v, Int intrinsic, Span<const i32> args);
 
-static void lowererStrCall(Lowerer* l, String sym, Span<const VReg> args);
+static void lowererStrCall(Lowerer* l, String sym, Span<const VReg> args, u8 guests, bool pointer);
+
+static VReg lowererStrFound(Lowerer* l);
 
 static VReg lowererStrResult(Lowerer* l);
-
-static VReg lowererHostAddress(Lowerer* l, VReg a);
 
 static VReg lowererStrLength(Lowerer* l, VReg s);
 
@@ -6093,8 +6124,6 @@ static void lowererCheckEnd(Lowerer* l, VReg a, VReg n, u8 cc);
 static void lowererMemCompare(Lowerer* l, i32 v, Span<const i32> args);
 
 static VReg lowererWithin(Lowerer* l, VReg s, VReg n);
-
-static void lowererGuestPointer(Lowerer* l, i32 v, VReg p);
 
 static void lowererMemFind(Lowerer* l, i32 v, Span<const i32> args);
 
@@ -6218,8 +6247,6 @@ static Tuple2<Mem, bool> lowererFoldedLoad(Lowerer* l, i32 v);
 
 static bool lowererTransparent(Op op);
 
-static void lowererMemAddr(Lowerer* l, VReg dst, VReg a);
-
 static void lowererMemCopy(Lowerer* l, Span<const i32> args, String sym);
 
 static void lowererMemFill(Lowerer* l, Span<const i32> args);
@@ -6317,6 +6344,12 @@ static void objCodeImportAdapters(ObjCode* oc);
 static Slice<bool> objCodeNamedFunctions(ObjCode* oc);
 
 static void objCodeInitThunk(ObjCode* oc);
+
+static i32 objCodeTrampoline(ObjCode* oc, String sym, u8 guests, bool pointer);
+
+static String trampolineName(Trampoline t);
+
+static void objCodeTrampolines(ObjCode* oc);
 
 static void objCodePlaceBlobs(ObjCode* oc);
 
@@ -6534,7 +6567,7 @@ static u64 foldUnary(Op op, ValType t, ValType from, u64 a);
 
 static bool globalMutability(Reader* r);
 
-static GoFrame goAssign(Slice<ValType> params, Slice<ValType> results);
+static GoFrame goAssign(Slice<ValType> params, Slice<ValType> results, bool instance);
 
 static i32 goSize(ValType t);
 
@@ -11505,6 +11538,11 @@ static void asmCallMem(Asm* a, Amem m) {
     asmOpRM(a, false, Span<const u8>({u8(255LL)}), 2, m, 0, false);
 }
 
+// jmpMem jumps to the address stored at m.
+static void asmJmpMem(Asm* a, Amem m) {
+    asmOpRM(a, false, Span<const u8>({u8(255LL)}), 4, m, 0, false);
+}
+
 static void asmCallReg(Asm* a, VReg r) {
     asmRex(a, false, -1, -1, convert<i64>(r), false);
     asmBytes(a, {u8(u8(255LL))});
@@ -13972,15 +14010,7 @@ static void funcEmitterInst(FuncEmitter* e, MInst* in) {
             break;
         }
         case mCopyForward: {
-            asmLea(a, 8, RAX, baseAt(RSI, 1));
-            asmAluRR(a, aluCmp, 8, RDI, RAX);
-            i32 copy = asmJcc8(a, ccNE);
-            asmLoad(a, 1, 4, false, RAX, baseAt(RSI, 0));
-            asmBytes(a, {u8(u8(243LL)), u8(u8(170LL))});
-            i32 done = asmJmp8(a);
-            asmHere8(a, copy);
-            asmBytes(a, {u8(u8(243LL)), u8(u8(164LL))});
-            asmHere8(a, done);
+            e->oc->trampolineCalls = appendValues(e->oc->trampolineCalls, CallFixup{asmCallRel(a), convert<i32>(in->imm)});
             break;
         }
         case mMov: {
@@ -14214,6 +14244,10 @@ static void funcEmitterInst(FuncEmitter* e, MInst* in) {
                 }
                 case calleeStr: {
                     asmCallMem(a, Amem{-1, -1, {}, {}, convert<i32>(in->imm), labelGot});
+                    break;
+                }
+                case calleeTrampoline: {
+                    e->oc->trampolineCalls = appendValues(e->oc->trampolineCalls, CallFixup{asmCallRel(a), convert<i32>(in->imm)});
                     break;
                 }
                 default: {
@@ -14462,14 +14496,13 @@ static Amem funcEmitterSlotMem(FuncEmitter* e, i32 slot) {
     return rspAt(convert<i32>(e->mf->stackArgs) + 8 * slot);
 }
 
-// goCall calls the function of extern symbol index as Go calls one, with
-// the instance in RAX. Go keeps none of the registers the code uses: they
-// come back from the instance (objCodeReloadAfterGo). While the
+// goCall calls the function of extern symbol index as Go calls one; Go
+// finds the instance in g. Go keeps none of the registers the code uses:
+// they come back from the Instance (objCodeReloadAfterGo). While the
 // instance's interrupt word is set, the interrupt stub runs on the way
 // out, as Go's runtime would inject a call of it there.
 static void funcEmitterGoCall(FuncEmitter* e, i32 index) {
     Asm* a = e->a;
-    asmLea(a, 8, RAX, instanceAt(0));
     asmCallMem(a, Amem{-1, -1, {}, {}, index, labelGot});
     objCodeReloadAfterGo(e->oc);
     asmAluMI(a, aluCmp, 4, instanceAt(offInterrupt), 0);
@@ -15154,7 +15187,7 @@ static VReg lowererShadowAddress(Lowerer* l, VReg a) {
 // the start of the range's shadow, and the first inaccessible byte is
 // the trap's address.
 static void lowererAsanRange(Lowerer* l, VReg a, VReg n) {
-    lowererStrCall(l, symAsanRange, Span<const VReg>({lowererShadowAddress(l, a), n}));
+    lowererStrCall(l, symAsanRange, Span<const VReg>({lowererShadowAddress(l, a), n}), 0, false);
     VReg ok = lowererStrResult(l);
     VReg bad = lowererSum(l, a, ok);
     MInst c = inst(mCmp);
@@ -15312,12 +15345,11 @@ static void lowererCall(Lowerer* l, i32 v, Int index, Span<const i32> args) {
 }
 
 // goCall calls the function sym names as Go calls a function: the
-// instance goes first, in RAX, which the emitter sets; the arguments
-// follow in Go's registers and stack slots, and so do the results. Go
-// leaves the upper half of a 32-bit result alone: a move of 4 bytes
-// clears it.
+// arguments go in Go's registers and stack slots, and so do the results;
+// Go finds the instance in g. Go leaves the upper half of a 32-bit result
+// alone: a move of 4 bytes clears it.
 static void lowererGoCall(Lowerer* l, i32 v, Slice<VReg> regs, Slice<ValType> params, Slice<ValType> results, String sym) {
-    GoFrame g = goAssign(params, results);
+    GoFrame g = goAssign(params, results, false);
     Slice<VReg> uses = {};
     MInst pm = inst(mParMove);
     for (Int i = 0; i < length(params); ++i) {
@@ -15422,19 +15454,19 @@ static void lowererCallIndirect(Lowerer* l, i32 v, Int typeIndex, Int table, Spa
     i64 id = convert<i64>(typeID(t));
     if (id == convert<i64>(convert<i32>(id))) {
         MInst ci = inst(mCmpMemImm);
-        ci.mem = memAt(desc, 8);
+        ci.mem = Mem{memReg, desc, u8(1LL), i32(8 - instanceDistance), -1};
         ci.imm = id;
         ci.size = 8;
         lowererEmit(l, ci);
     } else {
         MInst cm = inst(mCmpMem);
         cm.src = lowererConstReg(l, id, 8);
-        cm.mem = memAt(desc, 8);
+        cm.mem = Mem{memReg, desc, u8(1LL), i32(8 - instanceDistance), -1};
         cm.size = 8;
         lowererEmit(l, cm);
     }
     lowererTrapIf(l, ccNE, trapIndirectType);
-    VReg code = lowererLoad64(l, memAt(desc, 0));
+    VReg code = lowererLoad64(l, Mem{memReg, desc, u8(1LL), i32(-instanceDistance), -1});
     auto temporary746 = lowererPlaceArgs(l, args);
     Slice<VReg> uses = temporary746.v0;
     Int stack = temporary746.v1;
@@ -16075,7 +16107,11 @@ static void lowererEdgeMoves(Lowerer* l, Edge* e) {
     }
 }
 
+// emit adds in to the current block. No register of a function holds a
+// value made of the memory's base, which a move of the memory changes
+// under it: its addresses stay in instructions (w2oInterruptCall).
 static MInst* lowererEmit(Lowerer* l, MInst in) {
+    require(in.src != memReg && in.src2 != memReg && (in.op != mLea || (in.mem.base != memReg && in.mem.index != memReg)), "a register of a function holds an address of the memory");
     MBlock* blk = &l->mf->blocks[l->cur];
     in.pos = l->pos;
     blk->insts.pushBack(in);
@@ -16731,14 +16767,13 @@ static void lowererLowerValue(Lowerer* l, i32 v) {
                 lowererAsanRange(l, lowererUse(l, args[0]), lowererUse(l, args[2]));
                 lowererAsanRange(l, lowererUse(l, args[1]), lowererUse(l, args[2]));
             }
-            VReg dst = mFuncNewReg(l->mf, classGPR);
-            VReg src = mFuncNewReg(l->mf, classGPR);
-            lowererMemAddr(l, dst, lowererUse(l, args[0]));
-            lowererMemAddr(l, src, lowererUse(l, args[1]));
+            // The copy is a trampoline's, which makes the addresses host
+            // ones (Trampoline).
             MInst pm = inst(mParMove);
-            mInstExtra(&pm)->moves.assign(Span<const Move>({Move{RDI, dst}, Move{RSI, src}, Move{RCX, lowererUse(l, args[2])}}));
+            mInstExtra(&pm)->moves.assign(Span<const Move>({Move{RDI, lowererUse(l, args[0])}, Move{RSI, lowererUse(l, args[1])}, Move{RCX, lowererUse(l, args[2])}}));
             lowererEmit(l, pm);
             MInst in = inst(mCopyForward);
+            in.imm = convert<i64>(objCodeTrampoline(l->oc, String(""), 0, false));
             mInstExtra(&in)->uses.assign(Span<const VReg>({RDI, RSI, RCX}));
             mInstExtra(&in)->defs.assign(Span<const VReg>({RAX, RDI, RSI, RCX}));
             lowererEmit(l, in);
@@ -16784,9 +16819,11 @@ static void lowererLowerValue(Lowerer* l, i32 v) {
             if (fn < l->m->importedFuncs && !l->oc->importCode[fn]) {
                 compilerError(String("ref.func of a function no element, export or global names"));
             }
-            MInst in = inst(mLea);
+            // A function reference is its descriptor's offset in the
+            // instance, which a move of the instance leaves as it is.
+            MInst in = inst(mMovImm);
             in.dst = lowererDef(l, v);
-            in.mem = instanceMem(layoutDesc(l->lay, convert<i64>(val->aux)));
+            in.imm = convert<i64>(layoutDesc(l->lay, convert<i64>(val->aux)));
             in.size = 8;
             lowererEmit(l, in);
             break;
@@ -17235,18 +17272,10 @@ static Mem lowererAccessAddress(Lowerer* l, i32 access, i32 addr, i64 offset, In
     return mem;
 }
 
-static void lowererMemAddr(Lowerer* l, VReg dst, VReg a) {
-    MInst in = inst(mLea);
-    in.dst = dst;
-    in.mem = memIndexed(memReg, a, 0);
-    in.size = 8;
-    lowererEmit(l, in);
-}
-
 // The bulk memory instructions and the imports of lib/c's memcpy,
 // memmove and memset check their ranges and call lib/str's functions
-// with host addresses: memory.init's source is the segment's bytes in
-// the object. A constant length of inlineCopyMax bytes or less is loads
+// through trampolines, which make the addresses host ones: memory.init's
+// source is the segment's bytes in the object. A constant length of inlineCopyMax bytes or less is loads
 // and stores instead, as a native compiler makes them.
 static constexpr i64 inlineCopyMax = 32;
 
@@ -17367,11 +17396,7 @@ static void lowererMemCopy(Lowerer* l, Span<const i32> args, String sym) {
         lowererAsanRange(l, d, n);
         lowererAsanRange(l, s, n);
     }
-    VReg dst = mFuncNewReg(l->mf, classGPR);
-    lowererMemAddr(l, dst, d);
-    VReg src = mFuncNewReg(l->mf, classGPR);
-    lowererMemAddr(l, src, s);
-    lowererStrCall(l, sym, Span<const VReg>({dst, src, n}));
+    lowererStrCall(l, sym, Span<const VReg>({d, s, n}), 3, false);
 }
 
 static void lowererMemFill(Lowerer* l, Span<const i32> args) {
@@ -17385,9 +17410,7 @@ static void lowererMemFill(Lowerer* l, Span<const i32> args) {
     if (l->m->asan) {
         lowererAsanRange(l, d, n);
     }
-    VReg dst = mFuncNewReg(l->mf, classGPR);
-    lowererMemAddr(l, dst, d);
-    lowererStrCall(l, symMemset, Span<const VReg>({dst, val, n}));
+    lowererStrCall(l, symMemset, Span<const VReg>({d, val, n}), 1, false);
 }
 
 // intrinsic compiles a direct call of one of the kernel's functions the
@@ -17539,8 +17562,12 @@ static bool lowererIntrinsic(Lowerer* l, i32 v, Int intrinsic, Span<const i32> a
 // strCall calls the function of lib/str sym names with up to four
 // arguments in AX, CX, DX and SI, as the module's functions call each
 // other: it changes what such a call may, and the instance and the memory
-// base stay. What it returns is in AX after it.
-static void lowererStrCall(Lowerer* l, String sym, Span<const VReg> args) {
+// base stay. The arguments guests marks, bit i for argument i, are
+// addresses in the memory, which a trampoline makes host addresses on the
+// way; with pointer the function returns one, which the trampoline makes
+// an address in the memory again, and DX says whether it found one
+// (strFound). What it returns is in AX after it.
+static void lowererStrCall(Lowerer* l, String sym, Span<const VReg> args, u8 guests, bool pointer) {
     const VReg regs[] = {RAX, RCX, RDX, RSI};
     Slice<Move> moves = {};
     Slice<VReg> uses = {};
@@ -17552,11 +17579,28 @@ static void lowererStrCall(Lowerer* l, String sym, Span<const VReg> args) {
     mInstExtra(&pm)->moves.assign(Span<const Move>(moves));
     lowererEmit(l, pm);
     MInst in = inst(mCall);
-    in.aux = calleeStr;
-    in.imm = convert<i64>(objCodeExtern(l->oc, sym));
+    if (guests == 0 && !pointer) {
+        in.aux = calleeStr;
+        in.imm = convert<i64>(objCodeExtern(l->oc, sym));
+    } else {
+        in.aux = calleeTrampoline;
+        in.imm = convert<i64>(objCodeTrampoline(l->oc, sym, guests, pointer));
+    }
     mInstExtra(&in)->uses.assign(Span<const VReg>(uses));
+    if (pointer) {
+        mInstExtra(&in)->defs.assign(Span<const VReg>({RAX, RDX}));
+    }
     l->mf->hasCalls = true;
     lowererEmit(l, in);
+}
+
+// strFound copies DX, 1 when the function of lib/str a trampoline for a
+// pointer just called found one and 0 when not, into a register of its
+// own.
+static VReg lowererStrFound(Lowerer* l) {
+    VReg r = mFuncNewReg(l->mf, classGPR);
+    lowererMov(l, r, RDX, 8);
+    return r;
 }
 
 // strResult copies all of AX, what the function of lib/str just called
@@ -17565,13 +17609,6 @@ static VReg lowererStrResult(Lowerer* l) {
     VReg r = mFuncNewReg(l->mf, classGPR);
     lowererMov(l, r, RAX, 8);
     return r;
-}
-
-// hostAddress is the host address of the memory at a.
-static VReg lowererHostAddress(Lowerer* l, VReg a) {
-    VReg h = mFuncNewReg(l->mf, classGPR);
-    lowererMemAddr(l, h, a);
-    return h;
 }
 
 // sum is a + b in 64 bits, in a register of its own.
@@ -17609,7 +17646,7 @@ static void lowererCheckEnd(Lowerer* l, VReg a, VReg n, u8 cc) {
 // lib/str's strlen stops there when the string does not.
 static VReg lowererStrLength(Lowerer* l, VReg s) {
     lowererCheckEnd(l, s, noReg, ccAE);
-    lowererStrCall(l, symStrlen, Span<const VReg>({lowererHostAddress(l, s)}));
+    lowererStrCall(l, symStrlen, Span<const VReg>({s}), 1, false);
     VReg n = lowererStrResult(l);
     lowererCheckEnd(l, s, n, ccAE);
     if (l->m->asan) {
@@ -17641,7 +17678,7 @@ static void lowererMemCompare(Lowerer* l, i32 v, Span<const i32> args) {
         lowererAsanRange(l, a, n);
         lowererAsanRange(l, b, n);
     }
-    lowererStrCall(l, symMemcmp, Span<const VReg>({lowererHostAddress(l, a), lowererHostAddress(l, b), n}));
+    lowererStrCall(l, symMemcmp, Span<const VReg>({a, b, n}), 3, false);
     lowererSign(l, v);
 }
 
@@ -17708,34 +17745,6 @@ static VReg lowererWithin(Lowerer* l, VReg s, VReg n) {
     return m;
 }
 
-// guestPointer makes v, if used, the address in the memory of the host
-// address p a function of lib/str returned, null for null.
-static void lowererGuestPointer(Lowerer* l, i32 v, VReg p) {
-    if (v < 0 || l->uses[v] == 0) {
-        return;
-    }
-    VReg r = mFuncNewReg(l->mf, classGPR);
-    lowererMov(l, r, p, 8);
-    MInst off = inst(mAlu);
-    off.dst = r;
-    off.src = memReg;
-    off.size = 8;
-    off.aux = convert<u8>(aluSub);
-    lowererEmit(l, off);
-    MInst none = inst(mTest);
-    none.src = p;
-    none.src2 = p;
-    none.size = 8;
-    lowererEmit(l, none);
-    MInst null = inst(mCmov);
-    null.dst = r;
-    null.src = p;
-    null.cc = ccE;
-    null.size = 8;
-    lowererEmit(l, null);
-    lowererMov(l, lowererDef(l, v), r, 4);
-}
-
 // memFind compiles memchr as the kernel's: it searches up to n bytes or
 // to the memory's end, whichever is nearer, and a search that found
 // nothing short of n bytes traps. The result is the address found, or 0.
@@ -17744,18 +17753,13 @@ static void lowererMemFind(Lowerer* l, i32 v, Span<const i32> args) {
     VReg c = lowererUse(l, args[1]);
     VReg n = lowererUse(l, args[2]);
     VReg m = lowererWithin(l, s, n);
-    lowererStrCall(l, symMemchr, Span<const VReg>({lowererHostAddress(l, s), c, m}));
+    lowererStrCall(l, symMemchr, Span<const VReg>({s, c, m}), 1, true);
     VReg p = lowererStrResult(l);
+    VReg found = lowererStrFound(l);
     if (l->m->asan) {
         // The bytes it read: up to the one found, or all m of them.
         VReg read = mFuncNewReg(l->mf, classGPR);
         lowererMov(l, read, p, 8);
-        MInst host = inst(mAlu);
-        host.dst = read;
-        host.src = memReg;
-        host.size = 8;
-        host.aux = convert<u8>(aluSub);
-        lowererEmit(l, host);
         MInst start = inst(mAlu);
         start.dst = read;
         start.src = s;
@@ -17769,8 +17773,8 @@ static void lowererMemFind(Lowerer* l, i32 v, Span<const i32> args) {
         last.aux = convert<u8>(aluAdd);
         lowererEmit(l, last);
         MInst any = inst(mTest);
-        any.src = p;
-        any.src2 = p;
+        any.src = found;
+        any.src2 = found;
         any.size = 8;
         lowererEmit(l, any);
         MInst all = inst(mCmov);
@@ -17784,11 +17788,11 @@ static void lowererMemFind(Lowerer* l, i32 v, Span<const i32> args) {
     // x is n when the byte was found and m when not: below n it trapped
     VReg x = mFuncNewReg(l->mf, classGPR);
     lowererMov(l, x, n, 8);
-    MInst found = inst(mTest);
-    found.src = p;
-    found.src2 = p;
-    found.size = 8;
-    lowererEmit(l, found);
+    MInst any = inst(mTest);
+    any.src = found;
+    any.src2 = found;
+    any.size = 8;
+    lowererEmit(l, any);
     MInst shortened = inst(mCmov);
     shortened.dst = x;
     shortened.src = m;
@@ -17801,7 +17805,9 @@ static void lowererMemFind(Lowerer* l, i32 v, Span<const i32> args) {
     cut.size = 8;
     lowererEmit(l, cut);
     lowererTrapIf(l, ccB, trapMemoryOOB);
-    lowererGuestPointer(l, v, p);
+    if (v >= 0 && l->uses[v] > 0) {
+        lowererMov(l, lowererDef(l, v), p, 4);
+    }
 }
 
 // strLimit is the length of the string at s within n bytes, by lib/str's
@@ -17813,7 +17819,7 @@ static void lowererMemFind(Lowerer* l, i32 v, Span<const i32> args) {
 // first n.
 static VReg lowererStrLimit(Lowerer* l, VReg s, VReg n, VReg* seen) {
     VReg m = lowererWithin(l, s, n);
-    lowererStrCall(l, symStrnlen, Span<const VReg>({lowererHostAddress(l, s), m}));
+    lowererStrCall(l, symStrnlen, Span<const VReg>({s, m}), 1, false);
     VReg r = lowererStrResult(l);
     // x is n when the NUL was found and m when not: below n it trapped
     VReg x = mFuncNewReg(l->mf, classGPR);
@@ -17909,22 +17915,22 @@ static void lowererStrChar(Lowerer* l, i32 v, Span<const i32> args, bool nul) {
     VReg c = lowererUse(l, args[1]);
     VReg n = lowererStrLength(l, s);
     VReg size = nul ? n : lowererAdded(l, n, 1);
-    lowererStrCall(l, symMemchr, Span<const VReg>({lowererHostAddress(l, s), c, size}));
-    VReg p = lowererStrResult(l);
-    if (!nul) {
-        lowererGuestPointer(l, v, p);
-        return;
-    }
+    lowererStrCall(l, symMemchr, Span<const VReg>({s, c, size}), 1, true);
     if (v < 0 || l->uses[v] == 0) {
         return;
     }
+    if (!nul) {
+        lowererMov(l, lowererDef(l, v), RAX, 4);
+        return;
+    }
+    VReg p = lowererStrResult(l);
+    VReg found = lowererStrFound(l);
     VReg end = lowererSum(l, s, n);
     VReg r = mFuncNewReg(l->mf, classGPR);
     lowererMov(l, r, p, 8);
-    lowererAluTo(l, r, aluSub, memReg, 8);
     MInst any = inst(mTest);
-    any.src = p;
-    any.src2 = p;
+    any.src = found;
+    any.src2 = found;
     any.size = 8;
     lowererEmit(l, any);
     MInst none = inst(mCmov);
@@ -17949,7 +17955,7 @@ static void lowererStrCompareLimited(Lowerer* l, i32 v, Span<const i32> args) {
     lowererStrLimit(l, a, n, &x);
     lowererStrLimit(l, b, n, &y);
     VReg m = lowererLeast(l, x, y);
-    lowererStrCall(l, symMemcmp, Span<const VReg>({lowererHostAddress(l, a), lowererHostAddress(l, b), m}));
+    lowererStrCall(l, symMemcmp, Span<const VReg>({a, b, m}), 3, false);
     lowererSign(l, v);
 }
 
@@ -17966,12 +17972,12 @@ static void lowererStrCopyLimited(Lowerer* l, i32 v, Span<const i32> args, bool 
     if (l->m->asan) {
         lowererAsanRange(l, d, n);
     }
-    lowererStrCall(l, symMemmove, Span<const VReg>({lowererHostAddress(l, d), lowererHostAddress(l, s), r}));
+    lowererStrCall(l, symMemmove, Span<const VReg>({d, s, r}), 3, false);
     VReg rest = mFuncNewReg(l->mf, classGPR);
     lowererMov(l, rest, n, 8);
     lowererAluTo(l, rest, aluSub, r, 8);
     VReg tail = lowererSum(l, d, r);
-    lowererStrCall(l, symMemset, Span<const VReg>({lowererHostAddress(l, tail), lowererConstReg(l, 0, 4), rest}));
+    lowererStrCall(l, symMemset, Span<const VReg>({tail, lowererConstReg(l, 0, 4), rest}), 1, false);
     if (v >= 0 && l->uses[v] > 0) {
         lowererMov(l, lowererDef(l, v), end ? tail : d, 4);
     }
@@ -17992,7 +17998,7 @@ static bool lowererStrDuplicate(Lowerer* l, i32 v, Span<const i32> args) {
     Slice<ValType> results = sliceOf<ValType>({I32});
     lowererGoCall(l, -1, sliceOf<VReg>({size}), params, results, l->oc->importSyms[l->oc->allocator]);
     VReg at = mFuncNewReg(l->mf, classGPR);
-    lowererGoResult(l, goAssign(params, results).results[0], I32, at);
+    lowererGoResult(l, goAssign(params, results, false).results[0], I32, at);
     VReg none = lowererConstReg(l, 0, 8);
     MInst got = inst(mTest);
     got.src = at;
@@ -18007,7 +18013,7 @@ static bool lowererStrDuplicate(Lowerer* l, i32 v, Span<const i32> args) {
     lowererEmit(l, nothing);
     // malloc's block is within the memory; the check holds whatever it gave
     lowererCheckRange(l, at, size, instanceMem(l->lay->memoryEnd), trapMemoryOOB);
-    lowererStrCall(l, symMemmove, Span<const VReg>({lowererHostAddress(l, at), lowererHostAddress(l, s), size}));
+    lowererStrCall(l, symMemmove, Span<const VReg>({at, s, size}), 3, false);
     if (v >= 0 && l->uses[v] > 0) {
         lowererMov(l, lowererDef(l, v), at, 4);
     }
@@ -18021,10 +18027,9 @@ static void lowererStrPut(Lowerer* l, VReg at, VReg s, VReg k) {
     if (l->m->asan) {
         lowererAsanRange(l, at, lowererAdded(l, k, 1));
     }
-    VReg dst = lowererHostAddress(l, at);
-    lowererStrCall(l, symMemmove, Span<const VReg>({dst, lowererHostAddress(l, s), k}));
+    lowererStrCall(l, symMemmove, Span<const VReg>({at, s, k}), 3, false);
     MInst nul = inst(mStoreImm);
-    nul.mem = memIndexed(dst, k, 0);
+    nul.mem = memIndexed(memReg, lowererSum(l, at, k), 0);
     nul.imm = 0;
     nul.size = 1;
     lowererEmit(l, nul);
@@ -18135,8 +18140,10 @@ static void lowererStrFind(Lowerer* l, i32 v, Span<const i32> args) {
     VReg n = lowererUse(l, args[1]);
     lowererStrLength(l, h);
     lowererStrLength(l, n);
-    lowererStrCall(l, symStrstr, Span<const VReg>({lowererHostAddress(l, h), lowererHostAddress(l, n)}));
-    lowererGuestPointer(l, v, lowererStrResult(l));
+    lowererStrCall(l, symStrstr, Span<const VReg>({h, n}), 3, true);
+    if (v >= 0 && l->uses[v] > 0) {
+        lowererMov(l, lowererDef(l, v), RAX, 4);
+    }
 }
 
 // memSearch compiles memmem: both ranges within the memory before
@@ -18153,8 +18160,10 @@ static void lowererMemSearch(Lowerer* l, i32 v, Span<const i32> args) {
         lowererAsanRange(l, h, hl);
         lowererAsanRange(l, n, nl);
     }
-    lowererStrCall(l, symMemmem, Span<const VReg>({lowererHostAddress(l, h), hl, lowererHostAddress(l, n), nl}));
-    lowererGuestPointer(l, v, lowererStrResult(l));
+    lowererStrCall(l, symMemmem, Span<const VReg>({h, hl, n, nl}), 5, true);
+    if (v >= 0 && l->uses[v] > 0) {
+        lowererMov(l, lowererDef(l, v), RAX, 4);
+    }
 }
 
 // bit is 1 where the flags just set are cc and 0 where they are not, in a
@@ -18326,7 +18335,7 @@ static void lowererMemZero(Lowerer* l, Span<const i32> args) {
     if (l->m->asan) {
         lowererAsanRange(l, d, n);
     }
-    lowererStrCall(l, symMemset, Span<const VReg>({lowererHostAddress(l, d), lowererConstReg(l, 0, 4), n}));
+    lowererStrCall(l, symMemset, Span<const VReg>({d, lowererConstReg(l, 0, 4), n}), 1, false);
 }
 
 // strBreak compiles strpbrk: strcspn as strPair compiles it, then the
@@ -18337,7 +18346,7 @@ static void lowererStrBreak(Lowerer* l, i32 v, Span<const i32> args) {
     VReg set = lowererUse(l, args[1]);
     lowererStrLength(l, s);
     lowererStrLength(l, set);
-    lowererStrCall(l, symStrcspn, Span<const VReg>({lowererHostAddress(l, s), lowererHostAddress(l, set)}));
+    lowererStrCall(l, symStrcspn, Span<const VReg>({s, set}), 3, false);
     if (v < 0 || l->uses[v] == 0) {
         return;
     }
@@ -18373,7 +18382,7 @@ static void lowererStrPair(Lowerer* l, i32 v, Span<const i32> args, String sym) 
     VReg b = lowererUse(l, args[1]);
     lowererStrLength(l, a);
     lowererStrLength(l, b);
-    lowererStrCall(l, sym, Span<const VReg>({lowererHostAddress(l, a), lowererHostAddress(l, b)}));
+    lowererStrCall(l, sym, Span<const VReg>({a, b}), 3, false);
     if (sym == symStrcmp) {
         lowererSign(l, v);
     } else if (v >= 0 && l->uses[v] > 0) {
@@ -18405,7 +18414,7 @@ static void lowererStrCopy(Lowerer* l, i32 v, Span<const i32> args, bool append,
     if (l->m->asan) {
         lowererAsanRange(l, at, size);
     }
-    lowererStrCall(l, symMemmove, Span<const VReg>({lowererHostAddress(l, at), lowererHostAddress(l, s), size}));
+    lowererStrCall(l, symMemmove, Span<const VReg>({at, s, size}), 3, false);
     if (v >= 0 && l->uses[v] > 0) {
         lowererMov(l, lowererDef(l, v), end ? lowererSum(l, d, n) : d, 4);
     }
@@ -18453,8 +18462,6 @@ static void lowererMemInit(Lowerer* l, Int seg, Span<const i32> args) {
     if (l->m->asan) {
         lowererAsanRange(l, d, n);
     }
-    VReg dst = mFuncNewReg(l->mf, classGPR);
-    lowererMemAddr(l, dst, d);
     VReg src = mFuncNewReg(l->mf, classGPR);
     MInst lea = inst(mLea);
     lea.dst = src;
@@ -18467,7 +18474,7 @@ static void lowererMemInit(Lowerer* l, Int seg, Span<const i32> args) {
     addS.size = 8;
     addS.aux = 0;
     lowererEmit(l, addS);
-    lowererStrCall(l, symMemmove, Span<const VReg>({dst, src, n}));
+    lowererStrCall(l, symMemmove, Span<const VReg>({d, src, n}), 1, false);
 }
 
 static void lowererMov(Lowerer* l, VReg dst, VReg src, u8 size) {
@@ -19798,6 +19805,7 @@ static void objCodeEmitFunction(ObjCode* oc, Int index, MFunc* mf, Allocator* al
     a->lastPos = 0;
     const Int calls = length(oc->calls);
     const Int jumpCalls = length(oc->jumpCalls);
+    const Int trampolineCalls = length(oc->trampolineCalls);
     const Int addresses = length(oc->addresses);
     FuncEmitter* e = objCodeEmitBody(oc, mf, al, {}, {}, {});
     Slice<u8> shorts = makeSlice<u8>(length(e->jumps));
@@ -19820,6 +19828,7 @@ static void objCodeEmitFunction(ObjCode* oc, Int index, MFunc* mf, Allocator* al
         a->lastPos = 0;
         oc->calls = subslice(oc->calls, 0, calls);
         oc->jumpCalls = subslice(oc->jumpCalls, 0, jumpCalls);
+        oc->trampolineCalls = subslice(oc->trampolineCalls, 0, trampolineCalls);
         oc->addresses = subslice(oc->addresses, 0, addresses);
         objCodeEmitBody(oc, mf, al, shorts, trapShorts, plan);
     }
@@ -20135,13 +20144,13 @@ static String objCodeFuncName(ObjCode* oc, Int i) {
 }
 
 // goCall emits a function of the internal convention that calls the Go
-// function value of sym with the instance and its parameters, and returns
-// its results; with record it writes the jump frame first. When the
-// instance asks, by its interrupt word, it calls the interrupt stub on the
-// way out, as Go's runtime would inject a call of it there.
+// function value of sym with its parameters, and returns its results; with
+// record it writes the jump frame first. When the instance asks, by its
+// interrupt word, it calls the interrupt stub on the way out, as Go's
+// runtime would inject a call of it there.
 static i32 objCodeGoCall(ObjCode* oc, String name, Slice<ValType> params, Slice<ValType> results, String sym, bool record) {
     Asm* a = &oc->a;
-    GoFrame g = goAssign(params, results);
+    GoFrame g = goAssign(params, results, false);
     auto temporary1034 = internalLocs(params, argGPRs, argXMMs, 0);
     Slice<VReg> pregs = temporary1034.v0;
     Slice<Int> pslots = temporary1034.v1;
@@ -20198,7 +20207,6 @@ static i32 objCodeGoCall(ObjCode* oc, String name, Slice<ValType> params, Slice<
             asmLoad(a, 8, 8, false, dst.reg, rspAt(incoming + convert<i32>(8 * pslots[i])));
         }
     }
-    asmLea(a, 8, RAX, instanceAt(0));
     objCodeCallGo(oc, sym);
     // The results move back the same way; Go leaves the upper half of a
     // 32-bit result alone.
@@ -20360,6 +20368,92 @@ static void objCodeInitData(ObjCode* oc) {
     asmPatch32(a, asmJccRel(a, ccNE), loop);
 }
 
+// trampolineName names a trampoline's region.
+static String trampolineName(Trampoline t) {
+    if (length(t.sym) == 0) {
+        return String("w2o.copy.forward");
+    }
+    return String("w2o.str.") + t.sym + fmtSprintf(String(".%d"), convert<i64>(t.guests)) + (t.pointer ? String(".pointer") : String(""));
+}
+
+// trampoline is the index of the trampoline that calls sym of lib/str
+// with the arguments guests marks made host addresses and, with pointer,
+// the address it returns made an address in the memory; an empty sym is
+// the forward copy. The trampolines follow the functions
+// (objCodeTrampolines).
+static i32 objCodeTrampoline(ObjCode* oc, String sym, u8 guests, bool pointer) {
+    PoolScope persistent(*oc->pool);
+    String key = trampolineName(Trampoline{sym, guests, pointer});
+    {
+        auto temporary = lookupMap(oc->trampolineIx, key);
+        if (temporary.v1) {
+            return temporary.v0;
+        }
+    }
+    i32 i = convert<i32>(length(oc->trampolines));
+    oc->trampolines = appendValues(oc->trampolines, Trampoline{cloneString(sym), guests, pointer});
+    setMap(oc->trampolineIx, cloneString(key), i);
+    return i;
+}
+
+// trampolines emits the trampolines the functions call, after the last of
+// them: outside the code the instance may be interrupted in. A
+// trampoline for pointer returns the address in AX, 0 for none, and in DX
+// 1 when there is one and 0 when not, as an address of 0 may be found.
+// The call through it leaves the stack as aligned as a call of the
+// function would.
+static void objCodeTrampolines(ObjCode* oc) {
+    Asm* a = &oc->a;
+    const VReg regs[] = {RAX, RCX, RDX, RSI};
+    oc->trampolineAt = makeSlice<i32>(length(oc->trampolines));
+    for (Int i = 0; i < length(oc->trampolines); ++i) {
+        Trampoline t = oc->trampolines[i];
+        if (length(t.sym) == 0) {
+            i32 start = objCodeBeginRegion(oc, trampolineName(t));
+            oc->trampolineAt[i] = start;
+            // a destination one past the source repeats the source's byte
+            asmAluRR(a, aluAdd, 8, RDI, memReg);
+            asmAluRR(a, aluAdd, 8, RSI, memReg);
+            asmLea(a, 8, RAX, baseAt(RSI, 1));
+            asmAluRR(a, aluCmp, 8, RDI, RAX);
+            i32 copy = asmJcc8(a, ccNE);
+            asmLoad(a, 1, 4, false, RAX, baseAt(RSI, 0));
+            asmBytes(a, {u8(u8(243LL)), u8(u8(170LL))});
+            asmRet(a);
+            asmHere8(a, copy);
+            asmBytes(a, {u8(u8(243LL)), u8(u8(164LL))});
+            asmRet(a);
+            objCodeEndRegion(oc, start);
+            continue;
+        }
+        i32 start = objCodeBeginRegion(oc, trampolineName(t));
+        oc->trampolineAt[i] = start;
+        if (t.pointer) {
+            asmAluRI(a, aluSub, 8, RSP, 8);
+        }
+        for (Int k = 0; k < 4; ++k) {
+            if (t.guests >> k & 1) {
+                asmAluRR(a, aluAdd, 8, regs[k], memReg);
+            }
+        }
+        if (!t.pointer) {
+            asmJmpMem(a, objCodeGotMem(oc, t.sym));
+            objCodeEndRegion(oc, start);
+            continue;
+        }
+        asmCallMem(a, objCodeGotMem(oc, t.sym));
+        asmAluRR(a, aluXor, 4, RDX, RDX);
+        asmTest(a, 8, RAX, RAX);
+        i32 none = asmJcc8(a, ccE);
+        asmAluRR(a, aluSub, 8, RAX, memReg);
+        asmMovImm(a, 4, RDX, 1);
+        asmHere8(a, none);
+        asmAluRI(a, aluAdd, 8, RSP, 8);
+        asmRet(a);
+        objCodeEndRegion(oc, start);
+    }
+}
+
 // initThunk fills function descriptors and active elements, then sets
 // globals, initializes data and calls start. Large, statically safe data
 // initializers run here; the other cases stay in the generated function.
@@ -20422,12 +20516,6 @@ static void objCodeInitThunk(ObjCode* oc) {
                     asmMovImm(a, 4, RCX, n);
                     i32 loop = asmPos(a);
                     asmOpRM(a, true, Span<const u8>({u8(99LL)}), 0, baseAt(RSI, 0), 0, false);
-                    asmTest(a, 8, RAX, RAX);
-                    i32 null = asmJcc8(a, ccE);
-                    // A descriptor's offset in the instance becomes its
-                    // address.
-                    asmLea(a, 8, RAX, Amem{RAX, memReg, u8(1LL), i32(-instanceDistance), -1, {}});
-                    asmHere8(a, null);
                     asmStore(a, 8, RAX, baseAt(RDI, 0));
                     asmAluRI(a, aluAdd, 8, RSI, 4);
                     asmAluRI(a, aluAdd, 8, RDI, 8);
@@ -20542,6 +20630,11 @@ static void objCodeResolve(ObjCode* oc) {
     for (Int i = 0; i < length(jumpCalls); ++i) {
         CallFixup c = jumpCalls[i];
         asmPatch32(a, c.at, oc->jumpAt[c.fn]);
+    }
+    auto trampolineCalls = oc->trampolineCalls;
+    for (Int i = 0; i < length(trampolineCalls); ++i) {
+        CallFixup c = trampolineCalls[i];
+        asmPatch32(a, c.at, oc->trampolineAt[c.fn]);
     }
 }
 
@@ -20705,13 +20798,13 @@ static Slice<i32> objCodeStackCheckBlocks(MFunc* mf) {
     return sliceOf<i32>({common});
 }
 
-// thunk emits a function Go calls with ABIInternal, func(ctx uintptr,
-// params...) (results...), that calls function index in the internal
+// thunk emits a function Go calls with ABIInternal, func(inst uintptr,
+// params...) (results...), inst the Instance, that calls function index in the internal
 // convention; with index negative it calls body instead, which emits the
 // work itself.
 static i32 objCodeThunk(ObjCode* oc, String name, Slice<ValType> params, Slice<ValType> results, Int index, Fn<void()> body) {
     Asm* a = &oc->a;
-    GoFrame g = goAssign(params, results);
+    GoFrame g = goAssign(params, results, true);
     auto temporary1102 = internalLocs(params, argGPRs, argXMMs, 0);
     Slice<VReg> pregs = temporary1102.v0;
     Slice<Int> pslots = temporary1102.v1;
@@ -20720,24 +20813,23 @@ static i32 objCodeThunk(ObjCode* oc, String name, Slice<ValType> params, Slice<V
     Slice<VReg> rregs = temporary1103.v0;
     Slice<Int> rslots = temporary1103.v1;
     Int nall = temporary1103.v2;
-    // The frame's last word keeps the cell g had: the instance's own takes
-    // its place while the code runs.
+    // The frame's last word keeps the Instance g had: this one takes its
+    // place while the code runs.
     i32 saved = convert<i32>(8 * nall);
     i32 frame = saved + 8;
     i32 total = 8 + frame;
     i32 start = objCodeBeginRegion(oc, name);
     // The instance comes in RAX; the memory's base goes first, as the
     // morestack stub finds the instance below it.
-    asmLoad(a, 8, 8, false, memReg, baseAt(RAX, offMem));
+    asmLoad(a, 8, 8, false, memReg, baseAt(RAX, handleBase));
     i32 slow = objCodeStackCheck(oc, total, R12);
     asmPush(a, RBP);
     asmMovRR(a, 8, RBP, RSP);
     asmAluRI(a, aluSub, 8, RSP, convert<i64>(frame));
     asmLoad(a, 8, 8, false, RDX, baseAt(R14, gInstance));
     asmStore(a, 8, RDX, rspAt(saved));
-    asmLoad(a, 8, 8, false, RDX, baseAt(RAX, offCell));
-    asmStore(a, 8, RDX, baseAt(R14, gInstance));
-    asmLoad(a, 8, 8, false, boundReg, baseAt(RAX, offMemBound));
+    asmStore(a, 8, RAX, baseAt(R14, gInstance));
+    asmLoad(a, 8, 8, false, boundReg, baseAt(RAX, handleBound));
     i32 goArgs = total + 8;
     // The parameters move from Go's convention to the internal one, as
     // the adapter moves the other way (goCall), R12 the scratch; a
@@ -20793,36 +20885,34 @@ static i32 objCodeThunk(ObjCode* oc, String name, Slice<ValType> params, Slice<V
     return start;
 }
 
-// trapCall calls Go's trap with the instance and code; it does not return.
-// Like any Go call it leaves the callee room to spill its arguments. Code
-// after it is reached by jumps, with the stack pointer of before.
+// trapCall calls Go's trap with the code; it does not return. Like any Go
+// call it leaves the callee room to spill its arguments. Code after it is
+// reached by jumps, with the stack pointer of before.
 static void objCodeTrapCall(ObjCode* oc, i64 code) {
     Asm* a = &oc->a;
     i32 sp = a->sp;
-    asmAluRI(a, aluSub, 8, RSP, convert<i64>(goAssign(sliceOf<ValType>({I32}), {}).size));
-    asmLea(a, 8, RAX, instanceAt(0));
-    asmMovImm(a, 4, RBX, code);
+    asmAluRI(a, aluSub, 8, RSP, convert<i64>(goAssign(sliceOf<ValType>({I32}), {}, false).size));
+    asmMovImm(a, 4, RAX, code);
     objCodeCallGo(oc, symTrap);
     asmUd2(a);
     asmSetSP(a, sp);
 }
 
-// trapAtCall calls Go's trap_at with the instance, the code, the
-// address of the access the fixup describes and its width and kind, in
-// Go's registers; it does not return. The address is taken first: the
-// register holding it may be one of those.
+// trapAtCall calls Go's trap_at with the code, the address of the access
+// the fixup describes and its width and kind, in Go's registers; it does
+// not return. The address is taken first: the register holding it may be
+// one of those.
 static void objCodeTrapAtCall(ObjCode* oc, const TrapFixup& t) {
     Asm* a = &oc->a;
     i32 sp = a->sp;
-    asmAluRI(a, aluSub, 8, RSP, convert<i64>(goAssign(sliceOf<ValType>({I32, I64, I32}), {}).size));
+    asmAluRI(a, aluSub, 8, RSP, convert<i64>(goAssign(sliceOf<ValType>({I32, I64, I32}), {}, false).size));
     if (t.reg == noReg) {
-        asmMovImm(a, 8, RCX, convert<i64>(convert<u32>(t.disp)));
+        asmMovImm(a, 8, RBX, convert<i64>(convert<u32>(t.disp)));
     } else {
-        asmLea(a, 8, RCX, baseAt(t.reg, t.disp));
+        asmLea(a, 8, RBX, baseAt(t.reg, t.disp));
     }
-    asmLea(a, 8, RAX, instanceAt(0));
-    asmMovImm(a, 4, RBX, t.code);
-    asmMovImm(a, 4, RDI, convert<i64>(t.width) | convert<i64>(t.kind) << 8);
+    asmMovImm(a, 4, RAX, t.code);
+    asmMovImm(a, 4, RCX, convert<i64>(t.width) | convert<i64>(t.kind) << 8);
     objCodeCallGo(oc, symTrapAt);
     asmUd2(a);
     asmSetSP(a, sp);
@@ -23182,15 +23272,16 @@ static Mem instanceMem(i32 off) {
 }
 
 // reloadAfterGo loads what the code keeps in registers again after a
-// call of Go, which keeps none of them: the instance from the cell g
-// holds, where the entry thunk put it, then the memory's bound and base,
-// which the call may have moved by growing the memory.
+// call of Go, which keeps none of them: the memory's base and bound, which
+// the call may have moved by growing the memory, from the Instance g
+// holds, where the entry thunk put it. The base's register holds the
+// Instance meanwhile, which no address in the memory equals: the
+// interrupt stub makes it the new base only where it holds the old one.
 static void objCodeReloadAfterGo(ObjCode* oc) {
     Asm* a = &oc->a;
     asmLoad(a, 8, 8, false, memReg, baseAt(R14, gInstance));
-    asmLoad(a, 8, 8, false, memReg, baseAt(memReg, 0));
-    asmLoad(a, 8, 8, false, boundReg, baseAt(memReg, offMemBound));
-    asmLoad(a, 8, 8, false, memReg, baseAt(memReg, offMem));
+    asmLoad(a, 8, 8, false, boundReg, baseAt(memReg, handleBound));
+    asmLoad(a, 8, 8, false, memReg, baseAt(memReg, handleBase));
 }
 
 // breakPatterns_func scatters some elements around in an attempt to break some patterns
@@ -24451,7 +24542,10 @@ static bool globalMutability(Reader* r) {
     return b == 1;
 }
 
-static GoFrame goAssign(Slice<ValType> params, Slice<ValType> results) {
+// goAssign places a Go function's parameters and results as ABIInternal
+// does; with instance the Instance goes first, in RAX, as Go passes it to
+// the entry thunks. A call of Go passes none: Go finds it in g.
+static GoFrame goAssign(Slice<ValType> params, Slice<ValType> results, bool instance) {
     GoFrame f = {};
     i32 off = 0;
     auto assign = [&](Slice<ValType> types, Int ints) mutable -> Slice<GoLoc> {
@@ -24476,9 +24570,11 @@ static GoFrame goAssign(Slice<ValType> params, Slice<ValType> results) {
         off = alignTo(off, 8);
         return locs;
     };
-    f.params = assign(params, 1);
+    f.params = assign(params, instance ? 1 : 0);
     f.results = assign(results, 0);
-    off += 8;
+    if (instance) {
+        off += 8;
+    }
     auto range1530 = f.params;
     for (Int index1531 = 0, rangeEnd1532 = length(range1530); index1531 < rangeEnd1532; ++index1531) {
         Int i = index1531;
@@ -26761,6 +26857,10 @@ static void compileWithOptions(CompileOptions options) {
     code->calls = makeSlice<CallFixup>(0);
     code->jumpAt = makeMap<i32, i32>();
     code->jumpCalls = makeSlice<CallFixup>(0);
+    code->trampolines = makeSlice<Trampoline>(0);
+    code->trampolineIx = makeMap<String, i32>();
+    code->trampolineAt = makeSlice<i32>(0);
+    code->trampolineCalls = makeSlice<CallFixup>(0);
     code->blobs = makeSlice<CodeBlob>(0);
     code->blobAt = makeSlice<i32>(0);
     code->floatIx = makeMap<Array<u64, 2>, i32>();
@@ -26798,6 +26898,7 @@ static void compileWithOptions(CompileOptions options) {
         objCodeEmitFunction(code, i, machine, allocation);
         machinePool.clear();
     }
+    objCodeTrampolines(code);
     if (code->lay->size > (Int(1) << 30)) {
         compilerError(String("unsupported: an instance larger than 1 GiB"));
     }

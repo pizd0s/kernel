@@ -138,7 +138,7 @@ func (t *TracedImports) function(imp *ImportMeta) any {
 	real, name := reflect.ValueOf(f), imp.name
 
 	return Closure{f: reflect.MakeFunc(real.Type(), func(args []reflect.Value) []reflect.Value {
-		p := instanceAt(uintptr(args[0].Uint())).proc
+		p := current().proc
 
 		if p == nil {
 			return real.Call(args)
@@ -148,7 +148,7 @@ func (t *TracedImports) function(imp *ImportMeta) any {
 
 		out := real.Call(args)
 
-		p.traceCall(class, name, args[1:], out, p.failure)
+		p.traceCall(class, name, args, out, p.failure)
 
 		return out
 	}).Interface()}

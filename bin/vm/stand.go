@@ -67,7 +67,7 @@ func (m *Module) mem() []byte {
 }
 
 func (m *Module) put(b []byte) uint32 {
-	p := m.malloc(m.i.ctx(), uint32(len(b)))
+	p := m.malloc(m.i.handle(), uint32(len(b)))
 
 	if p == 0 && len(b) > 0 {
 		throwFmt("malloc of %d bytes failed", len(b))
@@ -86,7 +86,7 @@ func (m *Module) image(h *Fnv64, p uint32) (uint32, uint32) {
 	h.write(mem[p : p+8])
 	h.write(mem[p+8 : uint64(p)+8+uint64(w)*uint64(ht)*4])
 	m.untimed += time.Since(start)
-	m.free(m.i.ctx(), p)
+	m.free(m.i.handle(), p)
 
 	return w, ht
 }
@@ -98,7 +98,7 @@ func scaled(w, h float32) (uint32, uint32) {
 }
 
 func (m *Module) work(kind, name string, data []byte) string {
-	ctx := m.i.ctx()
+	ctx := m.i.handle()
 
 	switch kind {
 	case "im":

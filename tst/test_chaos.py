@@ -7,7 +7,10 @@ The guest, tst/chaos/check.c, the image of the tests' /tests/chaos/check,
 runs in the system, its rule of the kernel's points of failure
 PIZDOS_CHAOS in its environment: it does an operation sixteen times and
 counts what failed, which the chaos build's rule fails once and the
-production build's never.
+production build's never. memory-move is a rule that holds: the chaos
+build moves a process's memory at every grow and as every signal handler
+starts, under waits a handler interrupts, and nothing they bring is
+lost.
 """
 import os
 from pathlib import Path
@@ -107,6 +110,11 @@ def main():
             run_guest(vm_chaos, operation, 0)
             run_guest(vm_chaos, operation, 1, rule)
             run_guest(vm_chaos, operation, 0, f"{point}@4294967295")
+
+        # A memory moves at every grow and as every handler starts with
+        # memory-move, under waits a handler interrupts: nothing is lost.
+        for binary, rule in ((vm, "memory-move@0"), (vm_chaos, ""), (vm_chaos, "memory-move@0")):
+            run_guest(binary, "memory-move", 0, rule)
 
     print("chaos: native/Wasm AOT and VM faults, the kernel's faults a guest recovers from, atomic output and production no-ops passed")
 

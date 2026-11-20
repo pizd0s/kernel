@@ -2,2620 +2,2620 @@
 
 package main
 
-func libc__kernel_start(ctx uintptr, errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt uint32) {
-	proc(ctx).libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt)
+func libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt uint32) {
+	proc().libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt)
 }
 
-func libc__kernel_program(ctx uintptr, buf, size uint32) uint32 {
-	return proc(ctx).libc__kernel_program(buf, size)
+func libc__kernel_program(buf, size uint32) uint32 {
+	return proc().libc__kernel_program(buf, size)
 }
 
-func libcRead(ctx uintptr, fd, buf, n uint32) uint32 {
-	return proc(ctx).libcRead(fd, buf, n)
+func libcRead(fd, buf, n uint32) uint32 {
+	return proc().libcRead(fd, buf, n)
 }
 
-func libcWrite(ctx uintptr, fd, buf, n uint32) uint32 {
-	return proc(ctx).libcWrite(fd, buf, n)
+func libcWrite(fd, buf, n uint32) uint32 {
+	return proc().libcWrite(fd, buf, n)
 }
 
-func libcReadv(ctx uintptr, fd, iovs, iovsSize, count uint32) uint32 {
-	p := proc(ctx)
+func libcReadv(fd, iovs, iovsSize, count uint32) uint32 {
+	p := proc()
 
 	p.sized("readv", iovsSize, sizeofIovec)
 
 	return p.libcReadv(fd, iovs, count)
 }
 
-func libcWritev(ctx uintptr, fd, iovs, iovsSize, count uint32) uint32 {
-	p := proc(ctx)
+func libcWritev(fd, iovs, iovsSize, count uint32) uint32 {
+	p := proc()
 
 	p.sized("writev", iovsSize, sizeofIovec)
 
 	return p.libcWritev(fd, iovs, count)
 }
 
-func libcPreadv(ctx uintptr, fd, iovs, iovsSize, count uint32, off uint64) uint32 {
-	p := proc(ctx)
+func libcPreadv(fd, iovs, iovsSize, count uint32, off uint64) uint32 {
+	p := proc()
 
 	p.sized("preadv", iovsSize, sizeofIovec)
 
 	return p.libcPreadv(fd, iovs, count, off)
 }
 
-func libcPwritev(ctx uintptr, fd, iovs, iovsSize, count uint32, off uint64) uint32 {
-	p := proc(ctx)
+func libcPwritev(fd, iovs, iovsSize, count uint32, off uint64) uint32 {
+	p := proc()
 
 	p.sized("pwritev", iovsSize, sizeofIovec)
 
 	return p.libcPwritev(fd, iovs, count, off)
 }
 
-func libcPread(ctx uintptr, fd, buf, n uint32, off uint64) uint32 {
-	return proc(ctx).libcPread(fd, buf, n, off)
+func libcPread(fd, buf, n uint32, off uint64) uint32 {
+	return proc().libcPread(fd, buf, n, off)
 }
 
-func libcPwrite(ctx uintptr, fd, buf, n uint32, off uint64) uint32 {
-	return proc(ctx).libcPwrite(fd, buf, n, off)
+func libcPwrite(fd, buf, n uint32, off uint64) uint32 {
+	return proc().libcPwrite(fd, buf, n, off)
 }
 
-func libcCopy_file_range(ctx uintptr, in, offIn, out, offOut, n, flags uint32) uint32 {
-	return proc(ctx).libcCopy_file_range(in, offIn, out, offOut, n, flags)
+func libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) uint32 {
+	return proc().libcCopy_file_range(in, offIn, out, offOut, n, flags)
 }
 
-func libcFdatasync(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcFdatasync(fd)
+func libcFdatasync(fd uint32) uint32 {
+	return proc().libcFdatasync(fd)
 }
 
-func libcSync(ctx uintptr) {
-	proc(ctx).libcSync()
+func libcSync() {
+	proc().libcSync()
 }
 
-func libcSyncfs(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcSyncfs(fd)
+func libcSyncfs(fd uint32) uint32 {
+	return proc().libcSyncfs(fd)
 }
 
-func libcFlock(ctx uintptr, fd, op uint32) uint32 {
-	return proc(ctx).libcFlock(fd, op)
+func libcFlock(fd, op uint32) uint32 {
+	return proc().libcFlock(fd, op)
 }
 
-func libcLockf(ctx uintptr, fd, cmd uint32, n uint64) uint32 {
-	return proc(ctx).libcLockf(fd, cmd, n)
+func libcLockf(fd, cmd uint32, n uint64) uint32 {
+	return proc().libcLockf(fd, cmd, n)
 }
 
-func libcPosix_fadvise(ctx uintptr, fd uint32, off, n uint64, advice uint32) uint32 {
-	return proc(ctx).libcPosix_fadvise(fd, off, n, advice)
+func libcPosix_fadvise(fd uint32, off, n uint64, advice uint32) uint32 {
+	return proc().libcPosix_fadvise(fd, off, n, advice)
 }
 
-func libcPosix_fallocate(ctx uintptr, fd uint32, off, n uint64) uint32 {
-	return proc(ctx).libcPosix_fallocate(fd, off, n)
+func libcPosix_fallocate(fd uint32, off, n uint64) uint32 {
+	return proc().libcPosix_fallocate(fd, off, n)
 }
 
-func libcSelect(ctx uintptr, n, r, rSize, w, wSize, e, eSize, tv, tvSize uint32) uint32 {
-	p := proc(ctx)
+func libcSelect(n, r, rSize, w, wSize, e, eSize, tv, tvSize uint32) uint32 {
+	p := proc()
 
 	p.sized("select", rSize, sizeofFdSet, wSize, sizeofFdSet, eSize, sizeofFdSet, tvSize, sizeofTimeval)
 
 	return p.libcSelect(n, r, w, e, tv)
 }
 
-func libcPselect(ctx uintptr, n, r, rSize, w, wSize, e, eSize, ts, tsSize, mask, maskSize uint32) uint32 {
-	p := proc(ctx)
+func libcPselect(n, r, rSize, w, wSize, e, eSize, ts, tsSize, mask, maskSize uint32) uint32 {
+	p := proc()
 
 	p.sized("pselect", rSize, sizeofFdSet, wSize, sizeofFdSet, eSize, sizeofFdSet, tsSize, sizeofTimespec, maskSize, sizeofSigset)
 
 	return p.libcPselect(n, r, w, e, ts, mask)
 }
 
-func libcLseek(ctx uintptr, fd uint32, off uint64, whence uint32) uint64 {
-	return proc(ctx).libcLseek(fd, off, whence)
+func libcLseek(fd uint32, off uint64, whence uint32) uint64 {
+	return proc().libcLseek(fd, off, whence)
 }
 
-func libcClose(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcClose(fd)
+func libcClose(fd uint32) uint32 {
+	return proc().libcClose(fd)
 }
 
-func libcDup(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcDup(fd)
+func libcDup(fd uint32) uint32 {
+	return proc().libcDup(fd)
 }
 
-func libcDup2(ctx uintptr, old, new uint32) uint32 {
-	return proc(ctx).libcDup2(old, new)
+func libcDup2(old, new uint32) uint32 {
+	return proc().libcDup2(old, new)
 }
 
-func libcDup3(ctx uintptr, old, new, flags uint32) uint32 {
-	return proc(ctx).libcDup3(old, new, flags)
+func libcDup3(old, new, flags uint32) uint32 {
+	return proc().libcDup3(old, new, flags)
 }
 
-func libcPipe(ctx uintptr, fds uint32) uint32 {
-	return proc(ctx).libcPipe(fds)
+func libcPipe(fds uint32) uint32 {
+	return proc().libcPipe(fds)
 }
 
-func libcPipe2(ctx uintptr, fds, flags uint32) uint32 {
-	return proc(ctx).libcPipe2(fds, flags)
+func libcPipe2(fds, flags uint32) uint32 {
+	return proc().libcPipe2(fds, flags)
 }
 
-func libcTcdrain(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcTcdrain(fd)
+func libcTcdrain(fd uint32) uint32 {
+	return proc().libcTcdrain(fd)
 }
 
-func libcTcsendbreak(ctx uintptr, fd, duration uint32) uint32 {
-	return proc(ctx).libcTcsendbreak(fd, duration)
+func libcTcsendbreak(fd, duration uint32) uint32 {
+	return proc().libcTcsendbreak(fd, duration)
 }
 
-func libcTcflow(ctx uintptr, fd, action uint32) uint32 {
-	return proc(ctx).libcTcflow(fd, action)
+func libcTcflow(fd, action uint32) uint32 {
+	return proc().libcTcflow(fd, action)
 }
 
-func libcTcflush(ctx uintptr, fd, queue uint32) uint32 {
-	return proc(ctx).libcTcflush(fd, queue)
+func libcTcflush(fd, queue uint32) uint32 {
+	return proc().libcTcflush(fd, queue)
 }
 
-func libcTcgetsid(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcTcgetsid(fd)
+func libcTcgetsid(fd uint32) uint32 {
+	return proc().libcTcgetsid(fd)
 }
 
-func libcCfgetospeed(ctx uintptr, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcCfgetospeed(at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("cfgetospeed", atSize, sizeofTermios)
 
 	return p.libcCfgetospeed(at)
 }
 
-func libcCfgetispeed(ctx uintptr, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcCfgetispeed(at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("cfgetispeed", atSize, sizeofTermios)
 
 	return p.libcCfgetispeed(at)
 }
 
-func libcCfsetospeed(ctx uintptr, at, atSize, speed uint32) uint32 {
-	p := proc(ctx)
+func libcCfsetospeed(at, atSize, speed uint32) uint32 {
+	p := proc()
 
 	p.sized("cfsetospeed", atSize, sizeofTermios)
 
 	return p.libcCfsetospeed(at, speed)
 }
 
-func libcCfsetspeed(ctx uintptr, at, atSize, speed uint32) uint32 {
-	p := proc(ctx)
+func libcCfsetspeed(at, atSize, speed uint32) uint32 {
+	p := proc()
 
 	p.sized("cfsetspeed", atSize, sizeofTermios)
 
 	return p.libcCfsetspeed(at, speed)
 }
 
-func libcCfsetispeed(ctx uintptr, at, atSize, speed uint32) uint32 {
-	p := proc(ctx)
+func libcCfsetispeed(at, atSize, speed uint32) uint32 {
+	p := proc()
 
 	p.sized("cfsetispeed", atSize, sizeofTermios)
 
 	return p.libcCfsetispeed(at, speed)
 }
 
-func libcFsync(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcFsync(fd)
+func libcFsync(fd uint32) uint32 {
+	return proc().libcFsync(fd)
 }
 
-func libcFtruncate(ctx uintptr, fd uint32, size uint64) uint32 {
-	return proc(ctx).libcFtruncate(fd, size)
+func libcFtruncate(fd uint32, size uint64) uint32 {
+	return proc().libcFtruncate(fd, size)
 }
 
-func libcFstat(ctx uintptr, fd, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcFstat(fd, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("fstat", atSize, sizeofStat)
 
 	return p.libcFstat(fd, at)
 }
 
-func libcFchmod(ctx uintptr, fd, mode uint32) uint32 {
-	return proc(ctx).libcFchmod(fd, mode)
+func libcFchmod(fd, mode uint32) uint32 {
+	return proc().libcFchmod(fd, mode)
 }
 
-func libcFchown(ctx uintptr, fd, uid, gid uint32) uint32 {
-	return proc(ctx).libcFchown(fd, uid, gid)
+func libcFchown(fd, uid, gid uint32) uint32 {
+	return proc().libcFchown(fd, uid, gid)
 }
 
-func libcFutimes(ctx uintptr, fd, times, timesSize uint32) uint32 {
-	p := proc(ctx)
+func libcFutimes(fd, times, timesSize uint32) uint32 {
+	p := proc()
 
 	p.sized("futimes", timesSize, sizeofTimeval)
 
 	return p.libcFutimes(fd, times)
 }
 
-func libcFutimens(ctx uintptr, fd, times, timesSize uint32) uint32 {
-	p := proc(ctx)
+func libcFutimens(fd, times, timesSize uint32) uint32 {
+	p := proc()
 
 	p.sized("futimens", timesSize, sizeofTimespec)
 
 	return p.libcFutimens(fd, times)
 }
 
-func libcFcntl(ctx uintptr, fd, cmd, va, size uint32) uint32 {
-	p := proc(ctx)
+func libcFcntl(fd, cmd, va, size uint32) uint32 {
+	p := proc()
 
 	p.sized("fcntl", size, fcntlSize(cmd))
 
 	return p.libcFcntl(fd, cmd, va)
 }
 
-func libcIoctl(ctx uintptr, fd, req, va, size uint32) uint32 {
-	p := proc(ctx)
+func libcIoctl(fd, req, va, size uint32) uint32 {
+	p := proc()
 
 	p.sized("ioctl", size, ioctlSize(req))
 
 	return p.libcIoctl(fd, req, va)
 }
 
-func libcIsatty(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcIsatty(fd)
+func libcIsatty(fd uint32) uint32 {
+	return proc().libcIsatty(fd)
 }
 
-func libcTcgetattr(ctx uintptr, fd, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcTcgetattr(fd, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("tcgetattr", atSize, sizeofTermios)
 
 	return p.libcTcgetattr(fd, at)
 }
 
-func libcTcsetattr(ctx uintptr, fd, action, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcTcsetattr(fd, action, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("tcsetattr", atSize, sizeofTermios)
 
 	return p.libcTcsetattr(fd, action, at)
 }
 
-func libcCfmakeraw(ctx uintptr, at, atSize uint32) {
-	p := proc(ctx)
+func libcCfmakeraw(at, atSize uint32) {
+	p := proc()
 
 	p.sized("cfmakeraw", atSize, sizeofTermios)
 
 	p.libcCfmakeraw(at)
 }
 
-func libcPoll(ctx uintptr, at, atSize, n, timeout uint32) uint32 {
-	p := proc(ctx)
+func libcPoll(at, atSize, n, timeout uint32) uint32 {
+	p := proc()
 
 	p.sized("poll", atSize, sizeofPollfd)
 
 	return p.libcPoll(at, n, timeout)
 }
 
-func libcPpoll(ctx uintptr, at, atSize, n, ts, tsSize, mask, maskSize uint32) uint32 {
-	p := proc(ctx)
+func libcPpoll(at, atSize, n, ts, tsSize, mask, maskSize uint32) uint32 {
+	p := proc()
 
 	p.sized("ppoll", atSize, sizeofPollfd, tsSize, sizeofTimespec, maskSize, sizeofSigset)
 
 	return p.libcPpoll(at, n, ts, mask)
 }
 
-func libcOpen(ctx uintptr, path, flags, va uint32) uint32 {
-	return proc(ctx).libcOpen(path, flags, va)
+func libcOpen(path, flags, va uint32) uint32 {
+	return proc().libcOpen(path, flags, va)
 }
 
-func libcOpenat(ctx uintptr, dirfd, path, flags, va uint32) uint32 {
-	return proc(ctx).libcOpenat(dirfd, path, flags, va)
+func libcOpenat(dirfd, path, flags, va uint32) uint32 {
+	return proc().libcOpenat(dirfd, path, flags, va)
 }
 
-func libcStat(ctx uintptr, path, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcStat(path, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("stat", atSize, sizeofStat)
 
 	return p.libcStat(path, at)
 }
 
-func libcLstat(ctx uintptr, path, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcLstat(path, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("lstat", atSize, sizeofStat)
 
 	return p.libcLstat(path, at)
 }
 
-func libcFstatat(ctx uintptr, dirfd, path, at, atSize, flags uint32) uint32 {
-	p := proc(ctx)
+func libcFstatat(dirfd, path, at, atSize, flags uint32) uint32 {
+	p := proc()
 
 	p.sized("fstatat", atSize, sizeofStat)
 
 	return p.libcFstatat(dirfd, path, at, flags)
 }
 
-func libcAccess(ctx uintptr, path, mode uint32) uint32 {
-	return proc(ctx).libcAccess(path, mode)
+func libcAccess(path, mode uint32) uint32 {
+	return proc().libcAccess(path, mode)
 }
 
-func libcFaccessat(ctx uintptr, dirfd, path, mode, flags uint32) uint32 {
-	return proc(ctx).libcFaccessat(dirfd, path, mode, flags)
+func libcFaccessat(dirfd, path, mode, flags uint32) uint32 {
+	return proc().libcFaccessat(dirfd, path, mode, flags)
 }
 
-func libcTruncate(ctx uintptr, path uint32, size uint64) uint32 {
-	return proc(ctx).libcTruncate(path, size)
+func libcTruncate(path uint32, size uint64) uint32 {
+	return proc().libcTruncate(path, size)
 }
 
-func libcStatvfs(ctx uintptr, path, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcStatvfs(path, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("statvfs", atSize, sizeofStatvfs)
 
 	return p.libcStatvfs(path, at)
 }
 
-func libcFstatvfs(ctx uintptr, fd, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcFstatvfs(fd, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("fstatvfs", atSize, sizeofStatvfs)
 
 	return p.libcFstatvfs(fd, at)
 }
 
-func libcFchdir(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcFchdir(fd)
+func libcFchdir(fd uint32) uint32 {
+	return proc().libcFchdir(fd)
 }
 
-func libcChroot(ctx uintptr, path uint32) uint32 {
-	return proc(ctx).libcChroot(path)
+func libcChroot(path uint32) uint32 {
+	return proc().libcChroot(path)
 }
 
-func libcChdir(ctx uintptr, path uint32) uint32 {
-	return proc(ctx).libcChdir(path)
+func libcChdir(path uint32) uint32 {
+	return proc().libcChdir(path)
 }
 
-func libcGetcwd(ctx uintptr, buf, size uint32) uint32 {
-	return proc(ctx).libcGetcwd(buf, size)
+func libcGetcwd(buf, size uint32) uint32 {
+	return proc().libcGetcwd(buf, size)
 }
 
-func libcMkdir(ctx uintptr, path, mode uint32) uint32 {
-	return proc(ctx).libcMkdir(path, mode)
+func libcMkdir(path, mode uint32) uint32 {
+	return proc().libcMkdir(path, mode)
 }
 
-func libcMkdirat(ctx uintptr, dirfd, path, mode uint32) uint32 {
-	return proc(ctx).libcMkdirat(dirfd, path, mode)
+func libcMkdirat(dirfd, path, mode uint32) uint32 {
+	return proc().libcMkdirat(dirfd, path, mode)
 }
 
-func libcRmdir(ctx uintptr, path uint32) uint32 {
-	return proc(ctx).libcRmdir(path)
+func libcRmdir(path uint32) uint32 {
+	return proc().libcRmdir(path)
 }
 
-func libcUnlink(ctx uintptr, path uint32) uint32 {
-	return proc(ctx).libcUnlink(path)
+func libcUnlink(path uint32) uint32 {
+	return proc().libcUnlink(path)
 }
 
-func libcUnlinkat(ctx uintptr, dirfd, path, flags uint32) uint32 {
-	return proc(ctx).libcUnlinkat(dirfd, path, flags)
+func libcUnlinkat(dirfd, path, flags uint32) uint32 {
+	return proc().libcUnlinkat(dirfd, path, flags)
 }
 
-func libcMount(ctx uintptr, source, target, fstype, flags, data uint32) uint32 {
-	return proc(ctx).libcMount(source, target, fstype, flags, data)
+func libcMount(source, target, fstype, flags, data uint32) uint32 {
+	return proc().libcMount(source, target, fstype, flags, data)
 }
 
-func libcUmount(ctx uintptr, target uint32) uint32 {
-	return proc(ctx).libcUmount(target)
+func libcUmount(target uint32) uint32 {
+	return proc().libcUmount(target)
 }
 
-func libcUmount2(ctx uintptr, target, flags uint32) uint32 {
-	return proc(ctx).libcUmount2(target, flags)
+func libcUmount2(target, flags uint32) uint32 {
+	return proc().libcUmount2(target, flags)
 }
 
-func libcRemove(ctx uintptr, path uint32) uint32 {
-	return proc(ctx).libcRemove(path)
+func libcRemove(path uint32) uint32 {
+	return proc().libcRemove(path)
 }
 
-func libcRename(ctx uintptr, old, new uint32) uint32 {
-	return proc(ctx).libcRename(old, new)
+func libcRename(old, new uint32) uint32 {
+	return proc().libcRename(old, new)
 }
 
-func libcRenameat(ctx uintptr, olddir, old, newdir, new uint32) uint32 {
-	return proc(ctx).libcRenameat(olddir, old, newdir, new)
+func libcRenameat(olddir, old, newdir, new uint32) uint32 {
+	return proc().libcRenameat(olddir, old, newdir, new)
 }
 
-func libcLink(ctx uintptr, old, new uint32) uint32 {
-	return proc(ctx).libcLink(old, new)
+func libcLink(old, new uint32) uint32 {
+	return proc().libcLink(old, new)
 }
 
-func libcLinkat(ctx uintptr, olddir, old, newdir, new, flags uint32) uint32 {
-	return proc(ctx).libcLinkat(olddir, old, newdir, new, flags)
+func libcLinkat(olddir, old, newdir, new, flags uint32) uint32 {
+	return proc().libcLinkat(olddir, old, newdir, new, flags)
 }
 
-func libcSymlink(ctx uintptr, target, path uint32) uint32 {
-	return proc(ctx).libcSymlink(target, path)
+func libcSymlink(target, path uint32) uint32 {
+	return proc().libcSymlink(target, path)
 }
 
-func libcSymlinkat(ctx uintptr, target, dirfd, path uint32) uint32 {
-	return proc(ctx).libcSymlinkat(target, dirfd, path)
+func libcSymlinkat(target, dirfd, path uint32) uint32 {
+	return proc().libcSymlinkat(target, dirfd, path)
 }
 
-func libcReadlink(ctx uintptr, path, buf, size uint32) uint32 {
-	return proc(ctx).libcReadlink(path, buf, size)
+func libcReadlink(path, buf, size uint32) uint32 {
+	return proc().libcReadlink(path, buf, size)
 }
 
-func libcReadlinkat(ctx uintptr, dirfd, path, buf, size uint32) uint32 {
-	return proc(ctx).libcReadlinkat(dirfd, path, buf, size)
+func libcReadlinkat(dirfd, path, buf, size uint32) uint32 {
+	return proc().libcReadlinkat(dirfd, path, buf, size)
 }
 
-func libcCanonicalize_file_name(ctx uintptr, path uint32) uint32 {
-	return proc(ctx).libcCanonicalize_file_name(path)
+func libcCanonicalize_file_name(path uint32) uint32 {
+	return proc().libcCanonicalize_file_name(path)
 }
 
-func libcGet_current_dir_name(ctx uintptr) uint32 {
-	return proc(ctx).libcGet_current_dir_name()
+func libcGet_current_dir_name() uint32 {
+	return proc().libcGet_current_dir_name()
 }
 
-func libcCreat(ctx uintptr, path, mode uint32) uint32 {
-	return proc(ctx).libcCreat(path, mode)
+func libcCreat(path, mode uint32) uint32 {
+	return proc().libcCreat(path, mode)
 }
 
-func libcEaccess(ctx uintptr, path, mode uint32) uint32 {
-	return proc(ctx).libcEaccess(path, mode)
+func libcEaccess(path, mode uint32) uint32 {
+	return proc().libcEaccess(path, mode)
 }
 
-func libcEuidaccess(ctx uintptr, path, mode uint32) uint32 {
-	return proc(ctx).libcEuidaccess(path, mode)
+func libcEuidaccess(path, mode uint32) uint32 {
+	return proc().libcEuidaccess(path, mode)
 }
 
-func libcStatfs(ctx uintptr, path, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcStatfs(path, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("statfs", atSize, sizeofStatfs)
 
 	return p.libcStatfs(path, at)
 }
 
-func libcFstatfs(ctx uintptr, fd, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcFstatfs(fd, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("fstatfs", atSize, sizeofStatfs)
 
 	return p.libcFstatfs(fd, at)
 }
 
-func libcAcct(ctx uintptr, path uint32) uint32 {
-	return proc(ctx).libcAcct(path)
+func libcAcct(path uint32) uint32 {
+	return proc().libcAcct(path)
 }
 
-func libcRealpath(ctx uintptr, path, resolved uint32) uint32 {
-	return proc(ctx).libcRealpath(path, resolved)
+func libcRealpath(path, resolved uint32) uint32 {
+	return proc().libcRealpath(path, resolved)
 }
 
-func libcChmod(ctx uintptr, path, mode uint32) uint32 {
-	return proc(ctx).libcChmod(path, mode)
+func libcChmod(path, mode uint32) uint32 {
+	return proc().libcChmod(path, mode)
 }
 
-func libcFchmodat(ctx uintptr, dirfd, path, mode, flags uint32) uint32 {
-	return proc(ctx).libcFchmodat(dirfd, path, mode, flags)
+func libcFchmodat(dirfd, path, mode, flags uint32) uint32 {
+	return proc().libcFchmodat(dirfd, path, mode, flags)
 }
 
-func libcChown(ctx uintptr, path, uid, gid uint32) uint32 {
-	return proc(ctx).libcChown(path, uid, gid)
+func libcChown(path, uid, gid uint32) uint32 {
+	return proc().libcChown(path, uid, gid)
 }
 
-func libcLchown(ctx uintptr, path, uid, gid uint32) uint32 {
-	return proc(ctx).libcLchown(path, uid, gid)
+func libcLchown(path, uid, gid uint32) uint32 {
+	return proc().libcLchown(path, uid, gid)
 }
 
-func libcFchownat(ctx uintptr, dirfd, path, uid, gid, flags uint32) uint32 {
-	return proc(ctx).libcFchownat(dirfd, path, uid, gid, flags)
+func libcFchownat(dirfd, path, uid, gid, flags uint32) uint32 {
+	return proc().libcFchownat(dirfd, path, uid, gid, flags)
 }
 
-func libcMknod(ctx uintptr, path, mode uint32, dev uint64) uint32 {
-	return proc(ctx).libcMknod(path, mode, dev)
+func libcMknod(path, mode uint32, dev uint64) uint32 {
+	return proc().libcMknod(path, mode, dev)
 }
 
-func libcMknodat(ctx uintptr, dirfd, path, mode uint32, dev uint64) uint32 {
-	return proc(ctx).libcMknodat(dirfd, path, mode, dev)
+func libcMknodat(dirfd, path, mode uint32, dev uint64) uint32 {
+	return proc().libcMknodat(dirfd, path, mode, dev)
 }
 
-func libcMkfifo(ctx uintptr, path, mode uint32) uint32 {
-	return proc(ctx).libcMkfifo(path, mode)
+func libcMkfifo(path, mode uint32) uint32 {
+	return proc().libcMkfifo(path, mode)
 }
 
-func libcMkfifoat(ctx uintptr, dirfd, path, mode uint32) uint32 {
-	return proc(ctx).libcMkfifoat(dirfd, path, mode)
+func libcMkfifoat(dirfd, path, mode uint32) uint32 {
+	return proc().libcMkfifoat(dirfd, path, mode)
 }
 
-func libcUtimes(ctx uintptr, path, times, timesSize uint32) uint32 {
-	p := proc(ctx)
+func libcUtimes(path, times, timesSize uint32) uint32 {
+	p := proc()
 
 	p.sized("utimes", timesSize, sizeofTimeval)
 
 	return p.libcUtimes(path, times)
 }
 
-func libcLutimes(ctx uintptr, path, times, timesSize uint32) uint32 {
-	p := proc(ctx)
+func libcLutimes(path, times, timesSize uint32) uint32 {
+	p := proc()
 
 	p.sized("lutimes", timesSize, sizeofTimeval)
 
 	return p.libcLutimes(path, times)
 }
 
-func libcUtime(ctx uintptr, path, times, timesSize uint32) uint32 {
-	p := proc(ctx)
+func libcUtime(path, times, timesSize uint32) uint32 {
+	p := proc()
 
 	p.sized("utime", timesSize, sizeofUtimbuf)
 
 	return p.libcUtime(path, times)
 }
 
-func libcUtimensat(ctx uintptr, dirfd, path, times, timesSize, flags uint32) uint32 {
-	p := proc(ctx)
+func libcUtimensat(dirfd, path, times, timesSize, flags uint32) uint32 {
+	p := proc()
 
 	p.sized("utimensat", timesSize, sizeofTimespec)
 
 	return p.libcUtimensat(dirfd, path, times, flags)
 }
 
-func libcDirfd(ctx uintptr, dir uint32) uint32 {
-	return proc(ctx).libcDirfd(dir)
+func libcDirfd(dir uint32) uint32 {
+	return proc().libcDirfd(dir)
 }
 
-func libcReaddir_r(ctx uintptr, dir, entry, entrySize, result, resultSize uint32) uint32 {
-	p := proc(ctx)
+func libcReaddir_r(dir, entry, entrySize, result, resultSize uint32) uint32 {
+	p := proc()
 
 	p.sized("readdir_r", entrySize, sizeofDirent, resultSize, sizeofDirent)
 
 	return p.libcReaddir_r(dir, entry, result)
 }
 
-func libcTelldir(ctx uintptr, dir uint32) uint32 {
-	return proc(ctx).libcTelldir(dir)
+func libcTelldir(dir uint32) uint32 {
+	return proc().libcTelldir(dir)
 }
 
-func libcSeekdir(ctx uintptr, dir, at uint32) {
-	proc(ctx).libcSeekdir(dir, at)
+func libcSeekdir(dir, at uint32) {
+	proc().libcSeekdir(dir, at)
 }
 
-func libcAlphasort(ctx uintptr, a, aSize, b, bSize uint32) uint32 {
-	p := proc(ctx)
+func libcAlphasort(a, aSize, b, bSize uint32) uint32 {
+	p := proc()
 
 	p.sized("alphasort", aSize, sizeofDirent, bSize, sizeofDirent)
 
 	return p.libcAlphasort(a, b)
 }
 
-func libcVersionsort(ctx uintptr, a, aSize, b, bSize uint32) uint32 {
-	p := proc(ctx)
+func libcVersionsort(a, aSize, b, bSize uint32) uint32 {
+	p := proc()
 
 	p.sized("versionsort", aSize, sizeofDirent, bSize, sizeofDirent)
 
 	return p.libcVersionsort(a, b)
 }
 
-func libcMkstemp(ctx uintptr, template uint32) uint32 {
-	return proc(ctx).libcMkstemp(template)
+func libcMkstemp(template uint32) uint32 {
+	return proc().libcMkstemp(template)
 }
 
-func libcMkostemp(ctx uintptr, template, flags uint32) uint32 {
-	return proc(ctx).libcMkostemp(template, flags)
+func libcMkostemp(template, flags uint32) uint32 {
+	return proc().libcMkostemp(template, flags)
 }
 
-func libcMkstemps(ctx uintptr, template, suffix uint32) uint32 {
-	return proc(ctx).libcMkstemps(template, suffix)
+func libcMkstemps(template, suffix uint32) uint32 {
+	return proc().libcMkstemps(template, suffix)
 }
 
-func libcMkdtemp(ctx uintptr, template uint32) uint32 {
-	return proc(ctx).libcMkdtemp(template)
+func libcMkdtemp(template uint32) uint32 {
+	return proc().libcMkdtemp(template)
 }
 
-func libcMktemp(ctx uintptr, template uint32) uint32 {
-	return proc(ctx).libcMktemp(template)
+func libcMktemp(template uint32) uint32 {
+	return proc().libcMktemp(template)
 }
 
-func libcOpendir(ctx uintptr, path uint32) uint32 {
-	return proc(ctx).libcOpendir(path)
+func libcOpendir(path uint32) uint32 {
+	return proc().libcOpendir(path)
 }
 
-func libcFdopendir(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcFdopendir(fd)
+func libcFdopendir(fd uint32) uint32 {
+	return proc().libcFdopendir(fd)
 }
 
-func libcRewinddir(ctx uintptr, dir uint32) {
-	proc(ctx).libcRewinddir(dir)
+func libcRewinddir(dir uint32) {
+	proc().libcRewinddir(dir)
 }
 
-func libcReaddir(ctx uintptr, dir, size uint32) uint32 {
-	p := proc(ctx)
+func libcReaddir(dir, size uint32) uint32 {
+	p := proc()
 
 	p.sized("readdir", size, sizeofDirent)
 
 	return p.libcReaddir(dir)
 }
 
-func libcClosedir(ctx uintptr, dir uint32) uint32 {
-	return proc(ctx).libcClosedir(dir)
+func libcClosedir(dir uint32) uint32 {
+	return proc().libcClosedir(dir)
 }
 
-func libcMalloc(ctx uintptr, n uint32) uint32 {
-	return proc(ctx).libcMalloc(n)
+func libcMalloc(n uint32) uint32 {
+	return proc().libcMalloc(n)
 }
 
-func libcFree(ctx uintptr, ptr uint32) {
-	proc(ctx).libcFree(ptr)
+func libcFree(ptr uint32) {
+	proc().libcFree(ptr)
 }
 
-func libcCalloc(ctx uintptr, n, size uint32) uint32 {
-	return proc(ctx).libcCalloc(n, size)
+func libcCalloc(n, size uint32) uint32 {
+	return proc().libcCalloc(n, size)
 }
 
-func libcRealloc(ctx uintptr, ptr, n uint32) uint32 {
-	return proc(ctx).libcRealloc(ptr, n)
+func libcRealloc(ptr, n uint32) uint32 {
+	return proc().libcRealloc(ptr, n)
 }
 
-func libcMallopt(ctx uintptr, param, value uint32) uint32 {
-	return proc(ctx).libcMallopt(param, value)
+func libcMallopt(param, value uint32) uint32 {
+	return proc().libcMallopt(param, value)
 }
 
-func libcGetpagesize(ctx uintptr) uint32 {
-	return proc(ctx).libcGetpagesize()
+func libcGetpagesize() uint32 {
+	return proc().libcGetpagesize()
 }
 
-func libcMmap(ctx uintptr, addr, n, prot, flags, fd uint32, off uint64) uint32 {
-	return proc(ctx).libcMmap(addr, n, prot, flags, fd, off)
+func libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
+	return proc().libcMmap(addr, n, prot, flags, fd, off)
 }
 
-func libcMemfd_create(ctx uintptr, addr, n, flags uint32) uint32 {
-	return proc(ctx).libcMemfd_create(addr, n, flags)
+func libcMemfd_create(addr, n, flags uint32) uint32 {
+	return proc().libcMemfd_create(addr, n, flags)
 }
 
-func libcMunmap(ctx uintptr, addr, n uint32) uint32 {
-	return proc(ctx).libcMunmap(addr, n)
+func libcMunmap(addr, n uint32) uint32 {
+	return proc().libcMunmap(addr, n)
 }
 
-func libcMsync(ctx uintptr, addr, n, flags uint32) uint32 {
-	return proc(ctx).libcMsync(addr, n, flags)
+func libcMsync(addr, n, flags uint32) uint32 {
+	return proc().libcMsync(addr, n, flags)
 }
 
-func libcMadvise(ctx uintptr, addr, n, advice uint32) uint32 {
-	return proc(ctx).libcMadvise(addr, n, advice)
+func libcMadvise(addr, n, advice uint32) uint32 {
+	return proc().libcMadvise(addr, n, advice)
 }
 
-func libcMprotect(ctx uintptr, addr, n, prot uint32) uint32 {
-	return proc(ctx).libcMprotect(addr, n, prot)
+func libcMprotect(addr, n, prot uint32) uint32 {
+	return proc().libcMprotect(addr, n, prot)
 }
 
-func libcMlock(ctx uintptr, addr, n uint32) uint32 {
-	return proc(ctx).libcMlock(addr, n)
+func libcMlock(addr, n uint32) uint32 {
+	return proc().libcMlock(addr, n)
 }
 
-func libcMunlock(ctx uintptr, addr, n uint32) uint32 {
-	return proc(ctx).libcMunlock(addr, n)
+func libcMunlock(addr, n uint32) uint32 {
+	return proc().libcMunlock(addr, n)
 }
 
-func libcMlockall(ctx uintptr, flags uint32) uint32 {
-	return proc(ctx).libcMlockall(flags)
+func libcMlockall(flags uint32) uint32 {
+	return proc().libcMlockall(flags)
 }
 
-func libcMunlockall(ctx uintptr) uint32 {
-	return proc(ctx).libcMunlockall()
+func libcMunlockall() uint32 {
+	return proc().libcMunlockall()
 }
 
-func libcMemalign(ctx uintptr, align, n uint32) uint32 {
-	return proc(ctx).libcMemalign(align, n)
+func libcMemalign(align, n uint32) uint32 {
+	return proc().libcMemalign(align, n)
 }
 
-func libcAligned_alloc(ctx uintptr, align, n uint32) uint32 {
-	return proc(ctx).libcAligned_alloc(align, n)
+func libcAligned_alloc(align, n uint32) uint32 {
+	return proc().libcAligned_alloc(align, n)
 }
 
-func libcValloc(ctx uintptr, n uint32) uint32 {
-	return proc(ctx).libcValloc(n)
+func libcValloc(n uint32) uint32 {
+	return proc().libcValloc(n)
 }
 
-func libcPosix_memalign(ctx uintptr, out, align, n uint32) uint32 {
-	return proc(ctx).libcPosix_memalign(out, align, n)
+func libcPosix_memalign(out, align, n uint32) uint32 {
+	return proc().libcPosix_memalign(out, align, n)
 }
 
-func libcMalloc_usable_size(ctx uintptr, ptr uint32) uint32 {
-	return proc(ctx).libcMalloc_usable_size(ptr)
+func libcMalloc_usable_size(ptr uint32) uint32 {
+	return proc().libcMalloc_usable_size(ptr)
 }
 
-func libcMalloc_trim(ctx uintptr, pad uint32) uint32 {
-	return proc(ctx).libcMalloc_trim(pad)
+func libcMalloc_trim(pad uint32) uint32 {
+	return proc().libcMalloc_trim(pad)
 }
 
-func libcReallocarray(ctx uintptr, ptr, n, size uint32) uint32 {
-	return proc(ctx).libcReallocarray(ptr, n, size)
+func libcReallocarray(ptr, n, size uint32) uint32 {
+	return proc().libcReallocarray(ptr, n, size)
 }
 
-func libcStrncmp(ctx uintptr, a, b, n uint32) uint32 {
-	return proc(ctx).libcStrncmp(a, b, n)
+func libcStrncmp(a, b, n uint32) uint32 {
+	return proc().libcStrncmp(a, b, n)
 }
 
-func libcStrcasecmp(ctx uintptr, a, b uint32) uint32 {
-	return proc(ctx).libcStrcasecmp(a, b)
+func libcStrcasecmp(a, b uint32) uint32 {
+	return proc().libcStrcasecmp(a, b)
 }
 
-func libcStrncasecmp(ctx uintptr, a, b, n uint32) uint32 {
-	return proc(ctx).libcStrncasecmp(a, b, n)
+func libcStrncasecmp(a, b, n uint32) uint32 {
+	return proc().libcStrncasecmp(a, b, n)
 }
 
-func libcStrchr(ctx uintptr, s, c uint32) uint32 {
-	return proc(ctx).libcStrchr(s, c)
+func libcStrchr(s, c uint32) uint32 {
+	return proc().libcStrchr(s, c)
 }
 
-func libcStrchrnul(ctx uintptr, s, c uint32) uint32 {
-	return proc(ctx).libcStrchrnul(s, c)
+func libcStrchrnul(s, c uint32) uint32 {
+	return proc().libcStrchrnul(s, c)
 }
 
-func libcStrrchr(ctx uintptr, s, c uint32) uint32 {
-	return proc(ctx).libcStrrchr(s, c)
+func libcStrrchr(s, c uint32) uint32 {
+	return proc().libcStrrchr(s, c)
 }
 
-func libcStrcasestr(ctx uintptr, h, n uint32) uint32 {
-	return proc(ctx).libcStrcasestr(h, n)
+func libcStrcasestr(h, n uint32) uint32 {
+	return proc().libcStrcasestr(h, n)
 }
 
-func libcStpcpy(ctx uintptr, d, s uint32) uint32 {
-	return proc(ctx).libcStpcpy(d, s)
+func libcStpcpy(d, s uint32) uint32 {
+	return proc().libcStpcpy(d, s)
 }
 
-func libcStrncpy(ctx uintptr, d, s, n uint32) uint32 {
-	return proc(ctx).libcStrncpy(d, s, n)
+func libcStrncpy(d, s, n uint32) uint32 {
+	return proc().libcStrncpy(d, s, n)
 }
 
-func libcStpncpy(ctx uintptr, d, s, n uint32) uint32 {
-	return proc(ctx).libcStpncpy(d, s, n)
+func libcStpncpy(d, s, n uint32) uint32 {
+	return proc().libcStpncpy(d, s, n)
 }
 
-func libcStrdup(ctx uintptr, s uint32) uint32 {
-	return proc(ctx).libcStrdup(s)
+func libcStrdup(s uint32) uint32 {
+	return proc().libcStrdup(s)
 }
 
-func libcStrndup(ctx uintptr, s, n uint32) uint32 {
-	return proc(ctx).libcStrndup(s, n)
+func libcStrndup(s, n uint32) uint32 {
+	return proc().libcStrndup(s, n)
 }
 
-func libcStrtok_r(ctx uintptr, s, delim, save uint32) uint32 {
-	return proc(ctx).libcStrtok_r(s, delim, save)
+func libcStrtok_r(s, delim, save uint32) uint32 {
+	return proc().libcStrtok_r(s, delim, save)
 }
 
-func libcStrsep(ctx uintptr, at, delim uint32) uint32 {
-	return proc(ctx).libcStrsep(at, delim)
+func libcStrsep(at, delim uint32) uint32 {
+	return proc().libcStrsep(at, delim)
 }
 
-func libcStrverscmp(ctx uintptr, a, b uint32) uint32 {
-	return proc(ctx).libcStrverscmp(a, b)
+func libcStrverscmp(a, b uint32) uint32 {
+	return proc().libcStrverscmp(a, b)
 }
 
-func libcAbs(ctx uintptr, n uint32) uint32 {
-	return proc(ctx).libcAbs(n)
+func libcAbs(n uint32) uint32 {
+	return proc().libcAbs(n)
 }
 
-func libcStrerror(ctx uintptr, e uint32) uint32 {
-	return proc(ctx).libcStrerror(e)
+func libcStrerror(e uint32) uint32 {
+	return proc().libcStrerror(e)
 }
 
-func libcStrsignal(ctx uintptr, sig uint32) uint32 {
-	return proc(ctx).libcStrsignal(sig)
+func libcStrsignal(sig uint32) uint32 {
+	return proc().libcStrsignal(sig)
 }
 
-func libcDirname(ctx uintptr, s uint32) uint32 {
-	return proc(ctx).libcDirname(s)
+func libcDirname(s uint32) uint32 {
+	return proc().libcDirname(s)
 }
 
-func libcFnmatch(ctx uintptr, pattern, s, flags uint32) uint32 {
-	return proc(ctx).libcFnmatch(pattern, s, flags)
+func libcFnmatch(pattern, s, flags uint32) uint32 {
+	return proc().libcFnmatch(pattern, s, flags)
 }
 
-func libcMemrchr(ctx uintptr, s, c, n uint32) uint32 {
-	return proc(ctx).libcMemrchr(s, c, n)
+func libcMemrchr(s, c, n uint32) uint32 {
+	return proc().libcMemrchr(s, c, n)
 }
 
-func libcRawmemchr(ctx uintptr, s, c uint32) uint32 {
-	return proc(ctx).libcRawmemchr(s, c)
+func libcRawmemchr(s, c uint32) uint32 {
+	return proc().libcRawmemchr(s, c)
 }
 
-func libcMemccpy(ctx uintptr, d, s, c, n uint32) uint32 {
-	return proc(ctx).libcMemccpy(d, s, c, n)
+func libcMemccpy(d, s, c, n uint32) uint32 {
+	return proc().libcMemccpy(d, s, c, n)
 }
 
-func libcSwab(ctx uintptr, s, d, n uint32) {
-	proc(ctx).libcSwab(s, d, n)
+func libcSwab(s, d, n uint32) {
+	proc().libcSwab(s, d, n)
 }
 
-func libcStrtok(ctx uintptr, s, delim uint32) uint32 {
-	return proc(ctx).libcStrtok(s, delim)
+func libcStrtok(s, delim uint32) uint32 {
+	return proc().libcStrtok(s, delim)
 }
 
-func libcStrcoll(ctx uintptr, a, b uint32) uint32 {
-	return proc(ctx).libcStrcoll(a, b)
+func libcStrcoll(a, b uint32) uint32 {
+	return proc().libcStrcoll(a, b)
 }
 
-func libcStrxfrm(ctx uintptr, d, s, n uint32) uint32 {
-	return proc(ctx).libcStrxfrm(d, s, n)
+func libcStrxfrm(d, s, n uint32) uint32 {
+	return proc().libcStrxfrm(d, s, n)
 }
 
-func libcStrerror_r(ctx uintptr, e, buf, n uint32) uint32 {
-	return proc(ctx).libcStrerror_r(e, buf, n)
+func libcStrerror_r(e, buf, n uint32) uint32 {
+	return proc().libcStrerror_r(e, buf, n)
 }
 
-func libcBasename(ctx uintptr, s uint32) uint32 {
-	return proc(ctx).libcBasename(s)
+func libcBasename(s uint32) uint32 {
+	return proc().libcBasename(s)
 }
 
-func libcFfs(ctx uintptr, x uint32) uint32 {
-	return proc(ctx).libcFfs(x)
+func libcFfs(x uint32) uint32 {
+	return proc().libcFfs(x)
 }
 
-func libcFfsl(ctx uintptr, x uint32) uint32 {
-	return proc(ctx).libcFfsl(x)
+func libcFfsl(x uint32) uint32 {
+	return proc().libcFfsl(x)
 }
 
-func libcFfsll(ctx uintptr, x uint64) uint32 {
-	return proc(ctx).libcFfsll(x)
+func libcFfsll(x uint64) uint32 {
+	return proc().libcFfsll(x)
 }
 
-func libcLabs(ctx uintptr, n uint32) uint32 {
-	return proc(ctx).libcLabs(n)
+func libcLabs(n uint32) uint32 {
+	return proc().libcLabs(n)
 }
 
-func libcLlabs(ctx uintptr, n uint64) uint64 {
-	return proc(ctx).libcLlabs(n)
+func libcLlabs(n uint64) uint64 {
+	return proc().libcLlabs(n)
 }
 
-func libcDiv(ctx uintptr, ret, a, b uint32) {
-	proc(ctx).libcDiv(ret, a, b)
+func libcDiv(ret, a, b uint32) {
+	proc().libcDiv(ret, a, b)
 }
 
-func libcLldiv(ctx uintptr, ret uint32, a, b uint64) {
-	proc(ctx).libcLldiv(ret, a, b)
+func libcLldiv(ret uint32, a, b uint64) {
+	proc().libcLldiv(ret, a, b)
 }
 
-func libcTime(ctx uintptr, at uint32) uint64 {
-	return proc(ctx).libcTime(at)
+func libcTime(at uint32) uint64 {
+	return proc().libcTime(at)
 }
 
-func libcGettimeofday(ctx uintptr, tv, tvSize, tz uint32) uint32 {
-	p := proc(ctx)
+func libcGettimeofday(tv, tvSize, tz uint32) uint32 {
+	p := proc()
 
 	p.sized("gettimeofday", tvSize, sizeofTimeval)
 
 	return p.libcGettimeofday(tv, tz)
 }
 
-func libcClock_settime(ctx uintptr, clock, ts, tsSize uint32) uint32 {
-	p := proc(ctx)
+func libcClock_settime(clock, ts, tsSize uint32) uint32 {
+	p := proc()
 
 	p.sized("clock_settime", tsSize, sizeofTimespec)
 
 	return p.libcClock_settime(clock, ts)
 }
 
-func libcLocaltime(ctx uintptr, t, size uint32) uint32 {
-	p := proc(ctx)
+func libcLocaltime(t, size uint32) uint32 {
+	p := proc()
 
 	p.sized("localtime", size, sizeofTm)
 
 	return p.libcLocaltime(t)
 }
 
-func libcLocaltime_r(ctx uintptr, t, at, atSize, size uint32) uint32 {
-	p := proc(ctx)
+func libcLocaltime_r(t, at, atSize, size uint32) uint32 {
+	p := proc()
 
 	p.sized("localtime_r", atSize, sizeofTm, size, sizeofTm)
 
 	return p.libcLocaltime_r(t, at)
 }
 
-func libcTzset(ctx uintptr) {
-	proc(ctx).libcTzset()
+func libcTzset() {
+	proc().libcTzset()
 }
 
-func libcAsctime(ctx uintptr, tm, tmSize uint32) uint32 {
-	p := proc(ctx)
+func libcAsctime(tm, tmSize uint32) uint32 {
+	p := proc()
 
 	p.sized("asctime", tmSize, sizeofTm)
 
 	return p.libcAsctime(tm)
 }
 
-func libcAsctime_r(ctx uintptr, tm, tmSize, buf uint32) uint32 {
-	p := proc(ctx)
+func libcAsctime_r(tm, tmSize, buf uint32) uint32 {
+	p := proc()
 
 	p.sized("asctime_r", tmSize, sizeofTm)
 
 	return p.libcAsctime_r(tm, buf)
 }
 
-func libcCtime_r(ctx uintptr, t, buf uint32) uint32 {
-	return proc(ctx).libcCtime_r(t, buf)
+func libcCtime_r(t, buf uint32) uint32 {
+	return proc().libcCtime_r(t, buf)
 }
 
-func libcDifftime(ctx uintptr, t1, t0 uint64) float64 {
-	return proc(ctx).libcDifftime(t1, t0)
+func libcDifftime(t1, t0 uint64) float64 {
+	return proc().libcDifftime(t1, t0)
 }
 
-func libcTimegm(ctx uintptr, at, atSize uint32) uint64 {
-	p := proc(ctx)
+func libcTimegm(at, atSize uint32) uint64 {
+	p := proc()
 
 	p.sized("timegm", atSize, sizeofTm)
 
 	return p.libcTimegm(at)
 }
 
-func libcSettimeofday(ctx uintptr, tv, tvSize, tz, tzSize uint32) uint32 {
-	p := proc(ctx)
+func libcSettimeofday(tv, tvSize, tz, tzSize uint32) uint32 {
+	p := proc()
 
 	p.sized("settimeofday", tvSize, sizeofTimeval, tzSize, sizeofTimezone)
 
 	return p.libcSettimeofday(tv, tz)
 }
 
-func libcStime(ctx uintptr, t uint32) uint32 {
-	return proc(ctx).libcStime(t)
+func libcStime(t uint32) uint32 {
+	return proc().libcStime(t)
 }
 
-func libcAdjtime(ctx uintptr, delta, deltaSize, old, oldSize uint32) uint32 {
-	p := proc(ctx)
+func libcAdjtime(delta, deltaSize, old, oldSize uint32) uint32 {
+	p := proc()
 
 	p.sized("adjtime", deltaSize, sizeofTimeval, oldSize, sizeofTimeval)
 
 	return p.libcAdjtime(delta, old)
 }
 
-func libcUsleep(ctx uintptr, us uint32) uint32 {
-	return proc(ctx).libcUsleep(us)
+func libcUsleep(us uint32) uint32 {
+	return proc().libcUsleep(us)
 }
 
-func libcUalarm(ctx uintptr, value, interval uint32) uint32 {
-	return proc(ctx).libcUalarm(value, interval)
+func libcUalarm(value, interval uint32) uint32 {
+	return proc().libcUalarm(value, interval)
 }
 
-func libcGmtime(ctx uintptr, t, size uint32) uint32 {
-	p := proc(ctx)
+func libcGmtime(t, size uint32) uint32 {
+	p := proc()
 
 	p.sized("gmtime", size, sizeofTm)
 
 	return p.libcGmtime(t)
 }
 
-func libcGmtime_r(ctx uintptr, t, at, atSize, size uint32) uint32 {
-	p := proc(ctx)
+func libcGmtime_r(t, at, atSize, size uint32) uint32 {
+	p := proc()
 
 	p.sized("gmtime_r", atSize, sizeofTm, size, sizeofTm)
 
 	return p.libcGmtime_r(t, at)
 }
 
-func libcClock(ctx uintptr) uint64 {
-	return proc(ctx).libcClock()
+func libcClock() uint64 {
+	return proc().libcClock()
 }
 
-func libcClock_getres(ctx uintptr, clock, res, resSize uint32) uint32 {
-	p := proc(ctx)
+func libcClock_getres(clock, res, resSize uint32) uint32 {
+	p := proc()
 
 	p.sized("clock_getres", resSize, sizeofTimespec)
 
 	return p.libcClock_getres(clock, res)
 }
 
-func libcClock_nanosleep(ctx uintptr, clock, flags, req, reqSize, rem, remSize uint32) uint32 {
-	p := proc(ctx)
+func libcClock_nanosleep(clock, flags, req, reqSize, rem, remSize uint32) uint32 {
+	p := proc()
 
 	p.sized("clock_nanosleep", reqSize, sizeofTimespec, remSize, sizeofTimespec)
 
 	return p.libcClock_nanosleep(clock, flags, req, rem)
 }
 
-func libcSetitimer(ctx uintptr, which, value, valueSize, old, oldSize uint32) uint32 {
-	p := proc(ctx)
+func libcSetitimer(which, value, valueSize, old, oldSize uint32) uint32 {
+	p := proc()
 
 	p.sized("setitimer", valueSize, sizeofItimerval, oldSize, sizeofItimerval)
 
 	return p.libcSetitimer(which, value, old)
 }
 
-func libcGetitimer(ctx uintptr, which, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcGetitimer(which, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("getitimer", atSize, sizeofItimerval)
 
 	return p.libcGetitimer(which, at)
 }
 
-func libcAlarm(ctx uintptr, seconds uint32) uint32 {
-	return proc(ctx).libcAlarm(seconds)
+func libcAlarm(seconds uint32) uint32 {
+	return proc().libcAlarm(seconds)
 }
 
-func libcMktime(ctx uintptr, at, atSize uint32) uint64 {
-	p := proc(ctx)
+func libcMktime(at, atSize uint32) uint64 {
+	p := proc()
 
 	p.sized("mktime", atSize, sizeofTm)
 
 	return p.libcMktime(at)
 }
 
-func libcCtime(ctx uintptr, t uint32) uint32 {
-	return proc(ctx).libcCtime(t)
+func libcCtime(t uint32) uint32 {
+	return proc().libcCtime(t)
 }
 
-func libcStrftime(ctx uintptr, s, max, format, tm, tmSize uint32) uint32 {
-	p := proc(ctx)
+func libcStrftime(s, max, format, tm, tmSize uint32) uint32 {
+	p := proc()
 
 	p.sized("strftime", tmSize, sizeofTm)
 
 	return p.libcStrftime(s, max, format, tm)
 }
 
-func libcStrptime(ctx uintptr, s, format, tm, tmSize uint32) uint32 {
-	p := proc(ctx)
+func libcStrptime(s, format, tm, tmSize uint32) uint32 {
+	p := proc()
 
 	p.sized("strptime", tmSize, sizeofTm)
 
 	return p.libcStrptime(s, format, tm)
 }
 
-func libcTimes(ctx uintptr, at, atSize uint32) uint64 {
-	p := proc(ctx)
+func libcTimes(at, atSize uint32) uint64 {
+	p := proc()
 
 	p.sized("times", atSize, sizeofTms)
 
 	return p.libcTimes(at)
 }
 
-func libcSleep(ctx uintptr, seconds uint32) uint32 {
-	return proc(ctx).libcSleep(seconds)
+func libcSleep(seconds uint32) uint32 {
+	return proc().libcSleep(seconds)
 }
 
-func libcClock_gettime(ctx uintptr, clock, ts, tsSize uint32) uint32 {
-	p := proc(ctx)
+func libcClock_gettime(clock, ts, tsSize uint32) uint32 {
+	p := proc()
 
 	p.sized("clock_gettime", tsSize, sizeofTimespec)
 
 	return p.libcClock_gettime(clock, ts)
 }
 
-func libcNanosleep(ctx uintptr, req, reqSize, rem, remSize uint32) uint32 {
-	p := proc(ctx)
+func libcNanosleep(req, reqSize, rem, remSize uint32) uint32 {
+	p := proc()
 
 	p.sized("nanosleep", reqSize, sizeofTimespec, remSize, sizeofTimespec)
 
 	return p.libcNanosleep(req, rem)
 }
 
-func libcRegcomp(ctx uintptr, preg, pregSize, pattern, flags uint32) uint32 {
-	p := proc(ctx)
+func libcRegcomp(preg, pregSize, pattern, flags uint32) uint32 {
+	p := proc()
 
 	p.sized("regcomp", pregSize, sizeofRegex)
 
 	return p.libcRegcomp(preg, pattern, flags)
 }
 
-func libcRegexec(ctx uintptr, preg, pregSize, s, nmatch, pmatch, pmatchSize, eflags uint32) uint32 {
-	p := proc(ctx)
+func libcRegexec(preg, pregSize, s, nmatch, pmatch, pmatchSize, eflags uint32) uint32 {
+	p := proc()
 
 	p.sized("regexec", pregSize, sizeofRegex, pmatchSize, sizeofRegmatch)
 
 	return p.libcRegexec(preg, s, nmatch, pmatch, eflags)
 }
 
-func libcRegfree(ctx uintptr, preg, pregSize uint32) {
-	p := proc(ctx)
+func libcRegfree(preg, pregSize uint32) {
+	p := proc()
 
 	p.sized("regfree", pregSize, sizeofRegex)
 
 	p.libcRegfree(preg)
 }
 
-func libcRegerror(ctx uintptr, code, preg, pregSize, buf, size uint32) uint32 {
-	p := proc(ctx)
+func libcRegerror(code, preg, pregSize, buf, size uint32) uint32 {
+	p := proc()
 
 	p.sized("regerror", pregSize, sizeofRegex)
 
 	return p.libcRegerror(code, preg, buf, size)
 }
 
-func libcSignal(ctx uintptr, sig, handler uint32) uint32 {
-	return proc(ctx).libcSignal(sig, handler)
+func libcSignal(sig, handler uint32) uint32 {
+	return proc().libcSignal(sig, handler)
 }
 
-func libcSigaction(ctx uintptr, sig, act, actSize, old, oldSize, infoSize uint32) uint32 {
-	p := proc(ctx)
+func libcSigaction(sig, act, actSize, old, oldSize, infoSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sigaction", actSize, sizeofSigaction, oldSize, sizeofSigaction, infoSize, sizeofSiginfo)
 
 	return p.libcSigaction(sig, act, old)
 }
 
-func libcSigprocmask(ctx uintptr, how, set, setSize, old, oldSize uint32) uint32 {
-	p := proc(ctx)
+func libcSigprocmask(how, set, setSize, old, oldSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sigprocmask", setSize, sizeofSigset, oldSize, sizeofSigset)
 
 	return p.libcSigprocmask(how, set, old)
 }
 
-func libcPthread_sigmask(ctx uintptr, how, set, setSize, old, oldSize uint32) uint32 {
-	p := proc(ctx)
+func libcPthread_sigmask(how, set, setSize, old, oldSize uint32) uint32 {
+	p := proc()
 
 	p.sized("pthread_sigmask", setSize, sizeofSigset, oldSize, sizeofSigset)
 
 	return p.libcPthread_sigmask(how, set, old)
 }
 
-func libcSigfillset(ctx uintptr, set, setSize uint32) uint32 {
-	p := proc(ctx)
+func libcSigfillset(set, setSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sigfillset", setSize, sizeofSigset)
 
 	return p.libcSigfillset(set)
 }
 
-func libcSigemptyset(ctx uintptr, set, setSize uint32) uint32 {
-	p := proc(ctx)
+func libcSigemptyset(set, setSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sigemptyset", setSize, sizeofSigset)
 
 	return p.libcSigemptyset(set)
 }
 
-func libcSigaddset(ctx uintptr, set, setSize, sig uint32) uint32 {
-	p := proc(ctx)
+func libcSigaddset(set, setSize, sig uint32) uint32 {
+	p := proc()
 
 	p.sized("sigaddset", setSize, sizeofSigset)
 
 	return p.libcSigaddset(set, sig)
 }
 
-func libcSigdelset(ctx uintptr, set, setSize, sig uint32) uint32 {
-	p := proc(ctx)
+func libcSigdelset(set, setSize, sig uint32) uint32 {
+	p := proc()
 
 	p.sized("sigdelset", setSize, sizeofSigset)
 
 	return p.libcSigdelset(set, sig)
 }
 
-func libcSigismember(ctx uintptr, set, setSize, sig uint32) uint32 {
-	p := proc(ctx)
+func libcSigismember(set, setSize, sig uint32) uint32 {
+	p := proc()
 
 	p.sized("sigismember", setSize, sizeofSigset)
 
 	return p.libcSigismember(set, sig)
 }
 
-func libcSigisemptyset(ctx uintptr, set, setSize uint32) uint32 {
-	p := proc(ctx)
+func libcSigisemptyset(set, setSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sigisemptyset", setSize, sizeofSigset)
 
 	return p.libcSigisemptyset(set)
 }
 
-func libcSigorset(ctx uintptr, d, dSize, a, aSize, b, bSize uint32) uint32 {
-	p := proc(ctx)
+func libcSigorset(d, dSize, a, aSize, b, bSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sigorset", dSize, sizeofSigset, aSize, sizeofSigset, bSize, sizeofSigset)
 
 	return p.libcSigorset(d, a, b)
 }
 
-func libcSigandset(ctx uintptr, d, dSize, a, aSize, b, bSize uint32) uint32 {
-	p := proc(ctx)
+func libcSigandset(d, dSize, a, aSize, b, bSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sigandset", dSize, sizeofSigset, aSize, sizeofSigset, bSize, sizeofSigset)
 
 	return p.libcSigandset(d, a, b)
 }
 
-func libcSigpending(ctx uintptr, set, setSize uint32) uint32 {
-	p := proc(ctx)
+func libcSigpending(set, setSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sigpending", setSize, sizeofSigset)
 
 	return p.libcSigpending(set)
 }
 
-func libcSigwait(ctx uintptr, set, setSize, at uint32) uint32 {
-	p := proc(ctx)
+func libcSigwait(set, setSize, at uint32) uint32 {
+	p := proc()
 
 	p.sized("sigwait", setSize, sizeofSigset)
 
 	return p.libcSigwait(set, at)
 }
 
-func libcSigwaitinfo(ctx uintptr, set, setSize, info, infoSize uint32) uint32 {
-	p := proc(ctx)
+func libcSigwaitinfo(set, setSize, info, infoSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sigwaitinfo", setSize, sizeofSigset, infoSize, sizeofSiginfo)
 
 	return p.libcSigwaitinfo(set, info)
 }
 
-func libcSigtimedwait(ctx uintptr, set, setSize, info, infoSize, timeout, timeoutSize uint32) uint32 {
-	p := proc(ctx)
+func libcSigtimedwait(set, setSize, info, infoSize, timeout, timeoutSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sigtimedwait", setSize, sizeofSigset, infoSize, sizeofSiginfo, timeoutSize, sizeofTimespec)
 
 	return p.libcSigtimedwait(set, info, timeout)
 }
 
-func libcSigaltstack(ctx uintptr, ss, ssSize, old, oldSize uint32) uint32 {
-	p := proc(ctx)
+func libcSigaltstack(ss, ssSize, old, oldSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sigaltstack", ssSize, sizeofStack, oldSize, sizeofStack)
 
 	return p.libcSigaltstack(ss, old)
 }
 
-func libcSiginterrupt(ctx uintptr, sig, flag uint32) uint32 {
-	return proc(ctx).libcSiginterrupt(sig, flag)
+func libcSiginterrupt(sig, flag uint32) uint32 {
+	return proc().libcSiginterrupt(sig, flag)
 }
 
-func libcPause(ctx uintptr) uint32 {
-	return proc(ctx).libcPause()
+func libcPause() uint32 {
+	return proc().libcPause()
 }
 
-func libcSigsuspend(ctx uintptr, set, setSize uint32) uint32 {
-	p := proc(ctx)
+func libcSigsuspend(set, setSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sigsuspend", setSize, sizeofSigset)
 
 	return p.libcSigsuspend(set)
 }
 
-func libcRaise(ctx uintptr, sig uint32) uint32 {
-	return proc(ctx).libcRaise(sig)
+func libcRaise(sig uint32) uint32 {
+	return proc().libcRaise(sig)
 }
 
-func libcKill(ctx uintptr, pid, sig uint32) uint32 {
-	return proc(ctx).libcKill(pid, sig)
+func libcKill(pid, sig uint32) uint32 {
+	return proc().libcKill(pid, sig)
 }
 
-func libcSigqueue(ctx uintptr, pid, sig, value uint32) uint32 {
-	return proc(ctx).libcSigqueue(pid, sig, value)
+func libcSigqueue(pid, sig, value uint32) uint32 {
+	return proc().libcSigqueue(pid, sig, value)
 }
 
-func libcKillpg(ctx uintptr, pgrp, sig uint32) uint32 {
-	return proc(ctx).libcKillpg(pgrp, sig)
+func libcKillpg(pgrp, sig uint32) uint32 {
+	return proc().libcKillpg(pgrp, sig)
 }
 
-func libcAbort(ctx uintptr) {
-	proc(ctx).libcAbort()
+func libcAbort() {
+	proc().libcAbort()
 }
 
-func libcGetpid(ctx uintptr) uint32 {
-	return proc(ctx).libcGetpid()
+func libcGetpid() uint32 {
+	return proc().libcGetpid()
 }
 
-func libcGetppid(ctx uintptr) uint32 {
-	return proc(ctx).libcGetppid()
+func libcGetppid() uint32 {
+	return proc().libcGetppid()
 }
 
-func libcGetpgrp(ctx uintptr) uint32 {
-	return proc(ctx).libcGetpgrp()
+func libcGetpgrp() uint32 {
+	return proc().libcGetpgrp()
 }
 
-func libcGetuid(ctx uintptr) uint32 {
-	return proc(ctx).libcGetuid()
+func libcGetuid() uint32 {
+	return proc().libcGetuid()
 }
 
-func libcGeteuid(ctx uintptr) uint32 {
-	return proc(ctx).libcGeteuid()
+func libcGeteuid() uint32 {
+	return proc().libcGeteuid()
 }
 
-func libcGetgid(ctx uintptr) uint32 {
-	return proc(ctx).libcGetgid()
+func libcGetgid() uint32 {
+	return proc().libcGetgid()
 }
 
-func libcGetegid(ctx uintptr) uint32 {
-	return proc(ctx).libcGetegid()
+func libcGetegid() uint32 {
+	return proc().libcGetegid()
 }
 
-func libcGetgroups(ctx uintptr, n, list uint32) uint32 {
-	return proc(ctx).libcGetgroups(n, list)
+func libcGetgroups(n, list uint32) uint32 {
+	return proc().libcGetgroups(n, list)
 }
 
-func libcUname(ctx uintptr, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcUname(at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("uname", atSize, sizeofUtsname)
 
 	return p.libcUname(at)
 }
 
-func libcSysconf(ctx uintptr, name uint32) uint32 {
-	return proc(ctx).libcSysconf(name)
+func libcSysconf(name uint32) uint32 {
+	return proc().libcSysconf(name)
 }
 
-func libcUmask(ctx uintptr, mask uint32) uint32 {
-	return proc(ctx).libcUmask(mask)
+func libcUmask(mask uint32) uint32 {
+	return proc().libcUmask(mask)
 }
 
-func libcRand(ctx uintptr) uint32 {
-	return proc(ctx).libcRand()
+func libcRand() uint32 {
+	return proc().libcRand()
 }
 
-func libcSrand(ctx uintptr, seed uint32) {
-	proc(ctx).libcSrand(seed)
+func libcSrand(seed uint32) {
+	proc().libcSrand(seed)
 }
 
-func libcGetenv(ctx uintptr, name uint32) uint32 {
-	return proc(ctx).libcGetenv(name)
+func libcGetenv(name uint32) uint32 {
+	return proc().libcGetenv(name)
 }
 
-func libcPutenv(ctx uintptr, s uint32) uint32 {
-	return proc(ctx).libcPutenv(s)
+func libcPutenv(s uint32) uint32 {
+	return proc().libcPutenv(s)
 }
 
-func libcSetenv(ctx uintptr, at, value, overwrite uint32) uint32 {
-	return proc(ctx).libcSetenv(at, value, overwrite)
+func libcSetenv(at, value, overwrite uint32) uint32 {
+	return proc().libcSetenv(at, value, overwrite)
 }
 
-func libcUnsetenv(ctx uintptr, at uint32) uint32 {
-	return proc(ctx).libcUnsetenv(at)
+func libcUnsetenv(at uint32) uint32 {
+	return proc().libcUnsetenv(at)
 }
 
-func libcClearenv(ctx uintptr) uint32 {
-	return proc(ctx).libcClearenv()
+func libcClearenv() uint32 {
+	return proc().libcClearenv()
 }
 
-func libcExecve(ctx uintptr, path, argv, envp uint32) uint32 {
-	return proc(ctx).libcExecve(path, argv, envp)
+func libcExecve(path, argv, envp uint32) uint32 {
+	return proc().libcExecve(path, argv, envp)
 }
 
-func libcExecvp(ctx uintptr, file, argv uint32) uint32 {
-	return proc(ctx).libcExecvp(file, argv)
+func libcExecvp(file, argv uint32) uint32 {
+	return proc().libcExecvp(file, argv)
 }
 
-func libcExecv(ctx uintptr, path, argv uint32) uint32 {
-	return proc(ctx).libcExecv(path, argv)
+func libcExecv(path, argv uint32) uint32 {
+	return proc().libcExecv(path, argv)
 }
 
-func libcExecvpe(ctx uintptr, file, argv, envp uint32) uint32 {
-	return proc(ctx).libcExecvpe(file, argv, envp)
+func libcExecvpe(file, argv, envp uint32) uint32 {
+	return proc().libcExecvpe(file, argv, envp)
 }
 
-func libcExecle(ctx uintptr, path, arg0, va uint32) uint32 {
-	return proc(ctx).libcExecle(path, arg0, va)
+func libcExecle(path, arg0, va uint32) uint32 {
+	return proc().libcExecle(path, arg0, va)
 }
 
-func libcFexecve(ctx uintptr, fd, argv, envp uint32) uint32 {
-	return proc(ctx).libcFexecve(fd, argv, envp)
+func libcFexecve(fd, argv, envp uint32) uint32 {
+	return proc().libcFexecve(fd, argv, envp)
 }
 
-func libcExecl(ctx uintptr, path, arg0, va uint32) uint32 {
-	return proc(ctx).libcExecl(path, arg0, va)
+func libcExecl(path, arg0, va uint32) uint32 {
+	return proc().libcExecl(path, arg0, va)
 }
 
-func libcExeclp(ctx uintptr, file, arg0, va uint32) uint32 {
-	return proc(ctx).libcExeclp(file, arg0, va)
+func libcExeclp(file, arg0, va uint32) uint32 {
+	return proc().libcExeclp(file, arg0, va)
 }
 
-func libc_exit(ctx uintptr, code uint32) {
-	proc(ctx).libc_exit(code)
+func libc_exit(code uint32) {
+	proc().libc_exit(code)
 }
 
-func libc_Exit(ctx uintptr, code uint32) {
-	proc(ctx).libc_Exit(code)
+func libc_Exit(code uint32) {
+	proc().libc_Exit(code)
 }
 
-func libcSystem(ctx uintptr, cmd uint32) uint32 {
-	return proc(ctx).libcSystem(cmd)
+func libcSystem(cmd uint32) uint32 {
+	return proc().libcSystem(cmd)
 }
 
-func libcSetpgid(ctx uintptr, pid, pgid uint32) uint32 {
-	return proc(ctx).libcSetpgid(pid, pgid)
+func libcSetpgid(pid, pgid uint32) uint32 {
+	return proc().libcSetpgid(pid, pgid)
 }
 
-func libcTcgetpgrp(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcTcgetpgrp(fd)
+func libcTcgetpgrp(fd uint32) uint32 {
+	return proc().libcTcgetpgrp(fd)
 }
 
-func libcTcsetpgrp(ctx uintptr, fd, pgrp uint32) uint32 {
-	return proc(ctx).libcTcsetpgrp(fd, pgrp)
+func libcTcsetpgrp(fd, pgrp uint32) uint32 {
+	return proc().libcTcsetpgrp(fd, pgrp)
 }
 
-func libcSetjmp(ctx uintptr, buf, bufSize uint32) uint32 {
-	p := proc(ctx)
+func libcSetjmp(buf, bufSize uint32) uint32 {
+	p := proc()
 
 	p.sized("setjmp", bufSize, sizeofJmpBuf)
 
 	return p.libcSetjmp(buf)
 }
 
-func libcSigsetjmp(ctx uintptr, buf, bufSize, saveMask uint32) uint32 {
-	p := proc(ctx)
+func libcSigsetjmp(buf, bufSize, saveMask uint32) uint32 {
+	p := proc()
 
 	p.sized("sigsetjmp", bufSize, sizeofJmpBuf)
 
 	return p.libcSigsetjmp(buf, saveMask)
 }
 
-func libcLongjmp(ctx uintptr, buf, bufSize, val uint32) {
-	p := proc(ctx)
+func libcLongjmp(buf, bufSize, val uint32) {
+	p := proc()
 
 	p.sized("longjmp", bufSize, sizeofJmpBuf)
 
 	p.libcLongjmp(buf, val)
 }
 
-func libcVfork(ctx uintptr) uint32 {
-	return proc(ctx).libcVfork()
+func libcVfork() uint32 {
+	return proc().libcVfork()
 }
 
-func libcFork(ctx uintptr) uint32 {
-	return proc(ctx).libcFork()
+func libcFork() uint32 {
+	return proc().libcFork()
 }
 
-func libcWaitpid(ctx uintptr, pid, status, options uint32) uint32 {
-	return proc(ctx).libcWaitpid(pid, status, options)
+func libcWaitpid(pid, status, options uint32) uint32 {
+	return proc().libcWaitpid(pid, status, options)
 }
 
-func libcWait(ctx uintptr, status uint32) uint32 {
-	return proc(ctx).libcWait(status)
+func libcWait(status uint32) uint32 {
+	return proc().libcWait(status)
 }
 
-func libcWait3(ctx uintptr, status, options, usage, usageSize uint32) uint32 {
-	p := proc(ctx)
+func libcWait3(status, options, usage, usageSize uint32) uint32 {
+	p := proc()
 
 	p.sized("wait3", usageSize, sizeofRusage)
 
 	return p.libcWait3(status, options, usage)
 }
 
-func libcWait4(ctx uintptr, pid, status, options, usage, usageSize uint32) uint32 {
-	p := proc(ctx)
+func libcWait4(pid, status, options, usage, usageSize uint32) uint32 {
+	p := proc()
 
 	p.sized("wait4", usageSize, sizeofRusage)
 
 	return p.libcWait4(pid, status, options, usage)
 }
 
-func libcWaitid(ctx uintptr, idtype, id, info, infoSize, options uint32) uint32 {
-	p := proc(ctx)
+func libcWaitid(idtype, id, info, infoSize, options uint32) uint32 {
+	p := proc()
 
 	p.sized("waitid", infoSize, sizeofSiginfo)
 
 	return p.libcWaitid(idtype, id, info, options)
 }
 
-func libcSetlocale(ctx uintptr, cat, name uint32) uint32 {
-	return proc(ctx).libcSetlocale(cat, name)
+func libcSetlocale(cat, name uint32) uint32 {
+	return proc().libcSetlocale(cat, name)
 }
 
-func libcLocaleconv(ctx uintptr, size uint32) uint32 {
-	p := proc(ctx)
+func libcLocaleconv(size uint32) uint32 {
+	p := proc()
 
 	p.sized("localeconv", size, sizeofLconv)
 
 	return p.libcLocaleconv()
 }
 
-func libcNl_langinfo(ctx uintptr, item uint32) uint32 {
-	return proc(ctx).libcNl_langinfo(item)
+func libcNl_langinfo(item uint32) uint32 {
+	return proc().libcNl_langinfo(item)
 }
 
-func libcTowlower(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcTowlower(c)
+func libcTowlower(c uint32) uint32 {
+	return proc().libcTowlower(c)
 }
 
-func libcTowupper(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcTowupper(c)
+func libcTowupper(c uint32) uint32 {
+	return proc().libcTowupper(c)
 }
 
-func libcWctype(ctx uintptr, name uint32) uint32 {
-	return proc(ctx).libcWctype(name)
+func libcWctype(name uint32) uint32 {
+	return proc().libcWctype(name)
 }
 
-func libcIswctype(ctx uintptr, c, class uint32) uint32 {
-	return proc(ctx).libcIswctype(c, class)
+func libcIswctype(c, class uint32) uint32 {
+	return proc().libcIswctype(c, class)
 }
 
-func libcWctrans(ctx uintptr, name uint32) uint32 {
-	return proc(ctx).libcWctrans(name)
+func libcWctrans(name uint32) uint32 {
+	return proc().libcWctrans(name)
 }
 
-func libcTowctrans(ctx uintptr, c, trans uint32) uint32 {
-	return proc(ctx).libcTowctrans(c, trans)
+func libcTowctrans(c, trans uint32) uint32 {
+	return proc().libcTowctrans(c, trans)
 }
 
-func libcIswalnum(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIswalnum(c)
+func libcIswalnum(c uint32) uint32 {
+	return proc().libcIswalnum(c)
 }
 
-func libcIswalpha(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIswalpha(c)
+func libcIswalpha(c uint32) uint32 {
+	return proc().libcIswalpha(c)
 }
 
-func libcIswblank(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIswblank(c)
+func libcIswblank(c uint32) uint32 {
+	return proc().libcIswblank(c)
 }
 
-func libcIswcntrl(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIswcntrl(c)
+func libcIswcntrl(c uint32) uint32 {
+	return proc().libcIswcntrl(c)
 }
 
-func libcIswdigit(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIswdigit(c)
+func libcIswdigit(c uint32) uint32 {
+	return proc().libcIswdigit(c)
 }
 
-func libcIswgraph(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIswgraph(c)
+func libcIswgraph(c uint32) uint32 {
+	return proc().libcIswgraph(c)
 }
 
-func libcIswlower(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIswlower(c)
+func libcIswlower(c uint32) uint32 {
+	return proc().libcIswlower(c)
 }
 
-func libcIswprint(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIswprint(c)
+func libcIswprint(c uint32) uint32 {
+	return proc().libcIswprint(c)
 }
 
-func libcIswpunct(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIswpunct(c)
+func libcIswpunct(c uint32) uint32 {
+	return proc().libcIswpunct(c)
 }
 
-func libcIswspace(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIswspace(c)
+func libcIswspace(c uint32) uint32 {
+	return proc().libcIswspace(c)
 }
 
-func libcIswupper(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIswupper(c)
+func libcIswupper(c uint32) uint32 {
+	return proc().libcIswupper(c)
 }
 
-func libcIswxdigit(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIswxdigit(c)
+func libcIswxdigit(c uint32) uint32 {
+	return proc().libcIswxdigit(c)
 }
 
-func libcWcslen(ctx uintptr, s uint32) uint32 {
-	return proc(ctx).libcWcslen(s)
+func libcWcslen(s uint32) uint32 {
+	return proc().libcWcslen(s)
 }
 
-func libcWcsnlen(ctx uintptr, s, n uint32) uint32 {
-	return proc(ctx).libcWcsnlen(s, n)
+func libcWcsnlen(s, n uint32) uint32 {
+	return proc().libcWcsnlen(s, n)
 }
 
-func libcWcscpy(ctx uintptr, d, s uint32) uint32 {
-	return proc(ctx).libcWcscpy(d, s)
+func libcWcscpy(d, s uint32) uint32 {
+	return proc().libcWcscpy(d, s)
 }
 
-func libcWcsncpy(ctx uintptr, d, s, n uint32) uint32 {
-	return proc(ctx).libcWcsncpy(d, s, n)
+func libcWcsncpy(d, s, n uint32) uint32 {
+	return proc().libcWcsncpy(d, s, n)
 }
 
-func libcWcscat(ctx uintptr, d, s uint32) uint32 {
-	return proc(ctx).libcWcscat(d, s)
+func libcWcscat(d, s uint32) uint32 {
+	return proc().libcWcscat(d, s)
 }
 
-func libcWcscmp(ctx uintptr, a, b uint32) uint32 {
-	return proc(ctx).libcWcscmp(a, b)
+func libcWcscmp(a, b uint32) uint32 {
+	return proc().libcWcscmp(a, b)
 }
 
-func libcWcsncmp(ctx uintptr, a, b, n uint32) uint32 {
-	return proc(ctx).libcWcsncmp(a, b, n)
+func libcWcsncmp(a, b, n uint32) uint32 {
+	return proc().libcWcsncmp(a, b, n)
 }
 
-func libcWcscoll(ctx uintptr, a, b uint32) uint32 {
-	return proc(ctx).libcWcscoll(a, b)
+func libcWcscoll(a, b uint32) uint32 {
+	return proc().libcWcscoll(a, b)
 }
 
-func libcWcsxfrm(ctx uintptr, d, s, n uint32) uint32 {
-	return proc(ctx).libcWcsxfrm(d, s, n)
+func libcWcsxfrm(d, s, n uint32) uint32 {
+	return proc().libcWcsxfrm(d, s, n)
 }
 
-func libcWcschr(ctx uintptr, s, c uint32) uint32 {
-	return proc(ctx).libcWcschr(s, c)
+func libcWcschr(s, c uint32) uint32 {
+	return proc().libcWcschr(s, c)
 }
 
-func libcWcsrchr(ctx uintptr, s, c uint32) uint32 {
-	return proc(ctx).libcWcsrchr(s, c)
+func libcWcsrchr(s, c uint32) uint32 {
+	return proc().libcWcsrchr(s, c)
 }
 
-func libcWcsstr(ctx uintptr, h, n uint32) uint32 {
-	return proc(ctx).libcWcsstr(h, n)
+func libcWcsstr(h, n uint32) uint32 {
+	return proc().libcWcsstr(h, n)
 }
 
-func libcWcspbrk(ctx uintptr, s, set uint32) uint32 {
-	return proc(ctx).libcWcspbrk(s, set)
+func libcWcspbrk(s, set uint32) uint32 {
+	return proc().libcWcspbrk(s, set)
 }
 
-func libcWcsspn(ctx uintptr, s, set uint32) uint32 {
-	return proc(ctx).libcWcsspn(s, set)
+func libcWcsspn(s, set uint32) uint32 {
+	return proc().libcWcsspn(s, set)
 }
 
-func libcWcscspn(ctx uintptr, s, set uint32) uint32 {
-	return proc(ctx).libcWcscspn(s, set)
+func libcWcscspn(s, set uint32) uint32 {
+	return proc().libcWcscspn(s, set)
 }
 
-func libcWcstok(ctx uintptr, s, sep, save uint32) uint32 {
-	return proc(ctx).libcWcstok(s, sep, save)
+func libcWcstok(s, sep, save uint32) uint32 {
+	return proc().libcWcstok(s, sep, save)
 }
 
-func libcWcsdup(ctx uintptr, s uint32) uint32 {
-	return proc(ctx).libcWcsdup(s)
+func libcWcsdup(s uint32) uint32 {
+	return proc().libcWcsdup(s)
 }
 
-func libcWcsftime(ctx uintptr, s, max, format, tm, tmSize uint32) uint32 {
-	p := proc(ctx)
+func libcWcsftime(s, max, format, tm, tmSize uint32) uint32 {
+	p := proc()
 
 	p.sized("wcsftime", tmSize, sizeofTm)
 
 	return p.libcWcsftime(s, max, format, tm)
 }
 
-func libcWmemchr(ctx uintptr, s, c, n uint32) uint32 {
-	return proc(ctx).libcWmemchr(s, c, n)
+func libcWmemchr(s, c, n uint32) uint32 {
+	return proc().libcWmemchr(s, c, n)
 }
 
-func libcWmemcmp(ctx uintptr, a, b, n uint32) uint32 {
-	return proc(ctx).libcWmemcmp(a, b, n)
+func libcWmemcmp(a, b, n uint32) uint32 {
+	return proc().libcWmemcmp(a, b, n)
 }
 
-func libcWmemcpy(ctx uintptr, d, s, n uint32) uint32 {
-	return proc(ctx).libcWmemcpy(d, s, n)
+func libcWmemcpy(d, s, n uint32) uint32 {
+	return proc().libcWmemcpy(d, s, n)
 }
 
-func libcWmemmove(ctx uintptr, d, s, n uint32) uint32 {
-	return proc(ctx).libcWmemmove(d, s, n)
+func libcWmemmove(d, s, n uint32) uint32 {
+	return proc().libcWmemmove(d, s, n)
 }
 
-func libcWmemset(ctx uintptr, d, c, n uint32) uint32 {
-	return proc(ctx).libcWmemset(d, c, n)
+func libcWmemset(d, c, n uint32) uint32 {
+	return proc().libcWmemset(d, c, n)
 }
 
-func libcWcwidth(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcWcwidth(c)
+func libcWcwidth(c uint32) uint32 {
+	return proc().libcWcwidth(c)
 }
 
-func libcWcswidth(ctx uintptr, s, n uint32) uint32 {
-	return proc(ctx).libcWcswidth(s, n)
+func libcWcswidth(s, n uint32) uint32 {
+	return proc().libcWcswidth(s, n)
 }
 
-func libcSetuid(ctx uintptr, uid uint32) uint32 {
-	return proc(ctx).libcSetuid(uid)
+func libcSetuid(uid uint32) uint32 {
+	return proc().libcSetuid(uid)
 }
 
-func libcSeteuid(ctx uintptr, uid uint32) uint32 {
-	return proc(ctx).libcSeteuid(uid)
+func libcSeteuid(uid uint32) uint32 {
+	return proc().libcSeteuid(uid)
 }
 
-func libcSetreuid(ctx uintptr, r, e uint32) uint32 {
-	return proc(ctx).libcSetreuid(r, e)
+func libcSetreuid(r, e uint32) uint32 {
+	return proc().libcSetreuid(r, e)
 }
 
-func libcSetresuid(ctx uintptr, r, e, s uint32) uint32 {
-	return proc(ctx).libcSetresuid(r, e, s)
+func libcSetresuid(r, e, s uint32) uint32 {
+	return proc().libcSetresuid(r, e, s)
 }
 
-func libcSetgid(ctx uintptr, gid uint32) uint32 {
-	return proc(ctx).libcSetgid(gid)
+func libcSetgid(gid uint32) uint32 {
+	return proc().libcSetgid(gid)
 }
 
-func libcSetegid(ctx uintptr, gid uint32) uint32 {
-	return proc(ctx).libcSetegid(gid)
+func libcSetegid(gid uint32) uint32 {
+	return proc().libcSetegid(gid)
 }
 
-func libcSetregid(ctx uintptr, r, e uint32) uint32 {
-	return proc(ctx).libcSetregid(r, e)
+func libcSetregid(r, e uint32) uint32 {
+	return proc().libcSetregid(r, e)
 }
 
-func libcSetresgid(ctx uintptr, r, e, s uint32) uint32 {
-	return proc(ctx).libcSetresgid(r, e, s)
+func libcSetresgid(r, e, s uint32) uint32 {
+	return proc().libcSetresgid(r, e, s)
 }
 
-func libcGetresuid(ctx uintptr, r, e, s uint32) uint32 {
-	return proc(ctx).libcGetresuid(r, e, s)
+func libcGetresuid(r, e, s uint32) uint32 {
+	return proc().libcGetresuid(r, e, s)
 }
 
-func libcGetresgid(ctx uintptr, r, e, s uint32) uint32 {
-	return proc(ctx).libcGetresgid(r, e, s)
+func libcGetresgid(r, e, s uint32) uint32 {
+	return proc().libcGetresgid(r, e, s)
 }
 
-func libcSetgroups(ctx uintptr, n, list uint32) uint32 {
-	return proc(ctx).libcSetgroups(n, list)
+func libcSetgroups(n, list uint32) uint32 {
+	return proc().libcSetgroups(n, list)
 }
 
-func libcInitgroups(ctx uintptr, user, gid uint32) uint32 {
-	return proc(ctx).libcInitgroups(user, gid)
+func libcInitgroups(user, gid uint32) uint32 {
+	return proc().libcInitgroups(user, gid)
 }
 
-func libcSetsid(ctx uintptr) uint32 {
-	return proc(ctx).libcSetsid()
+func libcSetsid() uint32 {
+	return proc().libcSetsid()
 }
 
-func libcGetsid(ctx uintptr, pid uint32) uint32 {
-	return proc(ctx).libcGetsid(pid)
+func libcGetsid(pid uint32) uint32 {
+	return proc().libcGetsid(pid)
 }
 
-func libcGetpgid(ctx uintptr, pid uint32) uint32 {
-	return proc(ctx).libcGetpgid(pid)
+func libcGetpgid(pid uint32) uint32 {
+	return proc().libcGetpgid(pid)
 }
 
-func libcSetpgrp(ctx uintptr) uint32 {
-	return proc(ctx).libcSetpgrp()
+func libcSetpgrp() uint32 {
+	return proc().libcSetpgrp()
 }
 
-func libcNice(ctx uintptr, inc uint32) uint32 {
-	return proc(ctx).libcNice(inc)
+func libcNice(inc uint32) uint32 {
+	return proc().libcNice(inc)
 }
 
-func libcGetpriority(ctx uintptr, which, who uint32) uint32 {
-	return proc(ctx).libcGetpriority(which, who)
+func libcGetpriority(which, who uint32) uint32 {
+	return proc().libcGetpriority(which, who)
 }
 
-func libcSetpriority(ctx uintptr, which, who, prio uint32) uint32 {
-	return proc(ctx).libcSetpriority(which, who, prio)
+func libcSetpriority(which, who, prio uint32) uint32 {
+	return proc().libcSetpriority(which, who, prio)
 }
 
-func libcSched_yield(ctx uintptr) uint32 {
-	return proc(ctx).libcSched_yield()
+func libcSched_yield() uint32 {
+	return proc().libcSched_yield()
 }
 
-func libcSched_get_priority_max(ctx uintptr, policy uint32) uint32 {
-	return proc(ctx).libcSched_get_priority_max(policy)
+func libcSched_get_priority_max(policy uint32) uint32 {
+	return proc().libcSched_get_priority_max(policy)
 }
 
-func libcSched_get_priority_min(ctx uintptr, policy uint32) uint32 {
-	return proc(ctx).libcSched_get_priority_min(policy)
+func libcSched_get_priority_min(policy uint32) uint32 {
+	return proc().libcSched_get_priority_min(policy)
 }
 
-func libcSched_getscheduler(ctx uintptr, pid uint32) uint32 {
-	return proc(ctx).libcSched_getscheduler(pid)
+func libcSched_getscheduler(pid uint32) uint32 {
+	return proc().libcSched_getscheduler(pid)
 }
 
-func libcSched_getparam(ctx uintptr, pid, param, paramSize uint32) uint32 {
-	p := proc(ctx)
+func libcSched_getparam(pid, param, paramSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sched_getparam", paramSize, sizeofSchedParam)
 
 	return p.libcSched_getparam(pid, param)
 }
 
-func libcSched_setparam(ctx uintptr, pid, param, paramSize uint32) uint32 {
-	p := proc(ctx)
+func libcSched_setparam(pid, param, paramSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sched_setparam", paramSize, sizeofSchedParam)
 
 	return p.libcSched_setparam(pid, param)
 }
 
-func libcSched_setscheduler(ctx uintptr, pid, policy, param, paramSize uint32) uint32 {
-	p := proc(ctx)
+func libcSched_setscheduler(pid, policy, param, paramSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sched_setscheduler", paramSize, sizeofSchedParam)
 
 	return p.libcSched_setscheduler(pid, policy, param)
 }
 
-func libcSched_rr_get_interval(ctx uintptr, pid, ts, tsSize uint32) uint32 {
-	p := proc(ctx)
+func libcSched_rr_get_interval(pid, ts, tsSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sched_rr_get_interval", tsSize, sizeofTimespec)
 
 	return p.libcSched_rr_get_interval(pid, ts)
 }
 
-func libcOpenlog(ctx uintptr, ident, option, facility uint32) {
-	proc(ctx).libcOpenlog(ident, option, facility)
+func libcOpenlog(ident, option, facility uint32) {
+	proc().libcOpenlog(ident, option, facility)
 }
 
-func libcCloselog(ctx uintptr) {
-	proc(ctx).libcCloselog()
+func libcCloselog() {
+	proc().libcCloselog()
 }
 
-func libcSetlogmask(ctx uintptr, mask uint32) uint32 {
-	return proc(ctx).libcSetlogmask(mask)
+func libcSetlogmask(mask uint32) uint32 {
+	return proc().libcSetlogmask(mask)
 }
 
-func libc__kernel_syslog(ctx uintptr, priority, message uint32) {
-	proc(ctx).libc__kernel_syslog(priority, message)
+func libc__kernel_syslog(priority, message uint32) {
+	proc().libc__kernel_syslog(priority, message)
 }
 
-func libcSysinfo(ctx uintptr, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcSysinfo(at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("sysinfo", atSize, sizeofSysinfo)
 
 	return p.libcSysinfo(at)
 }
 
-func libcGet_nprocs(ctx uintptr) uint32 {
-	return proc(ctx).libcGet_nprocs()
+func libcGet_nprocs() uint32 {
+	return proc().libcGet_nprocs()
 }
 
-func libcGet_nprocs_conf(ctx uintptr) uint32 {
-	return proc(ctx).libcGet_nprocs_conf()
+func libcGet_nprocs_conf() uint32 {
+	return proc().libcGet_nprocs_conf()
 }
 
-func libcGet_phys_pages(ctx uintptr) uint32 {
-	return proc(ctx).libcGet_phys_pages()
+func libcGet_phys_pages() uint32 {
+	return proc().libcGet_phys_pages()
 }
 
-func libcGet_avphys_pages(ctx uintptr) uint32 {
-	return proc(ctx).libcGet_avphys_pages()
+func libcGet_avphys_pages() uint32 {
+	return proc().libcGet_avphys_pages()
 }
 
-func libcGetloadavg(ctx uintptr, at, n uint32) uint32 {
-	return proc(ctx).libcGetloadavg(at, n)
+func libcGetloadavg(at, n uint32) uint32 {
+	return proc().libcGetloadavg(at, n)
 }
 
-func libcGetrusage(ctx uintptr, who, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcGetrusage(who, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("getrusage", atSize, sizeofRusage)
 
 	return p.libcGetrusage(who, at)
 }
 
-func libcGetrlimit(ctx uintptr, res, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcGetrlimit(res, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("getrlimit", atSize, sizeofRlimit)
 
 	return p.libcGetrlimit(res, at)
 }
 
-func libcSetrlimit(ctx uintptr, res, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcSetrlimit(res, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("setrlimit", atSize, sizeofRlimit)
 
 	return p.libcSetrlimit(res, at)
 }
 
-func libcPrlimit(ctx uintptr, pid, res, set, setSize, old, oldSize uint32) uint32 {
-	p := proc(ctx)
+func libcPrlimit(pid, res, set, setSize, old, oldSize uint32) uint32 {
+	p := proc()
 
 	p.sized("prlimit", setSize, sizeofRlimit, oldSize, sizeofRlimit)
 
 	return p.libcPrlimit(pid, res, set, old)
 }
 
-func libcGetdtablesize(ctx uintptr) uint32 {
-	return proc(ctx).libcGetdtablesize()
+func libcGetdtablesize() uint32 {
+	return proc().libcGetdtablesize()
 }
 
-func libcConfstr(ctx uintptr, name, buf, n uint32) uint32 {
-	return proc(ctx).libcConfstr(name, buf, n)
+func libcConfstr(name, buf, n uint32) uint32 {
+	return proc().libcConfstr(name, buf, n)
 }
 
-func libcPathconf(ctx uintptr, path, name uint32) uint32 {
-	return proc(ctx).libcPathconf(path, name)
+func libcPathconf(path, name uint32) uint32 {
+	return proc().libcPathconf(path, name)
 }
 
-func libcFpathconf(ctx uintptr, fd, name uint32) uint32 {
-	return proc(ctx).libcFpathconf(fd, name)
+func libcFpathconf(fd, name uint32) uint32 {
+	return proc().libcFpathconf(fd, name)
 }
 
-func libcGetlogin(ctx uintptr) uint32 {
-	return proc(ctx).libcGetlogin()
+func libcGetlogin() uint32 {
+	return proc().libcGetlogin()
 }
 
-func libcGetlogin_r(ctx uintptr, buf, n uint32) uint32 {
-	return proc(ctx).libcGetlogin_r(buf, n)
+func libcGetlogin_r(buf, n uint32) uint32 {
+	return proc().libcGetlogin_r(buf, n)
 }
 
-func libcCtermid(ctx uintptr, s uint32) uint32 {
-	return proc(ctx).libcCtermid(s)
+func libcCtermid(s uint32) uint32 {
+	return proc().libcCtermid(s)
 }
 
-func libcTtyname(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcTtyname(fd)
+func libcTtyname(fd uint32) uint32 {
+	return proc().libcTtyname(fd)
 }
 
-func libcTtyname_r(ctx uintptr, fd, buf, n uint32) uint32 {
-	return proc(ctx).libcTtyname_r(fd, buf, n)
+func libcTtyname_r(fd, buf, n uint32) uint32 {
+	return proc().libcTtyname_r(fd, buf, n)
 }
 
-func libcGetpwnam(ctx uintptr, name, size uint32) uint32 {
-	p := proc(ctx)
+func libcGetpwnam(name, size uint32) uint32 {
+	p := proc()
 
 	p.sized("getpwnam", size, sizeofPasswd)
 
 	return p.libcGetpwnam(name)
 }
 
-func libcGetpwuid(ctx uintptr, uid, size uint32) uint32 {
-	p := proc(ctx)
+func libcGetpwuid(uid, size uint32) uint32 {
+	p := proc()
 
 	p.sized("getpwuid", size, sizeofPasswd)
 
 	return p.libcGetpwuid(uid)
 }
 
-func libcGetpwnam_r(ctx uintptr, name, pwd, pwdSize, buf, size, result, resultSize uint32) uint32 {
-	p := proc(ctx)
+func libcGetpwnam_r(name, pwd, pwdSize, buf, size, result, resultSize uint32) uint32 {
+	p := proc()
 
 	p.sized("getpwnam_r", pwdSize, sizeofPasswd, resultSize, sizeofPasswd)
 
 	return p.libcGetpwnam_r(name, pwd, buf, size, result)
 }
 
-func libcGetpwuid_r(ctx uintptr, uid, pwd, pwdSize, buf, size, result, resultSize uint32) uint32 {
-	p := proc(ctx)
+func libcGetpwuid_r(uid, pwd, pwdSize, buf, size, result, resultSize uint32) uint32 {
+	p := proc()
 
 	p.sized("getpwuid_r", pwdSize, sizeofPasswd, resultSize, sizeofPasswd)
 
 	return p.libcGetpwuid_r(uid, pwd, buf, size, result)
 }
 
-func libcGetpwent(ctx uintptr, size uint32) uint32 {
-	p := proc(ctx)
+func libcGetpwent(size uint32) uint32 {
+	p := proc()
 
 	p.sized("getpwent", size, sizeofPasswd)
 
 	return p.libcGetpwent()
 }
 
-func libcSetpwent(ctx uintptr) {
-	proc(ctx).libcSetpwent()
+func libcSetpwent() {
+	proc().libcSetpwent()
 }
 
-func libcEndpwent(ctx uintptr) {
-	proc(ctx).libcEndpwent()
+func libcEndpwent() {
+	proc().libcEndpwent()
 }
 
-func libcGetgrnam(ctx uintptr, name, size uint32) uint32 {
-	p := proc(ctx)
+func libcGetgrnam(name, size uint32) uint32 {
+	p := proc()
 
 	p.sized("getgrnam", size, sizeofGroup)
 
 	return p.libcGetgrnam(name)
 }
 
-func libcGetgrgid(ctx uintptr, gid, size uint32) uint32 {
-	p := proc(ctx)
+func libcGetgrgid(gid, size uint32) uint32 {
+	p := proc()
 
 	p.sized("getgrgid", size, sizeofGroup)
 
 	return p.libcGetgrgid(gid)
 }
 
-func libcGetgrnam_r(ctx uintptr, name, grp, grpSize, buf, size, result, resultSize uint32) uint32 {
-	p := proc(ctx)
+func libcGetgrnam_r(name, grp, grpSize, buf, size, result, resultSize uint32) uint32 {
+	p := proc()
 
 	p.sized("getgrnam_r", grpSize, sizeofGroup, resultSize, sizeofGroup)
 
 	return p.libcGetgrnam_r(name, grp, buf, size, result)
 }
 
-func libcGetgrgid_r(ctx uintptr, gid, grp, grpSize, buf, size, result, resultSize uint32) uint32 {
-	p := proc(ctx)
+func libcGetgrgid_r(gid, grp, grpSize, buf, size, result, resultSize uint32) uint32 {
+	p := proc()
 
 	p.sized("getgrgid_r", grpSize, sizeofGroup, resultSize, sizeofGroup)
 
 	return p.libcGetgrgid_r(gid, grp, buf, size, result)
 }
 
-func libcGetgrent(ctx uintptr, size uint32) uint32 {
-	p := proc(ctx)
+func libcGetgrent(size uint32) uint32 {
+	p := proc()
 
 	p.sized("getgrent", size, sizeofGroup)
 
 	return p.libcGetgrent()
 }
 
-func libcSetgrent(ctx uintptr) {
-	proc(ctx).libcSetgrent()
+func libcSetgrent() {
+	proc().libcSetgrent()
 }
 
-func libcEndgrent(ctx uintptr) {
-	proc(ctx).libcEndgrent()
+func libcEndgrent() {
+	proc().libcEndgrent()
 }
 
-func libcGetgrouplist(ctx uintptr, user, group, groups, count uint32) uint32 {
-	return proc(ctx).libcGetgrouplist(user, group, groups, count)
+func libcGetgrouplist(user, group, groups, count uint32) uint32 {
+	return proc().libcGetgrouplist(user, group, groups, count)
 }
 
-func libcPosix_openpt(ctx uintptr, flags uint32) uint32 {
-	return proc(ctx).libcPosix_openpt(flags)
+func libcPosix_openpt(flags uint32) uint32 {
+	return proc().libcPosix_openpt(flags)
 }
 
-func libcGrantpt(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcGrantpt(fd)
+func libcGrantpt(fd uint32) uint32 {
+	return proc().libcGrantpt(fd)
 }
 
-func libcUnlockpt(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcUnlockpt(fd)
+func libcUnlockpt(fd uint32) uint32 {
+	return proc().libcUnlockpt(fd)
 }
 
-func libcPtsname(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcPtsname(fd)
+func libcPtsname(fd uint32) uint32 {
+	return proc().libcPtsname(fd)
 }
 
-func libcPtsname_r(ctx uintptr, fd, buf, size uint32) uint32 {
-	return proc(ctx).libcPtsname_r(fd, buf, size)
+func libcPtsname_r(fd, buf, size uint32) uint32 {
+	return proc().libcPtsname_r(fd, buf, size)
 }
 
-func libcOpenpty(ctx uintptr, amaster, aslave, name, termp, termpSize, winp, winpSize uint32) uint32 {
-	p := proc(ctx)
+func libcOpenpty(amaster, aslave, name, termp, termpSize, winp, winpSize uint32) uint32 {
+	p := proc()
 
 	p.sized("openpty", termpSize, sizeofTermios, winpSize, sizeofWinsize)
 
 	return p.libcOpenpty(amaster, aslave, name, termp, winp)
 }
 
-func libcForkpty(ctx uintptr, amaster, name, termp, termpSize, winp, winpSize uint32) uint32 {
-	p := proc(ctx)
+func libcForkpty(amaster, name, termp, termpSize, winp, winpSize uint32) uint32 {
+	p := proc()
 
 	p.sized("forkpty", termpSize, sizeofTermios, winpSize, sizeofWinsize)
 
 	return p.libcForkpty(amaster, name, termp, winp)
 }
 
-func libcGlob(ctx uintptr, pattern, flags, errfunc, out, outSize uint32) uint32 {
-	p := proc(ctx)
+func libcGlob(pattern, flags, errfunc, out, outSize uint32) uint32 {
+	p := proc()
 
 	p.sized("glob", outSize, sizeofGlob)
 
 	return p.libcGlob(pattern, flags, errfunc, out)
 }
 
-func libcGlobfree(ctx uintptr, out, outSize uint32) {
-	p := proc(ctx)
+func libcGlobfree(out, outSize uint32) {
+	p := proc()
 
 	p.sized("globfree", outSize, sizeofGlob)
 
 	p.libcGlobfree(out)
 }
 
-func libcRandom(ctx uintptr) uint32 {
-	return proc(ctx).libcRandom()
+func libcRandom() uint32 {
+	return proc().libcRandom()
 }
 
-func libcSrandom(ctx uintptr, seed uint32) {
-	proc(ctx).libcSrandom(seed)
+func libcSrandom(seed uint32) {
+	proc().libcSrandom(seed)
 }
 
-func libcInitstate(ctx uintptr, seed, state, size uint32) uint32 {
-	return proc(ctx).libcInitstate(seed, state, size)
+func libcInitstate(seed, state, size uint32) uint32 {
+	return proc().libcInitstate(seed, state, size)
 }
 
-func libcSetstate(ctx uintptr, state uint32) uint32 {
-	return proc(ctx).libcSetstate(state)
+func libcSetstate(state uint32) uint32 {
+	return proc().libcSetstate(state)
 }
 
-func libcRand_r(ctx uintptr, seed uint32) uint32 {
-	return proc(ctx).libcRand_r(seed)
+func libcRand_r(seed uint32) uint32 {
+	return proc().libcRand_r(seed)
 }
 
-func libcSecure_getenv(ctx uintptr, name uint32) uint32 {
-	return proc(ctx).libcSecure_getenv(name)
+func libcSecure_getenv(name uint32) uint32 {
+	return proc().libcSecure_getenv(name)
 }
 
-func libcGetsubopt(ctx uintptr, opt, keys, val uint32) uint32 {
-	return proc(ctx).libcGetsubopt(opt, keys, val)
+func libcGetsubopt(opt, keys, val uint32) uint32 {
+	return proc().libcGetsubopt(opt, keys, val)
 }
 
-func libcDaemon(ctx uintptr, nochdir, noclose uint32) uint32 {
-	return proc(ctx).libcDaemon(nochdir, noclose)
+func libcDaemon(nochdir, noclose uint32) uint32 {
+	return proc().libcDaemon(nochdir, noclose)
 }
 
-func libcPrctl(ctx uintptr, option, va uint32) uint32 {
-	return proc(ctx).libcPrctl(option, va)
+func libcPrctl(option, va uint32) uint32 {
+	return proc().libcPrctl(option, va)
 }
 
-func libcGetpass(ctx uintptr, prompt uint32) uint32 {
-	return proc(ctx).libcGetpass(prompt)
+func libcGetpass(prompt uint32) uint32 {
+	return proc().libcGetpass(prompt)
 }
 
-func libcVhangup(ctx uintptr) uint32 {
-	return proc(ctx).libcVhangup()
+func libcVhangup() uint32 {
+	return proc().libcVhangup()
 }
 
-func libcGetusershell(ctx uintptr) uint32 {
-	return proc(ctx).libcGetusershell()
+func libcGetusershell() uint32 {
+	return proc().libcGetusershell()
 }
 
-func libcSetusershell(ctx uintptr) {
-	proc(ctx).libcSetusershell()
+func libcSetusershell() {
+	proc().libcSetusershell()
 }
 
-func libcEndusershell(ctx uintptr) {
-	proc(ctx).libcEndusershell()
+func libcEndusershell() {
+	proc().libcEndusershell()
 }
 
-func libcGethostname(ctx uintptr, name, n uint32) uint32 {
-	return proc(ctx).libcGethostname(name, n)
+func libcGethostname(name, n uint32) uint32 {
+	return proc().libcGethostname(name, n)
 }
 
-func libcGetentropy(ctx uintptr, buf, n uint32) uint32 {
-	return proc(ctx).libcGetentropy(buf, n)
+func libcGetentropy(buf, n uint32) uint32 {
+	return proc().libcGetentropy(buf, n)
 }
 
-func libcGetdomainname(ctx uintptr, name, n uint32) uint32 {
-	return proc(ctx).libcGetdomainname(name, n)
+func libcGetdomainname(name, n uint32) uint32 {
+	return proc().libcGetdomainname(name, n)
 }
 
-func libcSethostname(ctx uintptr, name, n uint32) uint32 {
-	return proc(ctx).libcSethostname(name, n)
+func libcSethostname(name, n uint32) uint32 {
+	return proc().libcSethostname(name, n)
 }
 
-func libcSetdomainname(ctx uintptr, name, n uint32) uint32 {
-	return proc(ctx).libcSetdomainname(name, n)
+func libcSetdomainname(name, n uint32) uint32 {
+	return proc().libcSetdomainname(name, n)
 }
 
-func libcGethostid(ctx uintptr) uint32 {
-	return proc(ctx).libcGethostid()
+func libcGethostid() uint32 {
+	return proc().libcGethostid()
 }
 
-func libcSethostid(ctx uintptr, id uint32) uint32 {
-	return proc(ctx).libcSethostid(id)
+func libcSethostid(id uint32) uint32 {
+	return proc().libcSethostid(id)
 }
 
-func libcPsignal(ctx uintptr, sig, s uint32) {
-	proc(ctx).libcPsignal(sig, s)
+func libcPsignal(sig, s uint32) {
+	proc().libcPsignal(sig, s)
 }
 
-func libcPsiginfo(ctx uintptr, info, infoSize, s uint32) {
-	p := proc(ctx)
+func libcPsiginfo(info, infoSize, s uint32) {
+	p := proc()
 
 	p.sized("psiginfo", infoSize, sizeofSiginfo)
 
 	p.libcPsiginfo(info, s)
 }
 
-func libc__assert_fail(ctx uintptr, expr, file, line, function uint32) {
-	proc(ctx).libc__assert_fail(expr, file, line, function)
+func libc__assert_fail(expr, file, line, function uint32) {
+	proc().libc__assert_fail(expr, file, line, function)
 }
 
-func libcSocket(ctx uintptr, domain, kind, protocol uint32) uint32 {
-	return proc(ctx).libcSocket(domain, kind, protocol)
+func libcSocket(domain, kind, protocol uint32) uint32 {
+	return proc().libcSocket(domain, kind, protocol)
 }
 
-func libcSocketpair(ctx uintptr, domain, kind, protocol, at uint32) uint32 {
-	return proc(ctx).libcSocketpair(domain, kind, protocol, at)
+func libcSocketpair(domain, kind, protocol, at uint32) uint32 {
+	return proc().libcSocketpair(domain, kind, protocol, at)
 }
 
-func libcBind(ctx uintptr, fd, addr, n uint32) uint32 {
-	return proc(ctx).libcBind(fd, addr, n)
+func libcBind(fd, addr, n uint32) uint32 {
+	return proc().libcBind(fd, addr, n)
 }
 
-func libcConnect(ctx uintptr, fd, addr, n uint32) uint32 {
-	return proc(ctx).libcConnect(fd, addr, n)
+func libcConnect(fd, addr, n uint32) uint32 {
+	return proc().libcConnect(fd, addr, n)
 }
 
-func libcListen(ctx uintptr, fd, backlog uint32) uint32 {
-	return proc(ctx).libcListen(fd, backlog)
+func libcListen(fd, backlog uint32) uint32 {
+	return proc().libcListen(fd, backlog)
 }
 
-func libcAccept(ctx uintptr, fd, addr, lenAt uint32) uint32 {
-	return proc(ctx).libcAccept(fd, addr, lenAt)
+func libcAccept(fd, addr, lenAt uint32) uint32 {
+	return proc().libcAccept(fd, addr, lenAt)
 }
 
-func libcAccept4(ctx uintptr, fd, addr, lenAt, flags uint32) uint32 {
-	return proc(ctx).libcAccept4(fd, addr, lenAt, flags)
+func libcAccept4(fd, addr, lenAt, flags uint32) uint32 {
+	return proc().libcAccept4(fd, addr, lenAt, flags)
 }
 
-func libcGetsockname(ctx uintptr, fd, addr, lenAt uint32) uint32 {
-	return proc(ctx).libcGetsockname(fd, addr, lenAt)
+func libcGetsockname(fd, addr, lenAt uint32) uint32 {
+	return proc().libcGetsockname(fd, addr, lenAt)
 }
 
-func libcGetpeername(ctx uintptr, fd, addr, lenAt uint32) uint32 {
-	return proc(ctx).libcGetpeername(fd, addr, lenAt)
+func libcGetpeername(fd, addr, lenAt uint32) uint32 {
+	return proc().libcGetpeername(fd, addr, lenAt)
 }
 
-func libcGetsockopt(ctx uintptr, fd, level, name, at, lenAt uint32) uint32 {
-	return proc(ctx).libcGetsockopt(fd, level, name, at, lenAt)
+func libcGetsockopt(fd, level, name, at, lenAt uint32) uint32 {
+	return proc().libcGetsockopt(fd, level, name, at, lenAt)
 }
 
-func libcSetsockopt(ctx uintptr, fd, level, name, at, n uint32) uint32 {
-	return proc(ctx).libcSetsockopt(fd, level, name, at, n)
+func libcSetsockopt(fd, level, name, at, n uint32) uint32 {
+	return proc().libcSetsockopt(fd, level, name, at, n)
 }
 
-func libcSend(ctx uintptr, fd, buf, n, flags uint32) uint32 {
-	return proc(ctx).libcSend(fd, buf, n, flags)
+func libcSend(fd, buf, n, flags uint32) uint32 {
+	return proc().libcSend(fd, buf, n, flags)
 }
 
-func libcSendto(ctx uintptr, fd, buf, n, flags, addr, alen uint32) uint32 {
-	return proc(ctx).libcSendto(fd, buf, n, flags, addr, alen)
+func libcSendto(fd, buf, n, flags, addr, alen uint32) uint32 {
+	return proc().libcSendto(fd, buf, n, flags, addr, alen)
 }
 
-func libcRecv(ctx uintptr, fd, buf, n, flags uint32) uint32 {
-	return proc(ctx).libcRecv(fd, buf, n, flags)
+func libcRecv(fd, buf, n, flags uint32) uint32 {
+	return proc().libcRecv(fd, buf, n, flags)
 }
 
-func libcRecvfrom(ctx uintptr, fd, buf, n, flags, addr, lenAt uint32) uint32 {
-	return proc(ctx).libcRecvfrom(fd, buf, n, flags, addr, lenAt)
+func libcRecvfrom(fd, buf, n, flags, addr, lenAt uint32) uint32 {
+	return proc().libcRecvfrom(fd, buf, n, flags, addr, lenAt)
 }
 
-func libcSendmsg(ctx uintptr, fd, msg, msgSize, iovSize, flags uint32) uint32 {
-	p := proc(ctx)
+func libcSendmsg(fd, msg, msgSize, iovSize, flags uint32) uint32 {
+	p := proc()
 
 	p.sized("sendmsg", msgSize, sizeofMsghdr, iovSize, sizeofIovec)
 
 	return p.libcSendmsg(fd, msg, flags)
 }
 
-func libcRecvmsg(ctx uintptr, fd, msg, msgSize, iovSize, flags uint32) uint32 {
-	p := proc(ctx)
+func libcRecvmsg(fd, msg, msgSize, iovSize, flags uint32) uint32 {
+	p := proc()
 
 	p.sized("recvmsg", msgSize, sizeofMsghdr, iovSize, sizeofIovec)
 
 	return p.libcRecvmsg(fd, msg, flags)
 }
 
-func libcShutdown(ctx uintptr, fd, how uint32) uint32 {
-	return proc(ctx).libcShutdown(fd, how)
+func libcShutdown(fd, how uint32) uint32 {
+	return proc().libcShutdown(fd, how)
 }
 
-func libcSockatmark(ctx uintptr, fd uint32) uint32 {
-	return proc(ctx).libcSockatmark(fd)
+func libcSockatmark(fd uint32) uint32 {
+	return proc().libcSockatmark(fd)
 }
 
-func libcGetaddrinfo(ctx uintptr, node, service, hints, hintsSize, res, resSize uint32) uint32 {
-	p := proc(ctx)
+func libcGetaddrinfo(node, service, hints, hintsSize, res, resSize uint32) uint32 {
+	p := proc()
 
 	p.sized("getaddrinfo", hintsSize, sizeofAddrinfo, resSize, sizeofAddrinfo)
 
 	return p.libcGetaddrinfo(node, service, hints, res)
 }
 
-func libcFreeaddrinfo(ctx uintptr, res, resSize uint32) {
-	p := proc(ctx)
+func libcFreeaddrinfo(res, resSize uint32) {
+	p := proc()
 
 	p.sized("freeaddrinfo", resSize, sizeofAddrinfo)
 
 	p.libcFreeaddrinfo(res)
 }
 
-func libcGai_strerror(ctx uintptr, code uint32) uint32 {
-	return proc(ctx).libcGai_strerror(code)
+func libcGai_strerror(code uint32) uint32 {
+	return proc().libcGai_strerror(code)
 }
 
-func libcGetnameinfo(ctx uintptr, sa, salen, host, hostlen, serv, servlen, flags uint32) uint32 {
-	return proc(ctx).libcGetnameinfo(sa, salen, host, hostlen, serv, servlen, flags)
+func libcGetnameinfo(sa, salen, host, hostlen, serv, servlen, flags uint32) uint32 {
+	return proc().libcGetnameinfo(sa, salen, host, hostlen, serv, servlen, flags)
 }
 
-func libcGethostbyname(ctx uintptr, name, size uint32) uint32 {
-	p := proc(ctx)
+func libcGethostbyname(name, size uint32) uint32 {
+	p := proc()
 
 	p.sized("gethostbyname", size, sizeofHostent)
 
 	return p.libcGethostbyname(name)
 }
 
-func libcGethostbyname2(ctx uintptr, name, family, size uint32) uint32 {
-	p := proc(ctx)
+func libcGethostbyname2(name, family, size uint32) uint32 {
+	p := proc()
 
 	p.sized("gethostbyname2", size, sizeofHostent)
 
 	return p.libcGethostbyname2(name, family)
 }
 
-func libcGethostbyaddr(ctx uintptr, addr, n, family, size uint32) uint32 {
-	p := proc(ctx)
+func libcGethostbyaddr(addr, n, family, size uint32) uint32 {
+	p := proc()
 
 	p.sized("gethostbyaddr", size, sizeofHostent)
 
 	return p.libcGethostbyaddr(addr, n, family)
 }
 
-func libcGethostent(ctx uintptr, size uint32) uint32 {
-	p := proc(ctx)
+func libcGethostent(size uint32) uint32 {
+	p := proc()
 
 	p.sized("gethostent", size, sizeofHostent)
 
 	return p.libcGethostent()
 }
 
-func libcSethostent(ctx uintptr, stay uint32) {
-	proc(ctx).libcSethostent(stay)
+func libcSethostent(stay uint32) {
+	proc().libcSethostent(stay)
 }
 
-func libcEndhostent(ctx uintptr) {
-	proc(ctx).libcEndhostent()
+func libcEndhostent() {
+	proc().libcEndhostent()
 }
 
-func libcGetservbyname(ctx uintptr, name, proto, size uint32) uint32 {
-	p := proc(ctx)
+func libcGetservbyname(name, proto, size uint32) uint32 {
+	p := proc()
 
 	p.sized("getservbyname", size, sizeofServent)
 
 	return p.libcGetservbyname(name, proto)
 }
 
-func libcGetservbyport(ctx uintptr, port, proto, size uint32) uint32 {
-	p := proc(ctx)
+func libcGetservbyport(port, proto, size uint32) uint32 {
+	p := proc()
 
 	p.sized("getservbyport", size, sizeofServent)
 
 	return p.libcGetservbyport(port, proto)
 }
 
-func libcGetprotobyname(ctx uintptr, name, size uint32) uint32 {
-	p := proc(ctx)
+func libcGetprotobyname(name, size uint32) uint32 {
+	p := proc()
 
 	p.sized("getprotobyname", size, sizeofProtoent)
 
 	return p.libcGetprotobyname(name)
 }
 
-func libcGetprotobynumber(ctx uintptr, number, size uint32) uint32 {
-	p := proc(ctx)
+func libcGetprotobynumber(number, size uint32) uint32 {
+	p := proc()
 
 	p.sized("getprotobynumber", size, sizeofProtoent)
 
 	return p.libcGetprotobynumber(number)
 }
 
-func libcGetnetbyname(ctx uintptr, name, size uint32) uint32 {
-	p := proc(ctx)
+func libcGetnetbyname(name, size uint32) uint32 {
+	p := proc()
 
 	p.sized("getnetbyname", size, sizeofNetent)
 
 	return p.libcGetnetbyname(name)
 }
 
-func libcGetnetbyaddr(ctx uintptr, net, family, size uint32) uint32 {
-	p := proc(ctx)
+func libcGetnetbyaddr(net, family, size uint32) uint32 {
+	p := proc()
 
 	p.sized("getnetbyaddr", size, sizeofNetent)
 
 	return p.libcGetnetbyaddr(net, family)
 }
 
-func libcHstrerror(ctx uintptr, code uint32) uint32 {
-	return proc(ctx).libcHstrerror(code)
+func libcHstrerror(code uint32) uint32 {
+	return proc().libcHstrerror(code)
 }
 
-func libcHerror(ctx uintptr, s uint32) {
-	proc(ctx).libcHerror(s)
+func libcHerror(s uint32) {
+	proc().libcHerror(s)
 }
 
-func libcInet_aton(ctx uintptr, s, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcInet_aton(s, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("inet_aton", atSize, sizeofInAddr)
 
 	return p.libcInet_aton(s, at)
 }
 
-func libcInet_addr(ctx uintptr, s uint32) uint32 {
-	return proc(ctx).libcInet_addr(s)
+func libcInet_addr(s uint32) uint32 {
+	return proc().libcInet_addr(s)
 }
 
-func libcInet_network(ctx uintptr, s uint32) uint32 {
-	return proc(ctx).libcInet_network(s)
+func libcInet_network(s uint32) uint32 {
+	return proc().libcInet_network(s)
 }
 
-func libcInet_ntoa(ctx uintptr, in uint32) uint32 {
-	return proc(ctx).libcInet_ntoa(in)
+func libcInet_ntoa(in uint32) uint32 {
+	return proc().libcInet_ntoa(in)
 }
 
-func libcInet_pton(ctx uintptr, family, s, dst uint32) uint32 {
-	return proc(ctx).libcInet_pton(family, s, dst)
+func libcInet_pton(family, s, dst uint32) uint32 {
+	return proc().libcInet_pton(family, s, dst)
 }
 
-func libcInet_ntop(ctx uintptr, family, src, dst, size uint32) uint32 {
-	return proc(ctx).libcInet_ntop(family, src, dst, size)
+func libcInet_ntop(family, src, dst, size uint32) uint32 {
+	return proc().libcInet_ntop(family, src, dst, size)
 }
 
-func libcInet_makeaddr(ctx uintptr, n, h uint32) uint32 {
-	return proc(ctx).libcInet_makeaddr(n, h)
+func libcInet_makeaddr(n, h uint32) uint32 {
+	return proc().libcInet_makeaddr(n, h)
 }
 
-func libcInet_lnaof(ctx uintptr, in uint32) uint32 {
-	return proc(ctx).libcInet_lnaof(in)
+func libcInet_lnaof(in uint32) uint32 {
+	return proc().libcInet_lnaof(in)
 }
 
-func libcInet_netof(ctx uintptr, in uint32) uint32 {
-	return proc(ctx).libcInet_netof(in)
+func libcInet_netof(in uint32) uint32 {
+	return proc().libcInet_netof(in)
 }
 
-func libcIf_nametoindex(ctx uintptr, name uint32) uint32 {
-	return proc(ctx).libcIf_nametoindex(name)
+func libcIf_nametoindex(name uint32) uint32 {
+	return proc().libcIf_nametoindex(name)
 }
 
-func libcIf_indextoname(ctx uintptr, index, buf uint32) uint32 {
-	return proc(ctx).libcIf_indextoname(index, buf)
+func libcIf_indextoname(index, buf uint32) uint32 {
+	return proc().libcIf_indextoname(index, buf)
 }
 
-func libcIf_nameindex(ctx uintptr, size uint32) uint32 {
-	p := proc(ctx)
+func libcIf_nameindex(size uint32) uint32 {
+	p := proc()
 
 	p.sized("if_nameindex", size, sizeofIfNameindex)
 
 	return p.libcIf_nameindex()
 }
 
-func libcIf_freenameindex(ctx uintptr, block, blockSize uint32) {
-	p := proc(ctx)
+func libcIf_freenameindex(block, blockSize uint32) {
+	p := proc()
 
 	p.sized("if_freenameindex", blockSize, sizeofIfNameindex)
 
 	p.libcIf_freenameindex(block)
 }
 
-func libcCrypt(ctx uintptr, key, setting uint32) uint32 {
-	return proc(ctx).libcCrypt(key, setting)
+func libcCrypt(key, setting uint32) uint32 {
+	return proc().libcCrypt(key, setting)
 }
 
-func libcEpoll_create(ctx uintptr, size uint32) uint32 {
-	return proc(ctx).libcEpoll_create(size)
+func libcEpoll_create(size uint32) uint32 {
+	return proc().libcEpoll_create(size)
 }
 
-func libcEpoll_create1(ctx uintptr, flags uint32) uint32 {
-	return proc(ctx).libcEpoll_create1(flags)
+func libcEpoll_create1(flags uint32) uint32 {
+	return proc().libcEpoll_create1(flags)
 }
 
-func libcEpoll_ctl(ctx uintptr, epfd, op, fd, at, atSize uint32) uint32 {
-	p := proc(ctx)
+func libcEpoll_ctl(epfd, op, fd, at, atSize uint32) uint32 {
+	p := proc()
 
 	p.sized("epoll_ctl", atSize, sizeofEpollEvent)
 
 	return p.libcEpoll_ctl(epfd, op, fd, at)
 }
 
-func libcEpoll_wait(ctx uintptr, epfd, at, atSize, max, timeout uint32) uint32 {
-	p := proc(ctx)
+func libcEpoll_wait(epfd, at, atSize, max, timeout uint32) uint32 {
+	p := proc()
 
 	p.sized("epoll_wait", atSize, sizeofEpollEvent)
 
 	return p.libcEpoll_wait(epfd, at, max, timeout)
 }
 
-func libcEpoll_pwait(ctx uintptr, epfd, at, atSize, max, timeout, mask, maskSize uint32) uint32 {
-	p := proc(ctx)
+func libcEpoll_pwait(epfd, at, atSize, max, timeout, mask, maskSize uint32) uint32 {
+	p := proc()
 
 	p.sized("epoll_pwait", atSize, sizeofEpollEvent, maskSize, sizeofSigset)
 
 	return p.libcEpoll_pwait(epfd, at, max, timeout, mask)
 }
 
-func libcIsalnum(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsalnum(c)
+func libcIsalnum(c uint32) uint32 {
+	return proc().libcIsalnum(c)
 }
 
-func libcIsalpha(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsalpha(c)
+func libcIsalpha(c uint32) uint32 {
+	return proc().libcIsalpha(c)
 }
 
-func libcIsascii(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsascii(c)
+func libcIsascii(c uint32) uint32 {
+	return proc().libcIsascii(c)
 }
 
-func libcIsblank(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsblank(c)
+func libcIsblank(c uint32) uint32 {
+	return proc().libcIsblank(c)
 }
 
-func libcIscntrl(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIscntrl(c)
+func libcIscntrl(c uint32) uint32 {
+	return proc().libcIscntrl(c)
 }
 
-func libcIsdigit(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsdigit(c)
+func libcIsdigit(c uint32) uint32 {
+	return proc().libcIsdigit(c)
 }
 
-func libcIsgraph(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsgraph(c)
+func libcIsgraph(c uint32) uint32 {
+	return proc().libcIsgraph(c)
 }
 
-func libcIslower(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIslower(c)
+func libcIslower(c uint32) uint32 {
+	return proc().libcIslower(c)
 }
 
-func libcIsprint(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsprint(c)
+func libcIsprint(c uint32) uint32 {
+	return proc().libcIsprint(c)
 }
 
-func libcIspunct(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIspunct(c)
+func libcIspunct(c uint32) uint32 {
+	return proc().libcIspunct(c)
 }
 
-func libcIsspace(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsspace(c)
+func libcIsspace(c uint32) uint32 {
+	return proc().libcIsspace(c)
 }
 
-func libcIsupper(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsupper(c)
+func libcIsupper(c uint32) uint32 {
+	return proc().libcIsupper(c)
 }
 
-func libcIsxdigit(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcIsxdigit(c)
+func libcIsxdigit(c uint32) uint32 {
+	return proc().libcIsxdigit(c)
 }
 
-func libcTolower(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcTolower(c)
+func libcTolower(c uint32) uint32 {
+	return proc().libcTolower(c)
 }
 
-func libcToupper(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcToupper(c)
+func libcToupper(c uint32) uint32 {
+	return proc().libcToupper(c)
 }
 
-func libcToascii(ctx uintptr, c uint32) uint32 {
-	return proc(ctx).libcToascii(c)
+func libcToascii(c uint32) uint32 {
+	return proc().libcToascii(c)
 }
 
-func libcMemmem(ctx uintptr, h, hn, n, nn uint32) uint32 {
-	return proc(ctx).libcMemmem(h, hn, n, nn)
+func libcMemmem(h, hn, n, nn uint32) uint32 {
+	return proc().libcMemmem(h, hn, n, nn)
 }
 
-func libcMempcpy(ctx uintptr, d, s, n uint32) uint32 {
-	return proc(ctx).libcMempcpy(d, s, n)
+func libcMempcpy(d, s, n uint32) uint32 {
+	return proc().libcMempcpy(d, s, n)
 }
 
-func libcStrnlen(ctx uintptr, s, n uint32) uint32 {
-	return proc(ctx).libcStrnlen(s, n)
+func libcStrnlen(s, n uint32) uint32 {
+	return proc().libcStrnlen(s, n)
 }
 
-func libcStrncat(ctx uintptr, d, s, n uint32) uint32 {
-	return proc(ctx).libcStrncat(d, s, n)
+func libcStrncat(d, s, n uint32) uint32 {
+	return proc().libcStrncat(d, s, n)
 }
 
-func libcStrlcpy(ctx uintptr, d, s, n uint32) uint32 {
-	return proc(ctx).libcStrlcpy(d, s, n)
+func libcStrlcpy(d, s, n uint32) uint32 {
+	return proc().libcStrlcpy(d, s, n)
 }
 
-func libcStrlcat(ctx uintptr, d, s, n uint32) uint32 {
-	return proc(ctx).libcStrlcat(d, s, n)
+func libcStrlcat(d, s, n uint32) uint32 {
+	return proc().libcStrlcat(d, s, n)
 }
 
-func libcStrstr(ctx uintptr, h, n uint32) uint32 {
-	return proc(ctx).libcStrstr(h, n)
+func libcStrstr(h, n uint32) uint32 {
+	return proc().libcStrstr(h, n)
 }
 
-func libcStrpbrk(ctx uintptr, s, accept uint32) uint32 {
-	return proc(ctx).libcStrpbrk(s, accept)
+func libcStrpbrk(s, accept uint32) uint32 {
+	return proc().libcStrpbrk(s, accept)
 }
 
-func libcExplicit_bzero(ctx uintptr, d, n uint32) {
-	proc(ctx).libcExplicit_bzero(d, n)
+func libcExplicit_bzero(d, n uint32) {
+	proc().libcExplicit_bzero(d, n)
 }
 
-func libcBcopy(ctx uintptr, s, d, n uint32) {
-	proc(ctx).libcBcopy(s, d, n)
+func libcBcopy(s, d, n uint32) {
+	proc().libcBcopy(s, d, n)
 }
 
-func libcBzero(ctx uintptr, d, n uint32) {
-	proc(ctx).libcBzero(d, n)
+func libcBzero(d, n uint32) {
+	proc().libcBzero(d, n)
 }
 
-func libcMemcpy(ctx uintptr, d, s, n uint32) uint32 {
-	return proc(ctx).libcMemcpy(d, s, n)
+func libcMemcpy(d, s, n uint32) uint32 {
+	return proc().libcMemcpy(d, s, n)
 }
 
-func libcMemmove(ctx uintptr, d, s, n uint32) uint32 {
-	return proc(ctx).libcMemmove(d, s, n)
+func libcMemmove(d, s, n uint32) uint32 {
+	return proc().libcMemmove(d, s, n)
 }
 
-func libcMemset(ctx uintptr, d, c, n uint32) uint32 {
-	return proc(ctx).libcMemset(d, c, n)
+func libcMemset(d, c, n uint32) uint32 {
+	return proc().libcMemset(d, c, n)
 }
 
-func libcMemcmp(ctx uintptr, a, b, n uint32) uint32 {
-	return proc(ctx).libcMemcmp(a, b, n)
+func libcMemcmp(a, b, n uint32) uint32 {
+	return proc().libcMemcmp(a, b, n)
 }
 
-func libcBcmp(ctx uintptr, a, b, n uint32) uint32 {
-	return proc(ctx).libcBcmp(a, b, n)
+func libcBcmp(a, b, n uint32) uint32 {
+	return proc().libcBcmp(a, b, n)
 }
 
-func libcMemchr(ctx uintptr, s, c, n uint32) uint32 {
-	return proc(ctx).libcMemchr(s, c, n)
+func libcMemchr(s, c, n uint32) uint32 {
+	return proc().libcMemchr(s, c, n)
 }
 
-func libcStrlen(ctx uintptr, s uint32) uint32 {
-	return proc(ctx).libcStrlen(s)
+func libcStrlen(s uint32) uint32 {
+	return proc().libcStrlen(s)
 }
 
-func libcStrcpy(ctx uintptr, d, s uint32) uint32 {
-	return proc(ctx).libcStrcpy(d, s)
+func libcStrcpy(d, s uint32) uint32 {
+	return proc().libcStrcpy(d, s)
 }
 
-func libcStrcat(ctx uintptr, d, s uint32) uint32 {
-	return proc(ctx).libcStrcat(d, s)
+func libcStrcat(d, s uint32) uint32 {
+	return proc().libcStrcat(d, s)
 }
 
-func libcStrcmp(ctx uintptr, a, b uint32) uint32 {
-	return proc(ctx).libcStrcmp(a, b)
+func libcStrcmp(a, b uint32) uint32 {
+	return proc().libcStrcmp(a, b)
 }
 
-func libcStrspn(ctx uintptr, s, set uint32) uint32 {
-	return proc(ctx).libcStrspn(s, set)
+func libcStrspn(s, set uint32) uint32 {
+	return proc().libcStrspn(s, set)
 }
 
-func libcStrcspn(ctx uintptr, s, set uint32) uint32 {
-	return proc(ctx).libcStrcspn(s, set)
+func libcStrcspn(s, set uint32) uint32 {
+	return proc().libcStrcspn(s, set)
 }
 
-func libcExecmode(ctx uintptr, modes, classes, sink uint32) uint32 {
-	return proc(ctx).libcExecmode(modes, classes, sink)
+func libcExecmode(modes, classes, sink uint32) uint32 {
+	return proc().libcExecmode(modes, classes, sink)
 }
 
 func fcntlSize(cmd uint32) uint32 {

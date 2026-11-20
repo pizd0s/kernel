@@ -2,15 +2,89 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+// A handler that takes memory, which may move it: the kernel's
+// memory-move point moves it as every handler starts anyway.
+static void* taken[16];
+static int takes;
+
+static void take(int sig) {
+    (void)sig;
+    if (takes < 16) {
+        char* block = malloc(1 << 20);
+        assert(block);
+        memset(block, takes, 1 << 20);
+        taken[takes++] = block;
+    }
+}
+
+// A child that writes text into fd once the parent waits for it.
+static pid_t later(int fd, const char* text) {
+    pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        usleep(100000);
+        assert(write(fd, text, strlen(text)) == (ssize_t)strlen(text));
+        _exit(0);
+    }
+    return child;
+}
+
+// A wait that a handler interrupts while the memory may move under it: an
+// epoll_wait, then a read of a pipe, each into memory of the heap; what
+// they bring is what was sent.
+static int waitsMoved(void) {
+    struct sigaction action = {0};
+    action.sa_handler = take;
+    action.sa_flags = SA_RESTART;
+    assert(sigaction(SIGALRM, &action, NULL) == 0);
+    struct itimerval timer = {{0, 20000}, {0, 20000}};
+    int pipes[2];
+    assert(pipe(pipes) == 0);
+    int ep = epoll_create1(0);
+    struct epoll_event event = {.events = EPOLLIN, .data.u64 = 0x1122334455667788ull};
+    assert(ep >= 0 && epoll_ctl(ep, EPOLL_CTL_ADD, pipes[0], &event) == 0);
+    struct epoll_event* events = calloc(4, sizeof *events);
+    char* bytes = calloc(16, 1);
+    assert(events && bytes);
+    assert(setitimer(ITIMER_REAL, &timer, NULL) == 0);
+    pid_t first = later(pipes[1], "moved");
+    int n;
+    do {
+        n = epoll_wait(ep, events, 4, -1);
+    } while (n < 0 && errno == EINTR);
+    int wrong = n != 1 || events[0].data.u64 != 0x1122334455667788ull || (events[0].events & EPOLLIN) == 0;
+    ssize_t got = read(pipes[0], bytes, 16);
+    wrong |= got != 5 || memcmp(bytes, "moved", 5) != 0;
+    pid_t second = later(pipes[1], "again");
+    do {
+        got = read(pipes[0], bytes, 16);
+    } while (got < 0 && errno == EINTR);
+    wrong |= got != 5 || memcmp(bytes, "again", 5) != 0;
+    struct itimerval off = {{0, 0}, {0, 0}};
+    assert(setitimer(ITIMER_REAL, &off, NULL) == 0);
+    int status;
+    assert(waitpid(first, &status, 0) == first && waitpid(second, &status, 0) == second);
+    free(events);
+    free(bytes);
+    assert(close(ep) == 0 && close(pipes[0]) == 0 && close(pipes[1]) == 0);
+    return wrong;
+}
+
 static int attempt(const char* operation) {
+    if (strcmp(operation, "memory-move") == 0) {
+        return waitsMoved();
+    }
     if (strcmp(operation, "system") == 0) {
         // A shell that cannot be loaded ends with 127, as system reports.
         int status = system("exit 7");

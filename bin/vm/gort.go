@@ -98,6 +98,10 @@ func checkGo() {
 	if runtime.InstanceOffset() != gInstance {
 		throwFmt("g.instance is at %d, the code reads %d", runtime.InstanceOffset(), gInstance)
 	}
+
+	if unsafe.Offsetof(Instance{}.memBase) != 0 || unsafe.Offsetof(Instance{}.memBound) != 8 || unsafe.Offsetof(Instance{}.blockAt) != 16 {
+		throwFmt("the instance's base, bound and block are not where the code reads them")
+	}
 }
 
 func resumeReturnRange() (lo, hi uintptr) {

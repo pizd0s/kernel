@@ -286,8 +286,8 @@ type ProcExit struct {
 	status int
 }
 
-func proc(ctx uintptr) *Process {
-	p := instanceAt(ctx).proc
+func proc() *Process {
+	p := current().proc
 
 	p.interruption = signalNone
 
@@ -469,6 +469,10 @@ func (p *Process) chaosStart(env []string) {
 
 func (p *Process) chaosFail(point string) bool {
 	return p != nil && p.chaos.fail(point)
+}
+
+func (p *Process) chaosMoves() bool {
+	return p != nil && p.chaos.holds("memory-move")
 }
 
 func (p *Process) firstCwd() (Dir, string) {
@@ -2879,6 +2883,10 @@ func (p *Process) stop(sig int) {
 }
 
 func (p *Process) runHandler(sig int, act SigAction) {
+	if p.chaosMoves() && p.inst.memory != nil {
+		p.inst.move(p.inst.memory.room())
+	}
+
 	p.sig.mu.Lock()
 
 	saved := p.sig.blocked
@@ -2914,11 +2922,11 @@ func (p *Process) runHandler(sig int, act SigAction) {
 
 		f, _ := p.inst.export("__call_signal_action")
 
-		f.Interface().(func(uintptr, uint32, uint32, uint32, uint32))(p.inst.ctx(), act.handler, uint32(sig), p.siginfo, 0)
+		f.Interface().(func(uintptr, uint32, uint32, uint32, uint32))(p.inst.handle(), act.handler, uint32(sig), p.siginfo, 0)
 	} else {
 		f, _ := p.inst.export("__call_signal_handler")
 
-		f.Interface().(func(uintptr, uint32, uint32))(p.inst.ctx(), act.handler, uint32(sig))
+		f.Interface().(func(uintptr, uint32, uint32))(p.inst.handle(), act.handler, uint32(sig))
 	}
 
 	if moved {
@@ -4160,10 +4168,11 @@ func (p *Process) writeBack(at uint32, m Mapping, from, n uint32) error {
 
 	n = uint32(max(min(int64(n), st.Size-m.offset-int64(from)), 0))
 
-	now := p.span(at+from, n)
 	was := m.read[from : from+n]
 
-	for i := 0; i < len(now); {
+	for i := 0; i < len(was); {
+		now := p.span(at+from, n)
+
 		if now[i] == was[i] {
 			i++
 
@@ -4185,7 +4194,7 @@ func (p *Process) writeBack(at uint32, m Mapping, from, n uint32) error {
 			return err
 		}
 
-		copy(was[i:j], now[i:j])
+		copy(was[i:j], p.span(at+from+uint32(i), uint32(j-i)))
 		i = j
 	}
 
@@ -4304,9 +4313,7 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 		return failed
 	}
 
-	b := p.span(at, n)
-
-	clear(b)
+	clear(p.span(at, n))
 
 	m := Mapping{length: n}
 
@@ -4346,7 +4353,7 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 		m.file, m.offset = f, int64(off)
 
 		if flags&MAP_SHARED != 0 && prot&PROT_WRITE != 0 {
-			m.read = bytes.Clone(b)
+			m.read = bytes.Clone(p.span(at, n))
 		}
 	}
 
@@ -7050,7 +7057,10 @@ func (p *Process) readdir(dir uint32) (uint32, error) {
 			return 0, err
 		}
 
-		n, err := d.readdir(p, p.span(dir+dirBuf, dirBufLen))
+		w := p.memory(dir+dirBuf, dirBufLen, O_WRONLY)
+		n, err := d.readdir(p, w, dirBufLen)
+
+		w.unref()
 
 		if err != nil || n == 0 {
 			return 0, err
@@ -7863,7 +7873,9 @@ func (p *Process) epollWait(epfd, at, max uint32, timeout int) (int, error) {
 		return 0, err
 	}
 
-	return ep.wait(p, p.span(at, max*sizeofEpollEvent), int(max), deadline(timeout))
+	return ep.wait(p, func() []byte {
+		return p.span(at, max*sizeofEpollEvent)
+	}, int(max), deadline(timeout))
 }
 
 func (p *Process) libcEpoll_wait(epfd, at, max, timeout uint32) uint32 {

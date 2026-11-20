@@ -75,7 +75,7 @@ type Dir interface {
 
 	path(p *Process) (string, error)
 
-	readdir(p *Process, b []byte) (int, error)
+	readdir(p *Process, into Transfer, n int) (int, error)
 	openPath(p *Process, path string, flags int, mode uint32) (Object, error)
 	statPath(p *Process, path string, follow bool, st *Stat) error
 	readlinkPath(p *Process, path string) (string, error)

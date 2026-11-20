@@ -81,9 +81,9 @@ func (CompilerImports) function(imp *ImportMeta) any {
 	return compilerExit
 }
 
-func compilerTransfer(ctx uintptr, fd, iovs, done uint32, write bool) uint32 {
-	m := guest(ctx)
-	host := instanceAt(ctx).host.(*CompilerIO)
+func compilerTransfer(fd, iovs, done uint32, write bool) uint32 {
+	m := guest()
+	host := current().host.(*CompilerIO)
 	table := span(m, iovs, 8)
 	at := binary.LittleEndian.Uint32(table)
 	size := binary.LittleEndian.Uint32(table[4:])
@@ -121,16 +121,16 @@ func compilerTransfer(ctx uintptr, fd, iovs, done uint32, write bool) uint32 {
 	return wasiOK
 }
 
-func compilerRead(ctx uintptr, fd, iovs, count, done uint32) uint32 {
-	return compilerTransfer(ctx, fd, iovs, done, false)
+func compilerRead(fd, iovs, count, done uint32) uint32 {
+	return compilerTransfer(fd, iovs, done, false)
 }
 
-func compilerWrite(ctx uintptr, fd, iovs, count, done uint32) uint32 {
-	return compilerTransfer(ctx, fd, iovs, done, true)
+func compilerWrite(fd, iovs, count, done uint32) uint32 {
+	return compilerTransfer(fd, iovs, done, true)
 }
 
-func compilerExit(ctx uintptr, code uint32) {
-	diagnostic := strings.TrimSpace(instanceAt(ctx).host.(*CompilerIO).diagnostic.String())
+func compilerExit(code uint32) {
+	diagnostic := strings.TrimSpace(current().host.(*CompilerIO).diagnostic.String())
 
 	throwFmt("aot exited with code %d: %s", code, diagnostic)
 }
@@ -165,11 +165,11 @@ func compileStreams(input io.Reader, output func(p []byte) (int, error), options
 	if flags == 3 {
 		entry, _ := i.export("compile")
 
-		entry.Interface().(func(uintptr))(i.ctx())
+		entry.Interface().(func(uintptr))(i.handle())
 	} else {
 		entry, _ := i.export("compileOptions")
 
-		entry.Interface().(func(uintptr, uint32))(i.ctx(), flags)
+		entry.Interface().(func(uintptr, uint32))(i.handle(), flags)
 	}
 }
 

@@ -422,9 +422,9 @@ func (ep *Epoll) collect(buf []byte, max int, who **EpollMember) int {
 	return n
 }
 
-func (ep *Epoll) wait(p *Process, buf []byte, max int, end time.Time) (int, error) {
+func (ep *Epoll) wait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
 	for {
-		if n := ep.collect(buf, max, nil); n > 0 {
+		if n := ep.collect(buf(), max, nil); n > 0 {
 			return n, nil
 		}
 
