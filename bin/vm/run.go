@@ -11,7 +11,7 @@ import (
 
 const imageDisk = "image"
 
-func runModule(path string, argv []string, asan bool, disks []Disk, user Cred, memory uint64) int {
+func runModule(path string, argv []string, asan, network bool, disks []Disk, user Cred, memory uint64) int {
 	data, exe, tail, err := hostProgram(path)
 
 	if err != nil {
@@ -53,7 +53,7 @@ func runModule(path string, argv []string, asan bool, disks []Disk, user Cred, m
 		disks = append([]Disk{{name: imageDisk, mem: tail}}, disks...)
 	}
 
-	return runKernel(k, path, argv, asan, data, obj, disks)
+	return runKernel(k, path, argv, asan, network, data, obj, disks)
 }
 
 func hostProgram(path string) (data []byte, exe bool, tail []byte, err error) {
@@ -117,7 +117,7 @@ func importsKernel(obj *ElfObject) bool {
 	return false
 }
 
-func runKernel(k *Kernel, path string, argv []string, asan bool, data []byte, obj *ElfObject, disks []Disk) int {
+func runKernel(k *Kernel, path string, argv []string, asan, network bool, data []byte, obj *ElfObject, disks []Disk) int {
 	syscall.Umask(0)
 	k.routeSignals()
 
@@ -171,6 +171,15 @@ func runKernel(k *Kernel, path string, argv []string, asan bool, data []byte, ob
 		}
 
 		env = append(env, "DISKS="+strings.Join(names, " "))
+	}
+
+	if network {
+		guest, link := newPair(false)
+
+		p.files.put(max(p.files.size(), 3), guest, false)
+		startNet(link)
+
+		env = append(env, "NETS="+netName)
 	}
 
 	k.first = p

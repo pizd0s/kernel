@@ -586,6 +586,18 @@ devices_service = executable("devices_service_exe", command(
     color="cyan",
 ), "$(B)/tst/devices_service")
 
+# The probe of vm's network device of tst/test_net.py, which vm runs.
+net_probe = executable("net_probe_exe", command(
+    name="net_probe_module",
+    inputs=["$(S)/tst/net_probe.cpp", *TOOL_INPUTS],
+    outputs=["$(B)/tst/net_probe.wasm"],
+    deps=[libc],
+    cmd=["python3", "$(S)/bin/tools/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], "$(B)/tst/net_probe.wasm",
+         "$(S)/tst/net_probe.cpp"],
+    descr="CC",
+    color="cyan",
+), "$(B)/tst/net_probe")
+
 # The sockets of tst/test_unix_sockets.py, which hands them to the system.
 unix_sockets = executable("unix_sockets_exe", command(
     name="unix_sockets_module",
@@ -1130,6 +1142,7 @@ APPLICATION_TESTED = {
     "devices": [vm, rootfs, devices_service],
     "disks": [vm, rootfs],
     "mounts": [vm, rootfs],
+    "net": [vm, net_probe],
     "unix_sockets": [vm, rootfs, unix_sockets],
     "vfs": [vm, rootfs],
     "busybox_abi": [busybox],

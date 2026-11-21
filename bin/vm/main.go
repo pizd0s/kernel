@@ -13,7 +13,7 @@ import (
 )
 
 func usage() {
-	throwFmt("usage: vm [-v] [--asan] -o output.o input.wasm\n       vm run [-a argv0] [--asan] [--user uid[:gid]] [--memory size] [--disk name=file]... -- module.wasm [arg...]\n       vm spec test.json\n       vm stand [--repeat N] im|pdf|djvu|svg|magic object.o file...")
+	throwFmt("usage: vm [-v] [--asan] -o output.o input.wasm\n       vm run [-a argv0] [--asan] [--user uid[:gid]] [--memory size] [--disk name=file]... [--net] -- module.wasm [arg...]\n       vm spec test.json\n       vm stand [--repeat N] im|pdf|djvu|svg|magic object.o file...")
 }
 
 func main() {
@@ -119,7 +119,7 @@ func compileCommand(args []string) {
 }
 
 func runCommand(args []string) int {
-	argv0, asan, memory := "", false, uint64(defaultMemory)
+	argv0, asan, network, memory := "", false, false, uint64(defaultMemory)
 
 	var disks []Disk
 	var user Cred
@@ -128,6 +128,9 @@ func runCommand(args []string) int {
 		switch {
 		case args[0] == "--asan":
 			asan = true
+			args = args[1:]
+		case args[0] == "--net":
+			network = true
 			args = args[1:]
 		case len(args) > 1 && args[0] == "--user":
 			uid, gid, ok := parseUser(args[1])
@@ -176,7 +179,7 @@ func runCommand(args []string) int {
 
 	argv := append([]string{argv0}, args[1:]...)
 
-	return runModule(args[0], argv, asan, disks, user, memory)
+	return runModule(args[0], argv, asan, network, disks, user, memory)
 }
 
 func parseSize(text string) (uint64, bool) {
