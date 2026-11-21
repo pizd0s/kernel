@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	_           Waker = (*Epoll)(nil)
+	_           Waker = (*EpollMember)(nil)
 	epollInodes atomic.Uint64
 )
 
@@ -20,11 +20,7 @@ const epollMaxEvents = 1 << 20
 type Epoll struct {
 	mu      sync.Mutex
 	members map[EpollKey]*EpollMember
-
-	order  []*EpollMember
-	byID   map[uint64]*EpollMember
-	lastID uint64
-	ready  MsgChannel[*EpollMember]
+	ready   MsgChannel[*EpollMember]
 
 	subs    Subscribers
 	told    bool
@@ -43,18 +39,15 @@ type EpollKey struct {
 type EpollMember struct {
 	key      EpollKey
 	sub      Subscription
-	id       uint64
+	ep       *Epoll
 	events   uint32
 	data     uint64
 	queued   bool
 	disabled bool
-	removed  bool
-	asking   bool
-	raced    bool
 }
 
 func newEpoll() *Epoll {
-	ep := &Epoll{members: map[EpollKey]*EpollMember{}, byID: map[uint64]*EpollMember{}, ino: epollInodes.Add(1), made: time.Now()}
+	ep := &Epoll{members: map[EpollKey]*EpollMember{}, ino: epollInodes.Add(1), made: time.Now()}
 
 	ep.self = []*Epoll{ep}
 	ep.refs.Store(1)
@@ -73,14 +66,9 @@ func (ep *Epoll) unref() {
 
 	ep.mu.Lock()
 
-	members := ep.order
+	members := ep.members
 
-	ep.members, ep.byID, ep.order, ep.ready = map[EpollKey]*EpollMember{}, map[uint64]*EpollMember{}, nil, MsgChannel[*EpollMember]{}
-
-	for _, m := range members {
-		m.removed = true
-	}
-
+	ep.members, ep.ready = map[EpollKey]*EpollMember{}, MsgChannel[*EpollMember]{}
 	ep.mu.Unlock()
 
 	for _, m := range members {
@@ -184,7 +172,7 @@ func (ep *Epoll) poll(events int16, through []*Epoll) int16 {
 
 		ep.ready.put(m)
 
-		if !m.disabled && !m.removed {
+		if !m.disabled && ep.members[m.key] == m {
 			marked = append(marked, asked{m.key.obj, m.events})
 		}
 	}
@@ -212,14 +200,18 @@ func (ep *Epoll) unsubscribe(s *Subscription) {
 	ep.mu.Unlock()
 }
 
-func (ep *Epoll) wake(l *Hook) {
+func (m *EpollMember) wake(l *Hook) {
+	m.ep.ring(m)
+}
+
+func (ep *Epoll) ring(m *EpollMember) {
 	var buf [4]*Hook
 
 	hooks := buf[:0]
 
 	ep.mu.Lock()
 
-	if m := ep.byID[l.sub.id]; m != nil && !m.disabled && !m.removed {
+	if !m.disabled && ep.members[m.key] == m {
 		ep.mark(m)
 
 		if !ep.told {
@@ -236,13 +228,7 @@ func (ep *Epoll) wake(l *Hook) {
 }
 
 func (ep *Epoll) mark(m *EpollMember) {
-	if m.queued || m.disabled || m.removed {
-		return
-	}
-
-	if m.asking {
-		m.raced = true
-
+	if m.queued || m.disabled {
 		return
 	}
 
@@ -310,7 +296,7 @@ func (ep *Epoll) ctl(op uint32, key EpollKey, events uint32, data uint64) error 
 		ep.mu.Unlock()
 		key.obj.unsubscribe(&m.sub)
 		key.obj.subscribe(&m.sub, int16(events))
-		ep.wake(&m.sub.in)
+		ep.ring(m)
 
 		return nil
 	case EPOLL_CTL_DEL:
@@ -324,7 +310,7 @@ func (ep *Epoll) ctl(op uint32, key EpollKey, events uint32, data uint64) error 
 			return ENOENT
 		}
 
-		ep.remove(m)
+		delete(ep.members, key)
 		ep.mu.Unlock()
 		key.obj.unsubscribe(&m.sub)
 		key.obj.unref()
@@ -333,13 +319,6 @@ func (ep *Epoll) ctl(op uint32, key EpollKey, events uint32, data uint64) error 
 	}
 
 	return EINVAL
-}
-
-func (ep *Epoll) remove(m *EpollMember) {
-	m.removed = true
-	delete(ep.members, m.key)
-	delete(ep.byID, m.id)
-	ep.order = slices.DeleteFunc(ep.order, func(o *EpollMember) bool { return o == m })
 }
 
 func (ep *Epoll) add(key EpollKey, events uint32, data uint64) error {
@@ -351,18 +330,15 @@ func (ep *Epoll) add(key EpollKey, events uint32, data uint64) error {
 		return EEXIST
 	}
 
-	ep.lastID++
+	m := &EpollMember{key: key, ep: ep, events: events, data: data}
 
-	m := &EpollMember{key: key, id: ep.lastID, events: events, data: data}
-
-	m.sub.init(ep, m.id)
-	ep.members[key], ep.byID[m.id] = m, m
-	ep.order = append(ep.order, m)
+	m.sub.init(m, 0)
+	ep.members[key] = m
 	ep.mu.Unlock()
 
 	key.obj.subscribe(&m.sub, int16(events))
 	key.obj.ref()
-	ep.wake(&m.sub.in)
+	ep.ring(m)
 
 	return nil
 }
@@ -378,27 +354,17 @@ func (ep *Epoll) collect(buf []byte, max int, who **EpollMember) int {
 
 		m.queued = false
 
-		if m.disabled || m.removed {
+		if m.disabled || ep.members[m.key] != m {
 			continue
 		}
 
-		m.asking = true
 		ep.mu.Unlock()
 
 		revents := m.key.obj.poll(int16(events), ep.self)
 
 		ep.mu.Lock()
-		m.asking = false
 
-		raced := m.raced
-
-		m.raced = false
-
-		if revents == 0 {
-			if raced {
-				ep.mark(m)
-			}
-
+		if revents == 0 || ep.members[m.key] != m {
 			continue
 		}
 
