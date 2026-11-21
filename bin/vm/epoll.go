@@ -343,7 +343,7 @@ func (ep *Epoll) add(key EpollKey, events uint32, data uint64) error {
 	return nil
 }
 
-func (ep *Epoll) collect(buf []byte, max int, who **EpollMember) int {
+func (ep *Epoll) collect(buf []byte, max int) int {
 	n := 0
 
 	ep.mu.Lock()
@@ -372,10 +372,6 @@ func (ep *Epoll) collect(buf []byte, max int, who **EpollMember) int {
 		binary.LittleEndian.PutUint64(buf[sizeofEpollEvent*n+8:], m.data)
 		n++
 
-		if who != nil {
-			*who = m
-		}
-
 		m.disabled = events&EPOLLONESHOT != 0
 
 		if events&EPOLLET == 0 {
@@ -390,7 +386,7 @@ func (ep *Epoll) collect(buf []byte, max int, who **EpollMember) int {
 
 func (ep *Epoll) wait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
 	for {
-		if n := ep.collect(buf(), max, nil); n > 0 {
+		if n := ep.collect(buf(), max); n > 0 {
 			return n, nil
 		}
 
@@ -408,18 +404,4 @@ func (ep *Epoll) marked(p *Process, end time.Time) (timedOut bool, err error) {
 	_, _, timedOut, err = attend(p, &p.turns, &ep.mu, &ep.waiting, func() bool { return ep.ready.len() > 0 }, end, interrupts)
 
 	return timedOut, err
-}
-
-func (ep *Epoll) one(p *Process, out []byte, end time.Time) (*EpollMember, error) {
-	for {
-		var m *EpollMember
-
-		if ep.collect(out, 1, &m) > 0 {
-			return m, nil
-		}
-
-		if timedOut, err := ep.marked(p, end); timedOut || err != nil {
-			return nil, err
-		}
-	}
 }
