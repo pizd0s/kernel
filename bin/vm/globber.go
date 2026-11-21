@@ -95,7 +95,7 @@ func (g *Globber) names(dir string) ([]string, error) {
 	file := bytesFile(buf)
 
 	for {
-		n, err := d.readdir(g.p, file, len(buf))
+		n, err := g.p.fileReaddir(d, file, len(buf))
 
 		if err != nil || n == 0 {
 			return names, err

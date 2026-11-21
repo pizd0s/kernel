@@ -6,8 +6,6 @@ import (
 	"encoding/binary"
 	"sync"
 	"sync/atomic"
-	"time"
-	"unsafe"
 )
 
 const (
@@ -157,11 +155,11 @@ func (a *Answer) unsubscribe(s *Subscription) {
 	a.mu.Unlock()
 }
 
-func (a *Answer) read(p *Process, into Object, n int, mode IoMode) (int, error) {
+func (a *Answer) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
 	return into.with(0, n, true, a.heard)
 }
 
-func (a *Answer) write(p *Process, from Object, n int, mode IoMode) (int, error) {
+func (a *Answer) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, error) {
 	data := make([]byte, n)
 
 	got, err := from.with(0, n, false, func(b []byte) (int, error) {
@@ -173,26 +171,6 @@ func (a *Answer) write(p *Process, from Object, n int, mode IoMode) (int, error)
 	}
 
 	return a.put(data[:got], nil)
-}
-
-func (a *Answer) pread(p *Process, into Object, n int, off int64) (int, error) {
-	return 0, ESPIPE
-}
-
-func (a *Answer) pwrite(p *Process, from Object, n int, off int64) (int, error) {
-	return 0, ESPIPE
-}
-
-func (a *Answer) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
-	return 0, EINVAL
-}
-
-func (a *Answer) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
-}
-
-func (a *Answer) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
 }
 
 func (a *Answer) bind(p *Process, addr Address) error {
@@ -264,22 +242,6 @@ func (a *Answer) recv(p *Process, r *SockRecv) error {
 func (a *Answer) consume(sink func(pk *Packet)) {
 }
 
-func (a *Answer) flags(p *Process) (int, error) {
-	return 0, EBADF
-}
-
-func (a *Answer) setFlags(p *Process, fl int) error {
-	return EBADF
-}
-
-func (a *Answer) seek(p *Process, off int64, whence int) (int64, error) {
-	return 0, ESPIPE
-}
-
-func (a *Answer) readdir(p *Process, into Object, n int) (int, error) {
-	return 0, ENOTDIR
-}
-
 func (a *Answer) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *SockBind:
@@ -326,19 +288,27 @@ func (a *Answer) call(p *Process, r Request, group uint32, waits bool) (bool, er
 		a.consume(r.sink)
 
 		return false, nil
+	case *FileRead:
+		if r.explicit {
+			return false, errUnserved
+		}
+
+		var err error
+
+		r.count, err = a.read(p, r.into, r.n, r.mode)
+
+		return false, err
+	case *FileWrite:
+		if r.explicit {
+			return false, errUnserved
+		}
+
+		var err error
+
+		r.count, err = a.write(p, r.from, r.n, r.mode)
+
+		return false, err
 	}
 
 	return false, errUnserved
-}
-
-func (a *Answer) ioctl(req uintptr, arg unsafe.Pointer) error {
-	return ENOTTY
-}
-
-func (a *Answer) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
-	return EINVAL
-}
-
-func (a *Answer) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
-	return 0, EINVAL
 }

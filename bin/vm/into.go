@@ -6,7 +6,7 @@ type Into struct {
 	p      *Process
 	at, n  uint32
 	vector bool
-	to     Object
+	to     *MemfdFile
 }
 
 func (d Into) put(at int, data []byte) int {

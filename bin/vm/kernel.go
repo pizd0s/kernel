@@ -152,7 +152,7 @@ func programData(p *Process, f Object, module bool) (data []byte, ok bool, err e
 		return nil, false, err
 	}
 
-	if fl, _ := f.flags(p); fl&O_PATH != 0 {
+	if fl, _ := p.fileFlags(f); fl&O_PATH != 0 {
 		return nil, false, EACCES
 	}
 
@@ -188,7 +188,7 @@ func readProgram(size int64, readAt func(b []byte, off int64) error, module bool
 
 func readAt(p *Process, t Object, b []byte, off int64) error {
 	for at := 0; at < len(b); {
-		n, err := t.pread(p, bytesFile(b[at:]), len(b)-at, off+int64(at))
+		n, err := p.filePread(t, bytesFile(b[at:]), len(b)-at, off+int64(at))
 
 		if err != nil {
 			return err

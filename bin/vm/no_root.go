@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
 type NoRoot struct {
@@ -56,7 +55,7 @@ func (r *NoRoot) setFlags(p *Process, fl int) error {
 	return nil
 }
 
-func (r *NoRoot) readdir(p *Process, into Object, n int) (int, error) {
+func (r *NoRoot) readdir(p *Process, into *MemfdFile, n int) (int, error) {
 	return 0, nil
 }
 
@@ -156,51 +155,27 @@ func (r *NoRoot) call(p *Process, q Request, group uint32, waits bool) (bool, er
 		return false, EINVAL
 	case *VfsBind, *VfsConnect:
 		return false, EOPNOTSUPP
+	case *FileGetfl:
+		var err error
+
+		q.flags, err = r.flags(p)
+
+		return false, err
+	case *FileSetfl:
+		return false, r.setFlags(p, q.flags)
+	case *FileReaddir:
+		var err error
+
+		q.count, err = r.readdir(p, q.into, q.n)
+
+		return false, err
+	case *FileRead:
+		return false, EISDIR
+	case *FileWrite:
+		return false, EBADF
+	case *FileCopyTo, *FileCopyFrom:
+		return false, EBADF
 	}
 
 	return false, errUnserved
-}
-
-func (r *NoRoot) read(p *Process, into Object, n int, mode IoMode) (int, error) {
-	return 0, EISDIR
-}
-
-func (r *NoRoot) write(p *Process, from Object, n int, mode IoMode) (int, error) {
-	return 0, EBADF
-}
-
-func (r *NoRoot) pread(p *Process, into Object, n int, off int64) (int, error) {
-	return 0, EISDIR
-}
-
-func (r *NoRoot) pwrite(p *Process, from Object, n int, off int64) (int, error) {
-	return 0, EBADF
-}
-
-func (r *NoRoot) seek(p *Process, off int64, whence int) (int64, error) {
-	return 0, ESPIPE
-}
-
-func (r *NoRoot) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
-	return 0, EINVAL
-}
-
-func (r *NoRoot) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
-	return 0, EBADF
-}
-
-func (r *NoRoot) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
-	return 0, EBADF
-}
-
-func (r *NoRoot) ioctl(req uintptr, arg unsafe.Pointer) error {
-	return ENOTTY
-}
-
-func (r *NoRoot) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
-	return EINVAL
-}
-
-func (r *NoRoot) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
-	return 0, EINVAL
 }

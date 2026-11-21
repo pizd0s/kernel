@@ -8,7 +8,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
 var (
@@ -186,34 +185,6 @@ func (ep *Epoll) setFlags(p *Process, fl int) error {
 	return nil
 }
 
-func (ep *Epoll) read(p *Process, into Object, n int, mode IoMode) (int, error) {
-	return 0, EINVAL
-}
-
-func (ep *Epoll) write(p *Process, from Object, n int, mode IoMode) (int, error) {
-	return 0, EINVAL
-}
-
-func (ep *Epoll) pread(p *Process, into Object, n int, off int64) (int, error) {
-	return 0, EINVAL
-}
-
-func (ep *Epoll) pwrite(p *Process, from Object, n int, off int64) (int, error) {
-	return 0, EINVAL
-}
-
-func (ep *Epoll) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
-	return 0, EINVAL
-}
-
-func (ep *Epoll) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
-}
-
-func (ep *Epoll) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
-}
-
 func (ep *Epoll) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
 	switch op {
 	case EPOLL_CTL_ADD:
@@ -343,23 +314,31 @@ func (ep *Epoll) marked(p *Process, end time.Time) (timedOut bool, err error) {
 	return timedOut, err
 }
 
-func (ep *Epoll) seek(p *Process, off int64, whence int) (int64, error) {
-	return 0, ESPIPE
-}
-
-func (ep *Epoll) readdir(p *Process, into Object, n int) (int, error) {
-	return 0, ENOTDIR
-}
-
 func (ep *Epoll) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, ep.stat(p, r.st)
+	case *FileGetfl:
+		var err error
+
+		r.flags, err = ep.flags(p)
+
+		return false, err
+	case *FileSetfl:
+		return false, ep.setFlags(p, r.flags)
+	case *EpollCtl:
+		return false, ep.epollCtl(r.ctl, r.key, r.events, r.data)
+	case *EpollWait:
+		var err error
+
+		r.count, err = ep.epollWait(p, r.buf, r.max, r.end)
+
+		return false, err
+	case *FileRead:
+		return false, EINVAL
+	case *FileWrite:
+		return false, EINVAL
 	}
 
 	return false, errUnserved
-}
-
-func (ep *Epoll) ioctl(req uintptr, arg unsafe.Pointer) error {
-	return ENOTTY
 }

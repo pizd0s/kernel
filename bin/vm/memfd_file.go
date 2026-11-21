@@ -6,7 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
 var memfdInodes atomic.Uint64
@@ -119,7 +118,7 @@ func (f *MemfdFile) setFlags(p *Process, fl int) error {
 	return nil
 }
 
-func (f *MemfdFile) read(p *Process, into Object, n int, mode IoMode) (int, error) {
+func (f *MemfdFile) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
 	f.mu.Lock()
 
 	defer f.mu.Unlock()
@@ -131,7 +130,7 @@ func (f *MemfdFile) read(p *Process, into Object, n int, mode IoMode) (int, erro
 	return count, err
 }
 
-func (f *MemfdFile) write(p *Process, from Object, n int, mode IoMode) (int, error) {
+func (f *MemfdFile) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, error) {
 	f.mu.Lock()
 
 	defer f.mu.Unlock()
@@ -143,7 +142,7 @@ func (f *MemfdFile) write(p *Process, from Object, n int, mode IoMode) (int, err
 	return count, err
 }
 
-func (f *MemfdFile) pread(p *Process, into Object, n int, off int64) (int, error) {
+func (f *MemfdFile) pread(p *Process, into *MemfdFile, n int, off int64) (int, error) {
 	f.mem.enter()
 
 	defer f.mem.leave()
@@ -169,7 +168,7 @@ func (f *MemfdFile) pread(p *Process, into Object, n int, off int64) (int, error
 	})
 }
 
-func (f *MemfdFile) pwrite(p *Process, from Object, n int, off int64) (int, error) {
+func (f *MemfdFile) pwrite(p *Process, from *MemfdFile, n int, off int64) (int, error) {
 	f.mem.enter()
 
 	defer f.mem.leave()
@@ -221,7 +220,7 @@ func (f *MemfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 	return off, nil
 }
 
-func (f *MemfdFile) splice(at int64, n int, mode int) Object {
+func (f *MemfdFile) splice(at int64, n int, mode int) *MemfdFile {
 	size := f.size()
 
 	at = min(max(at, 0), size)
@@ -264,7 +263,7 @@ func (f *MemfdFile) copyTo(p *Process, out Object, from, to int64, n int) (int, 
 	n = int(min(int64(n), size-from))
 
 	part := f.splice(from, n, O_RDONLY)
-	count, err := out.pwrite(p, part, n, to)
+	count, err := p.filePwrite(out, part, n, to)
 
 	part.unref()
 
@@ -286,34 +285,64 @@ func (f *MemfdFile) copyFrom(p *Process, in Object, from, to int64, n int) (int,
 	n = int(min(int64(n), size-to))
 
 	part := f.splice(to, n, O_WRONLY)
-	count, err := in.pread(p, part, n, from)
+	count, err := p.filePread(in, part, n, from)
 
 	part.unref()
 
 	return count, err
 }
 
-func (f *MemfdFile) readdir(p *Process, into Object, n int) (int, error) {
-	return 0, ENOTDIR
-}
-
 func (f *MemfdFile) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, f.stat(p, r.st)
+	case *FileGetfl:
+		var err error
+
+		r.flags, err = f.flags(p)
+
+		return false, err
+	case *FileSetfl:
+		return false, f.setFlags(p, r.flags)
+	case *FileRead:
+		var err error
+
+		if r.explicit {
+			r.count, err = f.pread(p, r.into, r.n, r.at)
+		} else {
+			r.count, err = f.read(p, r.into, r.n, r.mode)
+		}
+
+		return false, err
+	case *FileWrite:
+		var err error
+
+		if r.explicit {
+			r.count, err = f.pwrite(p, r.from, r.n, r.at)
+		} else {
+			r.count, err = f.write(p, r.from, r.n, r.mode)
+		}
+
+		return false, err
+	case *FileSeek:
+		var err error
+
+		r.pos, err = f.seek(p, r.off, r.whence)
+
+		return false, err
+	case *FileCopyTo:
+		var err error
+
+		r.count, err = f.copyTo(p, r.out, r.from, r.to, r.n)
+
+		return false, err
+	case *FileCopyFrom:
+		var err error
+
+		r.count, err = f.copyFrom(p, r.in, r.from, r.to, r.n)
+
+		return false, err
 	}
 
 	return false, errUnserved
-}
-
-func (f *MemfdFile) ioctl(req uintptr, arg unsafe.Pointer) error {
-	return ENOTTY
-}
-
-func (f *MemfdFile) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
-	return EINVAL
-}
-
-func (f *MemfdFile) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
-	return 0, EINVAL
 }

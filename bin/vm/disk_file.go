@@ -5,8 +5,6 @@ package main
 import (
 	"sync/atomic"
 	"syscall"
-	"time"
-	"unsafe"
 )
 
 type DiskFile struct {
@@ -102,23 +100,19 @@ func (f *DiskFile) at(b []byte, off int64, write bool) (int, error) {
 	}
 }
 
-func (f *DiskFile) pread(p *Process, into Object, n int, off int64) (int, error) {
+func (f *DiskFile) pread(p *Process, into *MemfdFile, n int, off int64) (int, error) {
 	return into.with(0, n, true, func(b []byte) (int, error) {
 		return f.at(b, off, false)
 	})
 }
 
-func (f *DiskFile) pwrite(p *Process, from Object, n int, off int64) (int, error) {
+func (f *DiskFile) pwrite(p *Process, from *MemfdFile, n int, off int64) (int, error) {
 	return from.with(0, n, false, func(b []byte) (int, error) {
 		return f.at(b, off, true)
 	})
 }
 
-func (f *DiskFile) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
-	return 0, EINVAL
-}
-
-func (f *DiskFile) read(p *Process, into Object, n int, mode IoMode) (int, error) {
+func (f *DiskFile) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
 	count, err := f.pread(p, into, n, f.pos.Load())
 
 	f.pos.Add(int64(count))
@@ -126,7 +120,7 @@ func (f *DiskFile) read(p *Process, into Object, n int, mode IoMode) (int, error
 	return count, err
 }
 
-func (f *DiskFile) write(p *Process, from Object, n int, mode IoMode) (int, error) {
+func (f *DiskFile) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, error) {
 	count, err := f.pwrite(p, from, n, f.pos.Load())
 
 	f.pos.Add(int64(count))
@@ -195,15 +189,11 @@ func (f *DiskFile) statfs(p *Process, st *Statfs) error {
 }
 
 func (f *DiskFile) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
-	return out.copyFrom(p, f, from, to, n)
+	return p.fileCopyFrom(out, f, from, to, n)
 }
 
 func (f *DiskFile) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
 	return copyThrough(p, in, f, from, to, n)
-}
-
-func (f *DiskFile) readdir(p *Process, into Object, n int) (int, error) {
-	return 0, ENOTDIR
 }
 
 func (f *DiskFile) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
@@ -220,19 +210,53 @@ func (f *DiskFile) call(p *Process, r Request, group uint32, waits bool) (bool, 
 		return false, f.utimes(p, r.ts)
 	case *FileStatfs:
 		return false, f.statfs(p, r.st)
+	case *FileGetfl:
+		var err error
+
+		r.flags, err = f.flags(p)
+
+		return false, err
+	case *FileSetfl:
+		return false, f.setFlags(p, r.flags)
+	case *FileRead:
+		var err error
+
+		if r.explicit {
+			r.count, err = f.pread(p, r.into, r.n, r.at)
+		} else {
+			r.count, err = f.read(p, r.into, r.n, r.mode)
+		}
+
+		return false, err
+	case *FileWrite:
+		var err error
+
+		if r.explicit {
+			r.count, err = f.pwrite(p, r.from, r.n, r.at)
+		} else {
+			r.count, err = f.write(p, r.from, r.n, r.mode)
+		}
+
+		return false, err
+	case *FileSeek:
+		var err error
+
+		r.pos, err = f.seek(p, r.off, r.whence)
+
+		return false, err
+	case *FileCopyTo:
+		var err error
+
+		r.count, err = f.copyTo(p, r.out, r.from, r.to, r.n)
+
+		return false, err
+	case *FileCopyFrom:
+		var err error
+
+		r.count, err = f.copyFrom(p, r.in, r.from, r.to, r.n)
+
+		return false, err
 	}
 
 	return false, errUnserved
-}
-
-func (f *DiskFile) ioctl(req uintptr, arg unsafe.Pointer) error {
-	return ENOTTY
-}
-
-func (f *DiskFile) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
-	return EINVAL
-}
-
-func (f *DiskFile) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
-	return 0, EINVAL
 }

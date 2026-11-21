@@ -6,7 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
 type UnixListener struct {
@@ -203,42 +202,6 @@ func (l *UnixListener) setFlags(p *Process, fl int) error {
 	return nil
 }
 
-func (l *UnixListener) read(p *Process, into Object, n int, mode IoMode) (int, error) {
-	return 0, EBADF
-}
-
-func (l *UnixListener) write(p *Process, from Object, n int, mode IoMode) (int, error) {
-	return 0, EBADF
-}
-
-func (l *UnixListener) pread(p *Process, into Object, n int, off int64) (int, error) {
-	return 0, EBADF
-}
-
-func (l *UnixListener) pwrite(p *Process, from Object, n int, off int64) (int, error) {
-	return 0, EBADF
-}
-
-func (l *UnixListener) seek(p *Process, off int64, whence int) (int64, error) {
-	return 0, ESPIPE
-}
-
-func (l *UnixListener) readdir(p *Process, into Object, n int) (int, error) {
-	return 0, ENOTDIR
-}
-
-func (l *UnixListener) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
-	return 0, EINVAL
-}
-
-func (l *UnixListener) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
-	return 0, EBADF
-}
-
-func (l *UnixListener) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
-	return 0, EBADF
-}
-
 func (l *UnixListener) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
@@ -249,6 +212,20 @@ func (l *UnixListener) call(p *Process, r Request, group uint32, waits bool) (bo
 		r.conn, err = l.knock(p, r.kind, r.nonblock, r.timeout)
 
 		return false, err
+	case *FileGetfl:
+		var err error
+
+		r.flags, err = l.flags(p)
+
+		return false, err
+	case *FileSetfl:
+		return false, l.setFlags(p, r.flags)
+	case *FileRead:
+		return false, EBADF
+	case *FileWrite:
+		return false, EBADF
+	case *FileCopyTo, *FileCopyFrom:
+		return false, EBADF
 	}
 
 	return false, errUnserved
@@ -291,16 +268,4 @@ func (l *UnixListener) knock(p *Process, kind int, nonblock bool, timeout *atomi
 
 		return nil, err
 	}
-}
-
-func (l *UnixListener) ioctl(req uintptr, arg unsafe.Pointer) error {
-	return ENOTTY
-}
-
-func (l *UnixListener) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
-	return EINVAL
-}
-
-func (l *UnixListener) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
-	return 0, EINVAL
 }

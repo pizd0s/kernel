@@ -5,8 +5,6 @@ package main
 import (
 	"sync"
 	"sync/atomic"
-	"time"
-	"unsafe"
 )
 
 type Capture struct {
@@ -66,11 +64,7 @@ func (c *Capture) setFlags(p *Process, fl int) error {
 	return nil
 }
 
-func (c *Capture) read(p *Process, into Object, n int, mode IoMode) (int, error) {
-	return 0, EBADF
-}
-
-func (c *Capture) write(p *Process, from Object, n int, mode IoMode) (int, error) {
+func (c *Capture) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, error) {
 	return from.with(0, n, false, func(b []byte) (int, error) {
 		c.mu.Lock()
 
@@ -86,51 +80,29 @@ func (c *Capture) write(p *Process, from Object, n int, mode IoMode) (int, error
 	})
 }
 
-func (c *Capture) pread(p *Process, into Object, n int, off int64) (int, error) {
-	return 0, ESPIPE
-}
-
-func (c *Capture) pwrite(p *Process, from Object, n int, off int64) (int, error) {
-	return 0, ESPIPE
-}
-
-func (c *Capture) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
-	return 0, EINVAL
-}
-
-func (c *Capture) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
-}
-
-func (c *Capture) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
-}
-
-func (c *Capture) seek(p *Process, off int64, whence int) (int64, error) {
-	return 0, ESPIPE
-}
-
-func (c *Capture) readdir(p *Process, into Object, n int) (int, error) {
-	return 0, ENOTDIR
-}
-
 func (c *Capture) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, c.stat(p, r.st)
+	case *FileGetfl:
+		var err error
+
+		r.flags, err = c.flags(p)
+
+		return false, err
+	case *FileSetfl:
+		return false, c.setFlags(p, r.flags)
+	case *FileWrite:
+		if r.explicit {
+			return false, errUnserved
+		}
+
+		var err error
+
+		r.count, err = c.write(p, r.from, r.n, r.mode)
+
+		return false, err
 	}
 
 	return false, errUnserved
-}
-
-func (c *Capture) ioctl(req uintptr, arg unsafe.Pointer) error {
-	return ENOTTY
-}
-
-func (c *Capture) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
-	return EINVAL
-}
-
-func (c *Capture) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
-	return 0, EINVAL
 }

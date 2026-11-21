@@ -5,8 +5,6 @@ package main
 import (
 	"sync"
 	"sync/atomic"
-	"time"
-	"unsafe"
 )
 
 type UnixDgram struct {
@@ -305,7 +303,7 @@ func (s *UnixDgram) dontwait() uint32 {
 	return 0
 }
 
-func (s *UnixDgram) read(p *Process, into Object, n int, mode IoMode) (int, error) {
+func (s *UnixDgram) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
 	r := SockRecv{into: Into{p: p, to: into}, want: n, flags: s.dontwait() | bit(mode.nonblock)*MSG_DONTWAIT}
 	err := s.inbox.recv(p, &r)
 
@@ -314,7 +312,7 @@ func (s *UnixDgram) read(p *Process, into Object, n int, mode IoMode) (int, erro
 	return r.n, err
 }
 
-func (s *UnixDgram) write(p *Process, from Object, n int, mode IoMode) (int, error) {
+func (s *UnixDgram) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, error) {
 	if n > packetMax {
 		return 0, EMSGSIZE
 	}
@@ -324,34 +322,6 @@ func (s *UnixDgram) write(p *Process, from Object, n int, mode IoMode) (int, err
 	err := s.send(p, &r)
 
 	return r.n, err
-}
-
-func (s *UnixDgram) pread(p *Process, into Object, n int, off int64) (int, error) {
-	return 0, ESPIPE
-}
-
-func (s *UnixDgram) pwrite(p *Process, from Object, n int, off int64) (int, error) {
-	return 0, ESPIPE
-}
-
-func (s *UnixDgram) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
-	return 0, EINVAL
-}
-
-func (s *UnixDgram) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
-}
-
-func (s *UnixDgram) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
-}
-
-func (s *UnixDgram) seek(p *Process, off int64, whence int) (int64, error) {
-	return 0, ESPIPE
-}
-
-func (s *UnixDgram) readdir(p *Process, into Object, n int) (int, error) {
-	return 0, ENOTDIR
 }
 
 func (s *UnixDgram) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
@@ -402,19 +372,35 @@ func (s *UnixDgram) call(p *Process, r Request, group uint32, waits bool) (bool,
 		s.consume(r.sink)
 
 		return false, nil
+	case *FileGetfl:
+		var err error
+
+		r.flags, err = s.flags(p)
+
+		return false, err
+	case *FileSetfl:
+		return false, s.setFlags(p, r.flags)
+	case *FileRead:
+		if r.explicit {
+			return false, errUnserved
+		}
+
+		var err error
+
+		r.count, err = s.read(p, r.into, r.n, r.mode)
+
+		return false, err
+	case *FileWrite:
+		if r.explicit {
+			return false, errUnserved
+		}
+
+		var err error
+
+		r.count, err = s.write(p, r.from, r.n, r.mode)
+
+		return false, err
 	}
 
 	return false, errUnserved
-}
-
-func (s *UnixDgram) ioctl(req uintptr, arg unsafe.Pointer) error {
-	return ENOTTY
-}
-
-func (s *UnixDgram) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
-	return EINVAL
-}
-
-func (s *UnixDgram) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
-	return 0, EINVAL
 }

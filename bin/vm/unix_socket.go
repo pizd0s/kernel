@@ -6,8 +6,6 @@ import (
 	"encoding/binary"
 	"sync"
 	"sync/atomic"
-	"time"
-	"unsafe"
 )
 
 type UnixSocket struct {
@@ -351,7 +349,7 @@ func (s *UnixSocket) consume(sink func(pk *Packet)) {
 	}
 }
 
-func (s *UnixSocket) read(p *Process, into Object, n int, mode IoMode) (int, error) {
+func (s *UnixSocket) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
 	c, err := s.connection()
 
 	if err != nil {
@@ -361,7 +359,7 @@ func (s *UnixSocket) read(p *Process, into Object, n int, mode IoMode) (int, err
 	return c.read(p, into, n, mode)
 }
 
-func (s *UnixSocket) write(p *Process, from Object, n int, mode IoMode) (int, error) {
+func (s *UnixSocket) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, error) {
 	c, err := s.connection()
 
 	if err != nil {
@@ -369,34 +367,6 @@ func (s *UnixSocket) write(p *Process, from Object, n int, mode IoMode) (int, er
 	}
 
 	return c.write(p, from, n, mode)
-}
-
-func (s *UnixSocket) pread(p *Process, into Object, n int, off int64) (int, error) {
-	return 0, ESPIPE
-}
-
-func (s *UnixSocket) pwrite(p *Process, from Object, n int, off int64) (int, error) {
-	return 0, ESPIPE
-}
-
-func (s *UnixSocket) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
-	return 0, EINVAL
-}
-
-func (s *UnixSocket) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
-}
-
-func (s *UnixSocket) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
-}
-
-func (s *UnixSocket) seek(p *Process, off int64, whence int) (int64, error) {
-	return 0, ESPIPE
-}
-
-func (s *UnixSocket) readdir(p *Process, into Object, n int) (int, error) {
-	return 0, ENOTDIR
 }
 
 func (s *UnixSocket) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
@@ -447,19 +417,35 @@ func (s *UnixSocket) call(p *Process, r Request, group uint32, waits bool) (bool
 		s.consume(r.sink)
 
 		return false, nil
+	case *FileGetfl:
+		var err error
+
+		r.flags, err = s.flags(p)
+
+		return false, err
+	case *FileSetfl:
+		return false, s.setFlags(p, r.flags)
+	case *FileRead:
+		if r.explicit {
+			return false, errUnserved
+		}
+
+		var err error
+
+		r.count, err = s.read(p, r.into, r.n, r.mode)
+
+		return false, err
+	case *FileWrite:
+		if r.explicit {
+			return false, errUnserved
+		}
+
+		var err error
+
+		r.count, err = s.write(p, r.from, r.n, r.mode)
+
+		return false, err
 	}
 
 	return false, errUnserved
-}
-
-func (s *UnixSocket) ioctl(req uintptr, arg unsafe.Pointer) error {
-	return ENOTTY
-}
-
-func (s *UnixSocket) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
-	return EINVAL
-}
-
-func (s *UnixSocket) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
-	return 0, EINVAL
 }

@@ -6,7 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
 type PairState struct {
@@ -570,7 +569,7 @@ func scatterInto(bufs [][]byte, data []byte) int {
 	return n
 }
 
-func (e *PairEnd) read(p *Process, into Object, n int, mode IoMode) (int, error) {
+func (e *PairEnd) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
 		return 0, EIO
 	}
@@ -583,7 +582,7 @@ func (e *PairEnd) read(p *Process, into Object, n int, mode IoMode) (int, error)
 	return r.n, err
 }
 
-func (e *PairEnd) write(p *Process, from Object, n int, mode IoMode) (int, error) {
+func (e *PairEnd) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, error) {
 	if p.chaosFail("write") {
 		return 0, EIO
 	}
@@ -599,7 +598,7 @@ func (e *PairEnd) write(p *Process, from Object, n int, mode IoMode) (int, error
 	return r.n, err
 }
 
-func takeFrom(from Object) func(at int, b []byte) int {
+func takeFrom(from *MemfdFile) func(at int, b []byte) int {
 	return func(at int, b []byte) int {
 		n, _ := from.with(int64(at), len(b), false, func(src []byte) (int, error) {
 			return copy(b, src), nil
@@ -607,26 +606,6 @@ func takeFrom(from Object) func(at int, b []byte) int {
 
 		return n
 	}
-}
-
-func (e *PairEnd) pread(p *Process, into Object, n int, off int64) (int, error) {
-	return 0, ESPIPE
-}
-
-func (e *PairEnd) pwrite(p *Process, from Object, n int, off int64) (int, error) {
-	return 0, ESPIPE
-}
-
-func (e *PairEnd) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
-	return 0, EINVAL
-}
-
-func (e *PairEnd) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
-}
-
-func (e *PairEnd) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
 }
 
 func (e *PairEnd) bind(p *Process, a Address) error {
@@ -693,14 +672,6 @@ func senderAddress(path []byte) []byte {
 	return unixAddress(path)
 }
 
-func (e *PairEnd) seek(p *Process, off int64, whence int) (int64, error) {
-	return 0, ESPIPE
-}
-
-func (e *PairEnd) readdir(p *Process, into Object, n int) (int, error) {
-	return 0, ENOTDIR
-}
-
 func (e *PairEnd) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
@@ -751,19 +722,35 @@ func (e *PairEnd) call(p *Process, r Request, group uint32, waits bool) (bool, e
 		return false, nil
 	case *SockKnock:
 		return false, EPROTOTYPE
+	case *FileGetfl:
+		var err error
+
+		r.flags, err = e.flags(p)
+
+		return false, err
+	case *FileSetfl:
+		return false, e.setFlags(p, r.flags)
+	case *FileRead:
+		if r.explicit {
+			return false, errUnserved
+		}
+
+		var err error
+
+		r.count, err = e.read(p, r.into, r.n, r.mode)
+
+		return false, err
+	case *FileWrite:
+		if r.explicit {
+			return false, errUnserved
+		}
+
+		var err error
+
+		r.count, err = e.write(p, r.from, r.n, r.mode)
+
+		return false, err
 	}
 
 	return false, errUnserved
-}
-
-func (e *PairEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
-	return ENOTTY
-}
-
-func (e *PairEnd) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
-	return EINVAL
-}
-
-func (e *PairEnd) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
-	return 0, EINVAL
 }

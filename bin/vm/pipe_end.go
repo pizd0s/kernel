@@ -149,7 +149,7 @@ func (e *PipeEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
 	return nil
 }
 
-func (e *PipeEnd) read(p *Process, into Object, n int, mode IoMode) (int, error) {
+func (e *PipeEnd) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
 		return 0, EIO
 	}
@@ -197,7 +197,7 @@ func (e *PipeEnd) read(p *Process, into Object, n int, mode IoMode) (int, error)
 	}
 }
 
-func (e *PipeEnd) write(p *Process, from Object, n int, mode IoMode) (int, error) {
+func (e *PipeEnd) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, error) {
 	if p.chaosFail("write") {
 		return 0, EIO
 	}
@@ -255,47 +255,41 @@ func (e *PipeEnd) write(p *Process, from Object, n int, mode IoMode) (int, error
 	return 0, err
 }
 
-func (e *PipeEnd) pread(p *Process, into Object, n int, off int64) (int, error) {
-	return 0, ESPIPE
-}
-
-func (e *PipeEnd) pwrite(p *Process, from Object, n int, off int64) (int, error) {
-	return 0, ESPIPE
-}
-
-func (e *PipeEnd) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
-	return 0, EINVAL
-}
-
-func (e *PipeEnd) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
-}
-
-func (e *PipeEnd) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
-	return 0, EINVAL
-}
-
-func (e *PipeEnd) seek(p *Process, off int64, whence int) (int64, error) {
-	return 0, ESPIPE
-}
-
-func (e *PipeEnd) readdir(p *Process, into Object, n int) (int, error) {
-	return 0, ENOTDIR
-}
-
 func (e *PipeEnd) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, e.stat(p, r.st)
+	case *FileGetfl:
+		var err error
+
+		r.flags, err = e.flags(p)
+
+		return false, err
+	case *FileSetfl:
+		return false, e.setFlags(p, r.flags)
+	case *FileRead:
+		if r.explicit {
+			return false, errUnserved
+		}
+
+		var err error
+
+		r.count, err = e.read(p, r.into, r.n, r.mode)
+
+		return false, err
+	case *FileWrite:
+		if r.explicit {
+			return false, errUnserved
+		}
+
+		var err error
+
+		r.count, err = e.write(p, r.from, r.n, r.mode)
+
+		return false, err
+	case *FileIoctl:
+		return false, e.ioctl(r.req, r.arg)
 	}
 
 	return false, errUnserved
-}
-
-func (e *PipeEnd) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
-	return EINVAL
-}
-
-func (e *PipeEnd) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
-	return 0, EINVAL
 }
