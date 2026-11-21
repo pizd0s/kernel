@@ -169,6 +169,8 @@ const (
 	utsMachine       = "wasm32"
 	databaseMax      = 16 << 20
 	windowsKept      = 8
+	packetsKept      = 8
+	packetRoomKept   = 4096
 	localeNameMax    = 23
 	traceStringMax   = 64
 )
@@ -187,6 +189,8 @@ const (
 )
 
 type Process struct {
+	packets []*Packet
+
 	stats  Slots[FileStat]
 	sends  Slots[SockSend]
 	recvs  Slots[SockRecv]
@@ -7562,14 +7566,15 @@ func (p *Process) libcSendmsg(fd, msg, flags uint32) uint32 {
 
 	h := p.span(msg, sizeofMsghdr)
 	to := p.destination(binary.LittleEndian.Uint32(h), binary.LittleEndian.Uint32(h[4:]))
-	files, cred, err := p.rights(binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
+	pk := p.packet()
+	files, cred, err := p.rights(pk.files[:0], binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
 	iov, count := binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:])
-	data, err := p.gather(iov, count, packetMax)
+	data, err := p.gatherIn(pk.data[:cap(pk.data)], iov, count, packetMax)
 
 	if err == EMSGSIZE && p.sockKind(s) == SOCK_STREAM {
 		data, err = p.gather(iov, count, math.MaxInt)
@@ -7579,7 +7584,40 @@ func (p *Process) libcSendmsg(fd, msg, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	return p.result(p.sockSend(s, &Packet{data: data, files: files, cred: cred}, to, sendMode(flags)))
+	pk.data, pk.files, pk.cred = data, files, cred
+
+	return p.result(p.sockSend(s, pk, to, sendMode(flags)))
+}
+
+func (p *Process) packet() *Packet {
+	k := len(p.packets)
+
+	if k == 0 {
+		return &Packet{}
+	}
+
+	pk := p.packets[k-1]
+
+	p.packets = p.packets[:k-1]
+
+	return pk
+}
+
+func (p *Process) packetDone(pk *Packet) {
+	if pk == nil || len(p.packets) >= packetsKept {
+		return
+	}
+
+	data, files := pk.data[:0], pk.files[:0]
+
+	clear(pk.files)
+
+	if cap(data) > packetRoomKept {
+		data = nil
+	}
+
+	*pk = Packet{data: data, files: files}
+	p.packets = append(p.packets, pk)
 }
 
 func sendMode(flags uint32) IoMode {
@@ -7621,6 +7659,7 @@ func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
 
 	p.put32(msg+20, written)
 	p.put32(msg+24, r.out|cut|flags&MSG_CMSG_CLOEXEC)
+	p.packetDone(r.pk)
 
 	return p.result(r.n, nil)
 }
@@ -7716,6 +7755,8 @@ func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 		p.putAddress(r.addr, addr, lenAt)
 	}
 
+	p.packetDone(r.pk)
+
 	return p.result(r.n, err)
 }
 
@@ -7748,8 +7789,7 @@ func (p *Process) ucred() *Ucred {
 	return &Ucred{uint32(p.pid), p.cred.uid(), p.cred.gid()}
 }
 
-func (p *Process) rights(at, n uint32) ([]Object, *Ucred, error) {
-	var files []Object
+func (p *Process) rights(files []Object, at, n uint32) ([]Object, *Ucred, error) {
 	var cred *Ucred
 
 	for off := uint32(0); off+sizeofCmsghdr <= n; {

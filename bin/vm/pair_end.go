@@ -442,6 +442,7 @@ func (e *PairEnd) recv(p *Process, r *SockRecv) error {
 
 	if r.flags&MSG_PEEK == 0 {
 		e.received(r, pk.files, pk.cred)
+		r.pk = pk
 	}
 
 	return nil

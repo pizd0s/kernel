@@ -16,6 +16,7 @@ type SockRecv struct {
 	files []Object
 	cred  *Ucred
 	addr  []byte
+	pk    *Packet
 }
 
 func (r *SockRecv) op() uint32 {
