@@ -14,12 +14,15 @@ and its directory do. Every case starts in a directory of its own under
     test_vfs.py --linux
 
 LINUX is what Linux answers: `test_vfs.py --linux` runs the probe in a
-chroot of a user namespace whose root, read-only, has the image's /etc,
-its files and mc's directory, and /usr -> /, and a tmpfs at /run, with
-the host's python. rootfs must
-answer it line for line.
+chroot of a user namespace whose root, read-only, is laid out as the
+image's (bin/rootfs/image.py): /etc and /bin links into the realm,
+/pzd/realm/system, a link to its directory of the store, whose etc has
+links to etc/base's files and mc's directory, /usr -> /, and a tmpfs at
+/run, with the host's python. rootfs must answer it line for line, each
+directory of the store's uid as <uid>.
 """
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -363,7 +366,7 @@ B15 open(O_DIRECTORY) ld: ok
 B16 open(O_DIRECTORY|O_NOFOLLOW) ld: ENOTDIR
 B17 chdir ld ; getcwd: ok /run/p040/d
 B18 chdir up3 ; getcwd: ok /
-B19 chdir abs ; getcwd: ok /etc
+B19 chdir abs ; getcwd: ok /pzd/store/<uid>-rlm-system/etc
 B20 readlink f: EINVAL
 B21 listdir up3/usr/usr/etc: ok ['group', 'mc', 'motd', 'passwd']
 B22 open(O_CREAT) through dangling into missing dir: ENOENT
@@ -378,7 +381,7 @@ C05 /usr/.. is /: ok True
 C06 stat /etc/motd/..: ENOTDIR
 C07 stat /nonexistent/..: ENOENT
 C08 ld/.. is .: ok True
-C09 abs/.. is /: ok True
+C09 abs/.. is /: ok False
 C10 openat(open(abs/..), etc/motd): ok -
 C11 openat(open(/run), ../etc/motd): ok -
 C12 st_dev of /run/.. is /'s: ok True
@@ -444,6 +447,13 @@ I16 stat f ; append to f ; stat f: ok (1, 3)
 """
 
 FILES = {"etc/motd": "pizdos\n", "etc/passwd": "root:x:0:0:root:/:/bin/sh\n", "etc/group": "root:x:0:\n"}
+REALM = "pzd/store/" + "r" * 22 + "-rlm-system"
+BASE = "pzd/store/" + "b" * 22 + "-etc-base"
+
+
+def stored(output):
+    """The output with every directory of the store's uid as <uid>."""
+    return re.sub(r"/pzd/store/[0-9A-Za-z]{22}-", "/pzd/store/<uid>-", output)
 
 
 def compare(got, want, where):
@@ -458,11 +468,14 @@ def linux():
     store = "/" + Path(python).parts[1]
     with tempfile.TemporaryDirectory(prefix="pizdos-vfs-linux-") as work:
         root = Path(work)
-        for d in ("etc", "run", "dev", store.lstrip("/")):
+        for d in ("run", "dev", store.lstrip("/"), f"{REALM}/bin", f"{REALM}/etc/mc", f"{BASE}/etc", "pzd/realm"):
             (root / d).mkdir(parents=True, exist_ok=True)
         for name, text in FILES.items():
-            (root / name).write_text(text)
-        (root / "etc/mc").mkdir()
+            (root / BASE / name).write_text(text)
+            (root / REALM / name).symlink_to(f"/{BASE}/{name}")
+        (root / "pzd/realm/system").symlink_to("/" + REALM)
+        (root / "bin").symlink_to("pzd/realm/system/bin")
+        (root / "etc").symlink_to("pzd/realm/system/etc")
         (root / "usr").symlink_to("/")
         (root / "dev/null").touch()
         (root / "probe.py").write_text(PROBE)
@@ -472,7 +485,7 @@ def linux():
         result = subprocess.run(["unshare", "--user", "--map-root-user", "--mount", "--fork", "sh", "-c", script],
                                 capture_output=True, text=True, timeout=600)
         assert result.returncode == 0 and result.stderr == "", result
-        return result.stdout
+        return stored(result.stdout)
 
 
 def main():
@@ -484,7 +497,7 @@ def main():
     script = "python3 - <<'PROBE_EOF'\n" + PROBE + "PROBE_EOF\nexit 0\n"
     result = subprocess.run([vm, "run", "--", rootfs], input=script.encode(), capture_output=True, env=env, timeout=600)
     assert result.returncode == 0 and result.stderr == b"", result
-    compare(result.stdout.decode(), LINUX, "rootfs")
+    compare(stored(result.stdout.decode()), LINUX, "rootfs")
     print(f"vfs: {len(LINUX.splitlines())} cases of the walk answer as Linux's in rootfs")
 
 

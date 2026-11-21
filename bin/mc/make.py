@@ -4,6 +4,7 @@ and of what it stands on: GLib, its utility library, with PCRE2 under
 GLib's regular expressions, and S-Lang, its screen.
 
     make.py <clang> <wasm-ld> <libc-include> <libc.a> <mc.tar.xz> <glib.tar.xz> <slang.tar.bz2> <pcre2.tar.bz2> <mc.wasm> <mc.tar>
+            <prefix> <terminfo package>
 
 What the four configures would make is made here. Each config.h is ours
 (mc-config.h, glib-config.h, slang-config.h; PCRE2's is its generic one
@@ -28,10 +29,11 @@ entry when another tree closes (mc-tree-hook.patch). A patch applies to
 the lines it names, exactly, or the build stops.
 
 mc.tar is what mc reads as it runs, as its make install lays it out: its
-members etc/mc, share/mc and libexec/mc are the system's /etc/mc,
-/usr/share/mc and /usr/libexec/mc. The templates among them get the
-system's paths. There is no help file: mc makes it from its manual with a
-perl script.
+members etc/mc, share/mc and libexec/mc are those of the prefix, mc's
+directory of the store (dev/pkg.py), where mc looks for them. The
+templates among them get those paths. S-Lang reads the terminals'
+descriptions from the terminfo package's share/terminfo first. There is
+no help file: mc makes it from its manual with a perl script.
 """
 import io
 import os
@@ -46,6 +48,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(ROOT / "dev"))
 
+import pkg  # noqa: E402
 import wasm  # noqa: E402
 
 CFLAGS = ["-O2", "-w", "-DHAVE_CONFIG_H"]
@@ -114,15 +117,18 @@ PATCHES = {"glib": ["glib-function-types.patch"], "mc": ["mc-function-types.patc
 MC_LEFT = ["lib/logging.c", "lib/tty/color-ncurses.c", "lib/tty/tty-ncurses.c", "lib/tty/x11conn.c", "lib/vfs/netutil.c",
            "src/editor/spell.c", "src/filemanager/chattr.c", "src/consaver/", "src/man2hlp/", "src/vfs/ftpfs/", "src/vfs/sftpfs/",
            "src/vfs/shell/", "src/vfs/undelfs/"]
-MC_FLAGS = ["-Dunix", '-DSYSCONFDIR="/etc/mc/"', '-DLIBEXECDIR="/usr/libexec/mc/"', '-DDATADIR="/usr/share/mc/"',
-            '-DLOCALEDIR="/usr/share/locale"', '-DEXTHELPERSDIR="/usr/libexec/mc/ext.d/"']
 
-# The values of mc's templates: the system's paths, and the programs its
-# scripts run, by the names the system would have them under.
+
+def mc_flags(prefix):
+    return ["-Dunix", f'-DSYSCONFDIR="{prefix}/etc/mc/"', f'-DLIBEXECDIR="{prefix}/libexec/mc/"', f'-DDATADIR="{prefix}/share/mc/"',
+            f'-DLOCALEDIR="{prefix}/share/locale"', f'-DEXTHELPERSDIR="{prefix}/libexec/mc/ext.d/"']
+
+
+# The values of mc's templates: its paths under the prefix, and the
+# programs its scripts run, by the names the system has them under; main
+# fills in the paths.
 VALUES = {
-    "PACKAGE": "mc", "bindir": "/usr/bin", "datarootdir": "/usr/share", "pkglibexecdir": "/usr/libexec/mc",
-    "EXTHELPERSDIR": "/usr/libexec/mc/ext.d", "EXTFSHELPERSDIR": "/usr/libexec/mc/extfs.d",
-    "AWK": "awk", "PERL": "/usr/bin/env perl", "PYTHON": "/usr/bin/python3", "RUBY": "/usr/bin/env ruby",
+    "PACKAGE": "mc", "AWK": "awk", "PERL": "/usr/bin/env perl", "PYTHON": "/usr/bin/python3", "RUBY": "/usr/bin/env ruby",
     "ZIP": "/usr/bin/zip", "UNZIP": "/usr/bin/unzip", "HAVE_ZIPINFO": "0", "MANDOC": "-man", "MAN_FLAGS": "",
     "ENCODING_ISO8859": "ISO-8859", "ENCODING_CP1251": "CP1251", "ENCODING_CP866": "CP866",
 }
@@ -206,12 +212,12 @@ def pcre2(tree, work, system):
     return units(sources, work / "o/pcre2", flags), gen
 
 
-def slang(tree, work, system):
+def slang(tree, work, system, terminfo):
     gen = work / "gen/slang"
     gen.mkdir(parents=True)
     shutil.copy(HERE / "slang-config.h", gen / "config.h")
     shutil.copy(tree / "src/terminfo/default.inc", gen / "terminfo.inc")
-    flags = [*CFLAGS, "-DSLANG", "-I", str(gen), "-I", str(tree / "src"), *system]
+    flags = [*CFLAGS, "-DSLANG", f'-DMISC_TERMINFO_DIRS="{terminfo}"', "-I", str(gen), "-I", str(tree / "src"), *system]
 
     return units([tree / "src" / f"{name}.c" for name in SLANG], work / "o/slang", flags)
 
@@ -235,7 +241,7 @@ def glib(cc, include, tree, work, system, pcre2_headers):
     return [(source, obj, flags + ["-D__GNU__"] if source.name == "glib-unix.c" else flags) for source, obj, flags in built], includes[:8]
 
 
-def mc(tree, work, system, glib_includes, slang_tree):
+def mc(tree, work, system, glib_includes, slang_tree, prefix):
     gen = work / "gen/mc"
     gen.mkdir(parents=True)
     shutil.copy(HERE / "mc-config.h", gen / "config.h")
@@ -245,7 +251,7 @@ def mc(tree, work, system, glib_includes, slang_tree):
     (tree / "lib/stdckdint.h").write_text("".join(line.replace("bool", "gboolean", 1) for line in checked))
     sources = sorted(source for directory in ("lib", "src") for source in (tree / directory).rglob("*.c")
                      if not any(str(source.relative_to(tree)).startswith(left) for left in MC_LEFT))
-    flags = [*CFLAGS, *MC_FLAGS, "-I", str(gen), "-I", str(tree), *glib_includes, "-I", str(slang_tree / "src"), *system]
+    flags = [*CFLAGS, *mc_flags(prefix), "-I", str(gen), "-I", str(tree), *glib_includes, "-I", str(slang_tree / "src"), *system]
 
     return units(sources, work / "o/mc", flags)
 
@@ -272,14 +278,14 @@ def installed(source, mode, only=None, skip=()):
     return found
 
 
-# misc's files of /etc/mc; its others are /usr/share/mc's.
+# misc's files of etc/mc; its others are share/mc's.
 ETC = ["edit.indent.rc", "filehighlight.ini", "mc.default.keymap", "mc.emacs.keymap", "mc.ext.ini", "mc.menu", "mc.vim.keymap",
        "mcedit.menu"]
 
 
 def data(tree, output):
-    """mc.tar: what make install puts under /etc/mc, /usr/share/mc and
-    /usr/libexec/mc."""
+    """mc.tar: what make install puts under the prefix's etc/mc, share/mc
+    and libexec/mc."""
     misc = tree / "misc"
     script, plain = (lambda name: 0o755), (lambda name: 0o644)
     trees = {
@@ -329,12 +335,15 @@ def data(tree, output):
 
 
 def main():
-    if len(sys.argv) != 11:
+    if len(sys.argv) != 13:
         raise SystemExit(__doc__)
 
     cc, ld, include, libc = sys.argv[1:5]
     tarballs = sys.argv[5:9]
-    output, share = Path(sys.argv[9]), sys.argv[10]
+    output, share, prefix = Path(sys.argv[9]), sys.argv[10], sys.argv[11]
+    terminfo = pkg.root(sys.argv[12]) + "/share/terminfo"
+    VALUES.update({"bindir": f"{prefix}/bin", "datarootdir": f"{prefix}/share", "pkglibexecdir": f"{prefix}/libexec/mc",
+                   "EXTHELPERSDIR": f"{prefix}/libexec/mc/ext.d", "EXTFSHELPERSDIR": f"{prefix}/libexec/mc/extfs.d"})
     include = str(Path(include).resolve())
     work = Path(os.environ.get("TMPDIR") or "/tmp") / "mc"
     shutil.rmtree(work, ignore_errors=True)
@@ -353,7 +362,7 @@ def main():
     system = ["-isystem", include]
     regex, pcre2_headers = pcre2(pcre2_tree, work, system)
     utility, glib_includes = glib(cc, include, glib_tree, work, system, pcre2_headers)
-    built = [*regex, *slang(slang_tree, work, system), *utility, *mc(mc_tree, work, system, glib_includes, slang_tree)]
+    built = [*regex, *slang(slang_tree, work, system, terminfo), *utility, *mc(mc_tree, work, system, glib_includes, slang_tree, prefix)]
     wasm.compile_all(cc, built)
     output.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([ld, *LINK, "-o", str(output), *(str(obj) for _, obj, _ in built), libc], check=True)

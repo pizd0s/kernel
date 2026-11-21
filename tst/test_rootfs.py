@@ -4,8 +4,10 @@ host's file system. The image follows rootfs in its file, and vm gives
 rootfs what follows as its disk named image, as it gives a file of the
 host by --disk: the executable alone starts no system, and starts this
 one with its image for the disk. erofs serves the image at the root, the
-executables of busybox and python, whose modules
-the kernel compiles as they are executed, a /dev and a /run, and starts
+packages of the system in /pzd/store, the executables of busybox and
+python among them, whose modules the kernel compiles as they are
+executed, its realm, whose bin and etc are /bin and /etc, a /dev and a
+/run, and starts
 busybox's shell on the terminal; the shell's status is vm's. The shell's
 HOME and TMPDIR are /run, and its TERM the host's name of the console's type, which
 the terminfo database describes, under a terminal's other name by a
@@ -22,6 +24,7 @@ is not root gets no more than the modes give.
     test_rootfs.py <vm> <rootfs>
 """
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -153,19 +156,18 @@ sh
 bin
 dev
 etc
-libexec
+pzd
 run
-share
 usr
 /usr/usr/bin/sh
 ls: /sbin: No such file or directory
 ls: /lib: No such file or directory
-/bin
-/etc/motd
-/bin
-/bin
+/pzd/store/<uid>-rlm-system/bin
+/pzd/store/<uid>-etc-base/etc/motd
+/pzd/store/<uid>-rlm-system/bin
+/pzd/store/<uid>-rlm-system/bin
 through env
-busybox
+/pzd/store/<uid>-bin-busybox/bin/sh
 executable
  50 5a 44 31
 read-only
@@ -179,7 +181,7 @@ inner=5
 20000
 8
  61 62
-1267650600228229401496703205376 (3, 14) 5 /bin/python3/json/__init__.py
+1267650600228229401496703205376 (3, 14) 5 /pzd/store/<uid>-bin-python/bin/python3/json/__init__.py
 ["python", "python3"]
 5000 True
 3145728 True 1048576 300000
@@ -220,6 +222,12 @@ changed
 """
 
 
+def stored(output):
+    """The output with every directory of the store's uid as <uid>: a uid
+    is its recipe's, 22 digits of base 62."""
+    return re.sub(rb"/pzd/store/[0-9A-Za-z]{22}-", b"/pzd/store/<uid>-", output)
+
+
 def main():
     vm, rootfs = sys.argv[1:3]
     # No root, no cwd of the host's: the environment is empty but for what
@@ -230,13 +238,13 @@ def main():
         for user, script, want in ((), SCRIPT, WANT), (("--user", "1000:1000"), PERMISSIONS, PERMITTED):
             result = subprocess.run([vm, "run", *user, "--", rootfs], input=(script + "exit 3\n").encode(), capture_output=True, cwd=empty,
                                     env=env, timeout=180)
-            assert (result.returncode, result.stdout.decode(), result.stderr) == (3, want, b""), result
+            assert (result.returncode, stored(result.stdout).decode(), result.stderr) == (3, want, b""), result
         assert not os.listdir(empty), os.listdir(empty)
         result = subprocess.run([vm, "run", "--", rootfs], input=b"ls /missing\n", capture_output=True, cwd=empty, env=env, timeout=120)
         assert result.returncode == 1 and b"No such file" in result.stderr and result.stdout == b"", result
         # The console's type is the host's to name: here another name of
         # FreeBSD's console, whose description is under its first.
-        script = b"cd /usr/share/terminfo && echo $TERM && readlink a/$TERM && cmp a/$TERM c/cons25 && head -c 2 a/$TERM | od -An -tx1\n"
+        script = b"cd /pzd/store/*-aux-terminfo/share/terminfo && echo $TERM && readlink a/$TERM && cmp a/$TERM c/cons25 && head -c 2 a/$TERM | od -An -tx1\n"
         result = subprocess.run([vm, "run", "--", rootfs], input=script, capture_output=True, cwd=empty, env=dict(env, TERM="ansis"),
                                 timeout=120)
         assert (result.returncode, result.stdout, result.stderr) == (0, b"ansis\n../c/cons25\n 1a 01\n", b""), result

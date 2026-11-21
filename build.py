@@ -212,16 +212,53 @@ libstr = command(
 # its module compressed by zstd, and the tail of the program's own; the
 # kernel runs nothing else. The module, the .wasm, stays what the compilers
 # and the ABI checks read.
+def packing(module, output, tail=None, level=None):
+    """The command that packs a module into an executable (dev/exe.py)."""
+    return ["python3", "$(S)/dev/exe.py", module, output, *(["--tail", tail] if tail else []), *(["--level", str(level)] if level else [])]
+
+
 def executable(name, program, output, tail=None, level=None, deps=()):
     return command(
         name=name,
         inputs=["$(S)/dev/exe.py"],
         outputs=[output],
         deps=[program, *deps],
-        cmd=["python3", "$(S)/dev/exe.py", program.outputs[0], output, *(["--tail", tail] if tail else []),
-             *(["--level", str(level)] if level else [])],
+        cmd=packing(program.outputs[0], output, tail, level),
         descr="PK",
         color="cyan",
+    )
+
+
+# Packages as ix makes them (dev/pkg.py): a package is its directory of the
+# store, /pzd/store/<uid>-<name>, the uid its recipe's ($(UID)), and its
+# file the tar.zst of that directory, $(B)/pkg/<name>.tar.zst, its last
+# output. A recipe whose program names where it is, as mc its data, python
+# its prefix and doom its IWAD, builds in the package's own node: the
+# directory is its own uid's.
+STORE = "/pzd/store"
+
+
+def store_name(name):
+    return name.replace("/", "-")
+
+
+def store(name):
+    """The package's directory of the store, as its own recipe names it."""
+    return f"{STORE}/$(UID)-{store_name(name)}"
+
+
+def package(name, contents, deps=(), inputs=(), recipe=(), outputs=(), descr="PG", color="cyan"):
+    """A package: the recipe's commands, then its directory laid out of
+    contents, pkg.py pack's arguments."""
+    tarball = f"$(B)/pkg/{store_name(name)}.tar.zst"
+    return command(
+        name="pkg_" + store_name(name).replace("-", "_"),
+        inputs=["$(S)/dev/pkg.py", *inputs],
+        outputs=[*outputs, tarball],
+        deps=deps,
+        cmd=[*recipe, ["python3", "$(S)/dev/pkg.py", "pack", tarball, store(name), *contents]],
+        descr=descr,
+        color=color,
     )
 
 
@@ -250,6 +287,8 @@ busybox = command(
     color="cyan",
 )
 busybox_exe = executable("busybox_exe", busybox, "$(B)/bin/busybox/busybox")
+busybox_pkg = package("bin/busybox", ["--file", "bin/busybox", busybox_exe.outputs[0], "--links", "bin", "busybox", busybox.outputs[1]],
+                      deps=[busybox, busybox_exe])
 
 # The kernel ABI busybox needs: every import and export of the module.
 busybox_abi = command(
@@ -263,30 +302,36 @@ busybox_abi = command(
 )
 
 # doom: doomgeneric with our terminal backend, drawn as ANSI half blocks on
-# the tty the kernel passes through.
-doom = command(
-    name="doom",
+# the tty the kernel passes through, and the shareware IWAD, which it
+# finds in its own share/doom.
+doom = package(
+    "bin/doom",
+    ["--file", "bin/doom", "$(B)/bin/doom/doom", "--file", "share/doom/doom1.wad", doom_wad.outputs[0]],
     inputs=[
         *LIBC_HEADERS,
         "$(S)/bin/doom/doomgeneric_pizdos.c",
         "$(S)/bin/doom/make.py",
         "$(S)/dev/wasm.py",
+        "$(S)/dev/exe.py",
     ],
-    outputs=["$(B)/bin/doom/doom.wasm"],
-    deps=[doomgeneric_tarball, libc],
-    cmd=[
-        "python3", "$(S)/bin/doom/make.py",
-        CLANG, WASM_LD,
-        doomgeneric_tarball.outputs[0],
-        "$(S)/bin/doom/doomgeneric_pizdos.c",
-        "$(S)/lib/c/include",
-        libc.outputs[0],
-        "$(B)/bin/doom/doom.wasm",
+    outputs=["$(B)/bin/doom/doom.wasm", "$(B)/bin/doom/doom"],
+    deps=[doomgeneric_tarball, libc, doom_wad],
+    recipe=[
+        [
+            "python3", "$(S)/bin/doom/make.py",
+            CLANG, WASM_LD,
+            doomgeneric_tarball.outputs[0],
+            "$(S)/bin/doom/doomgeneric_pizdos.c",
+            "$(S)/lib/c/include",
+            libc.outputs[0],
+            "$(B)/bin/doom/doom.wasm",
+            store("bin/doom") + "/share/doom",
+        ],
+        packing("$(B)/bin/doom/doom.wasm", "$(B)/bin/doom/doom"),
     ],
     descr="DM",
     color="light-magenta",
 )
-doom_exe = executable("doom_exe", doom, "$(B)/bin/doom/doom")
 
 # CPython's interpreter and built-in modules, and its freezer: nothing of
 # vm, so a change of the compiler rebuilds none of it.
@@ -527,6 +572,8 @@ tools_module = command(
     color="cyan",
 )
 tools = executable("tools_exe", tools_module, "$(B)/bin/tools/tools")
+tools_pkg = package("bin/tools", ["--file", "bin/tools", tools.outputs[0], *(arg for tool in TOOLS for arg in ("--link", "bin/" + tool, "tools"))],
+                    deps=[tools])
 # A service of tst/test_devices.py, which hands it to the system it runs.
 devices_service = executable("devices_service_exe", command(
     name="devices_service_module",
@@ -566,18 +613,19 @@ fuse2fs = command(
     color="cyan",
 )
 fuse2fs_exe = executable("fuse2fs_exe", fuse2fs, "$(B)/bin/fuse2fs/fuse2fs")
+fuse2fs_pkg = package("bin/fuse2fs", ["--file", "bin/fuse2fs", fuse2fs_exe.outputs[0]], deps=[fuse2fs_exe])
+
+# The system's own /etc: its message of the day and its users, root alone.
+base_etc = package("etc/base", ["--tree", "etc", "$(S)/bin/rootfs/etc"], inputs=build.glob("$(S)/bin/rootfs/etc/*"))
 
 # rootfs, the first process and the VFS, has its image after it in its
 # file: a system of one executable (bin/rootfs), which vm gives the image
-# of as a disk. erofs of the tools serves the
-# image at the root, with /dev and /tmp of its own, to the shell rootfs
-# starts, and the kernel compiles each module as it is executed. The base
-# system's image has busybox's executable with its links, the tools with
-# theirs and fuse2fs: its rootfs runs python's freezer as python builds.
-BASE = [busybox, busybox_exe, tools, fuse2fs_exe]
-BASE_IMAGE = ["--busybox", busybox_exe.outputs[0], busybox.outputs[1],
-              "--program", "tools", tools.outputs[0], *(arg for tool in TOOLS for arg in ("--link", tool, "tools")),
-              "--program", "fuse2fs", fuse2fs_exe.outputs[0], "--server", "tools"]
+# of as a disk. erofs of the tools serves the image at the root, with /dev
+# and /run of its own, to the shell rootfs starts, and the kernel compiles
+# each module as it is executed. An image is packages and their realm
+# (bin/rootfs/image.py). The base system has busybox, the tools and
+# fuse2fs: its rootfs runs python's freezer as python builds.
+BASE = [busybox_pkg, tools_pkg, fuse2fs_pkg, base_etc]
 rootfs_module = command(
     name="rootfs_module",
     inputs=["$(S)/bin/rootfs/rootfs.cpp", "$(S)/lib/protocol/protocol.cpp", "$(S)/lib/protocol/protocol.h", "$(S)/bin/rootfs/make.py",
@@ -591,66 +639,72 @@ rootfs_module = command(
 )
 
 
-def system(name, nodes, arguments, directory):
-    """The image of a system and the rootfs of it: rootfs's executable with
-    the image after it."""
-    image = command(
-        name=name + "_image",
-        inputs=["$(S)/bin/rootfs/image.py"],
-        outputs=[f"$(B)/{directory}/rootfs.img"],
-        deps=nodes,
-        cmd=["python3", "$(S)/bin/rootfs/image.py", f"$(B)/{directory}/rootfs.img", *arguments],
+def image(name, output, packages, arguments=(), deps=()):
+    """The image of packages: their realm, the system, as ix links one
+    (dev/pkg.py), and the root that names it, with the files of
+    arguments, image.py's."""
+    realm = f"$(B)/realm/{name}.tar.zst"
+    linked = command(
+        name=name + "_realm",
+        inputs=["$(S)/dev/pkg.py"],
+        outputs=[realm],
+        deps=packages,
+        cmd=["python3", "$(S)/dev/pkg.py", "realm", realm, store("rlm/system"), *(node.outputs[-1] for node in packages)],
+        descr="RL",
+        color="cyan",
+    )
+    return command(
+        name=name,
+        inputs=["$(S)/bin/rootfs/image.py", "$(S)/dev/pkg.py"],
+        outputs=[output],
+        deps=[linked, *packages, *deps],
+        cmd=["python3", "$(S)/bin/rootfs/image.py", output, "--realm", realm, *(arg for node in packages for arg in ("--package", node.outputs[-1])),
+             *arguments, "--server", "/bin/tools"],
         descr="IM",
         color="cyan",
     )
-    return image, executable(name, rootfs_module, f"$(B)/{directory}/rootfs", tail=image.outputs[0], deps=[image])
 
 
-base_image, rootfs_base = system("rootfs_base", BASE, BASE_IMAGE, "bin/rootfs/base")
+def system(name, packages, directory):
+    """The image of a system and the rootfs of it: rootfs's executable with
+    the image after it."""
+    built = image(name + "_image", f"$(B)/{directory}/rootfs.img", packages)
+    return built, executable(name, rootfs_module, f"$(B)/{directory}/rootfs", tail=built.outputs[0], deps=[built])
+
+
+base_image, rootfs_base = system("rootfs_base", BASE, "bin/rootfs/base")
 
 # python.wasm, its modules frozen by the freezer running in the base system, and
 # the standard library as a zip; python3, the executable, ends with that
 # zip, which python imports from its own file.
-python = command(
-    name="python",
+python = package(
+    "bin/python",
+    ["--file", "bin/python3", "$(B)/bin/python/python3", "--link", "bin/python", "python3"],
     inputs=[*LIBC_HEADERS, "$(S)/bin/python/pyconfig.h", "$(S)/bin/python/make.py", "$(S)/bin/python/main.c", "$(S)/dev/wasm.py",
             "$(S)/dev/exe.py"],
-    outputs=["$(B)/bin/python/python.wasm", "$(B)/bin/python/stdlib.zip"],
+    outputs=["$(B)/bin/python/python.wasm", "$(B)/bin/python/stdlib.zip", "$(B)/bin/python/python3"],
     deps=[python_tarball, libc, python_core, vm, rootfs_base],
-    cmd=[
-        "python3", "$(S)/bin/python/make.py", "python",
-        CLANG, WASM_LD, vm.outputs[0], rootfs_base.outputs[0],
-        python_tarball.outputs[0],
-        "$(S)/bin/python/pyconfig.h",
-        "$(S)/lib/c/include",
-        libc.outputs[0],
-        *python_core.outputs,
-        "$(B)/bin/python/python.wasm",
-        "$(B)/bin/python/stdlib.zip",
+    recipe=[
+        [
+            "python3", "$(S)/bin/python/make.py", "python",
+            CLANG, WASM_LD, vm.outputs[0], rootfs_base.outputs[0],
+            python_tarball.outputs[0],
+            "$(S)/bin/python/pyconfig.h",
+            "$(S)/lib/c/include",
+            libc.outputs[0],
+            *python_core.outputs,
+            "$(B)/bin/python/python.wasm",
+            "$(B)/bin/python/stdlib.zip",
+            store("bin/python"),
+        ],
+        packing("$(B)/bin/python/python.wasm", "$(B)/bin/python/python3", tail="$(B)/bin/python/stdlib.zip"),
     ],
     descr="PY",
     color="yellow",
 )
-python_exe = executable("python_exe", python, "$(B)/bin/python/python3", tail=python.outputs[1])
 
-# mc: Midnight Commander on GLib and S-Lang, both with bin/mc's patches,
-# mc.wasm, and mc.tar, what it reads as it runs: its configuration, skins,
-# syntax rules and scripts.
-mc = command(
-    name="mc",
-    inputs=[*LIBC_HEADERS, "$(S)/bin/mc/make.py", "$(S)/bin/mc/mc-config.h", "$(S)/bin/mc/glib-config.h", "$(S)/bin/mc/slang-config.h",
-            *build.glob("$(S)/bin/mc/*.patch"), "$(S)/dev/wasm.py"],
-    outputs=["$(B)/bin/mc/mc.wasm", "$(B)/bin/mc/mc.tar"],
-    deps=[mc_tarball, glib_tarball, slang_tarball, pcre2_tarball, libc],
-    cmd=["python3", "$(S)/bin/mc/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], mc_tarball.outputs[0],
-         glib_tarball.outputs[0], slang_tarball.outputs[0], pcre2_tarball.outputs[0], "$(B)/bin/mc/mc.wasm", "$(B)/bin/mc/mc.tar"],
-    descr="CC",
-    color="cyan",
-)
-mc_exe = executable("mc_exe", mc, "$(B)/bin/mc/mc")
-
-# The terminfo database, /usr/share/terminfo: every terminal ncurses
-# describes, as the console's type is the host's to name (TERM).
+# The terminfo database, aux/terminfo's share/terminfo: every terminal
+# ncurses describes, as the console's type is the host's to name (TERM).
 terminfo = command(
     name="terminfo",
     inputs=["$(S)/dev/terminfo.py"],
@@ -660,15 +714,35 @@ terminfo = command(
     descr="TI",
     color="cyan",
 )
+terminfo_pkg = package("aux/terminfo", ["--tar", "share/terminfo", terminfo.outputs[0], "terminfo"], deps=[terminfo])
 
-# The system: the base system, python, and mc with the terminals'
-# descriptions; mcedit, mcview and mcdiff are mc by another name.
-SYSTEM = [*BASE, python_exe, mc, mc_exe, terminfo]
-SYSTEM_IMAGE = [*BASE_IMAGE, "--python", python_exe.outputs[0],
-                "--program", "mc", mc_exe.outputs[0], *(arg for name in ("mcedit", "mcview", "mcdiff") for arg in ("--link", name, "mc")),
-                *(arg for member in ("etc/mc", "share/mc", "libexec/mc") for arg in ("--tar", "/" + member, mc.outputs[1], member)),
-                "--tar", "/share/terminfo", terminfo.outputs[0], "terminfo"]
-rootfs_image, rootfs = system("rootfs", SYSTEM, SYSTEM_IMAGE, "bin/rootfs")
+# mc: Midnight Commander on GLib and S-Lang, both with bin/mc's patches,
+# mc.wasm, and mc.tar, what it reads as it runs: its configuration, skins,
+# syntax rules and scripts, in its package, and the terminals'
+# descriptions in terminfo's; mcedit, mcview and mcdiff are mc by another
+# name.
+mc = package(
+    "bin/mc",
+    ["--file", "bin/mc", "$(B)/bin/mc/mc", *(arg for name in ("mcedit", "mcview", "mcdiff") for arg in ("--link", "bin/" + name, "mc")),
+     *(arg for member in ("etc/mc", "share/mc", "libexec/mc") for arg in ("--tar", member, "$(B)/bin/mc/mc.tar", member))],
+    inputs=[*LIBC_HEADERS, "$(S)/bin/mc/make.py", "$(S)/bin/mc/mc-config.h", "$(S)/bin/mc/glib-config.h", "$(S)/bin/mc/slang-config.h",
+            *build.glob("$(S)/bin/mc/*.patch"), "$(S)/dev/wasm.py", "$(S)/dev/exe.py"],
+    outputs=["$(B)/bin/mc/mc.wasm", "$(B)/bin/mc/mc.tar", "$(B)/bin/mc/mc"],
+    deps=[mc_tarball, glib_tarball, slang_tarball, pcre2_tarball, libc, terminfo_pkg],
+    recipe=[
+        ["python3", "$(S)/bin/mc/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], mc_tarball.outputs[0],
+         glib_tarball.outputs[0], slang_tarball.outputs[0], pcre2_tarball.outputs[0], "$(B)/bin/mc/mc.wasm", "$(B)/bin/mc/mc.tar",
+         store("bin/mc"), terminfo_pkg.outputs[-1]],
+        packing("$(B)/bin/mc/mc.wasm", "$(B)/bin/mc/mc"),
+    ],
+    descr="CC",
+    color="cyan",
+)
+
+# The system: the base system, python, mc, the terminals' descriptions and
+# doom.
+SYSTEM = [*BASE, python, mc, terminfo_pkg, doom]
+rootfs_image, rootfs = system("rootfs", SYSTEM, "bin/rootfs")
 
 # clang for this system: LLVM's multicall program of the release lib/cxx
 # comes from, compiled against lib/c and lib/cxx, and the headers clang
@@ -963,48 +1037,38 @@ TEST_FILES = [
     ("/tests/libc/check", libc_check_exe),
     ("/tests/cxx/check", cxx_check_exe),
     ("/tests/asan/check", asan_check_exe),
-    ("/tests/doom/doom", doom_exe),
-    ("/tests/doom/doom1.wad", doom_wad),
     ("/tests/chaos/check", chaos_check_exe),
 ]
 TEST_TREES = [("/tests/libc/etc", "$(S)/tst/libc/etc"), ("/tests/busybox", "$(S)/tst/busybox")]
-# CPython's own tests, in the standard library's directory, which python
-# searches after its file.
-TEST_TARS = [("/lib/python3.14/test", python_tarball, f"Python-{PYTHON}/Lib/test")]
+# CPython's own tests, the package test, which test_python puts on
+# PYTHONPATH.
+TEST_TARS = [("/tests/python/test", python_tarball, f"Python-{PYTHON}/Lib/test")]
 
-tests_image = command(
-    name="tests_image",
-    inputs=["$(S)/bin/rootfs/image.py", *(path for _, tree in TEST_TREES for path in build.glob(tree + "/**/*"))],
-    outputs=["$(B)/tst/tests.img"],
-    deps=[*SYSTEM, *(built for _, _, _, built in unit_cases), *dict.fromkeys(node for _, node in TEST_FILES),
-          *(node for _, node, _ in TEST_TARS)],
-    cmd=["python3", "$(S)/bin/rootfs/image.py", "$(B)/tst/tests.img", *SYSTEM_IMAGE,
-         *(arg for name, _, prefix, _ in unit_cases for arg in ("--file", "/tests/unit/" + name, prefix + ".exe")),
-         *(arg for path, node in TEST_FILES for arg in ("--file", path, node.outputs[0])),
-         *(arg for path, tree in TEST_TREES for arg in ("--tree", path, tree)),
-         *(arg for path, node, member in TEST_TARS for arg in ("--tar", path, node.outputs[0], member))],
-    descr="IM",
-    color="cyan",
+tests_image = image(
+    "tests_image", "$(B)/tst/tests.img", SYSTEM,
+    [*(arg for name, _, prefix, _ in unit_cases for arg in ("--file", "/tests/unit/" + name, prefix + ".exe")),
+     *(arg for path, node in TEST_FILES for arg in ("--file", path, node.outputs[0])),
+     *(arg for path, tree in TEST_TREES for arg in ("--tree", path, tree)),
+     *(arg for path, node, member in TEST_TARS for arg in ("--tar", path, node.outputs[0], member))],
+    deps=[*(built for _, _, _, built in unit_cases), *dict.fromkeys(node for _, node in TEST_FILES), *(node for _, node, _ in TEST_TARS)],
 )
 SYSTEM_TOOLS = {"vm": vm.outputs[0], "rootfs": rootfs.outputs[0], "image": tests_image.outputs[0]}
 
-# The image test_clang boots: the system's and clang's, LLVM's
-# multicall executable as /bin/llvm with clang, clang++ and wasm-ld links,
-# its resource headers, lib/c's and lib/cxx's headers and libraries, and
-# pzd. /usr is the root: they are /usr/include and /usr/lib to clang.
-clang_image = command(
-    name="clang_image",
-    inputs=["$(S)/bin/rootfs/image.py"],
-    outputs=["$(B)/tst/clang.img"],
-    deps=[*SYSTEM, llvm_exe, clang, libc, libc_headers, libcxx, pzd],
-    cmd=["python3", "$(S)/bin/rootfs/image.py", "$(B)/tst/clang.img", *SYSTEM_IMAGE,
-         "--program", "llvm", llvm_exe.outputs[0], *(arg for name in ("clang", "clang++", "wasm-ld") for arg in ("--link", name, "llvm")),
-         "--program", "pzd", pzd.outputs[0], "--tar", "/lib/clang", clang.outputs[1], "lib/clang",
-         "--tar", "/include", libc_headers.outputs[0], "include", "--tar", "/include/c++", libcxx.outputs[1], "include/c++",
-         "--file", "/lib/libc.a", libc.outputs[0], "--file", "/lib/libc++.a", libcxx.outputs[0]],
-    descr="IM",
-    color="cyan",
-)
+# The image test_clang boots: the system's packages and clang's. bin/clang
+# is LLVM's multicall executable, bin/llvm, with clang, clang++ and
+# wasm-ld links, and its resource headers in lib/clang beside it, where
+# clang finds them from its file; lib/c and lib/cxx are lib/c's and
+# lib/cxx's headers and libraries, which the realm has in its include and
+# lib; bin/pzd is pzd.
+clang_pkg = package("bin/clang", ["--file", "bin/llvm", llvm_exe.outputs[0],
+                                  *(arg for name in ("clang", "clang++", "wasm-ld") for arg in ("--link", "bin/" + name, "llvm")),
+                                  "--tar", "lib/clang", clang.outputs[1], "lib/clang"], deps=[llvm_exe, clang])
+libc_pkg = package("lib/c", ["--tar", "include", libc_headers.outputs[0], "include", "--file", "lib/libc.a", libc.outputs[0]],
+                   deps=[libc_headers, libc])
+libcxx_pkg = package("lib/cxx", ["--tar", "include/c++", libcxx.outputs[1], "include/c++", "--file", "lib/libc++.a", libcxx.outputs[0]],
+                     deps=[libcxx])
+pzd_pkg = package("bin/pzd", ["--file", "bin/pzd", pzd.outputs[0]], deps=[pzd])
+clang_image = image("clang_image", "$(B)/tst/clang.img", [*SYSTEM, clang_pkg, libc_pkg, libcxx_pkg, pzd_pkg])
 
 E2E_TESTED = {
     "aot": [aot, vm, chaos_check, rootfs],
@@ -1242,9 +1306,9 @@ coverage_check = command(
     descr="CV", color="cyan",
 )
 
-group("install", libcxx, libc_headers, clang, llvm_exe, busybox, busybox_exe, busybox_abi, doom, doom_exe, python, python_exe, pzd,
+group("install", libcxx, libc_headers, clang, llvm_exe, busybox, busybox_exe, busybox_abi, doom, python, pzd,
       vm, aot_native, aot, aot_aot, wazero, rootfs)
 group("unit", *unit_tests)
 group("e2e", *e2e_tests, *unit_tests, vm_spec_test)
 group("test", *tests, *unit_tests, vm_spec_test)
-group("stand", vm, aot_native, aot, aot_aot, busybox, stand_corpus, *decode_stand, python_exe, rootfs, stand_python_native)
+group("stand", vm, aot_native, aot, aot_aot, busybox, stand_corpus, *decode_stand, python, rootfs, stand_python_native)

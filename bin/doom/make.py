@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Build doom.wasm from a doomgeneric release tarball and our terminal backend.
 
-    make.py <cc> <wasm-ld> <doomgeneric-tarball> <platform.c> <libc-include> <libc.a> <doom.wasm>
+    make.py <cc> <wasm-ld> <doomgeneric-tarball> <platform.c> <libc-include> <libc.a> <doom.wasm> <wads>
 
 The source list is the Makefile's own; its xlib platform object is replaced
 by ours, which lives outside the tarball. The frame is 320x200 palette
 indices (CMAP256): the backend takes the palette through i_video.c. Nothing
 defines FEATURE_SOUND, so i_sound.c links empty. An undefined symbol is a
 link error: every libc function is either defined in libc.a or declared as
-a kernel import by its header.
+a kernel import by its header. doom looks for its IWAD in wads, the
+directory of its package (dev/pkg.py), where config.h says the files are:
+FILES_DIR, "." in the tarball, which a configure of doomgeneric's would set.
 """
 import os
 import re
@@ -82,8 +84,19 @@ def patch(tree):
     path.write_text(src)
 
 
+def files_dir(tree, wads):
+    path = tree / "config.h"
+    line = '#define FILES_DIR "."'
+    src = path.read_text()
+
+    if src.count(line) != 1:
+        raise SystemExit("config.h does not define FILES_DIR as .")
+
+    path.write_text(src.replace(line, f'#define FILES_DIR "{wads}"'))
+
+
 def main():
-    cc, ld, tarball, platform, libc_include, libc, output = sys.argv[1:8]
+    cc, ld, tarball, platform, libc_include, libc, output, wads = sys.argv[1:9]
     work = Path(os.environ.get("TMPDIR") or "/tmp") / "doom"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -93,6 +106,7 @@ def main():
 
     tree = next(work.glob("doomgeneric-*")) / "doomgeneric"
     patch(tree)
+    files_dir(tree, wads)
     flags = FLAGS + ["-I", str(tree), "-isystem", str(Path(libc_include).resolve())]
     units = [(source, work / "obj" / source.with_suffix(".o").name, flags) for source in sources(tree, Path(platform))]
 

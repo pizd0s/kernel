@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""clang in the system: LLVM's multicall program, as /bin/llvm with clang,
-clang++ and wasm-ld naming it, of the image of the system and the
-toolchain, with lib/c's and lib/cxx's headers and libraries, compiles and
+"""clang in the system: LLVM's multicall program, bin/llvm of its package
+with clang, clang++ and wasm-ld naming it, its resource headers in the
+package's lib/clang, of the image of the system and the toolchain, with
+lib/c's and lib/cxx's headers and libraries in the realm's include and
+lib (/pzd/realm/system), compiles and
 links a C and a C++ program in /run, its driver running cc1 and the linker
 as processes of their own, and the shell runs what they link, packed by
 pzd into executables: the kernel compiles each module once, LLVM's for all
@@ -57,15 +59,18 @@ int main() {
 }
 """
 
+REALM = "/pzd/realm/system"
 LINK = ["-nostdlib", "-Wl,--stack-first", "-Wl,--max-memory=4294967296",
         "-Wl,--export=__heap_base", "-Wl,--export=__stack_pointer", "-Wl,--gc-sections"]
 
 
 def main():
     vm, rootfs, image = sys.argv[1:4]
-    c = ["clang", *wasm.CFLAGS, "-isystem", "/usr/include", "-O2", "/run/src/hello.c", "-o", "/run/src/hello.wasm", *LINK, "/usr/lib/libc.a"]
-    cxx = ["clang++", *wasm.CFLAGS, "-nostdinc++", "-fno-exceptions", "-std=c++23", "-isystem", "/usr/include/c++/v1",
-           "-isystem", "/usr/include", "-O2", "/run/src/hello.cpp", "-o", "/run/src/hello-cxx.wasm", *LINK, "/usr/lib/libc++.a", "/usr/lib/libc.a"]
+    c = ["clang", *wasm.CFLAGS, "-isystem", f"{REALM}/include", "-O2", "/run/src/hello.c", "-o", "/run/src/hello.wasm", *LINK,
+         f"{REALM}/lib/libc.a"]
+    cxx = ["clang++", *wasm.CFLAGS, "-nostdinc++", "-fno-exceptions", "-std=c++23", "-isystem", f"{REALM}/include/c++/v1",
+           "-isystem", f"{REALM}/include", "-O2", "/run/src/hello.cpp", "-o", "/run/src/hello-cxx.wasm", *LINK, f"{REALM}/lib/libc++.a",
+           f"{REALM}/lib/libc.a"]
     script = (f"set -e\nmkdir -p /run/src /run/bin\ncat > /run/src/hello.c <<'C_EOF'\n{C}C_EOF\n"
               f"cat > /run/src/hello.cpp <<'CXX_EOF'\n{CXX}CXX_EOF\nclang --version\necho ---\n{shlex.join(c)}\n{shlex.join(cxx)}\n"
               "pzd /run/src/hello.wasm /run/bin/hello\npzd /run/src/hello-cxx.wasm /run/bin/hello-cxx\nPATH=/run/bin:$PATH\nhello\nhello-cxx\n")

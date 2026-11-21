@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """doom in the system: doomgeneric's frame is ANSI half blocks, its clock
 the kernel's monotonic time. Headless it plays the shareware demo from the
-wad, both the image of the tests' /tests/doom, and hashes each second of
+wad, which doom finds in its package (bin/doom), and hashes each second of
 frames, which are the same in two runs. On a host's terminal it runs on
 the system's pseudoterminal joined to the console (bin/tools/console.cpp),
 its keys the terminal's in raw mode: it takes the alternate screen, draws
@@ -20,8 +20,8 @@ import sys
 import termios
 import time
 
-COMMAND = "cd /run && exec env DG_HEADLESS=1 HOME=/run /tests/doom/doom -iwad /tests/doom/doom1.wad -nosound -timedemo demo1"
-TERMINAL = "cd /run && exec env TERM=xterm-256color DG_COLS=80 DG_ROWS=50 HOME=/run /tests/doom/doom -iwad /tests/doom/doom1.wad -nosound"
+COMMAND = "cd /run && exec env DG_HEADLESS=1 doom -nosound -timedemo demo1"
+TERMINAL = "cd /run && exec env TERM=xterm-256color DG_COLS=80 DG_ROWS=50 doom -nosound"
 
 
 def timedemo(vm, rootfs, image):

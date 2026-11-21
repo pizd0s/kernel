@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""CPython in the system: python3 is the image's /bin/python3, its
-standard library its own file's. A script, its standard input, prints what
+"""CPython in the system: python3 is the image's /bin/python3, of its
+package (bin/python), its standard library its own file's. A script, its standard input, prints what
 the interpreter computes and what it gets from the kernel: processes,
 pipes, a pseudoterminal, signals, timers, locks, mappings written back,
 the user database, locales and the tokenizer's positions. Then a set of
 CPython's own tests, from the release tarball's Lib/test, the image of the
-tests' /lib/python3.14/test, which python searches after its file, runs
-with its regrtest, but for the cases XFAIL names, which run apart and
+tests' /tests/python/test, which PYTHONPATH names, runs with its regrtest, but for the cases XFAIL names, which run apart and
 must fail. Each boots rootfs from the image of the tests and runs in /run.
 
     test_python.py <vm> <rootfs> <tests.img>
@@ -147,7 +146,7 @@ clock True True
 
 def python(vm, rootfs, image, args, timeout, stdin=None):
     command = [vm, "run", "--disk", f"image={image}", "--", rootfs, "-c",
-               "cd /run && exec env HOME=/run TZ=UTC python3 " + " ".join(args)]
+               "cd /run && exec env TZ=UTC PYTHONPATH=/tests/python python3 " + " ".join(args)]
 
     return subprocess.run(command, input=stdin, capture_output=True, text=True, timeout=timeout)
 

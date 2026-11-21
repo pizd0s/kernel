@@ -2,7 +2,8 @@
 """Build CPython for pizdos from a release tarball, our pyconfig.h and lib/c.
 
     make.py core <cc> <ar> <wasm-ld> <tarball> <pyconfig.h> <libc-include> <libc.a> <libpython.a> <freeze.wasm>
-    make.py python <cc> <wasm-ld> <vm> <tarball> <pyconfig.h> <libc-include> <libc.a> <libpython.a> <freeze.wasm> <python.wasm> <stdlib.zip>
+    make.py python <cc> <wasm-ld> <vm> <rootfs> <tarball> <pyconfig.h> <libc-include> <libc.a> <libpython.a> <freeze.wasm> <python.wasm> <stdlib.zip>
+                   <prefix>
 
 core compiles the interpreter and its built-in modules into libpython.a,
 the objects the tarball's Makefile.pre.in names and the modules below, and
@@ -12,7 +13,8 @@ freeze the modules the Makefile freezes, and links python.wasm with them
 and main.c, its own main, which finds the standard library in the
 program's own file: the library, without its tests, with the build's
 sysconfig data, is stdlib.zip, the tail of python's executable, where
-zipimport finds it. The prefix is /, programs in /bin. Threads are
+zipimport finds it. The prefix is python's directory of the store
+(dev/pkg.py), the program in its bin. Threads are
 CPython's stubs, there is no dynamic loading, every module is built in and
 none needs more than lib/c: no sockets, no compression. An undefined symbol
 is a link error, as for every program of lib/c.
@@ -38,8 +40,9 @@ import exe  # noqa: E402
 import wasm  # noqa: E402
 
 VERSION = "3.14"
-PREFIX = "/"
-STDLIB = posixpath.join(PREFIX, "lib", f"python{VERSION}")
+# The prefix, which python's mode sets.
+PREFIX = None
+STDLIB = None
 PLATFORM = "pizdos"
 
 FLAGS = [
@@ -380,7 +383,9 @@ def stdlib_zip(tree, pyconfig):
     return out.getvalue()
 
 
-def python(cc, ld, vm, rootfs, tarball, pyconfig, libc_include, libc, libpython, freeze, output, stdlib):
+def python(cc, ld, vm, rootfs, tarball, pyconfig, libc_include, libc, libpython, freeze, output, stdlib, prefix):
+    global PREFIX, STDLIB
+    PREFIX, STDLIB = prefix, posixpath.join(prefix, "lib", f"python{VERSION}")
     work = Path(os.environ.get("TMPDIR") or "/tmp") / "python"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)

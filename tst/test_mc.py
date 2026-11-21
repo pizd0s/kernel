@@ -555,20 +555,20 @@ def trees(vm, rootfs, image):
 
     # the root's directories, the bar on the first, and it is forgotten
     term.key("f2")
-    term.until("─ bin", "the root's directories in the tree")
+    term.until("─ dev", "the root's directories in the tree")
     term.key("down")
-    status(term, "/bin", "the bar on /bin")
+    status(term, "/dev", "the bar on /dev")
     term.key("f3")
-    term.until(lambda text: "─ bin" not in text, "the directory forgotten")
-    status(term, "/dev", "the bar on the next directory")
+    term.until(lambda text: "─ dev" not in text, "the directory forgotten")
+    status(term, "/pzd", "the bar on the next directory")
 
     # the tree is drawn again: after a menu, and as the bar moves
     term.key("f9")
     term.send("\x1b\x1b")
     term.key("down")
-    status(term, "/etc", "the bar on /etc")
+    status(term, "/run", "the bar on /run")
     term.key("up")
-    status(term, "/dev", "the bar on /dev again")
+    status(term, "/pzd", "the bar on /pzd again")
     text = term.screen.text()
     assert "asan" not in text and "3Forget" in term.row(23), text
     term.key("f10")

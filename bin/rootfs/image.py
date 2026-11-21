@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-"""The image of the system, read-only: the programs of the system and the
-directories it expects, in a layout of its own, which follows rootfs in
-its file and erofs serves (bin/tools), with nothing to build at start.
+"""The image of the system, read-only: its packages and the root that
+names them, in a layout of its own, which follows rootfs in its file and
+erofs serves (bin/tools), with nothing to build at start.
 
-    image.py <rootfs.img> --busybox <busybox> <busybox.links> --python <python3> [--program <name> <path>]...
-             [--link <name> <target>]... [--file <path> <host path>]... [--tree <path> <host directory>]...
-             [--tar <path> <tarball> <member>]... --server <name>
+    image.py <rootfs.img> --realm <realm.tar.zst> [--package <package.tar.zst>]...
+             [--file <path> <host path>]... [--tree <path> <host directory>]... [--tar <path> <tarball> <member>]...
+             --server <path>
 
-The programs are executables (dev/exe.py), whose modules the kernel
-unpacks and compiles as they are executed, and every one is in /bin:
-busybox is /bin/busybox, and each name of busybox.links, wherever busybox
-would install it, a link to it in /bin; python is /bin/python3, its
-standard library the tail of its executable; each --program is
-/bin/<name>, each --link a link /bin/<name> to target, as the tools of the
-system are to /bin/tools. A --file is the image's file at path, of the
-host file's bytes and its mode, a --tree the host directory's files and
-links under path, as the image of the tests has them, and a --tar the
-files and links of a tarball under its member, a directory, under path. /usr is a link to
-the root, for what names /usr/bin and the like: /usr/bin is /bin. The --server program serves the
-image: rootfs runs it from the image itself, as erofs. No times, no
-owners: the same inputs are the same image.
+The root is as ix makes a host's: each package is its directory of the
+store, /pzd/store/<uid>-<name> (dev/pkg.py), the realm one of them, of
+links to the files of the others, /pzd/realm/system is a link to the
+realm's directory, /bin and /etc links to its bin and etc, /usr a link to
+the root, and /dev and /run are directories, where rootfs mounts devfs and
+tmpfs. A link of the realm to no file of the image stops the build. A
+--file is the image's file at path, of the host file's bytes and its mode,
+a --tree the host directory's files and links under path, as the image of
+the tests has them, and a --tar the files and links of a tarball under its
+member, a directory, under path. The program at --server's path, through
+the links, serves the image: rootfs runs it from the image itself, as
+erofs. No times, no owners: the same inputs are the same image.
 
 The layout, little-endian, its tables at offsets a multiple of 16:
 
@@ -39,7 +38,7 @@ size), a file's at an offset a multiple of 16, all of them from the
 header's data on: the header and the tables are before it. A directory's
 nlink is two and one for each directory in it, every other node's one.
 The header's server is where the bytes of the server's program are, the
-file of /bin/<server>.
+file --server names.
 """
 import os
 import stat
@@ -48,7 +47,12 @@ import sys
 import tarfile
 from pathlib import Path
 
-DIRS = {"bin", "dev", "etc", "run"}
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "dev"))
+
+import pkg  # noqa: E402
+
+DIRS = {"dev", "run"}
+ROOT = {"bin": "pzd/realm/system/bin", "etc": "pzd/realm/system/etc", "usr": "/"}
 NONE = 0xFFFFFFFF
 HEADER = struct.Struct("<4s10I")
 NODE = struct.Struct("<8I")
@@ -150,28 +154,66 @@ def layout(dirs, files, symlinks, server):
     return bytes(out)
 
 
+def resolve(path, symlinks):
+    """Where path is in the image through its links, or None."""
+    parts, at, hops = path.strip("/").split("/"), [], 0
+
+    while parts:
+        part = parts.pop(0)
+
+        if part in ("", "."):
+            continue
+
+        if part == "..":
+            at = at[:-1]
+            continue
+
+        here = "/".join(at + [part])
+
+        if here in symlinks:
+            hops += 1
+
+            if hops > 40:
+                return None
+
+            target = symlinks[here]
+            parts = target.strip("/").split("/") + parts
+
+            if target.startswith("/"):
+                at = []
+
+            continue
+
+        at.append(part)
+
+    return "/".join(at)
+
+
 def main():
     output = sys.argv[1]
     args = sys.argv[2:]
-    files = {"etc/motd": (b"pizdos\n", 0o644), "etc/passwd": (b"root:x:0:0:root:/:/bin/sh\n", 0o644), "etc/group": (b"root:x:0:\n", 0o644)}
-    symlinks = {"usr": "/"}
-    dirs = set(DIRS)
-    server = None
+    files, symlinks, dirs = {}, dict(ROOT), set(DIRS)
+    realm = server = None
+
+    def unpack(package):
+        top = pkg.root(package).strip("/")
+        dirs.add(top)
+
+        for path, kind, content, mode in pkg.entries(package):
+            if kind == "dir":
+                dirs.add(top + "/" + path)
+            elif kind == "link":
+                symlinks[top + "/" + path] = content
+            else:
+                files[top + "/" + path] = (content, mode)
 
     while args:
         match args:
-            case ["--busybox", busybox, links, *rest]:
-                files["bin/busybox"] = (Path(busybox).read_bytes(), 0o755)
-
-                for link in Path(links).read_text().split():
-                    symlinks["bin/" + os.path.basename(link)] = "busybox"
-            case ["--python", python, *rest]:
-                files["bin/python3"] = (Path(python).read_bytes(), 0o755)
-                symlinks["bin/python"] = "python3"
-            case ["--program", name, program, *rest]:
-                files["bin/" + name] = (Path(program).read_bytes(), 0o755)
-            case ["--link", name, target, *rest]:
-                symlinks["bin/" + name] = target
+            case ["--realm", package, *rest]:
+                realm = package
+                unpack(package)
+            case ["--package", package, *rest]:
+                unpack(package)
             case ["--file", path, host, *rest]:
                 files[path.strip("/")] = (Path(host).read_bytes(), stat.S_IMODE(os.stat(host).st_mode))
             case ["--tree", path, host, *rest]:
@@ -198,12 +240,17 @@ def main():
                             dirs.add(inside)
                         elif entry.isfile():
                             files[inside] = (archive.extractfile(entry).read(), stat.S_IMODE(entry.mode))
-            case ["--server", name, *rest]:
-                server = "bin/" + name
+            case ["--server", path, *rest]:
+                server = path
             case _:
                 raise SystemExit(f"image.py: unknown arguments {args}")
 
         args = rest
+
+    if realm is None:
+        raise SystemExit("image.py: no --realm")
+
+    symlinks["pzd/realm/system"] = pkg.root(realm)
 
     for path in list(files) + list(symlinks):
         parent = os.path.dirname(path)
@@ -215,8 +262,16 @@ def main():
     for path in list(files) + list(symlinks):
         dirs.discard(path)
 
+    top = pkg.root(realm).strip("/")
+
+    for path in symlinks:
+        if path.startswith(top + "/") and (end := resolve(path, symlinks)) not in files and end not in dirs:
+            raise SystemExit(f"image.py: /{path} of the realm is a link to no file of the image")
+
+    server = server and resolve(server, symlinks)
+
     if server not in files:
-        raise SystemExit("image.py: --server names no --program")
+        raise SystemExit("image.py: --server names no file of the image")
 
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     Path(output).write_bytes(layout(dirs, files, symlinks, server))

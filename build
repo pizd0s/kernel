@@ -47,6 +47,22 @@ except ImportError:
 
 S = "$(S)"
 B = "$(B)"
+# A node's own uid where a command or its environment says $(UID), as a
+# package names its directory of the store: the uid hashes the token, not
+# what it becomes, as ix hashes its placeholder.
+UID = "$(UID)"
+B62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def store_id(uid: str) -> str:
+    """The uid, an md5, as ix writes one: 22 digits of base 62, the least
+    significant first."""
+    number = int.from_bytes(bytes.fromhex(uid), "little")
+    digits = []
+    for _ in range(22):
+        number, digit = divmod(number, len(B62))
+        digits.append(B62[digit])
+    return "".join(digits)
 
 ANSI_COLORS = {
     "red": "31", "green": "32", "yellow": "33", "blue": "34",
@@ -218,6 +234,10 @@ class Node:
 
     def __post_init__(self) -> None:
         _validate_descr(self.descr)
+
+    def own(self, value: str) -> str:
+        assert self.uid is not None
+        return value.replace(UID, store_id(self.uid))
 
     def canonical(self) -> dict[str, Any]:
         return {
@@ -2843,9 +2863,9 @@ class Executor:
             os.close(fd)
 
     def _run_command(self, node: Node, command: list[str], work: Path) -> None:
-        args = [self._mount(arg, work) for arg in command]
+        args = [self._mount(node.own(arg), work) for arg in command]
         env = os.environ.copy()
-        env.update({key: self._mount(value, work) for key, value in node.env.items()})
+        env.update({key: self._mount(node.own(value), work) for key, value in node.env.items()})
         env["BUILD_JOBS"] = str(self.jobs)
         env["TMPDIR"] = str(work)
         cwd = self._mount(node.cwd, work)
@@ -2917,12 +2937,12 @@ class Executor:
                     self._describe_source(self.context.physical(path), path, files, blobs)
             job = {
                 "t": "job", "uid": node.uid, "name": self._node_name(node),
-                "cmd": node.commands, "cwd": node.cwd,
+                "cmd": [[node.own(arg) for arg in command] for command in node.commands], "cwd": node.cwd,
                 # The toolchain the build was configured with, for commands
                 # that spawn a compiler themselves, and its PATH.
                 "env": {
                     "CC": self.context.cc, "CXX": self.context.cxx, "AR": self.context.ar,
-                    **node.env,
+                    **{key: node.own(value) for key, value in node.env.items()},
                 },
                 "path": os.environ.get("PATH", ""),
                 "outputs": node.outputs, "files": files,
