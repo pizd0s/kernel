@@ -5,7 +5,6 @@ package main
 import (
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 var memfdInodes atomic.Uint64
@@ -18,14 +17,13 @@ type MemfdFile struct {
 	held bool
 	refs atomic.Int32
 
-	mu   sync.Mutex
-	off  int64
-	ino  uint64
-	made time.Time
+	mu  sync.Mutex
+	off int64
+	ino uint64
 }
 
 func newMemfd(mem *LinearMemory, at, n int64, mode int) *MemfdFile {
-	f := &MemfdFile{mem: mem, at: at, n: n, mode: mode, ino: memfdInodes.Add(1), made: time.Now()}
+	f := &MemfdFile{mem: mem, at: at, n: n, mode: mode, ino: memfdInodes.Add(1)}
 
 	f.refs.Store(1)
 
@@ -93,9 +91,6 @@ func (f *MemfdFile) size() int64 {
 func (f *MemfdFile) stat(p *Process, st *Stat) error {
 	*st = Stat{Ino: f.ino, Mode: S_IFREG | 0o777, Nlink: 1, Size: f.size(),
 		Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: 4096}
-
-	st.Atim = nsecToTimespec(f.made.UnixNano())
-	st.Mtim, st.Ctim = st.Atim, st.Atim
 
 	return nil
 }
