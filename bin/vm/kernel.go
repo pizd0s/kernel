@@ -152,7 +152,7 @@ func programData(p *Process, f Object, module bool) (data []byte, ok bool, err e
 		return nil, false, err
 	}
 
-	if fl, _ := f.flags(); fl&O_PATH != 0 {
+	if fl, _ := f.flags(p); fl&O_PATH != 0 {
 		return nil, false, EACCES
 	}
 

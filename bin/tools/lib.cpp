@@ -191,13 +191,12 @@ void tools::error(int fd, int e) {
     reply(fd, opErr, u32(e), nullptr, 0);
 }
 
-bool tools::ioOf(const Header& h, Body body, Io& out) {
+bool tools::ioOf(Body body, Io& out) {
     if (body.size() != sizeof out) {
         return false;
     }
     memcpy(&out, body.at, sizeof out);
-    const u32 known = h.op == opWrite ? ioAppend | ioNonblock | ioAt : ioNonblock | ioAt;
-    return (out.flags & ~known) == 0;
+    return (out.flags & ~ioAt) == 0;
 }
 
 void tools::readCount(int fd, usize count) {
@@ -273,7 +272,7 @@ Endpoint* tools::listen(int fd, Role role, void* node, bool reads, bool writes) 
     } else {
         ep = static_cast<Endpoint*>(allocate(sizeof(Endpoint)));
     }
-    *ep = {fd, reads, writes, role, false, node, nullptr, live, nullptr};
+    *ep = {fd, reads, writes, role, false, node, nullptr, live, nullptr, 0, false, false};
     if (live) {
         live->before = ep;
     }
@@ -289,13 +288,15 @@ Endpoint* tools::listen(int fd, Role role, void* node, bool reads, bool writes) 
 }
 
 Endpoint* tools::openFile(int fd, u32 flags, void* node, u64 dev, u64 ino, bool reads, bool writes) {
-    const Opened what{openedFile, flags & (O_ACCMODE | O_APPEND | O_NONBLOCK), dev, ino, 0, POLLIN | POLLOUT};
+    const Opened what{openedFile, flags & O_ACCMODE, dev, ino, 0, POLLIN | POLLOUT};
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         error(fd, errno);
         return nullptr;
     }
     Endpoint* ep = listen(pair[0], Role::File, node, reads, writes);
+    ep->append = (flags & O_APPEND) != 0;
+    ep->nonblock = (flags & O_NONBLOCK) != 0;
     const iovec said = part(&what, sizeof what);
     reply(fd, opOk, 0, &said, 1, &pair[1], 1);
     close(pair[1]);
@@ -335,6 +336,55 @@ static void bury() {
     }
 }
 
+u64 tools::ioOffset(const Endpoint* ep, const Io& io, bool write, u64 size) {
+    if ((io.flags & ioAt) != 0) {
+        return io.off;
+    }
+    return write && ep->append ? size : ep->pos;
+}
+
+int tools::seekTo(Endpoint* ep, const Header& h, Body body, u64 size, u64& out) {
+    if (body.size() != 8) {
+        return EINVAL;
+    }
+    const i64 off = body.take<i64>();
+    i64 from = 0;
+    switch (h.arg) {
+        case SEEK_SET:
+            break;
+        case SEEK_CUR:
+            from = i64(ep->pos);
+            break;
+        case SEEK_END:
+            from = i64(size);
+            break;
+        default:
+            return EINVAL;
+    }
+    if (off > 0 && from > INT64_MAX - off) {
+        return EOVERFLOW;
+    }
+    if (from + off < 0) {
+        return EINVAL;
+    }
+    out = u64(from + off);
+    ep->pos = out;
+    return 0;
+}
+
+// GETFL and SETFL of an open file: what its open lets it do and the
+// flags it keeps.
+static void flagsCall(Endpoint* ep, const Header& h, int fd) {
+    if (h.op == opSetfl) {
+        ep->append = (h.arg & O_APPEND) != 0;
+        ep->nonblock = (h.arg & O_NONBLOCK) != 0;
+        return ok(fd);
+    }
+    const u32 flags = (ep->reads && ep->writes ? O_RDWR : ep->writes ? O_WRONLY : O_RDONLY) | (ep->append ? O_APPEND : 0) |
+                      (ep->nonblock ? O_NONBLOCK : 0);
+    ok(fd, &flags, sizeof flags);
+}
+
 static void handle(Endpoint* ep, FsCall fsCall, FileCall fileCall, Closing closing) {
     if (ep->dead) {
         return;
@@ -372,7 +422,9 @@ static void handle(Endpoint* ep, FsCall fsCall, FileCall fileCall, Closing closi
     // the end of the answer: of a call rootfs handed on, and of a request
     // of an open file's, which comes on the file's own endpoint.
     const int fd = packetFds[packetFdCount - 1];
-    if (ep->role == Role::File) {
+    if (ep->role == Role::File && (h.op == opGetfl || h.op == opSetfl)) {
+        flagsCall(ep, h, fd);
+    } else if (ep->role == Role::File) {
         fileCall(ep, h, body, fd);
     } else {
         fsCall(h, body, fd);

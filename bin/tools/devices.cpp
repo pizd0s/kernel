@@ -90,10 +90,7 @@ static void writeSource(const Source& s, const Endpoint& e, const Request& r) {
     if (s.kind == Kind::Full) {
         return fail(r.reply(), ENOSPC);
     }
-    unsigned char taken[12];
-    memcpy(taken, &r.h.arg, 4);
-    memcpy(taken + 4, &io.off, 8);
-    answer(r.reply(), opOk, 0, taken, sizeof taken);
+    answer(r.reply(), opOk, 0, &r.h.arg, sizeof r.h.arg);
 }
 
 static int epoll = -1;
@@ -123,6 +120,13 @@ static void handle(Endpoint& e, Request& r) {
         case opFutimes:
             fail(r.reply(), EPERM);
             break;
+        case opSeek: {
+            // A device of these has no position: every seek is at 0, as
+            // Linux's are.
+            const uint64_t at = 0;
+            answer(r.reply(), opOk, 0, &at, sizeof at);
+            break;
+        }
         default:
             fail(r.reply(), unserved(r.h.op));
     }

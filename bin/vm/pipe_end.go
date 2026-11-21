@@ -117,7 +117,7 @@ func (e *PipeEnd) poll(events int16, through []*Epoll) int16 {
 	return mask & (events | POLLERR | POLLHUP)
 }
 
-func (e *PipeEnd) flags() (int, error) {
+func (e *PipeEnd) flags(p *Process) (int, error) {
 	fl := O_RDWR
 
 	if !e.writes {
@@ -133,7 +133,7 @@ func (e *PipeEnd) flags() (int, error) {
 	return fl, nil
 }
 
-func (e *PipeEnd) setFlags(fl int) error {
+func (e *PipeEnd) setFlags(p *Process, fl int) error {
 	e.nonblock.Store(fl&O_NONBLOCK != 0)
 
 	return nil

@@ -17,8 +17,8 @@
 // line editing, echo and special characters, to what the slave reads;
 // what the slave writes, and the echo, go through its output processing
 // to what the master reads. A read that finds nothing waits, unless it
-// must not (ioNonblock), until there is something or a CANCEL; so does a
-// write that finds no room, and a drain. When the master goes, the
+// must not (O_NONBLOCK of its open file), until there is something or a
+// CANCEL; so does a write that finds no room, and a drain. When the master goes, the
 // terminal hangs up: a read the slave waits on is EIO, as Linux's of an
 // end whose other end closed, and the slave reads nothing more, its
 // writes EIO; the session it controls hears SIGHUP. With no slave open,
@@ -699,9 +699,7 @@ static void answerCount(int fd, uint32_t count) {
 }
 
 static void answerWrote(int fd, uint32_t count) {
-    unsigned char wrote[12] = {};
-    memcpy(wrote, &count, 4);
-    answer(fd, opOk, 0, wrote, sizeof wrote);
+    answer(fd, opOk, 0, &count, sizeof count);
 }
 
 // Takes what a read of the slave gets into the reader's memory: in the
@@ -941,7 +939,7 @@ static void cancel(Waiting& w) {
     tellAll(t);
 }
 
-static void readFile(Open& o, Request& r) {
+static void readFile(Open& o, const Endpoint& e, Request& r) {
     Terminal& t = *o.terminal;
     Io io;
     if (!o.reads) {
@@ -955,14 +953,14 @@ static void readFile(Open& o, Request& r) {
     }
     if (Waiting* w = hold(o, r, Wait::Read)) {
         progress(t);
-        if (w->at && (io.flags & ioNonblock) != 0) {
+        if (w->at && e.nonblock) {
             fail(w->at->fd, EAGAIN);
             release(*w);
         }
     }
 }
 
-static void writeFile(Open& o, Request& r) {
+static void writeFile(Open& o, const Endpoint& e, Request& r) {
     Terminal& t = *o.terminal;
     Io io;
     if (!o.writes) {
@@ -979,7 +977,7 @@ static void writeFile(Open& o, Request& r) {
     }
     if (Waiting* w = hold(o, r, Wait::Write)) {
         progress(t);
-        if (w->at && (io.flags & ioNonblock) != 0) {
+        if (w->at && e.nonblock) {
             if (w->done > 0) {
                 answerWrote(w->at->fd, w->done);
             } else {
@@ -1184,19 +1182,19 @@ static void reopened(const Open& o, Request& r) {
     opened(t, false, r);
 }
 
-static void fileCall(Open& o, Request& r) {
+static void fileCall(Open& o, const Endpoint& e, Request& r) {
     Terminal& t = *o.terminal;
     switch (r.h.op) {
         case opRead:
             if (heldBack(o, r, SIGTTIN)) {
                 return;
             }
-            return readFile(o, r);
+            return readFile(o, e, r);
         case opWrite:
             if ((t.settings.c_lflag & TOSTOP) != 0 && heldBack(o, r, SIGTTOU)) {
                 return;
             }
-            return writeFile(o, r);
+            return writeFile(o, e, r);
         case opTcsetattr:
         case opTcflush:
         case opTcflow:
@@ -1351,7 +1349,7 @@ static void handle(Endpoint& e, Request& r) {
             cancel(*static_cast<Waiting*>(e.of));
         }
     } else {
-        fileCall(*static_cast<Open*>(e.of), r);
+        fileCall(*static_cast<Open*>(e.of), e, r);
     }
 }
 

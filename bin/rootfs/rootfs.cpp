@@ -538,6 +538,9 @@ namespace {
         bool dead;       // closed, while a batch of events may still name it
         Place at;        // a Handle's
         u64 id;          // a Handle's
+        u64 pos;         // a Handle's: where its READDIR goes on, an entry's pos
+        bool append;     // a Handle's O_APPEND and O_NONBLOCK, the open's, then SETFL's
+        bool nonblock;
         Fs* fs;          // a Fs's
         Endpoint* next;  // among the free ones
         Endpoint* after; // among the live ones
@@ -687,13 +690,16 @@ static void letGo(Mount* m);
 
 // A handle of id at a place, on our end of its pair; O_PATH's reads
 // nothing and changes nothing.
-static Endpoint* listenHandle(int fd, const Place& p, bool opath, u64 id) {
+static Endpoint* listenHandle(int fd, const Place& p, int flags, u64 id) {
+    const bool opath = (flags & O_PATH) != 0;
     Endpoint* ep = listen(fd, Role::Handle);
     ep->at = p;
     ep->at.fresh = false; // the stat is the open's, not a later call's
     ep->reads = !opath;
     ep->writes = !opath;
     ep->id = id;
+    ep->append = (flags & O_APPEND) != 0;
+    ep->nonblock = (flags & O_NONBLOCK) != 0;
     ++p.m->refs;
     handles.insert(hashId(ep->id), ep);
     return ep;
@@ -1455,7 +1461,6 @@ Answer Ask::await_resume() const noexcept {
 // file system's, which the kernel keeps a directory's locks by: none of a
 // place whose file system has not said its stat yet.
 static void openHandle(int fd, const Place& at, int flags) {
-    const bool opath = (flags & O_PATH) != 0;
     const u64 ino = at.st.dev != 0 ? at.st.ino : 0;
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
@@ -1463,9 +1468,8 @@ static void openHandle(int fd, const Place& at, int flags) {
         return;
     }
     const u64 id = ++handleIds;
-    const Opened what{u32(isDir(at) ? openedDir : openedPath), u32(flags) & (O_ACCMODE | O_APPEND | O_NONBLOCK | O_PATH), at.st.dev, ino, id,
-                      POLLIN | POLLOUT};
-    listenHandle(pair[0], at, opath, id);
+    const Opened what{u32(isDir(at) ? openedDir : openedPath), u32(flags) & (O_ACCMODE | O_PATH), at.st.dev, ino, id, POLLIN | POLLOUT};
+    listenHandle(pair[0], at, flags, id);
     const iovec said = part(&what, sizeof what);
     reply(fd, opOk, 0, &said, 1, &pair[1], 1);
     close(pair[1]);
@@ -2651,6 +2655,71 @@ static Task fstatCall(Header h, int fd, Place at) {
     }
 }
 
+// READDIR of a directory's handle of id: the file system's entries after
+// the handle's position, after, as many as the room holds; the position
+// moves to the last one's.
+static Task readdirCall(Header h, int fd, Place at, u64 id, u64 after) {
+    Reply r{fd};
+    Held here(at);
+    Ask ask = asking(here.at, h, fsReaddir, {reinterpret_cast<const char*>(&after), sizeof after});
+    ask.head.arg = h.arg;
+    const Answer a = co_await ask;
+    if (a.error != 0) {
+        error(fd, a.error);
+        co_return;
+    }
+    u64 last = after;
+    for (const u8* entry = a.body.at; a.body.end - entry > 17;) {
+        const void* nul = memchr(entry + 17, 0, usize(a.body.end - entry - 17));
+        if (!nul) {
+            break;
+        }
+        memcpy(&last, entry + 8, sizeof last);
+        entry = static_cast<const u8*>(nul) + 1;
+    }
+    if (Endpoint* ep = handleOf(id)) {
+        ep->pos = last;
+    }
+    ok(fd, a.body.at, a.body.size());
+}
+
+// SEEK of a handle: a directory's position is an entry's, READDIR's; its
+// end the size its stat has. What O_PATH opens has none.
+static bool seekCall(Endpoint* ep, const Header& h, Body body, int fd) {
+    if (!ep->reads) {
+        return error(fd, EBADF);
+    }
+    if (body.size() != 8) {
+        return error(fd, EINVAL);
+    }
+    const i64 off = body.take<i64>();
+    const i64 from = h.arg == SEEK_SET ? 0 : h.arg == SEEK_CUR ? i64(ep->pos) : h.arg == SEEK_END ? i64(ep->at.st.size) : -1;
+    if (from < 0) {
+        return error(fd, EINVAL);
+    }
+    if (off > 0 && from > INT64_MAX - off) {
+        return error(fd, EOVERFLOW);
+    }
+    if (from + off < 0) {
+        return error(fd, EINVAL);
+    }
+    ep->pos = u64(from + off);
+    ok(fd, &ep->pos, sizeof ep->pos);
+    return false;
+}
+
+// GETFL and SETFL of a handle: O_RDONLY, or O_PATH, and what it keeps.
+static bool flagsCall(Endpoint* ep, const Header& h, int fd) {
+    if (h.op == opSetfl) {
+        ep->append = (h.arg & O_APPEND) != 0;
+        ep->nonblock = (h.arg & O_NONBLOCK) != 0;
+        return answer(fd, 0);
+    }
+    const u32 flags = (ep->reads ? O_RDONLY : O_PATH) | (ep->append ? O_APPEND : 0) | (ep->nonblock ? O_NONBLOCK : 0);
+    ok(fd, &flags, sizeof flags);
+    return false;
+}
+
 // UNMOUNT: what is mounted where a path names, a last link followed
 // unless UMOUNT_NOFOLLOW says; EINVAL for what is no mount's root, EBUSY
 // for one with mounts on it.
@@ -2725,7 +2794,9 @@ Name Path::text() const {
 // ---- the loop ---------------------------------------------------------------
 
 // An open file's call on a handle: FSTAT rootfs answers, with the
-// handle's id, the others are handed on to the file system its place
+// handle's id, and SEEK, GETFL and SETFL of the position and the flags
+// the handle keeps; READDIR asks the file system for the entries after
+// the position; the others are handed on to the file system its place
 // is of. O_PATH's handle reads, changes and locks nothing: EBADF; a
 // handle locks nothing, EINVAL; a directory reads by READDIR, not READ,
 // EISDIR; a call no handle serves fails as the protocol has it.
@@ -2745,7 +2816,13 @@ static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
             if (!isDir(at)) {
                 return error(fd, ENOTDIR);
             }
-            return hand(at, h, fsReaddir, 0, body.at, body.size(), {}, fd);
+            readdirCall(h, fd, at, ep->id, ep->pos);
+            return true;
+        case opSeek:
+            return seekCall(ep, h, body, fd);
+        case opGetfl:
+        case opSetfl:
+            return flagsCall(ep, h, fd);
         case opFsync:
             return opath ? error(fd, EBADF) : answer(fd, 0);
         case opFtruncate:
@@ -3330,7 +3407,7 @@ static Task boot() {
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, root) != 0) {
         fatal("rootfs: a pair for the root: errno %d", errno);
     }
-    listenHandle(root[0], rootOf(rootMount), false, 0);
+    listenHandle(root[0], rootOf(rootMount), O_RDONLY, 0);
     rootEnd = attach(root[1]);
     if (rootEnd < 0 || fcntl(rootEnd, F_SETFD, FD_CLOEXEC) != 0) {
         fatal("rootfs: attach: errno %d", errno);

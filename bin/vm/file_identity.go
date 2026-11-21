@@ -3,8 +3,9 @@
 package main
 
 type FileIdentity struct {
-	id  uint64
-	key FileKey
+	id     uint64
+	key    FileKey
+	access int
 }
 
 func (r *FileIdentity) op() uint32 {

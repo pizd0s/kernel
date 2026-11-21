@@ -41,14 +41,17 @@ void tell(int fd, uint32_t events) {
 }
 
 Endpoint* answerOpen(int epoll, const Request& r, Opened what, void* of) {
-    what.flags = r.h.arg & (O_ACCMODE | O_APPEND | O_NONBLOCK);
+    what.access = r.h.arg & O_ACCMODE;
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         fail(r.reply(), errno);
         return nullptr;
     }
     const uint32_t access = r.h.arg & O_ACCMODE;
-    Endpoint* e = watch(epoll, {pair[0], false, access != O_WRONLY, access != O_RDONLY, of});
+    Endpoint opened{pair[0], false, access != O_WRONLY, access != O_RDONLY, of};
+    opened.append = (r.h.arg & O_APPEND) != 0;
+    opened.nonblock = (r.h.arg & O_NONBLOCK) != 0;
+    Endpoint* e = watch(epoll, opened);
     Header h{opOk, 0, 0, 0, 0, 0};
     const iovec parts[] = {{&h, sizeof h}, {&what, sizeof what}};
     sendPacket(r.reply(), parts, 2, &pair[1], 1); // a gone asker is its own loss
@@ -179,8 +182,64 @@ bool Request::io(Io& out) const {
         return false;
     }
     memcpy(&out, body, sizeof out);
-    const uint32_t known = h.op == opWrite ? ioAppend | ioNonblock | ioAt : ioNonblock | ioAt;
-    return (out.flags & ~known) == 0;
+    return (out.flags & ~ioAt) == 0;
+}
+
+uint64_t offsetOf(const Endpoint& e, const Io& io, bool write, uint64_t size) {
+    if ((io.flags & ioAt) != 0) {
+        return io.off;
+    }
+    return write && e.append ? size : e.pos;
+}
+
+int seekOf(Endpoint& e, const Request& r, uint64_t size, uint64_t& out) {
+    int64_t off;
+    if (r.size != sizeof off || !r.at(0, off)) {
+        return EINVAL;
+    }
+    int64_t from = 0;
+    switch (r.h.arg) {
+        case SEEK_SET:
+            break;
+        case SEEK_CUR:
+            from = int64_t(e.pos);
+            break;
+        case SEEK_END:
+            from = int64_t(size);
+            break;
+        default:
+            return EINVAL;
+    }
+    if (off > 0 && from > INT64_MAX - off) {
+        return EOVERFLOW;
+    }
+    if (from + off < 0) {
+        return EINVAL;
+    }
+    out = uint64_t(from + off);
+    e.pos = out;
+    return 0;
+}
+
+void answerSeek(Endpoint& e, const Request& r, uint64_t size) {
+    uint64_t pos;
+    if (const int err = seekOf(e, r, size, pos); err != 0) {
+        return fail(r.reply(), err);
+    }
+    answer(r.reply(), opOk, 0, &pos, sizeof pos);
+}
+
+// GETFL and SETFL of an open file: what its open lets it do and the
+// flags its endpoint keeps.
+static void flagsOf(Endpoint& e, const Request& r) {
+    if (r.h.op == opSetfl) {
+        e.append = (r.h.arg & O_APPEND) != 0;
+        e.nonblock = (r.h.arg & O_NONBLOCK) != 0;
+        return answer(r.reply(), opOk, 0);
+    }
+    const uint32_t flags = (e.reads && e.writes ? O_RDWR : e.writes ? O_WRONLY : O_RDONLY) | (e.append ? O_APPEND : 0) |
+                           (e.nonblock ? O_NONBLOCK : 0);
+    answer(r.reply(), opOk, 0, &flags, sizeof flags);
 }
 
 void stopServing() {
@@ -231,6 +290,8 @@ static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepte
     }
     if (e->channel && r.h.op != opOpen) {
         fail(r.reply(), EINVAL);
+    } else if (!e->channel && !e->answers && (r.h.op == opGetfl || r.h.op == opSetfl)) {
+        flagsOf(*e, r);
     } else {
         handle(*e, r);
     }

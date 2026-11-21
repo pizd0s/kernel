@@ -264,11 +264,11 @@ func (a *Answer) recv(p *Process, r *SockRecv) error {
 func (a *Answer) consume(sink func(pk *Packet)) {
 }
 
-func (a *Answer) flags() (int, error) {
+func (a *Answer) flags(p *Process) (int, error) {
 	return 0, EBADF
 }
 
-func (a *Answer) setFlags(fl int) error {
+func (a *Answer) setFlags(p *Process, fl int) error {
 	return EBADF
 }
 

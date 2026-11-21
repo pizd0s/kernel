@@ -200,7 +200,7 @@ func (e *PairEnd) poll(events int16, through []*Epoll) int16 {
 	return mask & (events | POLLERR | POLLHUP)
 }
 
-func (e *PairEnd) flags() (int, error) {
+func (e *PairEnd) flags(p *Process) (int, error) {
 	fl := O_RDWR
 
 	if e.nonblock.Load() {
@@ -210,7 +210,7 @@ func (e *PairEnd) flags() (int, error) {
 	return fl, nil
 }
 
-func (e *PairEnd) setFlags(fl int) error {
+func (e *PairEnd) setFlags(p *Process, fl int) error {
 	e.nonblock.Store(fl&O_NONBLOCK != 0)
 
 	return nil

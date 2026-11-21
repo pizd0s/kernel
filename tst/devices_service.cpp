@@ -113,7 +113,7 @@ static void readMail(const Endpoint& e, Request& r) {
     if (mailLength > 0) {
         return deliver(r.memfd(), r.h.arg, r.reply());
     }
-    if ((io.flags & ioNonblock) != 0) {
+    if (e.nonblock) {
         return fail(r.reply(), EAGAIN);
     }
     if (reader.at) {
@@ -136,12 +136,7 @@ static void writeMail(const Endpoint& e, const Request& r) {
     const size_t part = MIN(size_t(r.h.arg), sizeof mail - mailLength);
     const ssize_t got = pread(r.memfd(), mail + mailLength, part, 0);
     mailLength += got > 0 ? size_t(got) : 0;
-
-    struct {
-        uint32_t count;
-        uint64_t at;
-    } __attribute__((packed)) done{uint32_t(got > 0 ? got : 0), io.off};
-
+    const uint32_t done = uint32_t(got > 0 ? got : 0);
     answer(r.reply(), opOk, 0, &done, sizeof done);
     if (reader.at && mailLength > 0) {
         deliver(reader.memfd, reader.length, reader.at->fd);
@@ -166,7 +161,7 @@ static void gone(Endpoint& e) {
     }
 }
 
-static void readText(const Endpoint& e, const Request& r) {
+static void readText(Endpoint& e, const Request& r) {
     Io io;
     if (!e.reads) {
         return fail(r.reply(), EBADF);
@@ -174,14 +169,17 @@ static void readText(const Endpoint& e, const Request& r) {
     if (r.memfd() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
-    const uint64_t off = io.off;
+    const uint64_t off = offsetOf(e, io, false, length);
     const size_t part = off < length ? MIN(size_t(r.h.arg), length - size_t(off)) : 0;
     pwrite(r.memfd(), text + MIN(off, uint64_t(length)), part, 0);
+    if ((io.flags & ioAt) == 0) {
+        e.pos = off + part;
+    }
     const uint32_t done = uint32_t(part);
     answer(r.reply(), opOk, 0, &done, sizeof done);
 }
 
-static void readKept(const Endpoint& e, Request& r) {
+static void readKept(Endpoint& e, Request& r) {
     readText(e, r);
     if (r.memfd() >= 0 && keptCount < sizeof kept / sizeof kept[0]) {
         kept[keptCount++] = r.memfd();
@@ -202,13 +200,7 @@ static void writeKept(const Endpoint& e, const Request& r) {
             return fail(r.reply(), EIO);
         }
     }
-
-    struct {
-        uint32_t count;
-        uint64_t at;
-    } __attribute__((packed)) done{r.h.arg, io.off};
-
-    answer(r.reply(), opOk, 0, &done, sizeof done);
+    answer(r.reply(), opOk, 0, &r.h.arg, sizeof r.h.arg);
 }
 
 static void handle(Endpoint& e, Request& r) {
@@ -255,6 +247,13 @@ static void handle(Endpoint& e, Request& r) {
             break;
         case opFstat:
             answer(r.reply(), opOk, 0, &device.st, sizeof device.st);
+            break;
+        case opSeek:
+            if (mailbox) {
+                fail(r.reply(), ESPIPE);
+            } else {
+                answerSeek(e, r, length);
+            }
             break;
         default:
             fail(r.reply(), unserved(r.h.op));

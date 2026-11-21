@@ -23,8 +23,8 @@ type Object interface {
 	subscribe(s *Subscription, events int16)
 	unsubscribe(s *Subscription)
 
-	flags() (int, error)
-	setFlags(fl int) error
+	flags(p *Process) (int, error)
+	setFlags(p *Process, fl int) error
 
 	read(p *Process, into Object, n int, mode IoMode) (int, error)
 	write(p *Process, from Object, n int, mode IoMode) (int, error)

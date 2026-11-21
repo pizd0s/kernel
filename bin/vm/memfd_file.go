@@ -111,11 +111,11 @@ func (f *MemfdFile) subscribe(s *Subscription, events int16) {
 func (f *MemfdFile) unsubscribe(s *Subscription) {
 }
 
-func (f *MemfdFile) flags() (int, error) {
+func (f *MemfdFile) flags(p *Process) (int, error) {
 	return f.mode, nil
 }
 
-func (f *MemfdFile) setFlags(fl int) error {
+func (f *MemfdFile) setFlags(p *Process, fl int) error {
 	return nil
 }
 

@@ -58,11 +58,11 @@ func (c *Capture) subscribe(s *Subscription, events int16) {
 func (c *Capture) unsubscribe(s *Subscription) {
 }
 
-func (c *Capture) flags() (int, error) {
+func (c *Capture) flags(p *Process) (int, error) {
 	return O_WRONLY, nil
 }
 
-func (c *Capture) setFlags(fl int) error {
+func (c *Capture) setFlags(p *Process, fl int) error {
 	return nil
 }
 

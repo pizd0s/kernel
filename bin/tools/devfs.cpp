@@ -271,14 +271,16 @@ static void readDir(const Node& dir, const Request& r) {
     }
     static unsigned char out[65536 - sizeof(Header)];
     size_t size = 0;
+    size_t room = r.h.arg;
     for (const Node* n = dir.entries; n; n = n->next) {
         const size_t length = strlen(n->name);
         if (n->pos <= after) {
             continue;
         }
-        if (size + 17 + length + 1 > sizeof out) {
+        if (size + 17 + length + 1 > sizeof out || direntRoom(length) > room) {
             break;
         }
+        room -= direntRoom(length);
         const uint8_t type = uint8_t((n->mode >> 12) & 017);
         memcpy(out + size, &n->ino, 8);
         memcpy(out + size + 8, &n->pos, 8);

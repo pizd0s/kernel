@@ -249,14 +249,15 @@ static int linkError(const Node* dst, Name newName, const Header& h) {
 
 // ---- calls on a node ---------------------------------------------------------
 
-// A READ of a file of the image: its bytes at the offset, as many as
-// asked up to its end, from the image into the memfd.
+// A READ of a file of the image: its bytes at the open file's position
+// or the offset, as many as asked up to its end, from the image into the
+// memfd; the position moves by them.
 static void readNode(Endpoint* ep, const Header& h, Body body, int fd) {
     Io io;
-    if (!ioOf(h, body, io) || io.off > INT64_MAX) {
+    if (!ioOf(body, io) || io.off > INT64_MAX) {
         return error(fd, EINVAL);
     }
-    const u64 off = io.off;
+    const u64 off = ioOffset(ep, io, false, 0);
     const auto* node = static_cast<const Node*>(ep->node);
     const int w = memfd();
     if (w < 0) {
@@ -275,6 +276,9 @@ static void readNode(Endpoint* ep, const Header& h, Body body, int fd) {
         }
         left -= usize(n);
     }
+    if ((io.flags & ioAt) == 0) {
+        ep->pos = off + count;
+    }
     return readCount(fd, count);
 }
 
@@ -290,10 +294,12 @@ static void readlinkNode(const Node* n, int fd) {
 }
 
 // An entry of a READDIR's reply, at a position.
-static bool addEntry(Assembly& a, const Node* n, u64 pos, const char* name, usize length) {
-    if (!a.fits(17 + length + 1)) {
+static bool addEntry(Assembly& a, u64& room, const Node* n, u64 pos, const char* name, usize length) {
+    const usize need = direntRoom(length);
+    if (need > room || !a.fits(17 + length + 1)) {
         return false;
     }
+    room -= need;
     a.add(inoOf(n));
     a.add(pos);
     a.add(dtype(n));
@@ -305,21 +311,22 @@ static bool addEntry(Assembly& a, const Node* n, u64 pos, const char* name, usiz
 // The entries after a position, in order, as many as one reply holds:
 // "." at 1, ".." at 2, the root's its own, and then the directory's, an
 // entry's position its place among them plus three.
-static void readdirNode(const Node* node, Body body, int fd) {
+static void readdirNode(const Node* node, const Header& h, Body body, int fd) {
     if (!isDirNode(node)) {
         return error(fd, ENOTDIR);
     }
     const u64 after = body.take<u64>();
+    u64 room = h.arg;
     Assembly a;
     if (after < 1) {
-        addEntry(a, node, 1, ".", 1);
+        addEntry(a, room, node, 1, ".", 1);
     }
     if (after < 2) {
-        addEntry(a, parentOf(node), 2, "..", 2);
+        addEntry(a, room, parentOf(node), 2, "..", 2);
     }
     for (u64 i = MIN(after < 2 ? 0 : after - 2, u64(node->size)); i < node->size; ++i) {
         const Entry& e = image.entries[node->data + i];
-        if (!addEntry(a, &image.nodes[e.node], i + 3, image.names + e.name, e.length)) {
+        if (!addEntry(a, room, &image.nodes[e.node], i + 3, image.names + e.name, e.length)) {
             break;
         }
     }
@@ -417,7 +424,7 @@ static void fsCall(const Header& h, Body body, int fd) {
         case fsReadlink:
             return readlinkNode(n, fd);
         case fsReaddir:
-            return readdirNode(n, body, fd);
+            return readdirNode(n, h, body, fd);
         case fsOpen:
             return openNode(n, h.arg, h, fd);
         case fsCreate: {
@@ -482,6 +489,13 @@ static void fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
             return error(fd, EBADF);
         case opReaddir:
             return error(fd, ENOTDIR);
+        case opSeek: {
+            u64 pos;
+            if (const int e = seekTo(ep, h, body, node->size, pos); e != 0) {
+                return error(fd, e);
+            }
+            return ok(fd, &pos, sizeof pos);
+        }
         case opFstat: {
             const Stat st = statOf(node);
             ok(fd, &st, sizeof st);

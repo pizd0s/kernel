@@ -126,8 +126,8 @@ namespace tools {
     };
 
     // A READ's or a WRITE's body, false for one that is not: just an Io,
-    // whose flags are the op's.
-    bool ioOf(const Header& h, Body body, Io& out);
+    // whose flags are known.
+    bool ioOf(Body body, Io& out);
 
     // Why a name is none a call takes, 0 for one it does: "." and ".." and
     // names with "/" are a walk's; a name past NAME_MAX is too long.
@@ -197,6 +197,9 @@ namespace tools {
         Endpoint* next;  // among the free ones
         Endpoint* after; // among the live ones
         Endpoint* before;
+        u64 pos;       // a File's position: READ's and WRITE's without ioAt, a directory's READDIR's
+        bool append;   // a File's O_APPEND and O_NONBLOCK, the OPEN's, then SETFL's
+        bool nonblock;
     };
 
     // A file system's calls: rootfs's on its channel, by node, and those
@@ -217,6 +220,14 @@ namespace tools {
     // open file's, where its requests come. That endpoint, or none, the
     // error answered.
     Endpoint* openFile(int fd, u32 flags, void* node, u64 dev, u64 ino, bool reads, bool writes);
+
+    // Where a READ or a WRITE of an open file goes: off with ioAt, else
+    // its position, or the file's end, size, for a WRITE that appends.
+    u64 ioOffset(const Endpoint* ep, const Io& io, bool write, u64 size);
+
+    // The position a SEEK of an open file sets, from its position and the
+    // file's size, or the errno.
+    int seekTo(Endpoint* ep, const Header& h, Body body, u64 size, u64& out);
 
     // Serves the endpoints until the last of them closes: rootfs's channel,
     // and the open files after it. A question of rootfs's, which brings

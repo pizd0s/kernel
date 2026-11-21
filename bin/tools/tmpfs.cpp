@@ -848,10 +848,10 @@ static bool put(int w, const void* from, usize count) {
 
 static void readNode(Endpoint* ep, const Header& h, Body body, int fd) {
     Io io;
-    if (!ioOf(h, body, io) || io.off > INT64_MAX) {
+    if (!ioOf(body, io) || io.off > INT64_MAX) {
         return error(fd, EINVAL);
     }
-    const u64 off = io.off;
+    const u64 off = ioOffset(ep, io, false, 0);
     const auto* node = static_cast<const Node*>(ep->node);
     const usize n = h.arg;
     if (node->kind != Kind::Dir && !ep->reads) {
@@ -868,6 +868,9 @@ static void readNode(Endpoint* ep, const Header& h, Body body, int fd) {
             if (!put(w, node->content.data() + (count ? usize(off) : 0), count)) {
                 return error(fd, EIO);
             }
+            if ((io.flags & ioAt) == 0) {
+                ep->pos = off + count;
+            }
             return readCount(fd, count);
         }
         default:
@@ -875,14 +878,16 @@ static void readNode(Endpoint* ep, const Header& h, Body body, int fd) {
     }
 }
 
-// The data at the offset, or at the end with append, as much as the
-// capacity takes: the count and where it went.
+// The data at the open file's position or the offset, or at the end
+// when it appends, as much as the capacity takes: the count; the position
+// after it.
 static void writeNode(Endpoint* ep, const Header& h, Body body, int fd) {
     Io io;
-    if (!ioOf(h, body, io) || io.off > INT64_MAX) {
+    if (!ioOf(body, io) || io.off > INT64_MAX) {
         return error(fd, EINVAL);
     }
     u64 off = io.off;
+    const bool positioned = (io.flags & ioAt) == 0;
     const usize length = h.arg;
     Server& s = tree;
     auto* node = static_cast<Node*>(ep->node);
@@ -900,9 +905,7 @@ static void writeNode(Endpoint* ep, const Header& h, Body body, int fd) {
                 return error(fd, EROFS);
             }
             const u64 size = node->content.size();
-            if ((io.flags & ioAppend) != 0) {
-                off = size;
-            }
+            off = ioOffset(ep, io, true, size);
             const u64 grows = off + count > size ? off + count - size : 0;
             if (s.capacity > 0 && grows > s.capacity - s.used) {
                 const u64 over = grows - (s.capacity - s.used);
@@ -923,17 +926,20 @@ static void writeNode(Endpoint* ep, const Header& h, Body body, int fd) {
         default:
             return error(fd, node->kind == Kind::Dir ? EISDIR : EINVAL);
     }
-    Assembly a;
-    a.add(u32(count));
-    a.add(off);
-    ok(fd, out, a.size);
+    if (positioned) {
+        ep->pos = off + count;
+    }
+    const u32 wrote = u32(count);
+    ok(fd, &wrote, sizeof wrote);
 }
 
 // An entry of a READDIR's reply, at a position.
-static bool addEntry(Assembly& a, const Node* n, u64 pos, const char* name, usize length) {
-    if (!a.fits(17 + length + 1)) {
+static bool addEntry(Assembly& a, u64& room, const Node* n, u64 pos, const char* name, usize length) {
+    const usize need = direntRoom(length);
+    if (need > room || !a.fits(17 + length + 1)) {
         return false;
     }
+    room -= need;
     a.add(n->ino);
     a.add(pos);
     a.add(dtype(n));
@@ -943,17 +949,18 @@ static bool addEntry(Assembly& a, const Node* n, u64 pos, const char* name, usiz
 }
 
 // The entries after a position, in order, as many as one reply holds.
-static void readdirNode(const Node* node, Body body, int fd) {
+static void readdirNode(const Node* node, const Header& h, Body body, int fd) {
     if (node->kind != Kind::Dir) {
         return error(fd, ENOTDIR);
     }
     const u64 after = body.take<u64>();
+    u64 room = h.arg;
     Assembly a;
     if (after < 1) {
-        addEntry(a, node, 1, ".", 1);
+        addEntry(a, room, node, 1, ".", 1);
     }
     if (after < 2) {
-        addEntry(a, node->parent ? node->parent : node, 2, "..", 2);
+        addEntry(a, room, node->parent ? node->parent : node, 2, "..", 2);
     }
     const Slot* slots = node->order.data();
     const usize count = node->order.size();
@@ -969,7 +976,7 @@ static void readdirNode(const Node* node, Body body, int fd) {
     }
     for (usize i = lo; i < count; ++i) {
         const Entry* e = slots[i].entry;
-        if (e && !addEntry(a, e->node, e->pos, e->name.at, e->name.length)) {
+        if (e && !addEntry(a, room, e->node, e->pos, e->name.at, e->name.length)) {
             break;
         }
     }
@@ -1086,7 +1093,7 @@ static void fsCall(const Header& h, Body body, int fd) {
             ok(fd, n->content.data(), n->content.size());
             return;
         case fsReaddir:
-            return readdirNode(n, body, fd);
+            return readdirNode(n, h, body, fd);
         case fsOpen:
             return openNode(n, h.arg, false, h, fd);
         case fsCreate: {
@@ -1181,6 +1188,13 @@ static void fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
             return writeNode(ep, h, body, fd);
         case opReaddir:
             return error(fd, ENOTDIR);
+        case opSeek: {
+            u64 pos;
+            if (const int e = seekTo(ep, h, body, node->kind == Kind::File ? node->content.size() : 0, pos); e != 0) {
+                return error(fd, e);
+            }
+            return ok(fd, &pos, sizeof pos);
+        }
         case opFstat: {
             const Stat st = statOf(tree, node);
             ok(fd, &st, sizeof st);

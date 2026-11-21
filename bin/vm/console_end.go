@@ -87,7 +87,7 @@ func (c *ConsoleEnd) unsubscribe(s *Subscription) {
 	}
 }
 
-func (c *ConsoleEnd) flags() (int, error) {
+func (c *ConsoleEnd) flags(p *Process) (int, error) {
 	fl := O_RDWR
 
 	if c.nonblock.Load() {
@@ -97,7 +97,7 @@ func (c *ConsoleEnd) flags() (int, error) {
 	return fl, nil
 }
 
-func (c *ConsoleEnd) setFlags(fl int) error {
+func (c *ConsoleEnd) setFlags(p *Process, fl int) error {
 	c.nonblock.Store(fl&O_NONBLOCK != 0)
 
 	return nil

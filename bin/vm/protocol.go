@@ -23,8 +23,6 @@ const (
 	whenAtimeKept          = 8
 	whenMtimeKept          = 16
 	rOpen           uint32 = 96
-	ioAppend               = 1
-	ioNonblock             = 2
 	ioAt                   = 4
 	openControlling        = 4
 	cttyTake               = 1
@@ -46,6 +44,9 @@ const (
 	rFstatfs
 	rCancel
 	rReady
+	rSeek
+	rGetfl
+	rSetfl
 )
 
 const (
@@ -102,13 +103,16 @@ const (
 	vConnect
 )
 
-func served(p *Process, kind uint32, flags int, dev, ino, id uint64, events uint32, end Object) (*RemoteFD, error) {
+func served(p *Process, kind uint32, access int, dev, ino, id uint64, events uint32, end Object) (*RemoteFD, error) {
 	if kind != openedFile && kind != openedTerminal && kind != openedDir && kind != openedPath {
 		return nil, EINVAL
 	}
 
-	f := &RemoteFD{end: end, id: id, key: FileKey{dev, ino}, accmode: flags & O_ACCMODE, opath: flags&O_PATH != 0 || kind == openedPath,
-		append: flags&O_APPEND != 0, nonblock: flags&O_NONBLOCK != 0, ready: readiness(events)}
+	if kind == openedPath {
+		access |= O_PATH
+	}
+
+	f := &RemoteFD{end: end, id: id, key: FileKey{dev, ino}, access: access & (O_ACCMODE | O_PATH), ready: readiness(events)}
 
 	if ino != 0 {
 		f.locks = &p.k.locks

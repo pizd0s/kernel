@@ -113,7 +113,9 @@
 //                                         parent, the root's the root
 //     GETATTR               node u64          OK stat
 //     READLINK              node u64          OK target
-//     READDIR               node u64, after u64   as an open file's
+//     READDIR   arg room    node u64, after u64   an open file's READDIR's
+//                                         reply: the entries after the
+//                                         position after that room holds
 //     OPEN      arg flags   node u64          OK, fds[0] the open file; a
 //                                         FIFO's OK is its stat alone
 //     CREATE    arg flags   node u64, mode u32, name   OK, fds[0] the open
@@ -142,15 +144,37 @@
 //                                         flags u32: fsNocache, of a file
 //                                         system that changes by itself
 //
-//   An open file's, on a connection to it:
+//   An open file's, on a connection to it. The open file keeps its
+//   position and its flags, the OPEN's, as an open file description does:
+//   who shares the open file shares them.
 //     READ      arg len     io            OK count u32; fds[0] a memfd of
 //                                         the reader's memory, the bytes
-//                                         go there
-//     WRITE     arg len     io            OK count u32 at u64, where an
-//                                         append went; fds[0] a memfd of
+//                                         go there. At the position, which
+//                                         moves by the count, or at off
+//     WRITE     arg len     io            OK count u32; fds[0] a memfd of
 //                                         the writer's memory, the bytes
-//                                         come from there
-//     READDIR               after u64     OK (ino u64, pos u64, type u8, name, 0)*
+//                                         come from there. At the position, or
+//                                         at the end the file has when it
+//                                         appends (O_APPEND), the position
+//                                         after it then; or at off
+//     SEEK      arg whence  off u64       OK pos u64: the position set,
+//                                         SEEK_SET, SEEK_CUR or SEEK_END;
+//                                         EINVAL below 0, ESPIPE of what
+//                                         has none. A directory's is an
+//                                         entry's, READDIR's pos: READDIR
+//                                         goes on after it
+//     GETFL                               OK flags u32: O_ACCMODE, O_APPEND,
+//                                         O_NONBLOCK, O_PATH
+//     SETFL     arg flags                 O_APPEND and O_NONBLOCK of the
+//                                         open file: one that does not wait
+//                                         answers at once, EAGAIN where it
+//                                         would
+//     READDIR   arg room                  OK (ino u64, pos u64, type u8, name, 0)*:
+//                                         the entries after the position,
+//                                         as many as room bytes of struct
+//                                         dirent64 hold, (19 + length + 1
+//                                         + 7) & ~7 each; the position moves
+//                                         to the last one's
 //     FSTAT                               OK stat
 //     FCHMOD    arg mode
 //     FCHOWN                uid u32 gid u32
@@ -276,26 +300,25 @@
 //
 //   replies: OK, ERR with arg the errno, BACKGROUND with arg the signal
 //   of a call out of the foreground (a terminal's)
-//   opened { kind u32, flags u32, dev u64, ino u64, id u64, events u32 }   kind:
+//   opened { kind u32, access u32, dev u64, ino u64, id u64, events u32 }   kind:
 //          openedFile, an open file; openedTerminal, a terminal's, which
 //          takes a terminal's calls too; openedDir, a handle of a directory
 //          of the VFS's, which calls with a path go to; openedPath, a handle
 //          of what O_PATH opened that is no directory. events are its
 //          readiness as it opens, READY's events: POLLIN and POLLOUT of
 //          what is always ready, a file's, a directory's, a device's; a
-//          terminal's as it is, which READY tells when it changes. flags
-//          are the open's:
-//          O_ACCMODE, O_APPEND and O_NONBLOCK, and O_PATH of a directory's
-//          handle, which takes no locks then. dev and ino are the file's or
+//          terminal's as it is, which READY tells when it changes. access
+//          is what the open lets the file do, O_ACCMODE, and O_PATH of a
+//          handle, the kernel's to know without asking, as the locks it
+//          keeps check it: what O_PATH opens takes no locks. The open's
+//          other flags are the open file's to keep (GETFL). dev and ino are the file's or
 //          the directory's, as its stat has them, or a terminal's device's:
 //          they name it to the kernel, which keeps the locks of flock and
 //          fcntl by them, so the open files given one dev and ino are one
 //          file to lock, and a file of ino 0 has no locks; two opens of a
 //          terminal are one terminal by them. id is a handle's, which calls
 //          with a path name the root by
-//   io { off u64, flags u32 }   flags: ioAppend, a WRITE at the
-//          end the file has, O_APPEND's; ioNonblock, answered at once, EAGAIN
-//          where it would wait, O_NONBLOCK's; ioAt, at off as pread and
+//   io { off u64, flags u32 }   flags: ioAt, at off as pread and
 //          pwrite ask, ESPIPE from what cannot seek
 //   stat { ino u64, size u64, mtime u64 nanoseconds, mode u32, nlink u32,
 //          uid u32, gid u32, atime u64, dev u64, ctime u64 }
@@ -367,6 +390,9 @@ enum : uint32_t {
     opFstatfs,
     opCancel,
     opReady,
+    opSeek,
+    opGetfl,
+    opSetfl,
     // A service's.
     opOpen = 96,
     opRegister,
@@ -416,9 +442,13 @@ constexpr uint32_t cttyTake = 1;
 constexpr uint32_t cttyGone = 2;
 constexpr uint32_t cttyDropped = 3;
 // Io's flags.
-constexpr uint32_t ioAppend = 1;
-constexpr uint32_t ioNonblock = 2;
 constexpr uint32_t ioAt = 4;
+
+// The room an entry of a READDIR's takes of struct dirent64, of a name of
+// length.
+constexpr size_t direntRoom(size_t length) {
+    return (19 + length + 1 + 7) & ~size_t(7);
+}
 // UTIMES's when.
 constexpr uint32_t whenAtimeNow = 2;
 constexpr uint32_t whenMtimeNow = 4;
@@ -437,7 +467,7 @@ struct Header {
 // What the end an OPEN's OK brings is: the OK's body.
 struct Opened {
     uint32_t kind;
-    uint32_t flags;
+    uint32_t access;
     uint64_t dev;
     uint64_t ino;
     uint64_t id;
@@ -500,6 +530,7 @@ ssize_t receivePacket(int fd, void* buffer, size_t size, int* fds, size_t& fdCou
 // says what it is: one by a path from what is no directory ENOTDIR, a
 // listing of what is no directory ENOTDIR, a terminal's call on what is
 // no terminal ENOTTY, a socket's call on what is no socket ENOTSOCK, a
-// change of size or a sync of what has none EINVAL, a read or a write of
-// what has none EBADF; another ENOSYS.
+// change of size or a sync of what has none EINVAL, a seek of what has no
+// position ESPIPE, a read or a write of what has none EBADF; another
+// ENOSYS.
 int unserved(uint32_t op);

@@ -64,6 +64,8 @@ int unserved(uint32_t op) {
     switch (op) {
         case opReaddir:
             return ENOTDIR;
+        case opSeek:
+            return ESPIPE;
         case opFtruncate:
         case opFsync:
             return EINVAL;

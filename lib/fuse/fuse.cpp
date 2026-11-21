@@ -381,8 +381,9 @@ static int changeOwner(const char* path, const Request& r, size_t at) {
     return operations.chown ? result(operations.chown(path, uid_t(uid), gid_t(gid))) : ENOSYS;
 }
 
-// A READ: what the file system reads at off, into the memfd.
-static void readFile(Open& o, const Endpoint& e, const Request& r) {
+// A READ: what the file system reads at the open file's position or off,
+// into the memfd; the position moves by it.
+static void readFile(Open& o, Endpoint& e, const Request& r) {
     Io io;
     if (!e.reads || !o.opened) {
         return fail(r.reply(), EBADF);
@@ -390,7 +391,7 @@ static void readFile(Open& o, const Endpoint& e, const Request& r) {
     if (r.memfd() < 0 || !r.io(io) || !operations.read) {
         return fail(r.reply(), EINVAL);
     }
-    const uint64_t off = io.off;
+    const uint64_t off = offsetOf(e, io, false, 0);
     size_t done = 0;
     while (done < r.h.arg) {
         const size_t ask = MIN(sizeof bytes, size_t(r.h.arg) - done);
@@ -409,13 +410,17 @@ static void readFile(Open& o, const Endpoint& e, const Request& r) {
             break;
         }
     }
+    if ((io.flags & ioAt) == 0) {
+        e.pos = off + done;
+    }
     const uint32_t count = uint32_t(done);
     answer(r.reply(), opOk, 0, &count, sizeof count);
 }
 
-// A WRITE: the memfd's bytes, what the file system writes at
-// off, or at its end with append.
-static void writeFile(Open& o, const Endpoint& e, const Request& r) {
+// A WRITE: the memfd's bytes, what the file system writes at the open
+// file's position or off, or at its end when it appends; the position
+// after it.
+static void writeFile(Open& o, Endpoint& e, const Request& r) {
     Io io;
     if (!e.writes || !o.opened) {
         return fail(r.reply(), EBADF);
@@ -423,9 +428,9 @@ static void writeFile(Open& o, const Endpoint& e, const Request& r) {
     if (r.memfd() < 0 || !r.io(io) || !operations.write) {
         return fail(r.reply(), EINVAL);
     }
-    uint64_t off = io.off;
+    uint64_t off = offsetOf(e, io, true, 0);
     const uint32_t length = r.h.arg;
-    if ((io.flags & ioAppend) != 0) {
+    if ((io.flags & ioAt) == 0 && e.append) {
         struct stat st;
         if (const int failed = attributes(o.path, st)) {
             return fail(r.reply(), failed);
@@ -450,11 +455,11 @@ static void writeFile(Open& o, const Endpoint& e, const Request& r) {
             break;
         }
     }
-    unsigned char wrote[12];
+    if ((io.flags & ioAt) == 0) {
+        e.pos = off + done;
+    }
     const uint32_t count = uint32_t(done);
-    memcpy(wrote, &count, 4);
-    memcpy(wrote + 4, &off, 8);
-    answer(r.reply(), opOk, 0, wrote, sizeof wrote);
+    answer(r.reply(), opOk, 0, &count, sizeof count);
 }
 
 static int fill(void* buffer, const char* name, const struct stat* st, off_t) {
@@ -512,12 +517,14 @@ static void readDirectory(uint64_t ino, const char* path, const Request& r) {
     }
     static unsigned char out[65536 - sizeof(Header)];
     size_t size = 0;
+    size_t room = r.h.arg;
     for (uint64_t i = after; i < l->count; ++i) {
         const Entry& entry = l->entries[i];
         const size_t length = strlen(entry.name);
-        if (size + 17 + length + 1 > sizeof out) {
+        if (size + 17 + length + 1 > sizeof out || direntRoom(length) > room) {
             break;
         }
+        room -= direntRoom(length);
         const uint64_t pos = i + 1;
         memcpy(out + size, &entry.ino, 8);
         memcpy(out + size + 8, &pos, 8);
@@ -683,7 +690,7 @@ static void fsCall(Request& r) {
 }
 
 // The calls on an open file.
-static void fileCall(Open& o, const Endpoint& e, Request& r) {
+static void fileCall(Open& o, Endpoint& e, Request& r) {
     struct stat st;
     int failed = 0;
     switch (r.h.op) {
@@ -693,6 +700,14 @@ static void fileCall(Open& o, const Endpoint& e, Request& r) {
             return writeFile(o, e, r);
         case opReaddir:
             return fail(r.reply(), ENOTDIR);
+        case opSeek:
+            if (r.h.arg == SEEK_END) {
+                if ((failed = attributes(o.path, st)) != 0) {
+                    break;
+                }
+                return answerSeek(e, r, uint64_t(st.st_size));
+            }
+            return answerSeek(e, r, 0);
         case opFstat:
             if (o.opened && operations.fgetattr) {
                 memset(&st, 0, sizeof st);

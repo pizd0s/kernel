@@ -178,11 +178,11 @@ func (ep *Epoll) mark(m *EpollMember) {
 	ep.waiting.wake(Turn{})
 }
 
-func (ep *Epoll) flags() (int, error) {
+func (ep *Epoll) flags(p *Process) (int, error) {
 	return O_RDWR, nil
 }
 
-func (ep *Epoll) setFlags(fl int) error {
+func (ep *Epoll) setFlags(p *Process, fl int) error {
 	return nil
 }
 

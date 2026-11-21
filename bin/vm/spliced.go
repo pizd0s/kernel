@@ -179,11 +179,11 @@ func (s *Spliced) copyFrom(p *Process, in Object, from, to int64, n int) (int, e
 	return s.of.copyFrom(p, in, from, at, n)
 }
 
-func (s *Spliced) flags() (int, error) {
+func (s *Spliced) flags(p *Process) (int, error) {
 	return 0, EBADF
 }
 
-func (s *Spliced) setFlags(fl int) error {
+func (s *Spliced) setFlags(p *Process, fl int) error {
 	return EBADF
 }
 

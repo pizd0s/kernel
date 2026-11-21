@@ -38,7 +38,7 @@ struct Header {
 
 struct Opened {
     uint32_t kind;
-    uint32_t flags;
+    uint32_t access;
     uint64_t dev;
     uint64_t ino;
     uint64_t id;

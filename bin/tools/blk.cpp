@@ -44,9 +44,9 @@ static int disk = -1;
 static Area whole;
 static int epoll = -1;
 
-// A READ: the area's bytes at off, as many as asked up to its end, into
-// the memfd.
-static void readBlocks(const Area& a, const Endpoint& e, const Request& r) {
+// A READ: the area's bytes at the open file's position or off, as many
+// as asked up to its end, into the memfd; the position moves by them.
+static void readBlocks(const Area& a, Endpoint& e, const Request& r) {
     Io io;
     if (!e.reads) {
         return fail(r.reply(), EBADF);
@@ -54,7 +54,7 @@ static void readBlocks(const Area& a, const Endpoint& e, const Request& r) {
     if (r.memfd() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
-    const uint64_t off = io.off;
+    const uint64_t off = offsetOf(e, io, false, a.length);
     const uint64_t count = off >= a.length ? 0 : MIN(uint64_t(r.h.arg), a.length - off);
     uint64_t done = 0;
     while (done < count) {
@@ -69,21 +69,25 @@ static void readBlocks(const Area& a, const Endpoint& e, const Request& r) {
         }
         done += uint64_t(n);
     }
+    if ((io.flags & ioAt) == 0) {
+        e.pos = off + done;
+    }
     const uint32_t got = uint32_t(done);
     answer(r.reply(), opOk, 0, &got, sizeof got);
 }
 
-// A WRITE: the memfd's bytes, as many as fit before the area's
-// end, onto it at off; none fit, ENOSPC. An area has no end to append at.
-static void writeBlocks(const Area& a, const Endpoint& e, const Request& r) {
+// A WRITE: the memfd's bytes, as many as fit before the area's end, onto
+// it at the open file's position or off; none fit, ENOSPC. An area has no
+// end to append at: one that appends writes at its position.
+static void writeBlocks(const Area& a, Endpoint& e, const Request& r) {
     Io io;
     if (!e.writes) {
         return fail(r.reply(), EBADF);
     }
-    if (r.memfd() < 0 || !r.io(io) || (io.flags & ioAppend) != 0) {
+    if (r.memfd() < 0 || !r.io(io)) {
         return fail(r.reply(), EINVAL);
     }
-    const uint64_t off = io.off;
+    const uint64_t off = (io.flags & ioAt) != 0 ? io.off : e.pos;
     const uint32_t length = r.h.arg;
     if (length > 0 && off >= a.length) {
         return fail(r.reply(), ENOSPC);
@@ -102,11 +106,11 @@ static void writeBlocks(const Area& a, const Endpoint& e, const Request& r) {
         }
         done += uint64_t(n);
     }
-    unsigned char wrote[12];
+    if ((io.flags & ioAt) == 0) {
+        e.pos = off + done;
+    }
     const uint32_t got = uint32_t(done);
-    memcpy(wrote, &got, 4);
-    memcpy(wrote + 4, &off, 8);
-    answer(r.reply(), opOk, 0, wrote, sizeof wrote);
+    answer(r.reply(), opOk, 0, &got, sizeof got);
 }
 
 // A request of an area's channel, an OPEN, or of an open file of it: the
@@ -141,6 +145,9 @@ static void handle(Endpoint& e, Request& r) {
         case opFchown:
         case opFutimes:
             fail(r.reply(), EPERM);
+            break;
+        case opSeek:
+            answerSeek(e, r, a.length);
             break;
         default:
             fail(r.reply(), unserved(r.h.op));

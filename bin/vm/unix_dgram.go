@@ -113,7 +113,7 @@ func (s *UnixDgram) wake(*Hook) {
 	s.mu.Unlock()
 }
 
-func (s *UnixDgram) flags() (int, error) {
+func (s *UnixDgram) flags(p *Process) (int, error) {
 	fl := O_RDWR
 
 	if s.nonblock.Load() {
@@ -123,7 +123,7 @@ func (s *UnixDgram) flags() (int, error) {
 	return fl, nil
 }
 
-func (s *UnixDgram) setFlags(fl int) error {
+func (s *UnixDgram) setFlags(p *Process, fl int) error {
 	s.nonblock.Store(fl&O_NONBLOCK != 0)
 
 	return nil

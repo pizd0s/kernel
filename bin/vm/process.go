@@ -1044,7 +1044,7 @@ func (p *Process) loadFrom(path string, first Object, argv []string) (*ExecImage
 			return nil, err
 		}
 
-		if fl, _ := f.flags(); fl&O_PATH != 0 || st.Mode&S_IFMT != S_IFREG {
+		if fl, _ := f.flags(p); fl&O_PATH != 0 || st.Mode&S_IFMT != S_IFREG {
 			f.unref()
 
 			return nil, EACCES
@@ -5281,8 +5281,8 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 		return p.result(0, EINVAL)
 	}
 
-	inFlags, _ := src.flags()
-	outFlags, _ := dst.flags()
+	inFlags, _ := src.flags(p)
+	outFlags, _ := dst.flags(p)
 	r, w := src, dst
 
 	if inFlags&O_ACCMODE == O_WRONLY || outFlags&O_ACCMODE == O_RDONLY || outFlags&O_APPEND != 0 {
@@ -5490,7 +5490,7 @@ func (p *Process) fallocate(obj Object, off, n int64) error {
 		return EINVAL
 	}
 
-	if fl, err := obj.flags(); err != nil || fl&O_ACCMODE == O_RDONLY {
+	if fl, err := obj.flags(p); err != nil || fl&O_ACCMODE == O_RDONLY {
 		return EBADF
 	}
 
@@ -5744,7 +5744,7 @@ func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
 
 		return p.result(0, nil)
 	case F_GETFL:
-		return p.result(obj.flags())
+		return p.result(obj.flags(p))
 	case F_GETLK, F_SETLK, F_SETLKW:
 		l, err := p.fd(fd)
 
@@ -5754,7 +5754,7 @@ func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
 
 		return p.result(0, p.recordLock(l, cmd, p.varArg(va, 0)))
 	case F_SETFL:
-		return p.result(0, obj.setFlags(int(p.varArg(va, 0))))
+		return p.result(0, obj.setFlags(p, int(p.varArg(va, 0))))
 	}
 
 	return p.result(0, EINVAL)
@@ -5952,7 +5952,7 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 
 	switch req {
 	case FIONBIO:
-		fl, err := obj.flags()
+		fl, err := obj.flags(p)
 
 		if err != nil {
 			return p.result(0, err)
@@ -5964,7 +5964,7 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 			fl |= O_NONBLOCK
 		}
 
-		return p.result(0, obj.setFlags(fl))
+		return p.result(0, obj.setFlags(p, fl))
 	case FIOCLEX, FIONCLEX:
 		p.files.slots[fd].cloexec = req == FIOCLEX
 
@@ -6608,7 +6608,7 @@ func (p *Process) libcReadlinkat(dirfd, path, buf, size uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	if fl, _ := obj.flags(); fl&O_PATH == 0 {
+	if fl, _ := obj.flags(p); fl&O_PATH == 0 {
 		return p.result(0, ENOENT)
 	}
 
@@ -13366,22 +13366,16 @@ func (p *Process) device(o Object) FileKey {
 }
 
 func (p *Process) lockable(o Object) (FileKey, int, error) {
-	fl, err := o.flags()
-
-	if err != nil || fl&O_PATH != 0 {
-		return FileKey{}, 0, EBADF
-	}
-
 	r, err := p.identity(o)
 
 	switch {
-	case err != nil:
+	case err != nil || r.access&O_PATH != 0:
 		return FileKey{}, 0, EBADF
 	case r.key.ino == 0:
 		return FileKey{}, 0, EINVAL
 	}
 
-	return r.key, fl, nil
+	return r.key, r.access, nil
 }
 
 func (p *Process) fileFlock(o Object, op int) error {

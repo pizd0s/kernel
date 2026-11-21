@@ -195,11 +195,11 @@ func (l *UnixListener) sides(events int16) (in, out bool) {
 	return in, out
 }
 
-func (l *UnixListener) flags() (int, error) {
+func (l *UnixListener) flags(p *Process) (int, error) {
 	return O_RDWR, nil
 }
 
-func (l *UnixListener) setFlags(fl int) error {
+func (l *UnixListener) setFlags(p *Process, fl int) error {
 	return nil
 }
 

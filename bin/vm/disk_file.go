@@ -67,11 +67,11 @@ func (f *DiskFile) subscribe(s *Subscription, events int16) {
 func (f *DiskFile) unsubscribe(s *Subscription) {
 }
 
-func (f *DiskFile) flags() (int, error) {
+func (f *DiskFile) flags(p *Process) (int, error) {
 	return O_RDWR, nil
 }
 
-func (f *DiskFile) setFlags(fl int) error {
+func (f *DiskFile) setFlags(p *Process, fl int) error {
 	return nil
 }
 

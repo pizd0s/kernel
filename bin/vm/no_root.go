@@ -48,11 +48,11 @@ func (r *NoRoot) subscribe(s *Subscription, events int16) {
 func (r *NoRoot) unsubscribe(s *Subscription) {
 }
 
-func (r *NoRoot) flags() (int, error) {
+func (r *NoRoot) flags(p *Process) (int, error) {
 	return O_RDONLY, nil
 }
 
-func (r *NoRoot) setFlags(fl int) error {
+func (r *NoRoot) setFlags(p *Process, fl int) error {
 	return nil
 }
 

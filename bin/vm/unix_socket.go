@@ -137,7 +137,7 @@ func (s *UnixSocket) wake(l *Hook) {
 	s.mu.Unlock()
 }
 
-func (s *UnixSocket) flags() (int, error) {
+func (s *UnixSocket) flags(p *Process) (int, error) {
 	fl := O_RDWR
 
 	if s.nonblock.Load() {
@@ -147,11 +147,11 @@ func (s *UnixSocket) flags() (int, error) {
 	return fl, nil
 }
 
-func (s *UnixSocket) setFlags(fl int) error {
+func (s *UnixSocket) setFlags(p *Process, fl int) error {
 	s.nonblock.Store(fl&O_NONBLOCK != 0)
 
 	if _, c := s.state(); c != nil {
-		return c.setFlags(fl)
+		return c.setFlags(p, fl)
 	}
 
 	return nil

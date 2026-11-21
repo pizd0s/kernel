@@ -55,6 +55,9 @@ struct Endpoint {
     bool listens = false;
     bool answers = false;
     Endpoint* next = nullptr; // among those let go of, the loop's
+    uint64_t pos = 0;         // an open file's position: READ's and WRITE's without ioAt
+    bool append = false;      // an open file's O_APPEND and O_NONBLOCK, the OPEN's, then SETFL's
+    bool nonblock = false;
 };
 
 Endpoint* watch(int epoll, Endpoint e);
@@ -77,7 +80,7 @@ struct Request {
     bool copy(size_t offset, void* out, size_t length) const;
 
     // A READ's or a WRITE's body, false for one that is not: just an Io,
-    // whose flags are the op's.
+    // whose flags are known.
     bool io(Io& out) const;
 
     template <typename T>
@@ -88,6 +91,17 @@ template <typename T>
 bool Request::at(size_t offset, T& out) const {
     return copy(offset, &out, sizeof out);
 }
+
+// Where a READ or a WRITE of an open file goes: off with ioAt, else its
+// position, or the file's end, size, for a WRITE that appends.
+uint64_t offsetOf(const Endpoint& e, const Io& io, bool write, uint64_t size);
+
+// The position a SEEK of an open file sets, from its position and the
+// file's size, into out: 0, or the errno.
+int seekOf(Endpoint& e, const Request& r, uint64_t size, uint64_t& out);
+
+// Answers a SEEK of an open file of size.
+void answerSeek(Endpoint& e, const Request& r, uint64_t size);
 
 // Answers an OPEN with a new open file: a pair whose second end goes
 // with the OK to who asked, the open file what says it is, the OPEN's
@@ -127,7 +141,8 @@ using Expire = int (*)();
 //
 // A request of an open file's comes on the file's endpoint and goes to
 // handle with it; where it is answered is the last of its descriptors,
-// and closing that ends the answer.
+// and closing that ends the answer. GETFL and SETFL the loop answers:
+// what the open lets the file do and the flags its endpoint keeps.
 //
 // A READ or a WRITE that waits is kept until handle answers it (keep).
 void serve(int epoll, Handle handle, Gone gone = nullptr, Accepted accepted = nullptr, Expire expire = nullptr);
