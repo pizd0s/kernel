@@ -354,40 +354,10 @@ func (s *UnixDgram) readdir(p *Process, into Object, n int) (int, error) {
 	return 0, ENOTDIR
 }
 
-func (s *UnixDgram) truncate(p *Process, size int64) error {
-	return EINVAL
-}
-
-func (s *UnixDgram) sync(p *Process, data bool) error {
-	return EINVAL
-}
-
-func (s *UnixDgram) chmod(p *Process, mode uint32) error {
-	return EINVAL
-}
-
-func (s *UnixDgram) chown(p *Process, uid, gid int) error {
-	return EINVAL
-}
-
-func (s *UnixDgram) utimes(p *Process, ts []Timespec) error {
-	return EINVAL
-}
-
-func (s *UnixDgram) statfs(p *Process, st *Statfs) error {
-	return EINVAL
-}
-
-func (s *UnixDgram) flock(p *Process, op int) error {
-	return EBADF
-}
-
-func (s *UnixDgram) recordLock(p *Process, cmd int, lk *Flock) error {
-	return EBADF
-}
-
 func (s *UnixDgram) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
+	case *FileStat:
+		return false, s.stat(p, r.st)
 	case *SockBind:
 		return false, s.bind(p, r.addr)
 	case *SockConnect:
@@ -435,14 +405,6 @@ func (s *UnixDgram) call(p *Process, r Request, group uint32, waits bool) (bool,
 	}
 
 	return false, errUnserved
-}
-
-func (s *UnixDgram) token() (uint64, error) {
-	return 0, EXDEV
-}
-
-func (s *UnixDgram) device() FileKey {
-	return FileKey{}
 }
 
 func (s *UnixDgram) ioctl(req uintptr, arg unsafe.Pointer) error {

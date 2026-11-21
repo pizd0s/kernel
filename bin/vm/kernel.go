@@ -146,7 +146,7 @@ func (k *Kernel) code(p *Process, f Object, name string) (*Code, error) {
 func programData(p *Process, f Object, module bool) (data []byte, ok bool, err error) {
 	var st Stat
 
-	if err := f.stat(p, &st); err == EBADF {
+	if err := p.fileStat(f, &st); err == EBADF {
 		return nil, false, EACCES
 	} else if err != nil {
 		return nil, false, err

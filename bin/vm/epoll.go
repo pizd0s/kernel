@@ -351,48 +351,13 @@ func (ep *Epoll) readdir(p *Process, into Object, n int) (int, error) {
 	return 0, ENOTDIR
 }
 
-func (ep *Epoll) truncate(p *Process, size int64) error {
-	return EINVAL
-}
-
-func (ep *Epoll) sync(p *Process, data bool) error {
-	return EINVAL
-}
-
-func (ep *Epoll) chmod(p *Process, mode uint32) error {
-	return EINVAL
-}
-
-func (ep *Epoll) chown(p *Process, uid, gid int) error {
-	return EINVAL
-}
-
-func (ep *Epoll) utimes(p *Process, ts []Timespec) error {
-	return EINVAL
-}
-
-func (ep *Epoll) statfs(p *Process, st *Statfs) error {
-	return EINVAL
-}
-
-func (ep *Epoll) flock(p *Process, op int) error {
-	return EBADF
-}
-
-func (ep *Epoll) recordLock(p *Process, cmd int, lk *Flock) error {
-	return EBADF
-}
-
 func (ep *Epoll) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	switch r := r.(type) {
+	case *FileStat:
+		return false, ep.stat(p, r.st)
+	}
+
 	return false, errUnserved
-}
-
-func (ep *Epoll) token() (uint64, error) {
-	return 0, EXDEV
-}
-
-func (ep *Epoll) device() FileKey {
-	return FileKey{}
 }
 
 func (ep *Epoll) ioctl(req uintptr, arg unsafe.Pointer) error {

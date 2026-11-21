@@ -88,6 +88,8 @@ func (r *NoRoot) makes(path string) error {
 
 func (r *NoRoot) call(p *Process, q Request, group uint32, waits bool) (bool, error) {
 	switch q := q.(type) {
+	case *FileStat:
+		return false, r.stat(p, q.st)
 	case *VfsOpen:
 		switch {
 		case !r.itself(q.path) && q.flags&O_CREAT != 0:
@@ -189,46 +191,6 @@ func (r *NoRoot) copyTo(p *Process, out Object, from, to int64, n int) (int, err
 
 func (r *NoRoot) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
 	return 0, EBADF
-}
-
-func (r *NoRoot) truncate(p *Process, size int64) error {
-	return EINVAL
-}
-
-func (r *NoRoot) sync(p *Process, data bool) error {
-	return EINVAL
-}
-
-func (r *NoRoot) chmod(p *Process, mode uint32) error {
-	return EINVAL
-}
-
-func (r *NoRoot) chown(p *Process, uid, gid int) error {
-	return EINVAL
-}
-
-func (r *NoRoot) utimes(p *Process, ts []Timespec) error {
-	return EINVAL
-}
-
-func (r *NoRoot) statfs(p *Process, st *Statfs) error {
-	return EINVAL
-}
-
-func (r *NoRoot) flock(p *Process, op int) error {
-	return EBADF
-}
-
-func (r *NoRoot) recordLock(p *Process, cmd int, lk *Flock) error {
-	return EBADF
-}
-
-func (r *NoRoot) token() (uint64, error) {
-	return 0, EXDEV
-}
-
-func (r *NoRoot) device() FileKey {
-	return FileKey{}
 }
 
 func (r *NoRoot) ioctl(req uintptr, arg unsafe.Pointer) error {

@@ -114,48 +114,13 @@ func (c *Capture) readdir(p *Process, into Object, n int) (int, error) {
 	return 0, ENOTDIR
 }
 
-func (c *Capture) truncate(p *Process, size int64) error {
-	return EINVAL
-}
-
-func (c *Capture) sync(p *Process, data bool) error {
-	return EINVAL
-}
-
-func (c *Capture) chmod(p *Process, mode uint32) error {
-	return EINVAL
-}
-
-func (c *Capture) chown(p *Process, uid, gid int) error {
-	return EINVAL
-}
-
-func (c *Capture) utimes(p *Process, ts []Timespec) error {
-	return EINVAL
-}
-
-func (c *Capture) statfs(p *Process, st *Statfs) error {
-	return EINVAL
-}
-
-func (c *Capture) flock(p *Process, op int) error {
-	return EBADF
-}
-
-func (c *Capture) recordLock(p *Process, cmd int, lk *Flock) error {
-	return EBADF
-}
-
 func (c *Capture) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	switch r := r.(type) {
+	case *FileStat:
+		return false, c.stat(p, r.st)
+	}
+
 	return false, errUnserved
-}
-
-func (c *Capture) token() (uint64, error) {
-	return 0, EXDEV
-}
-
-func (c *Capture) device() FileKey {
-	return FileKey{}
 }
 
 func (c *Capture) ioctl(req uintptr, arg unsafe.Pointer) error {

@@ -23,7 +23,6 @@ type Object interface {
 	subscribe(s *Subscription, events int16)
 	unsubscribe(s *Subscription)
 
-	stat(p *Process, st *Stat) error
 	flags() (int, error)
 	setFlags(fl int) error
 
@@ -37,19 +36,7 @@ type Object interface {
 	copyTo(p *Process, out Object, from, to int64, n int) (int, error)
 	copyFrom(p *Process, in Object, from, to int64, n int) (int, error)
 
-	truncate(p *Process, size int64) error
-	sync(p *Process, data bool) error
-	chmod(p *Process, mode uint32) error
-	chown(p *Process, uid, gid int) error
-	utimes(p *Process, ts []Timespec) error
-	statfs(p *Process, st *Statfs) error
-
-	flock(p *Process, op int) error
-	recordLock(p *Process, cmd int, lk *Flock) error
-
 	call(p *Process, r Request, group uint32, waits bool) (bool, error)
-	token() (uint64, error)
-	device() FileKey
 
 	ioctl(req uintptr, arg unsafe.Pointer) error
 

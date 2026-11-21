@@ -5,13 +5,15 @@ package main
 import (
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const lockPast = math.MaxUint64
 
 type FileLock struct {
-	owner       *RemoteFD
+	owner       Object
+	key         FileKey
 	ranged      bool
 	write       bool
 	start, stop uint64
@@ -25,8 +27,10 @@ type LockedFile struct {
 }
 
 type LockTable struct {
-	mu    sync.Mutex
-	files map[FileKey]*LockedFile
+	mu     sync.Mutex
+	files  map[FileKey]*LockedFile
+	owners map[Object]FileKey
+	held   atomic.Int32
 }
 
 func (a *FileLock) crossing(b *FileLock) bool {
@@ -65,7 +69,7 @@ func (f *LockedFile) ready(want, before *FileLock) bool {
 	return true
 }
 
-func (f *LockedFile) drop(owner *RemoteFD, ranged bool, start, stop uint64) {
+func (f *LockedFile) drop(owner Object, ranged bool, start, stop uint64) {
 	for at := &f.held; *at != nil; {
 		l := *at
 
@@ -139,21 +143,29 @@ func (t *LockTable) settle(key FileKey, f *LockedFile) {
 }
 
 func (t *LockTable) lock(p *Process, want *FileLock, waits bool) error {
-	n := want.owner
+	n, key := want.owner, want.key
 
-	n.locked.Store(true)
 	t.mu.Lock()
 
-	f := t.files[n.key]
+	if t.owners == nil {
+		t.owners = map[Object]FileKey{}
+	}
+
+	if _, known := t.owners[n]; !known {
+		t.owners[n] = key
+		t.held.Add(1)
+	}
+
+	f := t.files[key]
 
 	if f == nil {
 		f = &LockedFile{}
-		t.files[n.key] = f
+		t.files[key] = f
 	}
 
 	if f.ready(want, nil) {
 		f.hold(want)
-		t.settle(n.key, f)
+		t.settle(key, f)
 		t.mu.Unlock()
 
 		return nil
@@ -194,7 +206,7 @@ func (t *LockTable) wait(p *Process, f *LockedFile, w *FileLock) (err error) {
 			err = nil
 		} else {
 			f.leave(w)
-			t.settle(n.key, f)
+			t.settle(w.key, f)
 		}
 
 		t.mu.Unlock()
@@ -210,16 +222,16 @@ func (t *LockTable) wait(p *Process, f *LockedFile, w *FileLock) (err error) {
 	}
 }
 
-func (t *LockTable) unlock(n *RemoteFD, ranged bool, start, stop uint64) {
-	if !n.locked.Load() {
+func (t *LockTable) unlock(n Object, key FileKey, ranged bool, start, stop uint64) {
+	if t.held.Load() == 0 {
 		return
 	}
 
 	t.mu.Lock()
 
-	if f := t.files[n.key]; f != nil {
+	if f := t.files[key]; f != nil {
 		f.drop(n, ranged, start, stop)
-		t.settle(n.key, f)
+		t.settle(key, f)
 	}
 
 	t.mu.Unlock()
@@ -230,7 +242,7 @@ func (t *LockTable) way(want *FileLock) (FileLock, bool) {
 
 	defer t.mu.Unlock()
 
-	if f := t.files[want.owner.key]; f != nil {
+	if f := t.files[want.key]; f != nil {
 		if l := f.inWay(want); l != nil {
 			return *l, true
 		}
@@ -239,10 +251,21 @@ func (t *LockTable) way(want *FileLock) (FileLock, bool) {
 	return FileLock{}, false
 }
 
-func (t *LockTable) forget(n *RemoteFD) {
+func (t *LockTable) forget(n Object) {
+	if t.held.Load() == 0 {
+		return
+	}
+
 	t.mu.Lock()
 
-	if f := t.files[n.key]; f != nil {
+	key, known := t.owners[n]
+
+	if known {
+		delete(t.owners, n)
+		t.held.Add(-1)
+	}
+
+	if f := t.files[key]; known && f != nil {
 		for at := &f.held; *at != nil; {
 			if l := *at; l.owner == n {
 				*at = l.next
@@ -251,7 +274,7 @@ func (t *LockTable) forget(n *RemoteFD) {
 			}
 		}
 
-		t.settle(n.key, f)
+		t.settle(key, f)
 	}
 
 	t.mu.Unlock()

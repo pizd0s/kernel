@@ -189,6 +189,7 @@ const (
 )
 
 type Process struct {
+	stats Slots[FileStat]
 	sends Slots[SockSend]
 	recvs Slots[SockRecv]
 	k     *Kernel
@@ -5093,7 +5094,7 @@ func (p *Process) recordLock(l Object, cmd, at uint32) error {
 	lk := Flock{Type: int16(p.u16(at)), Whence: int16(p.u16(at + 2)), Start: int64(p.u64(at + 8)), Len: int64(p.u64(at + 16))}
 
 	if cmd == F_GETLK {
-		if err := l.recordLock(p, fOfdGetlk, &lk); err != nil {
+		if err := p.fileLock(l, fOfdGetlk, &lk); err != nil {
 			return err
 		}
 
@@ -5107,10 +5108,10 @@ func (p *Process) recordLock(l Object, cmd, at uint32) error {
 	}
 
 	if cmd == F_SETLKW {
-		return l.recordLock(p, fOfdSetlkw, &lk)
+		return p.fileLock(l, fOfdSetlkw, &lk)
 	}
 
-	return l.recordLock(p, fOfdSetlk, &lk)
+	return p.fileLock(l, fOfdSetlk, &lk)
 }
 
 type FdSet struct {
@@ -5344,7 +5345,7 @@ func copyThrough(p *Process, in, out Object, from, to int64, n int) (int, error)
 	for _, t := range []Object{in, out} {
 		var st Stat
 
-		if err := t.stat(p, &st); err == EBADF {
+		if err := p.fileStat(t, &st); err == EBADF {
 			return 0, EINVAL
 		} else if err != nil {
 			return 0, err
@@ -5395,7 +5396,7 @@ func (p *Process) libcFdatasync(fd uint32) uint32 {
 	n, err := p.fd(fd)
 
 	if err == nil {
-		err = n.sync(p, true)
+		err = p.request(n, &FileSync{data: true})
 	}
 
 	return p.result(0, err)
@@ -5418,7 +5419,7 @@ func (p *Process) libcFlock(fd, op uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	return p.result(0, l.flock(p, int(op)))
+	return p.result(0, p.fileFlock(l, int(op)))
 }
 
 func (p *Process) libcLockf(fd, cmd uint32, n uint64) uint32 {
@@ -5433,15 +5434,15 @@ func (p *Process) libcLockf(fd, cmd uint32, n uint64) uint32 {
 	switch cmd {
 	case 0:
 		lk.Type = F_UNLCK
-		err = l.recordLock(p, fOfdSetlk, &lk)
+		err = p.fileLock(l, fOfdSetlk, &lk)
 	case 1:
-		err = l.recordLock(p, fOfdSetlkw, &lk)
+		err = p.fileLock(l, fOfdSetlkw, &lk)
 	case 2:
-		err = l.recordLock(p, fOfdSetlk, &lk)
+		err = p.fileLock(l, fOfdSetlk, &lk)
 	case 3:
 		lk.Type = F_RDLCK
 
-		if err = l.recordLock(p, fOfdGetlk, &lk); err == nil && lk.Type != F_UNLCK {
+		if err = p.fileLock(l, fOfdGetlk, &lk); err == nil && lk.Type != F_UNLCK {
 			err = EACCES
 		}
 	default:
@@ -5460,7 +5461,7 @@ func (p *Process) libcPosix_fadvise(fd uint32, off, n uint64, advice uint32) uin
 
 	var st Stat
 
-	if err := obj.stat(p, &st); err != nil {
+	if err := p.fileStat(obj, &st); err != nil {
 		return uint32(errnoOf(err))
 	}
 
@@ -5495,7 +5496,7 @@ func (p *Process) fallocate(obj Object, off, n int64) error {
 
 	var st Stat
 
-	if err := obj.stat(p, &st); err != nil {
+	if err := p.fileStat(obj, &st); err != nil {
 		return err
 	}
 
@@ -5512,7 +5513,7 @@ func (p *Process) fallocate(obj Object, off, n int64) error {
 		return nil
 	}
 
-	if err := obj.truncate(p, off+n); err != EINVAL {
+	if err := p.request(obj, &FileTruncate{size: off + n}); err != EINVAL {
 		return err
 	}
 
@@ -5628,7 +5629,7 @@ func (p *Process) libcFsync(fd uint32) uint32 {
 	n, err := p.fd(fd)
 
 	if err == nil {
-		err = n.sync(p, false)
+		err = p.request(n, &FileSync{data: false})
 	}
 
 	return p.result(0, err)
@@ -5638,7 +5639,7 @@ func (p *Process) libcFtruncate(fd uint32, size uint64) uint32 {
 	n, err := p.fd(fd)
 
 	if err == nil {
-		err = n.truncate(p, int64(size))
+		err = p.request(n, &FileTruncate{size: int64(size)})
 	}
 
 	return p.result(0, err)
@@ -5649,7 +5650,7 @@ func statFile(p *Process, obj Object, st *Stat) error {
 		return EIO
 	}
 
-	return obj.stat(p, st)
+	return p.fileStat(obj, st)
 }
 
 func (p *Process) libcFstat(fd, at uint32) uint32 {
@@ -5674,7 +5675,7 @@ func (p *Process) libcFchmod(fd, mode uint32) uint32 {
 	n, err := p.fd(fd)
 
 	if err == nil {
-		err = n.chmod(p, mode&0o7777)
+		err = p.request(n, &FileChmod{mode: mode & 0o7777})
 	}
 
 	return p.result(0, err)
@@ -5684,7 +5685,7 @@ func (p *Process) libcFchown(fd, uid, gid uint32) uint32 {
 	n, err := p.fd(fd)
 
 	if err == nil {
-		err = n.chown(p, int(int32(uid)), int(int32(gid)))
+		err = p.request(n, &FileChown{uid: int(int32(uid)), gid: int(int32(gid))})
 	}
 
 	return p.result(0, err)
@@ -5694,7 +5695,7 @@ func (p *Process) libcFutimes(fd, times uint32) uint32 {
 	n, err := p.fd(fd)
 
 	if err == nil {
-		err = n.utimes(p, p.timevals(times))
+		err = p.request(n, &FileUtimes{ts: p.timevals(times)})
 	}
 
 	return p.result(0, err)
@@ -5704,7 +5705,7 @@ func (p *Process) libcFutimens(fd, times uint32) uint32 {
 	n, err := p.fd(fd)
 
 	if err == nil {
-		err = n.utimes(p, p.timespecs(times))
+		err = p.request(n, &FileUtimes{ts: p.timespecs(times)})
 	}
 
 	return p.result(0, err)
@@ -5943,7 +5944,7 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	if obj.device() != (FileKey{}) {
+	if p.device(obj) != (FileKey{}) {
 		if r, done := p.terminalIoctl(obj, fd, req, va); done {
 			return r
 		}
@@ -6343,7 +6344,7 @@ func (p *Process) libcFstatvfs(fd, at uint32) uint32 {
 
 	var st Statfs
 
-	if err := n.statfs(p, &st); err != nil {
+	if err := p.request(n, &FileStatfs{st: &st}); err != nil {
 		return p.result(0, err)
 	}
 
@@ -6708,7 +6709,7 @@ func (p *Process) libcFstatfs(fd, at uint32) uint32 {
 
 	var st Statfs
 
-	if err := n.statfs(p, &st); err != nil {
+	if err := p.request(n, &FileStatfs{st: &st}); err != nil {
 		return p.result(0, err)
 	}
 
@@ -6747,7 +6748,7 @@ func (p *Process) libcChmod(path, mode uint32) uint32 {
 
 func (p *Process) libcFchmodat(dirfd, path, mode, flags uint32) uint32 {
 	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(a Object) error {
-		return a.chmod(p, mode&0o7777)
+		return p.request(a, &FileChmod{mode: mode & 0o7777})
 	}, func(d Object, follow bool) error {
 		return p.dirChmod(d, p.str(path), mode&0o7777, follow)
 	}))
@@ -6755,7 +6756,7 @@ func (p *Process) libcFchmodat(dirfd, path, mode, flags uint32) uint32 {
 
 func (p *Process) libcFchownat(dirfd, path, uid, gid, flags uint32) uint32 {
 	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(a Object) error {
-		return a.chown(p, int(int32(uid)), int(int32(gid)))
+		return p.request(a, &FileChown{uid: int(int32(uid)), gid: int(int32(gid))})
 	}, func(d Object, follow bool) error {
 		return p.dirChown(d, p.str(path), int(int32(uid)), int(int32(gid)), follow)
 	}))
@@ -6800,7 +6801,7 @@ func (p *Process) libcUtimensat(dirfd, path, times, flags uint32) uint32 {
 		n, err := p.fd(dirfd)
 
 		if err == nil {
-			err = n.utimes(p, p.timespecs(times))
+			err = p.request(n, &FileUtimes{ts: p.timespecs(times)})
 		}
 
 		return p.result(0, err)
@@ -7994,8 +7995,8 @@ func (p *Process) permits(st *Stat, want uint32) bool {
 	return bits&want == want
 }
 
-func sameTerminal(a, b Object) bool {
-	return a.device() == b.device()
+func (p *Process) sameTerminal(a, b Object) bool {
+	return p.device(a) == p.device(b)
 }
 
 func (p *Process) isCtty(t Object) bool {
@@ -8005,7 +8006,7 @@ func (p *Process) isCtty(t Object) bool {
 
 	p.k.mu.Unlock()
 
-	return c != nil && sameTerminal(c, t)
+	return c != nil && p.sameTerminal(c, t)
 }
 
 func (p *Process) openControlling(flags int) (Object, error) {
@@ -8212,7 +8213,7 @@ func (p *Process) libcTcgetpgrp(fd uint32) uint32 {
 func (p *Process) libcTcsetpgrp(fd, pgrp uint32) uint32 {
 	t, err := p.fd(fd)
 
-	if err == nil && t.device() == (FileKey{}) {
+	if err == nil && p.device(t) == (FileKey{}) {
 		_, _, err = p.ttyForeground(t)
 	}
 
@@ -8254,7 +8255,7 @@ func (p *Process) controls(t Object) error {
 	p.k.mu.Unlock()
 
 	switch {
-	case leads && c != nil && sameTerminal(c, t):
+	case leads && c != nil && p.sameTerminal(c, t):
 		return nil
 	case !leads || c != nil:
 		return EPERM
@@ -13035,9 +13036,9 @@ func (p *Process) request(o Object, r Request) error {
 }
 
 func (p *Process) vfsRoot(d Object) uint64 {
-	id, _ := d.token()
+	id, _ := p.handleID(d)
 
-	if root, err := p.root.token(); err == nil {
+	if root, err := p.handleID(p.root); err == nil {
 		id = root
 	}
 
@@ -13112,7 +13113,7 @@ func (p *Process) dirUnlink(d Object, path string, dir bool) error {
 }
 
 func (p *Process) dirRename(d Object, old string, to Object, new string) error {
-	id, err := to.token()
+	id, err := p.handleID(to)
 
 	if err != nil {
 		return err
@@ -13122,7 +13123,7 @@ func (p *Process) dirRename(d Object, old string, to Object, new string) error {
 }
 
 func (p *Process) dirLink(d Object, old string, to Object, new string, follow bool) error {
-	id, err := to.token()
+	id, err := p.handleID(to)
 
 	if err != nil {
 		return err
@@ -13331,4 +13332,154 @@ func (p *Process) sockGetopt(s Object, level, name uint32) ([]byte, error) {
 	err := p.request(s, &r)
 
 	return r.value, err
+}
+
+func (p *Process) fileStat(o Object, st *Stat) error {
+	r := p.stats.get()
+
+	r.st = st
+
+	err := p.request(o, r)
+
+	p.stats.put(r)
+
+	return err
+}
+
+func (p *Process) identity(o Object) (FileIdentity, error) {
+	r := FileIdentity{}
+	err := p.request(o, &r)
+
+	return r, err
+}
+
+func (p *Process) handleID(o Object) (uint64, error) {
+	r, err := p.identity(o)
+
+	return r.id, err
+}
+
+func (p *Process) device(o Object) FileKey {
+	r, _ := p.identity(o)
+
+	return r.key
+}
+
+func (p *Process) lockable(o Object) (FileKey, int, error) {
+	fl, err := o.flags()
+
+	if err != nil || fl&O_PATH != 0 {
+		return FileKey{}, 0, EBADF
+	}
+
+	r, err := p.identity(o)
+
+	switch {
+	case err != nil:
+		return FileKey{}, 0, EBADF
+	case r.key.ino == 0:
+		return FileKey{}, 0, EINVAL
+	}
+
+	return r.key, fl, nil
+}
+
+func (p *Process) fileFlock(o Object, op int) error {
+	key, _, err := p.lockable(o)
+
+	if err != nil {
+		return err
+	}
+
+	switch kind := op &^ LOCK_NB; kind {
+	case LOCK_UN:
+		p.k.locks.unlock(o, key, false, 0, 0)
+
+		return nil
+	case LOCK_SH, LOCK_EX:
+		return p.k.locks.lock(p, &FileLock{owner: o, key: key, write: kind == LOCK_EX}, op&LOCK_NB == 0)
+	}
+
+	return EINVAL
+}
+
+func (p *Process) fileLock(o Object, cmd int, lk *Flock) error {
+	key, fl, err := p.lockable(o)
+
+	if err != nil {
+		return err
+	}
+
+	start, length := lk.Start, lk.Len
+
+	switch lk.Whence {
+	case 0:
+	case 1:
+		pos, err := o.seek(p, 0, 1)
+
+		if err != nil {
+			return err
+		}
+
+		start += pos
+	case 2:
+		var st Stat
+
+		if err := p.fileStat(o, &st); err != nil {
+			return err
+		}
+
+		start += st.Size
+	default:
+		return EINVAL
+	}
+
+	if length < 0 {
+		start, length = start+length, -length
+	}
+
+	if start < 0 || lk.Type != F_RDLCK && lk.Type != F_WRLCK && lk.Type != F_UNLCK {
+		return EINVAL
+	}
+
+	want := &FileLock{owner: o, key: key, ranged: true, write: lk.Type == F_WRLCK, start: uint64(start), stop: lockPast}
+
+	if length != 0 && want.start <= lockPast-uint64(length) {
+		want.stop = want.start + uint64(length)
+	}
+
+	accmode := fl & O_ACCMODE
+
+	switch {
+	case cmd != fOfdGetlk && (lk.Type == F_RDLCK && accmode == O_WRONLY || lk.Type == F_WRLCK && accmode == O_RDONLY):
+		return EBADF
+	case cmd == fOfdGetlk:
+		lk.Whence, lk.Pid = 0, -1
+
+		way, found := p.k.locks.way(want)
+
+		if !found {
+			lk.Type, lk.Start, lk.Len = F_UNLCK, start, length
+
+			return nil
+		}
+
+		lk.Type, lk.Start, lk.Len = F_RDLCK, int64(way.start), 0
+
+		if way.write {
+			lk.Type = F_WRLCK
+		}
+
+		if way.stop != lockPast {
+			lk.Len = int64(way.stop - way.start)
+		}
+
+		return nil
+	case lk.Type == F_UNLCK:
+		p.k.locks.unlock(o, key, true, want.start, want.stop)
+
+		return nil
+	}
+
+	return p.k.locks.lock(p, want, cmd == fOfdSetlkw)
 }

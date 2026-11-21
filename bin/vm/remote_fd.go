@@ -25,8 +25,7 @@ type RemoteFD struct {
 	pos      int64
 	ready    int16
 
-	locks  *LockTable
-	locked atomic.Bool
+	locks *LockTable
 }
 
 func (f *RemoteFD) ref() {
@@ -35,7 +34,7 @@ func (f *RemoteFD) ref() {
 
 func (f *RemoteFD) unref() {
 	if f.refs.Add(-1) == 0 {
-		if f.locked.Load() {
+		if f.locks != nil {
 			f.locks.forget(f)
 		}
 
@@ -152,6 +151,12 @@ func (f *RemoteFD) exchange(p *Process, data []byte, files []Object, interruptib
 }
 
 func (f *RemoteFD) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	if r, ok := r.(*FileIdentity); ok {
+		r.id, r.key = f.id, f.key
+
+		return false, nil
+	}
+
 	op := r.op()
 
 	if op == 0 {
@@ -217,159 +222,6 @@ func (f *RemoteFD) simple(p *Process, op, arg uint32, body []byte) error {
 	_, err := f.on(p, op, arg, body)
 
 	return err
-}
-
-func (f *RemoteFD) stat(p *Process, st *Stat) error {
-	pk, err := f.on(p, rFstat, 0, nil)
-
-	if err != nil {
-		return err
-	}
-
-	return decodeStat(pk.data, st)
-}
-
-func (f *RemoteFD) statfs(p *Process, st *Statfs) error {
-	pk, err := f.on(p, rFstatfs, 0, nil)
-
-	if err != nil {
-		return err
-	}
-
-	return decodeStatfs(pk.data, st)
-}
-
-func (f *RemoteFD) truncate(p *Process, size int64) error {
-	var body [8]byte
-
-	binary.LittleEndian.PutUint64(body[:], uint64(size))
-
-	return f.simple(p, rFtruncate, 0, body[:])
-}
-
-func (f *RemoteFD) sync(p *Process, data bool) error {
-	arg := uint32(0)
-
-	if data {
-		arg = 1
-	}
-
-	return f.simple(p, rFsync, arg, nil)
-}
-
-func (f *RemoteFD) chmod(p *Process, mode uint32) error {
-	return f.simple(p, rFchmod, mode, nil)
-}
-
-func (f *RemoteFD) chown(p *Process, uid, gid int) error {
-	var body [8]byte
-
-	binary.LittleEndian.PutUint32(body[:], uint32(uid))
-	binary.LittleEndian.PutUint32(body[4:], uint32(gid))
-
-	return f.simple(p, rFchown, 0, body[:])
-}
-
-func (f *RemoteFD) utimes(p *Process, ts []Timespec) error {
-	when, body := whens(ts)
-
-	return f.simple(p, rFutimes, when, body)
-}
-
-func (f *RemoteFD) flock(p *Process, op int) error {
-	if f.opath {
-		return EBADF
-	}
-
-	if f.locks == nil {
-		return EINVAL
-	}
-
-	switch kind := op &^ LOCK_NB; kind {
-	case LOCK_UN:
-		f.locks.unlock(f, false, 0, 0)
-
-		return nil
-	case LOCK_SH, LOCK_EX:
-		return f.locks.lock(p, &FileLock{owner: f, write: kind == LOCK_EX}, op&LOCK_NB == 0)
-	}
-
-	return EINVAL
-}
-
-func (f *RemoteFD) recordLock(p *Process, cmd int, lk *Flock) error {
-	if f.opath {
-		return EBADF
-	}
-
-	if f.locks == nil {
-		return EINVAL
-	}
-
-	start, length := lk.Start, lk.Len
-
-	switch lk.Whence {
-	case 0:
-	case 1:
-		start += f.position()
-	case 2:
-		var st Stat
-
-		if err := f.stat(p, &st); err != nil {
-			return err
-		}
-
-		start += st.Size
-	default:
-		return EINVAL
-	}
-
-	if length < 0 {
-		start, length = start+length, -length
-	}
-
-	if start < 0 || lk.Type != F_RDLCK && lk.Type != F_WRLCK && lk.Type != F_UNLCK {
-		return EINVAL
-	}
-
-	want := &FileLock{owner: f, ranged: true, write: lk.Type == F_WRLCK, start: uint64(start), stop: lockPast}
-
-	if length != 0 && want.start <= lockPast-uint64(length) {
-		want.stop = want.start + uint64(length)
-	}
-
-	switch {
-	case cmd != fOfdGetlk && (lk.Type == F_RDLCK && f.accmode == O_WRONLY || lk.Type == F_WRLCK && f.accmode == O_RDONLY):
-		return EBADF
-	case cmd == fOfdGetlk:
-		lk.Whence, lk.Pid = 0, -1
-
-		way, found := f.locks.way(want)
-
-		if !found {
-			lk.Type, lk.Start, lk.Len = F_UNLCK, start, length
-
-			return nil
-		}
-
-		lk.Type, lk.Start, lk.Len = F_RDLCK, int64(way.start), 0
-
-		if way.write {
-			lk.Type = F_WRLCK
-		}
-
-		if way.stop != lockPast {
-			lk.Len = int64(way.stop - way.start)
-		}
-
-		return nil
-	case lk.Type == F_UNLCK:
-		f.locks.unlock(f, true, want.start, want.stop)
-
-		return nil
-	}
-
-	return f.locks.lock(p, want, cmd == fOfdSetlkw)
 }
 
 func ioBody(off int64, flags uint32) [12]byte {
@@ -558,7 +410,7 @@ func (f *RemoteFD) seek(p *Process, off int64, whence int) (int64, error) {
 	case 2:
 		var st Stat
 
-		if err := f.stat(p, &st); err != nil {
+		if err := p.fileStat(f, &st); err != nil {
 			return 0, err
 		}
 
@@ -644,14 +496,6 @@ func (f *RemoteFD) readdir(p *Process, into Object, size int) (int, error) {
 	return into.with(0, n, true, func(dst []byte) (int, error) {
 		return copy(dst, b[:n]), nil
 	})
-}
-
-func (f *RemoteFD) device() FileKey {
-	return f.key
-}
-
-func (f *RemoteFD) token() (uint64, error) {
-	return f.id, nil
 }
 
 func (f *RemoteFD) ioctl(req uintptr, arg unsafe.Pointer) error {

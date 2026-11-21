@@ -283,48 +283,13 @@ func (e *PipeEnd) readdir(p *Process, into Object, n int) (int, error) {
 	return 0, ENOTDIR
 }
 
-func (e *PipeEnd) truncate(p *Process, size int64) error {
-	return EINVAL
-}
-
-func (e *PipeEnd) sync(p *Process, data bool) error {
-	return EINVAL
-}
-
-func (e *PipeEnd) chmod(p *Process, mode uint32) error {
-	return EINVAL
-}
-
-func (e *PipeEnd) chown(p *Process, uid, gid int) error {
-	return EINVAL
-}
-
-func (e *PipeEnd) utimes(p *Process, ts []Timespec) error {
-	return EINVAL
-}
-
-func (e *PipeEnd) statfs(p *Process, st *Statfs) error {
-	return EINVAL
-}
-
-func (e *PipeEnd) flock(p *Process, op int) error {
-	return EBADF
-}
-
-func (e *PipeEnd) recordLock(p *Process, cmd int, lk *Flock) error {
-	return EBADF
-}
-
 func (e *PipeEnd) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	switch r := r.(type) {
+	case *FileStat:
+		return false, e.stat(p, r.st)
+	}
+
 	return false, errUnserved
-}
-
-func (e *PipeEnd) token() (uint64, error) {
-	return 0, EXDEV
-}
-
-func (e *PipeEnd) device() FileKey {
-	return FileKey{}
 }
 
 func (e *PipeEnd) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {

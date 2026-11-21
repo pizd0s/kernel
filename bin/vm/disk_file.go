@@ -162,10 +162,6 @@ func (f *DiskFile) seek(p *Process, off int64, whence int) (int64, error) {
 	return base + off, nil
 }
 
-func (f *DiskFile) truncate(p *Process, size int64) error {
-	return EINVAL
-}
-
 func (f *DiskFile) sync(p *Process, data bool) error {
 	sync := syscall.Fsync
 
@@ -210,24 +206,23 @@ func (f *DiskFile) readdir(p *Process, into Object, n int) (int, error) {
 	return 0, ENOTDIR
 }
 
-func (f *DiskFile) flock(p *Process, op int) error {
-	return EBADF
-}
-
-func (f *DiskFile) recordLock(p *Process, cmd int, lk *Flock) error {
-	return EBADF
-}
-
 func (f *DiskFile) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	switch r := r.(type) {
+	case *FileStat:
+		return false, f.stat(p, r.st)
+	case *FileSync:
+		return false, f.sync(p, r.data)
+	case *FileChmod:
+		return false, f.chmod(p, r.mode)
+	case *FileChown:
+		return false, f.chown(p, r.uid, r.gid)
+	case *FileUtimes:
+		return false, f.utimes(p, r.ts)
+	case *FileStatfs:
+		return false, f.statfs(p, r.st)
+	}
+
 	return false, errUnserved
-}
-
-func (f *DiskFile) token() (uint64, error) {
-	return 0, EXDEV
-}
-
-func (f *DiskFile) device() FileKey {
-	return FileKey{}
 }
 
 func (f *DiskFile) ioctl(req uintptr, arg unsafe.Pointer) error {

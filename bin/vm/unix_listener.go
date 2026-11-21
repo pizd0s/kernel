@@ -239,40 +239,11 @@ func (l *UnixListener) copyFrom(p *Process, in Object, from, to int64, n int) (i
 	return 0, EBADF
 }
 
-func (l *UnixListener) truncate(p *Process, size int64) error {
-	return EINVAL
-}
-
-func (l *UnixListener) sync(p *Process, data bool) error {
-	return EINVAL
-}
-
-func (l *UnixListener) chmod(p *Process, mode uint32) error {
-	return EINVAL
-}
-
-func (l *UnixListener) chown(p *Process, uid, gid int) error {
-	return EINVAL
-}
-
-func (l *UnixListener) utimes(p *Process, ts []Timespec) error {
-	return EINVAL
-}
-
-func (l *UnixListener) statfs(p *Process, st *Statfs) error {
-	return EINVAL
-}
-
-func (l *UnixListener) flock(p *Process, op int) error {
-	return EBADF
-}
-
-func (l *UnixListener) recordLock(p *Process, cmd int, lk *Flock) error {
-	return EBADF
-}
-
 func (l *UnixListener) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
-	if r, ok := r.(*SockKnock); ok {
+	switch r := r.(type) {
+	case *FileStat:
+		return false, l.stat(p, r.st)
+	case *SockKnock:
 		var err error
 
 		r.conn, err = l.knock(p, r.kind, r.nonblock, r.timeout)
@@ -281,14 +252,6 @@ func (l *UnixListener) call(p *Process, r Request, group uint32, waits bool) (bo
 	}
 
 	return false, errUnserved
-}
-
-func (l *UnixListener) token() (uint64, error) {
-	return 0, EXDEV
-}
-
-func (l *UnixListener) device() FileKey {
-	return FileKey{}
 }
 
 func (l *UnixListener) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {

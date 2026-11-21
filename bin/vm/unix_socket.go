@@ -399,40 +399,10 @@ func (s *UnixSocket) readdir(p *Process, into Object, n int) (int, error) {
 	return 0, ENOTDIR
 }
 
-func (s *UnixSocket) truncate(p *Process, size int64) error {
-	return EINVAL
-}
-
-func (s *UnixSocket) sync(p *Process, data bool) error {
-	return EINVAL
-}
-
-func (s *UnixSocket) chmod(p *Process, mode uint32) error {
-	return EINVAL
-}
-
-func (s *UnixSocket) chown(p *Process, uid, gid int) error {
-	return EINVAL
-}
-
-func (s *UnixSocket) utimes(p *Process, ts []Timespec) error {
-	return EINVAL
-}
-
-func (s *UnixSocket) statfs(p *Process, st *Statfs) error {
-	return EINVAL
-}
-
-func (s *UnixSocket) flock(p *Process, op int) error {
-	return EBADF
-}
-
-func (s *UnixSocket) recordLock(p *Process, cmd int, lk *Flock) error {
-	return EBADF
-}
-
 func (s *UnixSocket) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
+	case *FileStat:
+		return false, s.stat(p, r.st)
 	case *SockBind:
 		return false, s.bind(p, r.addr)
 	case *SockConnect:
@@ -480,14 +450,6 @@ func (s *UnixSocket) call(p *Process, r Request, group uint32, waits bool) (bool
 	}
 
 	return false, errUnserved
-}
-
-func (s *UnixSocket) token() (uint64, error) {
-	return 0, EXDEV
-}
-
-func (s *UnixSocket) device() FileKey {
-	return FileKey{}
 }
 
 func (s *UnixSocket) ioctl(req uintptr, arg unsafe.Pointer) error {

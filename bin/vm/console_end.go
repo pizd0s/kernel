@@ -159,40 +159,10 @@ func (c *ConsoleEnd) readdir(p *Process, into Object, n int) (int, error) {
 	return 0, ENOTDIR
 }
 
-func (c *ConsoleEnd) truncate(p *Process, size int64) error {
-	return EINVAL
-}
-
-func (c *ConsoleEnd) sync(p *Process, data bool) error {
-	return EINVAL
-}
-
-func (c *ConsoleEnd) chmod(p *Process, mode uint32) error {
-	return EINVAL
-}
-
-func (c *ConsoleEnd) chown(p *Process, uid, gid int) error {
-	return EINVAL
-}
-
-func (c *ConsoleEnd) utimes(p *Process, ts []Timespec) error {
-	return EINVAL
-}
-
-func (c *ConsoleEnd) statfs(p *Process, st *Statfs) error {
-	return EINVAL
-}
-
-func (c *ConsoleEnd) flock(p *Process, op int) error {
-	return EBADF
-}
-
-func (c *ConsoleEnd) recordLock(p *Process, cmd int, lk *Flock) error {
-	return EBADF
-}
-
 func (c *ConsoleEnd) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
+	case *FileStat:
+		return false, c.stat(p, r.st)
 	case *TtyWindow:
 		w, err := hostWindow()
 
@@ -212,14 +182,6 @@ func (c *ConsoleEnd) call(p *Process, r Request, group uint32, waits bool) (bool
 	}
 
 	return false, errUnserved
-}
-
-func (c *ConsoleEnd) token() (uint64, error) {
-	return 0, EXDEV
-}
-
-func (c *ConsoleEnd) device() FileKey {
-	return FileKey{}
 }
 
 func (c *ConsoleEnd) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {

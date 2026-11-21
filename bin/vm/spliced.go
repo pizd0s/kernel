@@ -179,10 +179,6 @@ func (s *Spliced) copyFrom(p *Process, in Object, from, to int64, n int) (int, e
 	return s.of.copyFrom(p, in, from, at, n)
 }
 
-func (s *Spliced) stat(p *Process, st *Stat) error {
-	return EBADF
-}
-
 func (s *Spliced) flags() (int, error) {
 	return 0, EBADF
 }
@@ -195,48 +191,8 @@ func (s *Spliced) readdir(p *Process, into Object, n int) (int, error) {
 	return 0, ENOTDIR
 }
 
-func (s *Spliced) truncate(p *Process, size int64) error {
-	return EINVAL
-}
-
-func (s *Spliced) sync(p *Process, data bool) error {
-	return EINVAL
-}
-
-func (s *Spliced) chmod(p *Process, mode uint32) error {
-	return EINVAL
-}
-
-func (s *Spliced) chown(p *Process, uid, gid int) error {
-	return EINVAL
-}
-
-func (s *Spliced) utimes(p *Process, ts []Timespec) error {
-	return EINVAL
-}
-
-func (s *Spliced) statfs(p *Process, st *Statfs) error {
-	return EINVAL
-}
-
-func (s *Spliced) flock(p *Process, op int) error {
-	return EBADF
-}
-
-func (s *Spliced) recordLock(p *Process, cmd int, lk *Flock) error {
-	return EBADF
-}
-
 func (s *Spliced) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	return false, errUnserved
-}
-
-func (s *Spliced) token() (uint64, error) {
-	return 0, EXDEV
-}
-
-func (s *Spliced) device() FileKey {
-	return FileKey{}
 }
 
 func (s *Spliced) ioctl(req uintptr, arg unsafe.Pointer) error {

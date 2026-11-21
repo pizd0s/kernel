@@ -264,10 +264,6 @@ func (a *Answer) recv(p *Process, r *SockRecv) error {
 func (a *Answer) consume(sink func(pk *Packet)) {
 }
 
-func (a *Answer) stat(p *Process, st *Stat) error {
-	return EBADF
-}
-
 func (a *Answer) flags() (int, error) {
 	return 0, EBADF
 }
@@ -282,38 +278,6 @@ func (a *Answer) seek(p *Process, off int64, whence int) (int64, error) {
 
 func (a *Answer) readdir(p *Process, into Object, n int) (int, error) {
 	return 0, ENOTDIR
-}
-
-func (a *Answer) truncate(p *Process, size int64) error {
-	return EINVAL
-}
-
-func (a *Answer) sync(p *Process, data bool) error {
-	return EINVAL
-}
-
-func (a *Answer) chmod(p *Process, mode uint32) error {
-	return EINVAL
-}
-
-func (a *Answer) chown(p *Process, uid, gid int) error {
-	return EINVAL
-}
-
-func (a *Answer) utimes(p *Process, ts []Timespec) error {
-	return EINVAL
-}
-
-func (a *Answer) statfs(p *Process, st *Statfs) error {
-	return EINVAL
-}
-
-func (a *Answer) flock(p *Process, op int) error {
-	return EBADF
-}
-
-func (a *Answer) recordLock(p *Process, cmd int, lk *Flock) error {
-	return EBADF
 }
 
 func (a *Answer) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
@@ -365,14 +329,6 @@ func (a *Answer) call(p *Process, r Request, group uint32, waits bool) (bool, er
 	}
 
 	return false, errUnserved
-}
-
-func (a *Answer) token() (uint64, error) {
-	return 0, EXDEV
-}
-
-func (a *Answer) device() FileKey {
-	return FileKey{}
 }
 
 func (a *Answer) ioctl(req uintptr, arg unsafe.Pointer) error {
