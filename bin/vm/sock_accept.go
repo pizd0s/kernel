@@ -25,13 +25,13 @@ func (r *SockAccept) ser(p *Process, b []byte) (uint32, []byte, []Object) {
 }
 
 func (r *SockAccept) des(p *Process, pk *Packet) error {
-	if len(pk.files) == 0 {
-		return EIO
+	conn, peer, err := p.attached(pk)
+
+	if err != nil {
+		return err
 	}
 
-	dropFiles(pk.files[1:])
-
-	r.conn, r.peer = pk.files[0], bytes.Clone(pk.data)
+	r.conn, r.peer = conn, bytes.Clone(peer)
 
 	return nil
 }

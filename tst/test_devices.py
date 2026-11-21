@@ -109,6 +109,7 @@ init
 null
 pty
 random
+sockmgr
 tty
 urandom
 zero

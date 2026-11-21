@@ -182,7 +182,7 @@ def main():
         system = ["-isystem", str(Path(include).resolve())]
         host = [*HOST_FLAGS, "-I", str(lib), "-I", str(ROOT), *system]
         units += [(HERE / "host.c", work / "o/host.o", [*CFLAGS, *host])]
-        ours = [HERE / "inet.cpp", HERE / "dhcp.cpp", HERE / "stack.cpp", *sorted((ROOT / "lib/protocol").glob("*.cpp"))]
+        ours = [HERE / "inet.cpp", HERE / "dhcp.cpp", HERE / "stack.cpp", HERE / "sockets.cpp", *sorted((ROOT / "lib/protocol").glob("*.cpp"))]
         units += [(s, work / "o" / f"h{i}-{s.stem}.o", [*CXXFLAGS, *host]) for i, s in enumerate(ours)]
         wasm.compile_all(cc, units)
         subprocess.run([ld, *LINK, "-o", str(output), *(str(o) for _, o, _ in units), libc], check=True)

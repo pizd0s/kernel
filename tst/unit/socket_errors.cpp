@@ -47,7 +47,6 @@ int main() {
     memset(name.sun_path, 0, sizeof(name.sun_path));
     memset(name.sun_path + 1, 'x', sizeof(name.sun_path) - 1);
     assert(bind(local, reinterpret_cast<sockaddr*>(&name), sizeof(name)) == -1 && errno == EOPNOTSUPP);
-    assert(socket(AF_INET, SOCK_DGRAM, 0) == -1 && errno == EAFNOSUPPORT);
 #endif
     assert(close(local) == 0);
 

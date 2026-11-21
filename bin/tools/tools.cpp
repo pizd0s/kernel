@@ -19,6 +19,7 @@ static const Tool tools[] = {
     {"erofs", erofsMain},
     {"mount", mountMain},
     {"pty", ptyMain},
+    {"sockmgr", sockmgrMain},
     {"spawn", spawnMain},
     {"tmpfs", tmpfsMain},
     {"umount", umountMain},

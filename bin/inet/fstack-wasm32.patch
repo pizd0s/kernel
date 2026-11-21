@@ -24,6 +24,15 @@ long and pointers are 32 bits and register_t is int, as on FreeBSD's
   nl_parse_attrs_raw a 16-bit length and the parsers' count;
 - its ff_event.h, of the programs' side, names glibc's own types of
   64-bit integers, __int64_t and __uint64_t, where it includes stdint.h.
+- its software interrupts are no-ops (ff_kern_intr.c), and so is
+  ff_swi_net_excute, which its loop calls for them, a stub "for smoke
+  testing" (ff_stub_14_extra.c): netisr's, which handles what is queued
+  and not dispatched at once, the loopback's packets, never runs, and a
+  connection to the stack's own address never starts. swi_add keeps its
+  handler, swi_sched marks it, and ff_swi_net_excute runs those marked.
+  And its m_rcvif_restore, a stub of NULL, has netisr free every packet
+  it queued: m_rcvif_serialize, a stub that does nothing, keeps the
+  mbuf's interface, which stays, and m_rcvif_restore gives it back.
 
 And of FreeBSD's sys/kernel.h: a SYSINIT's function is called through
 sysinit_cfunc_t, with its argument, whatever its own type, and many are
@@ -108,7 +117,15 @@ net/vnet.h, called through its vnet_sysinit.
  elf_reloc(linker_file_t lf, Elf_Addr relocbase, const void *data, int type,
 --- a/lib/ff_stub_14_extra.c
 +++ b/lib/ff_stub_14_extra.c
-@@ -88,10 +88,10 @@
+@@ -26,6 +26,7 @@
+ #include <sys/socket.h>
+ #include <sys/file.h>
+ #include <sys/malloc.h>
++#include <sys/mbuf.h>
+ #include <sys/uio.h>
+ #include <sys/jail.h>
+ #include <netinet/in.h>
+@@ -88,10 +89,10 @@
      return (0);
  }
  
@@ -122,7 +139,7 @@ net/vnet.h, called through its vnet_sysinit.
  }
  
  void aio_complete(struct kaiocb *job, long status, int error);
-@@ -260,16 +260,16 @@
+@@ -260,16 +261,16 @@
  
  MALLOC_DEFINE(M_NVLIST, "nvlist", "kernel nvlist");
  
@@ -132,7 +149,7 @@ net/vnet.h, called through its vnet_sysinit.
 +struct ifnet *m_rcvif_restore(struct mbuf *m)
  {
 -    
-+    return (NULL);
++    return (m->m_pkthdr.rcvif); /* serialize kept it, as the interface stays */
  }
  
 -void *m_rcvif_serialize(struct mbuf *m);
@@ -145,7 +162,7 @@ net/vnet.h, called through its vnet_sysinit.
  }
  
  int m_snd_tag_alloc(if_t ifp, union if_snd_tag_alloc_params *params, struct m_snd_tag **mstp);
-@@ -382,8 +382,8 @@
+@@ -382,8 +383,8 @@
      return (0);
  }
  
@@ -156,7 +173,7 @@ net/vnet.h, called through its vnet_sysinit.
  {
      return (EOPNOTSUPP);
  }
-@@ -412,10 +412,10 @@
+@@ -412,10 +413,10 @@
      return (false);
  }
  
@@ -170,7 +187,7 @@ net/vnet.h, called through its vnet_sysinit.
  }
  
  void *nlmsg_reserve_data_raw(struct nl_writer *nw, size_t sz);
-@@ -424,8 +424,8 @@
+@@ -424,8 +425,8 @@
      return (NULL);
  }
  
@@ -181,6 +198,17 @@ net/vnet.h, called through its vnet_sysinit.
  {
      return (EINVAL);
  }
+@@ -848,10 +849,6 @@
+  * a safe fallback. Smoke testing only — full loopback semantics
+  * may require revisit if a runtime path actually relies on this.
+  */
+-void ff_swi_net_excute(void);
+-void ff_swi_net_excute(void)
+-{
+-}
+ 
+ 
+ /* ===== End of stubs ===== */
 --- a/lib/ff_event.h
 +++ b/lib/ff_event.h
 @@ -87,9 +87,9 @@
@@ -206,6 +234,76 @@ net/vnet.h, called through its vnet_sysinit.
          rc = EINVAL;
          goto kern_fail;
      }
+--- a/lib/ff_kern_intr.c
++++ b/lib/ff_kern_intr.c
+@@ -81,25 +81,66 @@
+ }
+ #endif
+ 
++/*
++ * The software interrupts, netisr's among them, which queues what it does
++ * not dispatch at once, the loopback's packets: swi_sched marks one, and
++ * ff_swi_net_excute, of the loop, runs those marked.
++ */
++struct ff_swi {
++    driver_intr_t *handler;
++    void *arg;
++    int pending;
++};
++
++static struct ff_swi ff_swis[16];
++static int ff_swi_count;
++
+ int
+ swi_add(struct intr_event **eventp, const char *name, driver_intr_t handler,
+         void *arg, int pri, enum intr_type flags, void **cookiep)
+ {
++    struct ff_swi *swi;
++
++    if (ff_swi_count == nitems(ff_swis))
++        return (ENOMEM);
++    swi = &ff_swis[ff_swi_count++];
++    swi->handler = handler;
++    swi->arg = arg;
++    swi->pending = 0;
++    if (cookiep != NULL)
++        *cookiep = swi;
+     return 0;
+ }
+ 
+ void
+ swi_sched(void *cookie, int flags)
+ {
+-
++    if (cookie != NULL)
++        ((struct ff_swi *)cookie)->pending = 1;
+ }
+ 
+ int
+ swi_remove(void *cookie)
+ {
++    if (cookie != NULL)
++        ((struct ff_swi *)cookie)->handler = NULL;
+     return 0;
+ }
+ 
++void ff_swi_net_excute(void);
++void
++ff_swi_net_excute(void)
++{
++    int i;
++
++    for (i = 0; i < ff_swi_count; i++) {
++        if (ff_swis[i].pending && ff_swis[i].handler != NULL) {
++            ff_swis[i].pending = 0;
++            ff_swis[i].handler(ff_swis[i].arg);
++        }
++    }
++}
++
+ int
+ intr_event_bind(struct intr_event *ie, int cpu)
+ {
 --- a/freebsd/sys/kernel.h
 +++ b/freebsd/sys/kernel.h
 @@ -278,8 +278,17 @@

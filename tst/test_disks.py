@@ -75,6 +75,7 @@ raw
 sda
 sda1
 sda2
+sockmgr
 tty
 urandom
 vd0

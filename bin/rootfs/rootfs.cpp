@@ -3073,27 +3073,6 @@ static Endpoint bootMarker; // what the events of bootEnd carry
 
 static void booted();
 
-// The shell ended: the system goes down. The services' devices lose
-// their names and the file systems their channels, the root's too; a
-// service ends once what is open of it is closed, a file system once it
-// has written what it holds, the file systems first, as the devices
-// under them serve them until then.
-static void shutdown() {
-    for (Endpoint* ep = live; ep;) {
-        Endpoint* after = ep->after;
-        if (!ep->dead && ep->role == Role::Fs) {
-            ended(ep);
-        }
-        ep = after;
-    }
-}
-
-static i64 monotonicMilliseconds() {
-    timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return i64(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
-}
-
 // A turn of the loop: the next packet of an endpoint comes into packet,
 // its descriptors into packetFds, the endpoint's event into event. The
 // packet's length, 0 for an endpoint that ended; -1 when none came, for a
@@ -3130,24 +3109,18 @@ static ssize_t turn(epoll_event& event, int timeout) {
     return n;
 }
 
-// Serves the VFS until the last endpoint closes: then nobody can reach
-// it. When the shell ends, the system goes down (shutdown), and it is
-// served until its processes are gone, the last endpoint closed, or for
-// 10 seconds at most. The end of bootEnd, no packet on it, is the
+// Serves the VFS until the last endpoint closes, when nobody can reach
+// it, or the shell ends: then the system goes down, every other process,
+// the services' too, killed. The end of bootEnd, no packet on it, is the
 // services' being up. An endpoint closed while a batch of events is
 // handled stays dead to the rest of the batch.
 static void serve() {
-    i64 deadline = -1;
     while (endpointCount > 0) {
-        const i64 left = deadline < 0 ? -1 : deadline - monotonicMilliseconds();
-        if (deadline >= 0 && left <= 0) {
-            break;
-        }
         epoll_event event{};
-        const ssize_t n = turn(event, int(left));
-        if (!reap() && deadline < 0) {
-            deadline = monotonicMilliseconds() + 10000;
-            shutdown();
+        const ssize_t n = turn(event, -1);
+        if (!reap()) {
+            kill(-1, SIGKILL);
+            break;
         }
         if (n >= 0 && event.data.ptr == &bootMarker) {
             if (n == 0) {

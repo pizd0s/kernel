@@ -18,8 +18,10 @@ an extent tree of a leaf, holes and unwritten extents as zeros; links are
 followed, an absolute one from the root of the process; ".." out of the
 root goes to where it is mounted, and so does the path of a directory.
 Names are made, moved, linked and removed, modes, times and bytes
-written, and all of it is there when the system starts again: it writes
-what it holds as it goes down. flock's and fcntl's locks, which the
+written, and all of it is there when the system starts again: the test
+syncs each, an fsync of a file of it, which has fuse2fs write what it
+holds. The system kills fuse2fs as it goes down, and a file system it
+had has no mark of being checked: fuse2fs, mounting it again, warns. flock's and fcntl's locks, which the
 kernel keeps by the dev and ino libfuse makes an open file with, are an
 open file's: one another holds is busy to try and waited for, a range's
 as the file's, and goes with its open. A directory made after one was
@@ -378,6 +380,13 @@ for root in ("/run/two", "/run/four"):
     fcntl.lockf(b, fcntl.LOCK_SH | fcntl.LOCK_NB, 5, 5)
     print("locks:", tried, os.read(r, 2), ranged)
 '
+python3 -c '
+import os
+for name in "/run/two/hello.txt", "/run/four/hello.txt":
+    f = os.open(name, os.O_RDONLY)
+    os.fsync(f)
+    os.close(f)
+'
 """
 
 EXT_WANT = """\
@@ -458,6 +467,8 @@ hello.txt
 """
 
 AGAIN_ERRORS = """\
+FUSE2FS (sda1): Warning: Mounting unchecked fs, running e2fsck is recommended.
+FUSE2FS (sda2): Warning: Mounting unchecked fs, running e2fsck is recommended.
 FUSE2FS (sda3): Filesystem has unsupported feature(s).
 FUSE2FS (sda3): Please run e2fsck -fy.
 """
@@ -484,7 +495,8 @@ def main():
         result = run(vm, rootfs, ["--disk", f"sda={disk}"], EXT, empty)
         assert (result.returncode, result.stdout.decode(), result.stderr.decode()) == (3, EXT_WANT, EXT_ERRORS), result
         result = run(vm, rootfs, ["--disk", f"sda={disk}"], AGAIN, empty)
-        assert (result.returncode, result.stdout.decode(), result.stderr.decode()) == (3, AGAIN_WANT, AGAIN_ERRORS), result
+        errors = "".join(sorted(result.stderr.decode().splitlines(keepends=True)))
+        assert (result.returncode, result.stdout.decode(), errors) == (3, AGAIN_WANT, AGAIN_ERRORS), result
     print("mounts: servers' directories, and the ext2 and ext4 file systems of a disk's partitions through fuse2fs, mount on rootfs's directories")
 
 

@@ -9,10 +9,16 @@ its probe connects to a TCP server of the host's, at 192.168.127.254,
 the host's 127.0.0.1 behind vm's network, sends a text and reads the
 server's answer up to its close. In the system, devfs starts inet for
 the card, which is /dev/net/0: its ctl, stats and addr, and, once "stack"
-in its ctl has the stack's lease by DHCP, iface/status.
+in its ctl has the stack's lease by DHCP, iface/status. sockmgr, which
+devfs starts too, writes it of each card it finds, and the stack, up,
+registers with sockmgr, whose ctl lists it: tst/inet_sockets.cpp, which the test hands the system, connects through
+it to the host's server, listens on the card's address and accepts a
+connection of its own, whose epoll's watch, made of sockmgr's socket
+before connect, follows it to the stack's, and finds the errors of a socket on no stack.
 
-    test_net.py <vm> <net_probe> <inet> <rootfs>
+    test_net.py <vm> <net_probe> <inet> <rootfs> <inet_sockets>
 """
+import base64
 import socket
 import subprocess
 import sys
@@ -35,11 +41,9 @@ def echo(server):
 
 
 SYSTEM = """\
+for i in $(seq 100); do grep -q '^stack 0 ' /dev/sockmgr/ctl && break; sleep 0.1; done
 ls /dev/net /dev/net/0
-cat /dev/net/0/ctl /dev/net/0/addr
-echo stack > /dev/net/0/ctl
-for i in $(seq 50); do [ -e /dev/net/0/iface/status ] && break; sleep 0.1; done
-cat /dev/net/0/ctl /dev/net/0/iface/status
+cat /dev/net/0/ctl /dev/net/0/addr /dev/net/0/iface/status /dev/sockmgr/ctl
 grep -c frames /dev/net/0/stats
 echo nothing > /dev/net/0/ctl
 echo stack > /dev/net/0/ctl
@@ -53,24 +57,50 @@ SYSTEM_WANT = """\
 /dev/net/0:
 addr
 ctl
+iface
 stats
-stack off
-mtu 1500
-02:70:7a:64:a8:af
 stack up
 mtu 1500
+02:70:7a:64:a8:af
 inet 192.168.127.2/24
 gateway 192.168.127.1
 dns 192.168.127.1
 lease 3600
+auto *
+stack 0 inet 192.168.127.2/24 gateway 192.168.127.1
 2
 """
 
 SYSTEM_ERRORS = "sh: write error: Invalid argument\nsh: write error: Device or resource busy\n"
 
+SOCKETS = """\
+base64 -d > /run/inet_sockets <<'PROGRAM'
+{program}
+PROGRAM
+chmod +x /run/inet_sockets
+for i in $(seq 100); do grep -q '^stack 0 ' /dev/sockmgr/ctl && break; sleep 0.1; done
+/run/inet_sockets {port}
+"""
+
+SOCKETS_WANT = """\
+connected from 192.168.127.2
+read echo: hello
+read at the end 0
+connect that does not wait: Operation now in progress
+poll: 1 POLLOUT
+accepted from 192.168.127.2
+recv ping
+epoll before the answer: 0
+epoll: 1 EPOLLIN
+read pong
+read of a socket on no stack: -1 Transport endpoint is not connected
+bind to no card's address: -1 Cannot assign requested address
+socket of AF_INET6: -1 Address family not supported by protocol
+"""
+
 
 def main():
-    vm, probe, inet, rootfs = sys.argv[1:5]
+    vm, probe, inet, rootfs, sockets = sys.argv[1:6]
     r = subprocess.run([vm, "run", "--net", "--", probe], capture_output=True, text=True, timeout=120)
 
     if r.returncode != 0 or r.stdout != WANT:
@@ -101,8 +131,23 @@ def main():
         print(f"FAIL net: the card in the system: exit {r.returncode}\n{r.stdout}\nwant\n{SYSTEM_WANT}\n{r.stderr[-2000:]}")
         sys.exit(1)
 
+    server = socket.create_server(("127.0.0.1", 0))
+    answering = threading.Thread(target=echo, args=(server,), daemon=True)
+    answering.start()
+
+    with open(sockets, "rb") as f:
+        program = base64.b64encode(f.read()).decode()
+
+    script = SOCKETS.format(program=program, port=server.getsockname()[1])
+    r = subprocess.run([vm, "run", "--net", "--", rootfs, "-c", script], capture_output=True, text=True, timeout=120)
+
+    if r.returncode != 0 or r.stdout != SOCKETS_WANT:
+        print(f"FAIL net: sockets: exit {r.returncode}\n{r.stdout}\nwant\n{SOCKETS_WANT}\n{r.stderr[-2000:]}")
+        sys.exit(1)
+
     print("net: vm's network device carries Ethernet frames to gvisor-tap-vsock's gateway, which answers ARP, DHCP and ICMP; "
-          "inet's FreeBSD stack talks TCP on it to a server of the host's; the card is /dev/net/0, its stack up by its ctl")
+          "inet's FreeBSD stack talks TCP on it to a server of the host's; the card is /dev/net/0, its stack up by sockmgr through its ctl; "
+          "a program's sockets go through sockmgr to the card's stack")
 
 
 if __name__ == "__main__":

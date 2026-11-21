@@ -7333,6 +7333,10 @@ func (p *Process) putAddress(addr []byte, at, lenAt uint32) {
 }
 
 func (p *Process) libcSocket(domain, kind, protocol uint32) uint32 {
+	if domain == AF_INET || domain == AF_INET6 {
+		return p.result(p.inetSocket(domain, kind, protocol))
+	}
+
 	if domain != AF_UNIX {
 		return p.result(0, EAFNOSUPPORT)
 	}
@@ -7355,6 +7359,30 @@ func (p *Process) libcSocket(domain, kind, protocol uint32) uint32 {
 	}
 
 	return p.result(0, ESOCKTNOSUPPORT)
+}
+
+func (p *Process) inetSocket(domain, kind, protocol uint32) (int, error) {
+	if kind&^(sockTypeMask|SOCK_NONBLOCK|SOCK_CLOEXEC) != 0 {
+		return 0, EINVAL
+	}
+
+	obj, err := p.dirOpen(p.root, sockmgrSocket, O_RDWR|int(bit(kind&SOCK_NONBLOCK != 0))*O_NONBLOCK, 0)
+
+	if err == ENOENT {
+		return 0, EAFNOSUPPORT
+	}
+
+	if err != nil {
+		return 0, err
+	}
+
+	if err := p.request(obj, &SockCreate{domain: domain, kind: kind &^ SOCK_CLOEXEC, protocol: protocol}); err != nil {
+		obj.unref()
+
+		return 0, err
+	}
+
+	return p.install(newIndirect(obj), 0, kind&SOCK_CLOEXEC != 0)
 }
 
 func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
@@ -7969,27 +7997,42 @@ func (p *Process) opened(pk *Packet) (Object, bool, error) {
 		return f, false, nil
 	}
 
-	end := f
-
 	if len(pk.data) != sizeofOpened {
 		f.unref()
 
 		return nil, false, EIO
 	}
 
-	b := pk.data
-	kind := binary.LittleEndian.Uint32(b)
+	obj, err := p.servedOf(f, pk.data)
 
-	obj, err := served(p, kind, int(binary.LittleEndian.Uint32(b[4:])), binary.LittleEndian.Uint64(b[8:]), binary.LittleEndian.Uint64(b[16:]),
-		binary.LittleEndian.Uint64(b[24:]), binary.LittleEndian.Uint32(b[32:]), end)
+	return obj, err == nil && binary.LittleEndian.Uint32(pk.data) == openedTerminal, err
+}
+
+func (p *Process) servedOf(end Object, b []byte) (Object, error) {
+	obj, err := served(p, binary.LittleEndian.Uint32(b), int(binary.LittleEndian.Uint32(b[4:])), binary.LittleEndian.Uint64(b[8:]),
+		binary.LittleEndian.Uint64(b[16:]), binary.LittleEndian.Uint64(b[24:]), binary.LittleEndian.Uint32(b[32:]), end)
 
 	if err != nil {
-		f.unref()
+		end.unref()
 
-		return nil, false, EIO
+		return nil, EIO
 	}
 
-	return obj, kind == openedTerminal, nil
+	return obj, nil
+}
+
+func (p *Process) attached(pk *Packet) (Object, []byte, error) {
+	if len(pk.files) == 0 || len(pk.data) < sizeofOpened {
+		dropFiles(pk.files)
+
+		return nil, nil, EIO
+	}
+
+	dropFiles(pk.files[1:])
+
+	obj, err := p.servedOf(pk.files[0], pk.data[:sizeofOpened])
+
+	return obj, pk.data[sizeofOpened:], err
 }
 
 func (p *Process) head(data []byte, op, arg, group uint32) {

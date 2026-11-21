@@ -12,6 +12,7 @@ const (
 	openedDir              = 3
 	openedPath             = 4
 	sizeofOpened           = 40
+	sockmgrSocket          = "/dev/sockmgr/socket"
 	rOk             uint32 = 128
 	rErr            uint32 = 129
 	rBackground     uint32 = 130
@@ -79,6 +80,7 @@ const (
 	sSetopt
 	sShutdown
 	sType
+	sCreate
 )
 
 const (

@@ -58,7 +58,7 @@ int unserved(uint32_t op) {
     if (op >= opTcgetattr && op <= opSetCtty) {
         return ENOTTY;
     }
-    if (op >= opBind && op <= opSocktype) {
+    if (op >= opBind && op <= opSocket) {
         return ENOTSOCK;
     }
     switch (op) {

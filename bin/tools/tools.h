@@ -17,6 +17,7 @@ int devicesMain(int argc, char** argv);
 int erofsMain(int argc, char** argv);
 int mountMain(int argc, char** argv);
 int ptyMain(int argc, char** argv);
+int sockmgrMain(int argc, char** argv);
 int spawnMain(int argc, char** argv);
 int tmpfsMain(int argc, char** argv);
 int umountMain(int argc, char** argv);

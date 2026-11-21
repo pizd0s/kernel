@@ -564,7 +564,7 @@ vm_chaos_coverage = command(
 # The tools of the system, its services and the commands that speak to
 # them, in one multicall executable, /bin/tools, each a link to it in the
 # image (bin/tools).
-TOOLS = ["blk", "console", "devfs", "devices", "erofs", "mount", "pty", "spawn", "tmpfs", "umount"]
+TOOLS = ["blk", "console", "devfs", "devices", "erofs", "mount", "pty", "sockmgr", "spawn", "tmpfs", "umount"]
 PROTOCOL_SOURCES = build.glob("$(S)/lib/protocol/*.cpp")
 PROTOCOL_HEADERS = build.glob("$(S)/lib/protocol/*.h")
 TOOL_SOURCES = [*build.glob("$(S)/bin/tools/*.cpp"), *PROTOCOL_SOURCES]
@@ -593,6 +593,18 @@ devices_service = executable("devices_service_exe", command(
     descr="CC",
     color="cyan",
 ), "$(B)/tst/devices_service")
+
+# The sockets of tst/test_net.py's system, which it hands to the system.
+inet_sockets = executable("inet_sockets_exe", command(
+    name="inet_sockets_module",
+    inputs=["$(S)/tst/inet_sockets.cpp", *TOOL_INPUTS],
+    outputs=["$(B)/tst/inet_sockets.wasm"],
+    deps=[libc],
+    cmd=["python3", "$(S)/bin/tools/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], "$(B)/tst/inet_sockets.wasm",
+         "$(S)/tst/inet_sockets.cpp"],
+    descr="CC",
+    color="cyan",
+), "$(B)/tst/inet_sockets")
 
 # The program of tst/test_watchdir.py, which hands it to the system.
 watch_dir = executable("watch_dir_exe", command(
@@ -1179,7 +1191,7 @@ APPLICATION_TESTED = {
     "devices": [vm, rootfs, devices_service],
     "disks": [vm, rootfs],
     "mounts": [vm, rootfs],
-    "net": [vm, net_probe, inet_exe, rootfs],
+    "net": [vm, net_probe, inet_exe, rootfs, inet_sockets],
     "watchdir": [vm, rootfs, watch_dir],
     "unix_sockets": [vm, rootfs, unix_sockets],
     "vfs": [vm, rootfs],

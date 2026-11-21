@@ -7,7 +7,8 @@ import (
 )
 
 type SockBind struct {
-	addr Address
+	addr  Address
+	moved Object
 }
 
 func (r *SockBind) op() uint32 {
@@ -23,7 +24,13 @@ func (r *SockBind) ser(p *Process, b []byte) (uint32, []byte, []Object) {
 }
 
 func (r *SockBind) des(p *Process, pk *Packet) error {
-	dropFiles(pk.files)
+	if len(pk.files) == 0 {
+		return nil
+	}
 
-	return nil
+	moved, _, err := p.attached(pk)
+
+	r.moved = moved
+
+	return err
 }

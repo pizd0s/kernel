@@ -14,7 +14,10 @@
 //
 //     net/<name>/iface/status   its address, router, name server, lease
 //
-// The stack keeps its time by ticks of hz a second, between the frames.
+// and the stack joins sockmgr (bin/tools/sockmgr), when there is one: of
+// sockmgr/stack, a STACK of its state, and the HANDs of sockets sockmgr
+// gives it (sockets.cpp). The stack keeps its time by ticks of hz a
+// second, between the frames.
 //
 //     inet [-r fd] <name> <fd>
 //     inet probe <address> <port> <text>
@@ -26,6 +29,7 @@
 
 #include <bin/inet/dhcp.h>
 #include <bin/inet/host.h>
+#include <bin/inet/sockets.h>
 #include <bin/inet/stack.h>
 #include <lib/protocol/service.h>
 
@@ -74,6 +78,7 @@ namespace {
     Stack stack = Stack::Off;
     Entry entries[4];
     size_t entryCount;
+    int sockmgrTag; // what sockmgr's end of ours is of
 
     long long nowMs() {
         timespec ts;
@@ -184,7 +189,37 @@ namespace {
         answer(r.reply(), opOk, 0, &r.h.arg, sizeof r.h.arg);
     }
 
+    // The stack's state, as STACK tells sockmgr and iface/status has it.
+    size_t stateOf(char* out, size_t room) {
+        char a[INET_ADDRSTRLEN], r[INET_ADDRSTRLEN], d[INET_ADDRSTRLEN];
+        const Lease& l = dhcpLease();
+        inet_ntop(AF_INET, &l.address, a, sizeof a);
+        inet_ntop(AF_INET, &l.router, r, sizeof r);
+        inet_ntop(AF_INET, &l.dns, d, sizeof d);
+        return size_t(snprintf(out, room, "card %s\ninet %s/%d\ngateway %s\ndns %s\n", name, a, __builtin_popcount(ntohl(l.mask)), r, d));
+    }
+
+    // Joins sockmgr, when there is one, telling it the stack's state.
+    void join() {
+        const int fd = open("/dev/sockmgr/stack", O_RDWR | O_CLOEXEC);
+        if (fd < 0) {
+            return;
+        }
+        char state[256];
+        const size_t size = stateOf(state, sizeof state);
+        const Header h{opStack, 0, 0, 0, 0, 0};
+        const iovec parts[] = {{const_cast<Header*>(&h), sizeof h}, {state, size}};
+        sendPacket(fd, parts, 2, nullptr, 0);
+        watch(epoll, {fd, false, true, true, &sockmgrTag});
+    }
+
     void handle(Endpoint& e, Request& r) {
+        if (e.of == &sockmgrTag) {
+            return r.h.op == opHand ? socketsHand(r) : fail(r.reply(), EINVAL);
+        }
+        if (socketsHandle(e, r)) {
+            return;
+        }
         Entry& f = *static_cast<Entry*>(e.of);
         if (e.channel) {
             answerOpen(epoll, r, {openedFile, 0, f.device.st.dev, f.device.st.ino, 0, POLLIN | POLLOUT}, e.of);
@@ -205,6 +240,9 @@ namespace {
     }
 
     void gone(Endpoint& e) {
+        if (e.of == &sockmgrTag || socketsGone(e)) {
+            return;
+        }
         if (e.channel) {
             stopServing();
         }
@@ -214,7 +252,8 @@ namespace {
     // none of anyone's before it.
     void frames(Endpoint& e) {
         if (stack == Stack::Up) {
-            return stackFrames();
+            stackFrames();
+            return socketsTurn();
         }
         unsigned char frame[2048];
         for (ssize_t n; (n = recv(e.fd, frame, sizeof frame, MSG_DONTWAIT)) != 0;) {
@@ -229,7 +268,9 @@ namespace {
                 stackStart(card, name, mac, dhcpLease());
                 stack = Stack::Up;
                 if (epoll >= 0) {
+                    socketsStart(epoll);
                     enrolled("iface/status", File::Status, S_IFCHR | 0444);
+                    join();
                 }
                 return;
             }
@@ -242,8 +283,11 @@ namespace {
         switch (stack) {
             case Stack::Dhcp:
                 return dhcpTimer();
-            case Stack::Up:
-                return stackTicks();
+            case Stack::Up: {
+                const int due = stackTicks();
+                socketsTurn();
+                return due;
+            }
             default:
                 return -1;
         }

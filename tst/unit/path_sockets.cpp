@@ -32,7 +32,6 @@ int main() {
     assert(socket(-1, SOCK_STREAM, 0) == -1 && errno == EAFNOSUPPORT);
     assert(socket(AF_UNIX, -1, 0) == -1 && errno == EINVAL);
 #ifdef __wasm__
-    assert(socket(AF_INET, SOCK_STREAM, 0) == -1 && errno == EAFNOSUPPORT);
     assert(socket(AF_INET6, SOCK_DGRAM, 0) == -1 && errno == EAFNOSUPPORT);
 #endif
     int listener = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);

@@ -12,9 +12,9 @@
 // unlinked. A device's name may be in a directory of /dev, pts/0: the
 // directory comes with the first device in it and goes with the last.
 // devfs starts the services of the system's devices, /bin/devices,
-// /bin/pty, /bin/blk for each disk vm gave the system and /bin/inet for
-// each card of its network, named net/<name>, and ends when rootfs lets
-// go of its channel.
+// /bin/pty, /bin/sockmgr, /bin/blk for each disk vm gave the system and
+// /bin/inet for each card of its network, named net/<name>, and ends when
+// rootfs lets go of its channel.
 //
 //     devfs [-r fd] <channel> [<disk> <fd>]... [net/<name> <fd>]...
 //
@@ -865,6 +865,10 @@ int devfsMain(int argc, char** argv) {
     char* const ptyArgv[] = {ptyName, option, readyText, nullptr};
     char* const barePty[] = {ptyName, nullptr};
     start("/bin/pty", ready >= 0 ? ptyArgv : barePty, -1);
+    char sockmgrName[] = "sockmgr";
+    char* const sockmgrArgv[] = {sockmgrName, option, readyText, nullptr};
+    char* const bareSockmgr[] = {sockmgrName, nullptr};
+    start("/bin/sockmgr", ready >= 0 ? sockmgrArgv : bareSockmgr, -1);
     char inetName[] = "inet";
     for (int i = at + 1; i < argc; i += 2) {
         if (strncmp(argv[i], "net/", 4) == 0) {
