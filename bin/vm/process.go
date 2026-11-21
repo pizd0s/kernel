@@ -7568,13 +7568,12 @@ func (p *Process) libcSendmsg(fd, msg, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	most := packetMax
+	iov, count := binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:])
+	data, err := p.gather(iov, count, packetMax)
 
-	if p.sockKind(s) == SOCK_STREAM {
-		most = math.MaxInt
+	if err == EMSGSIZE && p.sockKind(s) == SOCK_STREAM {
+		data, err = p.gather(iov, count, math.MaxInt)
 	}
-
-	data, err := p.gather(binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]), most)
 
 	if err != nil {
 		return p.result(0, err)
