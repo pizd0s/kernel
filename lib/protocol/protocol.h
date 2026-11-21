@@ -292,12 +292,12 @@
 //     SHUTDOWN  arg how
 //     SOCKTYPE                            OK type u32
 //
-//   A card's stack's and sockmgr's, on the end of a pair a stack has of
-//   sockmgr/stack, whose open is a plain socket as /dev/init's, a request
-//   on it answered where it says:
+//   A card's stack's and sockmgr's, on the open sockmgr has of the
+//   stack's net/<card>/iface/stack, a plain socket as /dev/init's, a
+//   request on it answered where it says:
 //     STACK                 text        the stack's state, a line each,
 //                                         card <name>, inet <a>/<len>,
-//                                         gateway <a>, dns <a>: at its start
+//                                         gateway <a>, dns <a>: at the open
 //                                         and at every change; no answer
 //     HAND      arg op      domain u32, type u32, protocol u32, nonblock
 //                           u32, call's arg u32, bound len u32 and sockaddr,

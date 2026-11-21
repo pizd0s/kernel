@@ -12,9 +12,10 @@
 // unlinked. A device's name may be in a directory of /dev, pts/0: the
 // directory comes with the first device in it and goes with the last.
 // devfs starts the services of the system's devices, /bin/devices,
-// /bin/pty, /bin/sockmgr, /bin/dns, /bin/blk for each disk vm gave the
-// system and /bin/inet for each card of its network, named net/<name>,
-// and ends when rootfs lets go of its channel.
+// /bin/pty, /bin/sockmgr, /bin/dns, /bin/inet of the loopback, lo,
+// /bin/blk for each disk vm gave the system and /bin/inet for each card
+// of its network, named net/<name>, and ends when rootfs lets go of its
+// channel.
 //
 //     devfs [-r fd] <channel> [<disk> <fd>]... [net/<name> <fd>]...
 //
@@ -874,6 +875,10 @@ int devfsMain(int argc, char** argv) {
     char* const bareDns[] = {dnsName, nullptr};
     start("/bin/dns", ready >= 0 ? dnsArgv : bareDns, -1);
     char inetName[] = "inet";
+    char loopback[] = "lo";
+    char* const loopbackArgv[] = {inetName, option, readyText, loopback, nullptr};
+    char* const bareLoopback[] = {inetName, loopback, nullptr};
+    start("/bin/inet", ready >= 0 ? loopbackArgv : bareLoopback, -1);
     for (int i = at + 1; i < argc; i += 2) {
         if (strncmp(argv[i], "net/", 4) == 0) {
             char* const inetArgv[] = {inetName, option, readyText, argv[i] + 4, argv[i + 1], nullptr};

@@ -11,7 +11,8 @@ server's answer up to its close. In the system, devfs starts inet for
 the card, which is /dev/net/0: its ctl, stats and addr, and, once "stack"
 in its ctl has the stack's lease by DHCP, iface/status. sockmgr, which
 devfs starts too, writes it of each card it finds, and the stack, up,
-registers with sockmgr, whose ctl lists it. "renew" in the card's ctl
+is opened by sockmgr, whose ctl lists it; so is the loopback's, lo, a
+card of no device, which devfs starts always. "renew" in the card's ctl
 asks for the lease again, "release" gives it up, the stack's address
 gone and sockmgr told, and "renew" then asks for a new one: the sockets
 after are of the stack's new address. tst/inet_sockets.cpp, which
@@ -48,9 +49,10 @@ def echo(server):
 
 
 SYSTEM = """\
-for i in $(seq 100); do grep -q '^stack 0 ' /dev/sockmgr/ctl && break; sleep 0.1; done
-ls /dev/net /dev/net/0
-cat /dev/net/0/ctl /dev/net/0/addr /dev/net/0/iface/status /dev/sockmgr/ctl
+for i in $(seq 100); do grep -q '^stack 0 ' /dev/sockmgr/ctl && grep -q '^stack lo ' /dev/sockmgr/ctl && break; sleep 0.1; done
+ls /dev/net /dev/net/0 /dev/net/lo
+cat /dev/net/0/ctl /dev/net/0/addr /dev/net/0/iface/status /dev/net/lo/ctl /dev/net/lo/iface/status
+sort /dev/sockmgr/ctl
 grep -c frames /dev/net/0/stats
 echo nothing > /dev/net/0/ctl
 echo stack > /dev/net/0/ctl
@@ -60,12 +62,17 @@ echo stack > /dev/net/0/ctl
 SYSTEM_WANT = """\
 /dev/net:
 0
+lo
 
 /dev/net/0:
 addr
 ctl
 iface
 stats
+
+/dev/net/lo:
+ctl
+iface
 stack up
 mtu 1500
 02:70:7a:64:a8:af
@@ -75,8 +82,12 @@ gateway 192.168.127.1
 dns 192.168.127.1
 lease 3600
 leases 1
+stack up
+mtu 16384
+inet 127.0.0.1/8
 auto *
 stack 0 inet 192.168.127.2/24 gateway 192.168.127.1
+stack lo inet 127.0.0.1/8 gateway 0.0.0.0
 2
 """
 
@@ -93,11 +104,11 @@ for i in $(seq 100); do grep -q '^leases 2' /dev/net/0/iface/status && break; sl
 grep -e state -e leases /dev/net/0/iface/status
 echo release > /dev/net/0/ctl
 cat /dev/net/0/iface/status
-grep '^stack' /dev/sockmgr/ctl
+grep '^stack 0 ' /dev/sockmgr/ctl
 echo renew > /dev/net/0/ctl
 for i in $(seq 100); do grep -q '^leases 3' /dev/net/0/iface/status && break; sleep 0.1; done
 grep -e state -e inet -e leases /dev/net/0/iface/status
-grep '^stack' /dev/sockmgr/ctl
+grep '^stack 0 ' /dev/sockmgr/ctl
 /run/inet_sockets {port}
 exec 3<>/dev/dns/query
 echo HOST.internal a >&3

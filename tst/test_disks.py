@@ -69,6 +69,7 @@ WANT = """\
 dns
 full
 init
+net
 null
 pty
 random

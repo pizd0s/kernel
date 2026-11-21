@@ -17,17 +17,26 @@
 //     net/<name>/iface/status   where DHCP is (state), the lease's address,
 //                               router, name server and length when there
 //                               is one, and how many leases there were
+//     net/<name>/iface/stack    sockmgr's (bin/tools/sockmgr), which opens
+//                               it: a plain socket, on which the stack
+//                               tells its state (STACK), at once and at
+//                               each change, and takes the sockets sockmgr
+//                               hands it (HAND, sockets.cpp)
 //
 // The lease is asked for again at half its time and at seven eighths
 // (dhcp.cpp), and the stack has the address of each lease, none when it
 // ends.
 //
-// and the stack joins sockmgr (bin/tools/sockmgr), when there is one: of
-// sockmgr/stack, a STACK of its state, and the HANDs of sockets sockmgr
-// gives it (sockets.cpp). The stack keeps its time by ticks of hz a
-// second, run as they are due: none while nothing is.
+// A card of no device is the loopback, lo, which devfs starts always:
+// its stack, up from the start, has only its loopback interface,
+// 127.0.0.1/8, and its iface/status that address.
 //
-//     inet [-r fd] <name> <fd>
+// The card asks nothing of sockmgr: sockmgr asks the card, its ctl and
+// its stack's file, and two loops of one thread each never wait on each
+// other. The stack keeps its time by ticks of hz a second, run as they
+// are due: none while nothing is.
+//
+//     inet [-r fd] <name> [<fd>]
 //     inet probe <address> <port> <text>
 //
 // -r: a descriptor to close once the card's files are there. probe, of
@@ -71,6 +80,7 @@ namespace {
         Stats,
         Addr,
         Status,
+        Stack,
     };
 
     // A file of the card's in /dev: what it is and its device.
@@ -84,11 +94,12 @@ namespace {
     char name[NAME_MAX + 1];
     uint8_t mac[6];
     Stack stack = Stack::Off;
-    Entry entries[4];
+    Entry entries[5];
     size_t entryCount;
     int sockmgrTag; // what sockmgr's end of ours is of
     int sockmgr = -1;
     Lease had; // the lease the stack's interface has
+    bool loopback;
 
     void leaseChanged();
 
@@ -113,9 +124,11 @@ namespace {
         char a[INET_ADDRSTRLEN], r[INET_ADDRSTRLEN], d[INET_ADDRSTRLEN];
         const Lease& l = dhcpLease();
         switch (file) {
+            case File::Stack:
+                return 0; // a plain socket, never read as a file
             case File::Ctl: {
                 static const char* const states[] = {"off", "dhcp", "up"};
-                return size_t(snprintf(out, room, "stack %s\nmtu 1500\n", states[int(stack)]));
+                return size_t(snprintf(out, room, "stack %s\nmtu %d\n", states[int(stack)], loopback ? 16384 : 1500));
             }
             case File::Stats:
                 return size_t(snprintf(out, room, "in %llu frames %llu bytes\nout %llu frames %llu bytes\ndropped %llu\n",
@@ -125,6 +138,9 @@ namespace {
             case File::Addr:
                 return size_t(snprintf(out, room, "%02x:%02x:%02x:%02x:%02x:%02x\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]));
             case File::Status: {
+                if (loopback) {
+                    return size_t(snprintf(out, room, "inet 127.0.0.1/8\n"));
+                }
                 static const char* const states[] = {"discovering", "requesting", "bound", "renewing", "rebinding", "released"};
                 size_t n = size_t(snprintf(out, room, "state %s\n", states[int(dhcpState())]));
                 if (l.address != 0 && n < room) {
@@ -185,11 +201,11 @@ namespace {
             dhcpStart(card, mac, leaseChanged);
             return 0;
         }
-        if (length == 5 && memcmp(line, "renew", 5) == 0 && stack != Stack::Off) {
+        if (length == 5 && memcmp(line, "renew", 5) == 0 && stack != Stack::Off && !loopback) {
             dhcpRenew();
             return 0;
         }
-        if (length == 7 && memcmp(line, "release", 7) == 0 && stack != Stack::Off) {
+        if (length == 7 && memcmp(line, "release", 7) == 0 && stack != Stack::Off && !loopback) {
             dhcpRelease();
             return 0;
         }
@@ -218,17 +234,17 @@ namespace {
         answer(r.reply(), opOk, 0, &r.h.arg, sizeof r.h.arg);
     }
 
-    // The stack's state, as STACK tells sockmgr and iface/status has it.
+    // The stack's state, as STACK tells sockmgr: its interface's.
     size_t stateOf(char* out, size_t room) {
         char a[INET_ADDRSTRLEN], r[INET_ADDRSTRLEN], d[INET_ADDRSTRLEN];
-        const Lease& l = dhcpLease();
+        const Lease& l = had;
         inet_ntop(AF_INET, &l.address, a, sizeof a);
         inet_ntop(AF_INET, &l.router, r, sizeof r);
         inet_ntop(AF_INET, &l.dns, d, sizeof d);
         return size_t(snprintf(out, room, "card %s\ninet %s/%d\ngateway %s\ndns %s\n", name, a, __builtin_popcount(ntohl(l.mask)), r, d));
     }
 
-    // Tells sockmgr, when the stack joined it, the stack's state.
+    // Tells sockmgr, once it opened the stack's file, the stack's state.
     void told() {
         if (sockmgr < 0) {
             return;
@@ -240,14 +256,30 @@ namespace {
         sendPacket(sockmgr, parts, 2, nullptr, 0);
     }
 
-    // Joins sockmgr, when there is one, telling it the stack's state.
-    void join() {
-        sockmgr = open("/dev/sockmgr/stack", O_RDWR | O_CLOEXEC);
-        if (sockmgr < 0) {
-            return;
+    // sockmgr's open of the stack's file: a pair, ours its endpoint of the
+    // loop's, the other end the open's, a plain socket; one at a time.
+    void joined(const Request& r) {
+        if (sockmgr >= 0) {
+            return fail(r.reply(), EBUSY);
         }
+        int pair[2];
+        if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+            return fail(r.reply(), errno);
+        }
+        sockmgr = pair[0];
+        watch(epoll, {pair[0], false, true, true, &sockmgrTag});
+        const Header h{opOk, 0, 0, 0, 0, 0};
+        const iovec part{const_cast<Header*>(&h), sizeof h};
+        sendPacket(r.reply(), &part, 1, &pair[1], 1);
+        close(pair[1]);
         told();
-        watch(epoll, {sockmgr, false, true, true, &sockmgrTag});
+    }
+
+    // The stack's files, once it is up.
+    void stackFiles() {
+        socketsStart(epoll);
+        enrolled("iface/status", File::Status, S_IFCHR | 0444);
+        enrolled("iface/stack", File::Stack, S_IFCHR | 0600);
     }
 
     // A lease ACKed or gone: the stack starts with the first, its own
@@ -261,9 +293,7 @@ namespace {
             stack = Stack::Up;
             inetTaken = dhcpFrame;
             if (epoll >= 0) {
-                socketsStart(epoll);
-                enrolled("iface/status", File::Status, S_IFCHR | 0444);
-                join();
+                stackFiles();
             }
             return;
         }
@@ -285,6 +315,9 @@ namespace {
             return;
         }
         Entry& f = *static_cast<Entry*>(e.of);
+        if (e.channel && f.file == File::Stack) {
+            return joined(r);
+        }
         if (e.channel) {
             answerOpen(epoll, r, {openedFile, 0, f.device.st.dev, f.device.st.ino, 0, POLLIN | POLLOUT}, e.of);
             return;
@@ -304,7 +337,11 @@ namespace {
     }
 
     void gone(Endpoint& e) {
-        if (e.of == &sockmgrTag || socketsGone(e)) {
+        if (e.of == &sockmgrTag) {
+            sockmgr = -1; // serve closes it; sockmgr opens the file again
+            return;
+        }
+        if (socketsGone(e)) {
             return;
         }
         if (e.channel) {
@@ -351,21 +388,39 @@ namespace {
         }
     }
 
+    // The loopback: its stack up from the start, and its files.
+    int serveLoopback(int ready) {
+        enrolled("ctl", File::Ctl, S_IFCHR | 0644);
+        stackLoopback();
+        had = {htonl(INADDR_LOOPBACK), htonl(0xff000000), 0, 0, 0};
+        stack = Stack::Up;
+        stackFiles();
+        if (ready >= 0) {
+            close(ready);
+        }
+        serve(epoll, handle, gone, nullptr, expire, frames);
+        return 0;
+    }
+
     int serveCard(int argc, char** argv) {
         int at;
         const int ready = readyDescriptor(argc, argv, at);
-        if (argc - at != 2) {
-            fprintf(stderr, "usage: inet [-r fd] <name> <fd>\n       inet probe <address> <port> <text>\n");
+        if (argc - at != 2 && argc - at != 1) {
+            fprintf(stderr, "usage: inet [-r fd] <name> [<fd>]\n       inet probe <address> <port> <text>\n");
             return 2;
         }
         snprintf(name, sizeof name, "%s", argv[at]);
-        card = atoi(argv[at + 1]);
-        fcntl(card, F_SETFD, FD_CLOEXEC);
-        macOf(name);
         epoll = epoll_create1(EPOLL_CLOEXEC);
         if (epoll < 0) {
             fatal("inet: epoll_create1: errno %d", errno);
         }
+        if (argc - at == 1) {
+            loopback = true;
+            return serveLoopback(ready);
+        }
+        card = atoi(argv[at + 1]);
+        fcntl(card, F_SETFD, FD_CLOEXEC);
+        macOf(name);
         enrolled("ctl", File::Ctl, S_IFCHR | 0644);
         enrolled("stats", File::Stats, S_IFCHR | 0444);
         enrolled("addr", File::Addr, S_IFCHR | 0444);

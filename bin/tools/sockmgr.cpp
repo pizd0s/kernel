@@ -9,9 +9,6 @@
 // Its files, which it registers at /dev/init:
 //
 //     sockmgr/socket   an open is a socket on no stack (socket(2) opens it)
-//     sockmgr/stack    a card's stack's: a plain socket, on which it tells
-//                      its state (STACK) and takes the sockets sockmgr
-//                      hands it (HAND)
 //     sockmgr/ctl      commands, a line each: "attach <card>" starts the
 //                      card's stack, "auto <pattern>" every card's whose
 //                      name matches (*, the start's); read, the stacks
@@ -27,8 +24,11 @@
 // with a connection, which answers the kernel with the connection's open
 // file, the stack's.
 //
-// sockmgr watches /dev/net for the cards (watchdir) and starts the stack
-// of each card the pattern names.
+// sockmgr watches /dev/net for the cards (watchdir), starts the stack of
+// each card the pattern names, and opens each card's stack's file once it
+// is there (its directory watched, then its iface): a plain socket, on
+// which the stack tells its state (STACK) and takes the sockets sockmgr
+// hands it (HAND). sockmgr asks the cards, and they ask nothing of it.
 //
 //     sockmgr [-r fd]
 
@@ -110,7 +110,6 @@ namespace {
 
     enum class File {
         Socket,
-        Stack,
         Ctl,
     };
 
@@ -119,15 +118,26 @@ namespace {
         Device device;
     };
 
+    // A card's watches: of its directory, for iface, and of its iface, for
+    // the stack's file.
+    struct Card {
+        char name[NAME_MAX + 1];
+        Endpoint* dir;
+        Endpoint* iface;
+        int ifaceTag; // what iface's watch is of
+        Card* next;
+    };
+
     int epoll = -1;
-    Entry entries[3];
+    Entry entries[2];
     Stack* stacks;
     Socket* handles;
     char pattern[NAME_MAX + 1] = "*";
     int ctlTag;
     int devTag;
     int netTag;
-    int netWatch = -1;
+    Endpoint* netWatch;
+    Card* cards;
 }
 
 // ---- the stacks ------------------------------------------------------------
@@ -625,23 +635,98 @@ static int attach(const char* card) {
     return e;
 }
 
-static int watched(const char* path, void* of) {
+static Endpoint* watched(const char* path, void* of) {
     const int dir = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (dir < 0) {
-        return -1;
+        return nullptr;
     }
     const int w = watchdir(dir, O_NONBLOCK | O_CLOEXEC);
     close(dir);
     if (w < 0) {
-        return -1;
+        return nullptr;
     }
     Endpoint e{w, false, true, false, of};
     e.raw = true;
-    watch(epoll, e);
-    return w;
+    return watch(epoll, e);
 }
 
-// The records of a watch: /dev's, for net, and /dev/net's, the cards.
+// Opens the stack's file of a card's: the stack's end of sockmgr's.
+static void opens(const char* card) {
+    char path[PATH_MAX];
+    snprintf(path, sizeof path, "/dev/net/%s/iface/stack", card);
+    const int fd = open(path, O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        return;
+    }
+    auto* s = static_cast<Stack*>(calloc(1, sizeof(Stack)));
+    if (!s) {
+        fatal("sockmgr: out of memory");
+    }
+    s->fd = fd;
+    snprintf(s->card, sizeof s->card, "%s", card);
+    s->next = stacks;
+    stacks = s;
+    watch(epoll, {fd, false, true, true, s});
+}
+
+static Card* cardOf(const void* of, bool& iface) {
+    for (Card* c = cards; c; c = c->next) {
+        if (c == of || &c->ifaceTag == of) {
+            iface = &c->ifaceTag == of;
+            return c;
+        }
+    }
+    return nullptr;
+}
+
+// A card that came: its directory watched, and its stack started when
+// the pattern names it.
+static void cardCame(const char* name) {
+    for (Card* c = cards; c; c = c->next) {
+        if (strcmp(c->name, name) == 0) {
+            return;
+        }
+    }
+    auto* c = static_cast<Card*>(calloc(1, sizeof(Card)));
+    if (!c) {
+        fatal("sockmgr: out of memory");
+    }
+    snprintf(c->name, sizeof c->name, "%s", name);
+    char path[PATH_MAX];
+    snprintf(path, sizeof path, "/dev/net/%s", name);
+    c->dir = watched(path, c);
+    if (!c->dir) {
+        free(c);
+        return;
+    }
+    c->next = cards;
+    cards = c;
+    if (fnmatch(pattern, name, 0) == 0) {
+        attach(name);
+    }
+}
+
+// The end of a watch of a card's: of its iface, which comes again with
+// its stack; of its directory, the card gone.
+static void cardWatchEnded(Card* c, bool iface) {
+    if (iface) {
+        c->iface = nullptr;
+        return;
+    }
+    if (c->iface) {
+        unwatch(epoll, c->iface);
+    }
+    for (Card** at = &cards; *at; at = &(*at)->next) {
+        if (*at == c) {
+            *at = c->next;
+            break;
+        }
+    }
+    free(c);
+}
+
+// The records of a watch: /dev's, for net; /dev/net's, the cards; a
+// card's, for iface; its iface's, for the stack's file.
 static void records(Endpoint& e) {
     unsigned char b[1024];
     for (ssize_t n; (n = read(e.fd, b, sizeof b)) != 0;) {
@@ -658,19 +743,32 @@ static void records(Endpoint& e) {
             if (kind != WATCH_EXISTING && kind != WATCH_ADDED) {
                 continue;
             }
-            if (e.of == &devTag && strcmp(name, "net") == 0 && netWatch < 0) {
+            bool iface = false;
+            Card* c = cardOf(e.of, iface);
+            if (e.of == &devTag && strcmp(name, "net") == 0 && !netWatch) {
                 netWatch = watched("/dev/net", &netTag);
-            } else if (e.of == &netTag && fnmatch(pattern, name, 0) == 0) {
-                attach(name);
+            } else if (e.of == &netTag) {
+                cardCame(name);
+            } else if (c && !iface && strcmp(name, "iface") == 0 && !c->iface) {
+                char path[PATH_MAX];
+                snprintf(path, sizeof path, "/dev/net/%s/iface", c->name);
+                c->iface = watched(path, &c->ifaceTag);
+            } else if (c && iface && strcmp(name, "stack") == 0) {
+                opens(c->name);
             }
         }
     }
     // The end of a watch, or of its file system, EIO, as devfs ends with
     // the system: /dev/net went with its last card, and comes back with
     // the next.
+    bool iface = false;
+    Card* c = cardOf(e.of, iface);
+    const bool net = e.of == &netTag;
     unwatch(epoll, &e);
-    if (e.of == &netTag) {
-        netWatch = -1;
+    if (net) {
+        netWatch = nullptr;
+    } else if (c) {
+        cardWatchEnded(c, iface);
     }
 }
 
@@ -773,25 +871,6 @@ static void opened(Entry& f, const Request& r) {
             handles = h;
             return;
         }
-        case File::Stack: {
-            int pair[2];
-            if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
-                return fail(r.reply(), errno);
-            }
-            auto* s = static_cast<Stack*>(calloc(1, sizeof(Stack)));
-            if (!s) {
-                fatal("sockmgr: out of memory");
-            }
-            s->fd = pair[0];
-            s->next = stacks;
-            stacks = s;
-            watch(epoll, {pair[0], false, true, true, s});
-            const Header h{opOk, 0, 0, 0, 0, 0};
-            const iovec part{const_cast<Header*>(&h), sizeof h};
-            sendPacket(r.reply(), &part, 1, &pair[1], 1);
-            close(pair[1]);
-            return;
-        }
         case File::Ctl:
             answerOpen(epoll, r, {openedFile, 0, 0, 0, 0, POLLIN | POLLOUT}, &ctlTag);
             return;
@@ -881,14 +960,13 @@ int sockmgrMain(int argc, char** argv) {
         const char* name;
         File file;
         uint32_t mode;
-    } files[] = {{"sockmgr/socket", File::Socket, S_IFCHR | 0666}, {"sockmgr/stack", File::Stack, S_IFCHR | 0600},
-                 {"sockmgr/ctl", File::Ctl, S_IFCHR | 0644}};
+    } files[] = {{"sockmgr/socket", File::Socket, S_IFCHR | 0666}, {"sockmgr/ctl", File::Ctl, S_IFCHR | 0644}};
 
-    for (size_t i = 0; i < 3; ++i) {
+    for (size_t i = 0; i < 2; ++i) {
         entries[i] = {files[i].file, enroll("sockmgr", files[i].name, files[i].mode)};
         watch(epoll, {entries[i].device.end, true, false, false, &entries[i]});
     }
-    if (watched("/dev", &devTag) < 0) {
+    if (!watched("/dev", &devTag)) {
         fatal("sockmgr: watchdir /dev: errno %d", errno);
     }
     if (ready >= 0) {

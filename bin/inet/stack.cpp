@@ -46,14 +46,24 @@ namespace {
     }
 }
 
-void stackStart(int card, const char* named, const uint8_t* mac, const Lease& lease) {
-    inetCard(card);
+static void boot() {
     ff_global_cfg.freebsd.hz = hz;
     ff_global_cfg.freebsd.physmem = 64ul << 20;
     if (ff_freebsd_init() != 0) {
         fprintf(stderr, "inet: the stack does not start\n");
         exit(1);
     }
+}
+
+void stackLoopback() {
+    boot();
+    start = nowMs();
+    started = true;
+}
+
+void stackStart(int card, const char* named, const uint8_t* mac, const Lease& lease) {
+    inetCard(card);
+    boot();
     snprintf(name, sizeof name, "%s", named);
     text(address, lease.address);
     text(netmask, lease.mask);

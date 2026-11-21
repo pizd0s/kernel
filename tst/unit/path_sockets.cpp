@@ -2,8 +2,8 @@
 //@ stdout: "path sockets: ok\n"
 
 // AF_UNIX sockets named by paths: of a connection, its listener's queue
-// and accept, and of datagrams, which carry their sender's name. The
-// system has no network: AF_INET and AF_INET6 are no domains of it.
+// and accept, and of datagrams, which carry their sender's name. AF_INET6
+// is no domain of the system's.
 
 #include <assert.h>
 #include <errno.h>
