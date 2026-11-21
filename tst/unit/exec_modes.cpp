@@ -31,7 +31,7 @@ static void handler(int) {
 // The traced image: a call that fails, a child, a signal, and the end of
 // its own trace, after which nothing is written.
 static int calls() {
-    assert(open("/tmp/none", O_RDONLY) == -1 && errno == ENOENT);
+    assert(open("/run/none", O_RDONLY) == -1 && errno == ENOENT);
     const pid_t child = fork();
     assert(child >= 0);
     if (child == 0) {
@@ -41,7 +41,7 @@ static int calls() {
     assert(waitpid(child, &status, 0) == child && WEXITSTATUS(status) == 3);
     assert(signal(SIGUSR1, handler) != SIG_ERR && raise(SIGUSR1) == 0);
     assert(execmode(0, 0, -1) == 0);
-    assert(access("/tmp/untraced", F_OK) == -1);
+    assert(access("/run/untraced", F_OK) == -1);
     return 5;
 }
 
@@ -174,7 +174,7 @@ int main(int argc, char** argv) {
         assert(WIFEXITED(status) && WEXITSTATUS(status) == 5);
         const char* const lines[] = {
             "exec \"/tests/unit/exec_modes\"",
-            "open(\"/tmp/none\", ...) = -1 ENOENT (no such file or directory)",
+            "open(\"/run/none\", ...) = -1 ENOENT (no such file or directory)",
             "waitpid(...",
             "signal SIGUSR1",
         };
@@ -274,6 +274,6 @@ int main(int argc, char** argv) {
             printf("the sanitizer of a mode reports to the standard error, through a shell\n");
         }
     }
-    assert(access("/tmp/none", F_OK) == -1 && overflow() == 0);
+    assert(access("/run/none", F_OK) == -1 && overflow() == 0);
     return 0;
 }

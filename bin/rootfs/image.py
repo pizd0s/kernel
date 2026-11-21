@@ -48,7 +48,7 @@ import sys
 import tarfile
 from pathlib import Path
 
-DIRS = {"bin", "dev", "etc", "tmp", "var"}
+DIRS = {"bin", "dev", "etc", "run"}
 NONE = 0xFFFFFFFF
 HEADER = struct.Struct("<4s10I")
 NODE = struct.Struct("<8I")

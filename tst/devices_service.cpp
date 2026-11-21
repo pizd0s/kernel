@@ -1,6 +1,6 @@
 // A service of one device for tst/test_devices.py: it registers name at
 // rootfs's /dev/init with the mode given in octal, says so, and serves the
-// device in a child whose pid is /tmp/<name>.pid, a "/" of the name "_"
+// device in a child whose pid is /run/<name>.pid, a "/" of the name "_"
 // there: the device's bytes are
 // the text given, read at any offset into the reader's memory, through the
 // memfd a READ brings. ro registers on an endpoint of /dev/init open to
@@ -356,7 +356,7 @@ int main(int argc, char** argv) {
     const pid_t child = fork();
     if (child != 0) {
         char path[64];
-        snprintf(path, sizeof path, "/tmp/%s.pid", name);
+        snprintf(path, sizeof path, "/run/%s.pid", name);
         for (char* c = path + 5; *c; ++c) {
             if (*c == '/') {
                 *c = '_';

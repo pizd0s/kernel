@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """lib/c's functions in the system: tst/libc/check.c prints one line of
 results per area, which must be these. It runs as /bin/check of a root of
-its own under /tmp, chroot's, whose /etc has tst/libc/etc's passwd,
+its own under /run, chroot's, whose /etc has tst/libc/etc's passwd,
 group, hosts and services, the image of the tests' /tests/libc/etc, so no
-name goes to a resolver, and whose /tmp it makes files and sockets in;
+name goes to a resolver, and whose /run it makes files and sockets in;
 /bin/check is the path dladdr names.
 
     test_libc.py <vm> <rootfs> <tests.img>
@@ -42,7 +42,7 @@ random 262836907 2022765545 1318479596 1 rand_r 1993684161 1388323688
 memalign 0 1 1 1 usable 1 reallocarray 1 1 mmap 0 0 0 0
 openat 1 pwrite 6 pread cde copy_file_range 4 5 bcde fstatat 0 6 faccessat 0 renameat 0 linkat 0 symlinkat 0 readlinkat 1 g truncate 0 2 unlinkat 0 0
 mkfifo 0 1 statvfs 0 1 flock 0 lockf 0 0
-dir 4 2 1 scandir 4 . .. g p glob 0 /tmp/d/g /tmp/d/p 1
+dir 4 2 1 scandir 4 . .. g p glob 0 /run/d/g /run/d/p 1
 mkstemps 1 suffix tmpfile temporary tmpnam 1 tempnam 1
 getpwnam user 1000 /home/user getpwuid_r 0 root 34 getpwent 2 getgrnam wheel 10 root user getgrouplist 3 100 10 50 fgetpwent root fgetgrent wheel root
 mntent / ext4 rw,noatime 1 noatime
@@ -51,7 +51,7 @@ waitid 0 1 5 wait4 1 5
 inet 1 0200010a 0100007f 10.1.0.2 1 2001:db8::ff00:42:8329 0 1
 getaddrinfo 0 2/6 10.0.0.7:80 box -2 Name does not resolve
 getnameinfo 0 box ssh servent domain 53 udp protoent udp 17 hostent box 10.0.0.7 1
-socketpair ping bind 0 listen 0 1 connect 0 accept 1 getsockname /tmp/socket sendmsg 1 recvmsg 1 x pass timeout -1 1
+socketpair ping bind 0 listen 0 1 connect 0 accept 1 getsockname /run/socket sendmsg 1 recvmsg 1 x pass timeout -1 1
 if_nameindex 1 crypt $6$salt$egUxKNxDs8kPfh8iPMNcosMhb2eWah6d3R44JDm5Rj/j/XWR5E33QPd0YmHXoDHOIDR6kL5D3JcQcz0O8FHE00 xy/gRonXQz8UE
 dlopen 1 1 1 dlsym 1 dladdr 1 /bin/check
 fenv 0 0 0 0 0 gethostname 1 confstr 14 sysconf 1 pathconf 255
@@ -60,8 +60,8 @@ fenv 0 0 0 0 0 gethostname 1 confstr 14 sysconf 1 pathconf 255
 
 def main():
     vm, rootfs, image = sys.argv[1:4]
-    script = ("mkdir -p /tmp/root/bin /tmp/root/tmp && cp -r /tests/libc/etc /tmp/root/etc && "
-              "cp /tests/libc/check /tmp/root/bin/check && exec chroot /tmp/root /bin/check")
+    script = ("mkdir -p /run/root/bin /run/root/run && cp -r /tests/libc/etc /run/root/etc && "
+              "cp /tests/libc/check /run/root/bin/check && exec chroot /run/root /bin/check")
     r = subprocess.run([vm, "run", "--disk", f"image={image}", "--", rootfs, "-c", script],
                        capture_output=True, text=True, timeout=120)
 

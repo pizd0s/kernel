@@ -6,7 +6,7 @@ walks the path to it and queues a connection, which accept takes. A name
 that is there is EADDRINUSE, a socket that does not listen or is closed
 refuses, a name unlinked is gone, what is no socket refuses, and the
 read-only image holds none. The sockets are a program the test brings
-(tst/unix_sockets.cpp), which runs in /tmp and in /dev.
+(tst/unix_sockets.cpp), which runs in /run and in /dev.
 
     test_unix_sockets.py <vm> <rootfs> <unix_sockets>
 """
@@ -16,13 +16,13 @@ import sys
 import tempfile
 
 SCRIPT = """\
-python3 -c 'import base64, sys; open("/tmp/sockets", "wb").write(base64.b64decode(sys.stdin.read()))' <<'EOF'
+python3 -c 'import base64, sys; open("/run/sockets", "wb").write(base64.b64decode(sys.stdin.read()))' <<'EOF'
 {program}
 EOF
-chmod +x /tmp/sockets
-/tmp/sockets /tmp/s
-ls -l /tmp | grep -c '^s'
-/tmp/sockets /dev/s
+chmod +x /run/sockets
+/run/sockets /run/s
+ls -l /run | grep -c '^s'
+/run/sockets /dev/s
 """
 
 RUN = """\
@@ -42,7 +42,7 @@ connect to a file Connection refused
 bind in the image Read-only file system
 """
 
-WANT = RUN.replace("{path}", "/tmp/s") + "0\n" + RUN.replace("{path}", "/dev/s")
+WANT = RUN.replace("{path}", "/run/s") + "0\n" + RUN.replace("{path}", "/dev/s")
 
 
 def main():
@@ -53,7 +53,7 @@ def main():
         result = subprocess.run([vm, "run", "--", rootfs], input=(script + "exit 3\n").encode(), capture_output=True, cwd=empty, env=env,
                                 timeout=180)
         assert (result.returncode, result.stdout.decode(), result.stderr.decode()) == (3, WANT, ""), result
-    print("unix sockets: the system's are bound to paths of the VFS's, in /tmp and /dev, connected to and accepted through them")
+    print("unix sockets: the system's are bound to paths of the VFS's, in /run and /dev, connected to and accepted through them")
 
 
 if __name__ == "__main__":

@@ -35,7 +35,7 @@ static int ok(void) {
     char* a = aligned_alloc(4096, 100);
     a[99] = 1;
     free(a);
-    int fd = open("/tmp/asan.txt", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    int fd = open("/run/asan.txt", O_RDWR | O_CREAT | O_TRUNC, 0644);
     char buf[32] = "data";
     write(fd, buf, 4);
     lseek(fd, 0, SEEK_SET);
@@ -64,7 +64,7 @@ static int after_free(void) {
 static int syscall_read(void) {
     char* p = malloc(8);
     free(p);
-    int fd = open("/tmp/asan.txt", O_RDWR | O_CREAT, 0644);
+    int fd = open("/run/asan.txt", O_RDWR | O_CREAT, 0644);
     write(fd, "12345678", 8);
     lseek(fd, 0, SEEK_SET);
     sink = (int)read(fd, p, 8);

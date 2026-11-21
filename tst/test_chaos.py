@@ -93,7 +93,7 @@ def main():
         # The check's output goes through cat, which waits for its end: what
         # daemon detaches writes it too.
         def run_guest(binary, operation, failures, rule=""):
-            script = f"cd /tmp && env PIZDOS_CHAOS={rule} /tests/chaos/check {operation} | cat"
+            script = f"cd /run && env PIZDOS_CHAOS={rule} /tests/chaos/check {operation} | cat"
             result = call([binary, "run", "--disk", f"image={image}", "--", rootfs, "-c", script], data=b"x" * 32)
             expected = f"{operation}: failures={failures}\n".encode()
             assert (result.returncode, result.stdout, result.stderr) == (0, expected, b""), (operation, rule, result)

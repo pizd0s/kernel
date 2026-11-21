@@ -6,7 +6,7 @@
 // a file system's calls by node, an open file's). Every file system is
 // another process's, mounted on the VFS's tree, which rootfs asks by node:
 // the image at the root, which erofs serves (bin/tools),
-// /tmp and /dev, which it starts itself (tmpfs and devfs), and those a
+// /run and /dev, which it starts itself (tmpfs and devfs), and those a
 // MOUNT names. A walk waits for the file systems' answers, as a coroutine,
 // while the loop goes on with other calls, and rootfs keeps what they
 // answer, a cache of names as Linux's dcache, for the walks after.
@@ -3162,11 +3162,12 @@ static pid_t spawn(const char* path, char* const* argv, char* const* env, int ro
 // What rootfs starts runs with a clean environment, its root the far
 // end of our own pair, never ours: a server does not walk its own tree
 // by path, and could not ask itself before it serves. erofs has none.
-// HOME is /tmp, where a program may write what it keeps. TERM is the
-// console's type (consoleType).
+// HOME and TMPDIR are /run, where a program may write what it keeps.
+// TERM is the console's type (consoleType).
 static char pathVariable[] = "PATH=/bin";
-static char homeVariable[] = "HOME=/tmp";
-static char* environment[] = {pathVariable, homeVariable, nullptr, nullptr};
+static char homeVariable[] = "HOME=/run";
+static char tmpVariable[] = "TMPDIR=/run";
+static char* environment[] = {pathVariable, homeVariable, tmpVariable, nullptr, nullptr};
 static int rootEnd = -1;
 
 // The console is a terminal of the host's, and of what type only the
@@ -3180,7 +3181,7 @@ static void consoleType() {
     const usize size = strlen(type) + sizeof "TERM=";
     char* variable = static_cast<char*>(allocate(size));
     snprintf(variable, size, "TERM=%s", type);
-    environment[2] = variable;
+    environment[3] = variable;
 }
 
 // A file system rootfs starts: its channel, ours, on the loop.
@@ -3243,21 +3244,21 @@ static int serverIn(int disk) {
 // Starts the system. erofs serves the image, its descriptor 3 the disk
 // named image, its 4 the channel of the root, its program a memfd of its
 // bytes there (serverIn); it has no root and walks no path. erofs tells
-// the root's stat, then where /tmp and /dev are. The file systems and the services of
+// the root's stat, then where /run and /dev are. The file systems and the services of
 // the system start next, the far end of a pair of ours their descriptor
 // 3: they close it once they are up, after the services they start
 // have it, and when the last one has, the shell starts (booted).
-// /bin/tmpfs is /tmp, its channel its descriptor 3. /bin/devfs is /dev,
+// /bin/tmpfs is /run, its channel its descriptor 3. /bin/devfs is /dev,
 // its channel its descriptor 4, and it gets the disks vm gave us but the
 // image, our descriptors after 2, in order, named by DISKS: its 5 and on,
 // and it starts their services and every system's devices. Each is
 // mounted before it starts: what it starts finds it there.
 static Task boot() {
     int ends[2];
-    int tmp[2];
+    int run[2];
     int dev[2];
     int image[2];
-    int* pairs[] = {ends, tmp, dev, image};
+    int* pairs[] = {ends, run, dev, image};
     for (int* pair : pairs) {
         if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
             fatal("rootfs: socketpair: errno %d", errno);
@@ -3334,7 +3335,7 @@ static Task boot() {
         const char* name;
         int channel;
         u32 perm;
-    } points[] = {{"tmp", tmp[0], 01777}, {"dev", dev[0], 0755}};
+    } points[] = {{"run", run[0], 01777}, {"dev", dev[0], 0755}};
 
     Mount* begun[2];
     int begins = 0;
@@ -3348,8 +3349,8 @@ static Task boot() {
     }
     char tmpfsName[] = "tmpfs";
     char* const tmpfsArgv[] = {tmpfsName, three, nullptr};
-    spawn("/bin/tmpfs", tmpfsArgv, environment, rootEnd, &tmp[1], 1);
-    close(tmp[1]);
+    spawn("/bin/tmpfs", tmpfsArgv, environment, rootEnd, &run[1], 1);
+    close(run[1]);
     spawn("/bin/devfs", argv, environment, rootEnd, kept, count);
     for (int i = 2; i < count; ++i) {
         close(kept[i]);

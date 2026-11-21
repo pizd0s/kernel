@@ -8,14 +8,14 @@ as directories through renames and removals, the length of names and
 paths, the names a call refuses, open's flags, calls on a link itself,
 and what the VFS keeps, which holds no longer than its name, its node
 and its directory do. Every case starts in a directory of its own under
-/tmp.
+/run.
 
     test_vfs.py <vm> <rootfs>
     test_vfs.py --linux
 
 LINUX is what Linux answers: `test_vfs.py --linux` runs the probe in a
 chroot of a user namespace whose root, read-only, has the image's /etc,
-its files and mc's directory, and /usr -> /, and a tmpfs at /tmp, with
+its files and mc's directory, and /usr -> /, and a tmpfs at /run, with
 the host's python. rootfs must
 answer it line for line.
 """
@@ -108,9 +108,9 @@ case("B01 open(O_CREAT) dangling dl ; dl kind, missing made")(lambda: (err(lambd
 case("B02 open(O_CREAT|O_EXCL) dangling dl ; dl kind, missing made")(lambda: (err(lambda: create("dl", os.O_EXCL)), kind("dl", False), exists("missing")))
 case("B03 open(O_NOFOLLOW) lf")(lambda: os.close(os.open("lf", os.O_RDONLY | os.O_NOFOLLOW)))
 case("B04 open(O_NOFOLLOW) ld/x")(lambda: os.close(os.open("ld/x", os.O_RDONLY | os.O_NOFOLLOW)))
-case("B05 open abs/motd (absolute link in /tmp)")(lambda: open("abs/motd").read().strip())
-case("B06 stat up3/etc/motd (relative link past /tmp's root)")(lambda: kind("up3/etc/motd"))
-case("B07 stat absself/x (absolute link back into /tmp)")(lambda: kind("absself/x"))
+case("B05 open abs/motd (absolute link in /run)")(lambda: open("abs/motd").read().strip())
+case("B06 stat up3/etc/motd (relative link past /run's root)")(lambda: kind("up3/etc/motd"))
+case("B07 stat absself/x (absolute link back into /run)")(lambda: kind("absself/x"))
 case("B08 stat loop")(lambda: kind("loop"))
 def chain(n):
     os.symlink("f", "c0")
@@ -136,9 +136,9 @@ case("B24 rmdir ld")(lambda: os.rmdir("ld"))
 case("B25 unlink ld ; d kept")(lambda: (os.unlink("ld"), exists("d"))[1])
 
 # C: ".."
-case("C01 /tmp/.. is /")(lambda: same("/tmp/..", "/"))
-case("C02 stat /tmp/../etc/motd")(lambda: kind("/tmp/../etc/motd"))
-case("C03 chdir /tmp ; stat ../etc/motd")(lambda: (os.chdir("/tmp"), kind("../etc/motd"))[1])
+case("C01 /run/.. is /")(lambda: same("/run/..", "/"))
+case("C02 stat /run/../etc/motd")(lambda: kind("/run/../etc/motd"))
+case("C03 chdir /run ; stat ../etc/motd")(lambda: (os.chdir("/run"), kind("../etc/motd"))[1])
 case("C04 /.. is /")(lambda: same("/..", "/"))
 case("C05 /usr/.. is /")(lambda: same("/usr/..", "/"))
 case("C06 stat /etc/motd/..")(lambda: kind("/etc/motd/.."))
@@ -153,15 +153,15 @@ def c10():
         os.close(fd)
 case("C10 openat(open(abs/..), etc/motd)")(c10)
 def c11():
-    fd = os.open("/tmp", os.O_RDONLY | os.O_DIRECTORY)
+    fd = os.open("/run", os.O_RDONLY | os.O_DIRECTORY)
     try:
         return kind("../etc/motd", dir_fd=fd)
     finally:
         os.close(fd)
-case("C11 openat(open(/tmp), ../etc/motd)")(c11)
-case("C12 st_dev of /tmp/.. is /'s")(lambda: os.stat("/tmp/..").st_dev == os.stat("/").st_dev)
-case("C13 st_dev of /tmp is not /'s")(lambda: os.stat("/tmp").st_dev != os.stat("/").st_dev)
-case("C14 chdir /tmp ; chdir .. ; getcwd")(lambda: (os.chdir("/tmp"), os.chdir(".."), os.getcwd())[2])
+case("C11 openat(open(/run), ../etc/motd)")(c11)
+case("C12 st_dev of /run/.. is /'s")(lambda: os.stat("/run/..").st_dev == os.stat("/").st_dev)
+case("C13 st_dev of /run is not /'s")(lambda: os.stat("/run").st_dev != os.stat("/").st_dev)
+case("C14 chdir /run ; chdir .. ; getcwd")(lambda: (os.chdir("/run"), os.chdir(".."), os.getcwd())[2])
 case("C15 //etc//motd")(lambda: kind("//etc//motd"))
 case("C16 stat /etc/.")(lambda: kind("/etc/."))
 
@@ -197,13 +197,13 @@ def d04():
     return (err(lambda: create("m")), exists(here + "/k_old/m"), exists(here + "/k/m"))
 case("D04 cwd replaced by a new dir of its name: create m ; in k_old ; in new k")(d04)
 def d05():
-    fd = os.open("/tmp", os.O_RDONLY | os.O_DIRECTORY)
+    fd = os.open("/run", os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fchdir(fd)
         return os.getcwd()
     finally:
         os.close(fd)
-case("D05 fchdir /tmp ; getcwd")(d05)
+case("D05 fchdir /run ; getcwd")(d05)
 def d06():
     fd = os.open("ld", os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -234,10 +234,10 @@ case("F03 unlink d/.")(lambda: os.unlink("d/."))
 case("F04 mkdir d/.")(lambda: os.mkdir("d/."))
 case("F05 rename d d/sub")(lambda: os.rename("d", "d/sub"))
 case("F06 rename d/. x")(lambda: os.rename("d/.", "x"))
-case("F07 rmdir /tmp")(lambda: os.rmdir("/tmp"))
+case("F07 rmdir /run")(lambda: os.rmdir("/run"))
 case("F08 rename f /f")(lambda: os.rename("f", "/f"))
 case("F09 link f /f2")(lambda: os.link("f", "/f2"))
-case("F10 rename /tmp /tmp2")(lambda: os.rename("/tmp", "/tmp2"))
+case("F10 rename /run /run2")(lambda: os.rename("/run", "/run2"))
 case("F11 link d d3")(lambda: os.link("d", "d3"))
 case("F12 link lf hl, following ; hl is f")(lambda: (os.link("lf", "hl", follow_symlinks=True), same("hl", "f"))[1])
 case("F13 link lf hl2, not following ; hl2 kind")(lambda: (os.link("lf", "hl2", follow_symlinks=False), kind("hl2", False))[1])
@@ -305,7 +305,7 @@ def i16():
 case("I16 stat f ; append to f ; stat f")(i16)
 
 for i, (name, f) in enumerate(CASES):
-    t = "/tmp/p%03d" % i
+    t = "/run/p%03d" % i
     try:
         fixture(t)
         v = f()
@@ -349,9 +349,9 @@ B01 open(O_CREAT) dangling dl ; dl kind, missing made: ok ('ok', 'l', True)
 B02 open(O_CREAT|O_EXCL) dangling dl ; dl kind, missing made: ok ('EEXIST', 'l', False)
 B03 open(O_NOFOLLOW) lf: ELOOP
 B04 open(O_NOFOLLOW) ld/x: ok
-B05 open abs/motd (absolute link in /tmp): ok pizdos
-B06 stat up3/etc/motd (relative link past /tmp's root): ok -
-B07 stat absself/x (absolute link back into /tmp): ok -
+B05 open abs/motd (absolute link in /run): ok pizdos
+B06 stat up3/etc/motd (relative link past /run's root): ok -
+B07 stat absself/x (absolute link back into /run): ok -
 B08 stat loop: ELOOP
 B09 stat a chain of 40 links: ok -
 B10 stat a chain of 41 links: ELOOP
@@ -361,7 +361,7 @@ B13 mkdir over dangling dl: EEXIST
 B14 symlink over existing f: EEXIST
 B15 open(O_DIRECTORY) ld: ok
 B16 open(O_DIRECTORY|O_NOFOLLOW) ld: ENOTDIR
-B17 chdir ld ; getcwd: ok /tmp/p040/d
+B17 chdir ld ; getcwd: ok /run/p040/d
 B18 chdir up3 ; getcwd: ok /
 B19 chdir abs ; getcwd: ok /etc
 B20 readlink f: EINVAL
@@ -370,9 +370,9 @@ B22 open(O_CREAT) through dangling into missing dir: ENOENT
 B23 open(O_CREAT) through abs link into /etc: EROFS
 B24 rmdir ld: ENOTDIR
 B25 unlink ld ; d kept: ok True
-C01 /tmp/.. is /: ok True
-C02 stat /tmp/../etc/motd: ok -
-C03 chdir /tmp ; stat ../etc/motd: ok -
+C01 /run/.. is /: ok True
+C02 stat /run/../etc/motd: ok -
+C03 chdir /run ; stat ../etc/motd: ok -
 C04 /.. is /: ok True
 C05 /usr/.. is /: ok True
 C06 stat /etc/motd/..: ENOTDIR
@@ -380,17 +380,17 @@ C07 stat /nonexistent/..: ENOENT
 C08 ld/.. is .: ok True
 C09 abs/.. is /: ok True
 C10 openat(open(abs/..), etc/motd): ok -
-C11 openat(open(/tmp), ../etc/motd): ok -
-C12 st_dev of /tmp/.. is /'s: ok True
-C13 st_dev of /tmp is not /'s: ok True
-C14 chdir /tmp ; chdir .. ; getcwd: ok /
+C11 openat(open(/run), ../etc/motd): ok -
+C12 st_dev of /run/.. is /'s: ok True
+C13 st_dev of /run is not /'s: ok True
+C14 chdir /run ; chdir .. ; getcwd: ok /
 C15 //etc//motd: ok -
 C16 stat /etc/.: ok d
 D01 cwd renamed: create x ; made in w2 ; getcwd's last name: ok ('ok', True, 'w2')
 D02 dirfd renamed: openat y ; made in v2: ok ('ok', True)
 D03 cwd removed: getcwd ; create: ok ('ENOENT', 'ENOENT')
 D04 cwd replaced by a new dir of its name: create m ; in k_old ; in new k: ok ('ok', True, False)
-D05 fchdir /tmp ; getcwd: ok /tmp
+D05 fchdir /run ; getcwd: ok /run
 D06 fchdir open(ld) ; getcwd's last name: ok d
 E01 create a name of 256: ENAMETOOLONG
 E02 create a name of 255: ok
@@ -404,10 +404,10 @@ F03 unlink d/.: EISDIR
 F04 mkdir d/.: EEXIST
 F05 rename d d/sub: EINVAL
 F06 rename d/. x: EBUSY
-F07 rmdir /tmp: EROFS
+F07 rmdir /run: EROFS
 F08 rename f /f: EXDEV
 F09 link f /f2: EROFS
-F10 rename /tmp /tmp2: EROFS
+F10 rename /run /run2: EROFS
 F11 link d d3: EPERM
 F12 link lf hl, following ; hl is f: ok True
 F13 link lf hl2, not following ; hl2 kind: ok l
@@ -458,7 +458,7 @@ def linux():
     store = "/" + Path(python).parts[1]
     with tempfile.TemporaryDirectory(prefix="pizdos-vfs-linux-") as work:
         root = Path(work)
-        for d in ("etc", "tmp", "dev", store.lstrip("/")):
+        for d in ("etc", "run", "dev", store.lstrip("/")):
             (root / d).mkdir(parents=True, exist_ok=True)
         for name, text in FILES.items():
             (root / name).write_text(text)
@@ -466,7 +466,7 @@ def linux():
         (root / "usr").symlink_to("/")
         (root / "dev/null").touch()
         (root / "probe.py").write_text(PROBE)
-        script = (f"mount --bind {root} {root} && mount -o remount,bind,ro {root} && mount -t tmpfs none {root}/tmp && "
+        script = (f"mount --bind {root} {root} && mount -o remount,bind,ro {root} && mount -t tmpfs none {root}/run && "
                   f"mount --rbind {store} {root}{store} && mount --bind /dev/null {root}/dev/null && "
                   f"chroot {root} {python} -I /probe.py")
         result = subprocess.run(["unshare", "--user", "--map-root-user", "--mount", "--fork", "sh", "-c", script],

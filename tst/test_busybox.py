@@ -2,7 +2,7 @@
 """busybox in the system: the image's /bin/busybox, each name of
 busybox.links a symbolic link to it in /bin and /usr a link to /, runs
 its applets, each case a boot of rootfs from the image of the tests, in
-/tmp with tst/busybox's files, the image's /tests/busybox. The shell's
+/run with tst/busybox's files, the image's /tests/busybox. The shell's
 errors, exit and SIGINT are longjmps, one of them out of a signal handler;
 its commands, pipes, substitutions and jobs are forks; xargs, find -exec
 and awk's pipes are vforks; a loop without system calls is interrupted for
@@ -55,10 +55,10 @@ CASES = [
     # exec inside the root: env runs /bin/env, a link to the executable
     (["env", "-i", "A=1", "env"], "", "A=1\n", 0),
     # a #! script runs its interpreter
-    (["env", "/tmp/script.sh", "x"], "", "from /tmp/script.sh x\n", 0),
+    (["env", "/run/script.sh", "x"], "", "from /run/script.sh x\n", 0),
     # a symbolic link to / is the root's
-    (["ls", "/tmp/up/bin/busybox"], "", "/tmp/up/bin/busybox\n", 0),
-    (["readlink", "-f", "/tmp/up/.."], "", "/\n", 0),
+    (["ls", "/run/up/bin/busybox"], "", "/run/up/bin/busybox\n", 0),
+    (["readlink", "-f", "/run/up/.."], "", "/\n", 0),
     # the shell raises its errors and exit by longjmp
     (["sh", "-c", "echo ${u?unset}; echo no"], "", "", 2),
     (["sh", "-c", "echo $((1 / 0)); echo no"], "", "", 2),
@@ -67,17 +67,17 @@ CASES = [
     (["sh", "-c", "f() { echo in $1; exit 7; }; f a; echo no"], "", "in a\n", 7),
     (["sh", "-c", "for i in 1 2 3; do [ $i = 2 ] && continue; echo $i; done"], "", "1\n3\n", 0),
     (["sh", "-s"], "x=4\necho $((x * x))\nexit 3\n", "16\n", 3),
-    (["env", "/tmp/shell.sh", "a", "b"], "", "2 a b\n", 2),
+    (["env", "/run/shell.sh", "a", "b"], "", "2 a b\n", 2),
     # fork: commands, pipes, substitutions, subshells, jobs
     (["sh", "-c", "echo $(echo sub) $(echo $(echo deep))"], "", "sub deep\n", 0),
     (["sh", "-c", "x=$(seq 3 | wc -l); echo x=$x"], "", "x=3\n", 0),
     (["sh", "-c", "echo a b c | tr a-z A-Z | sed s/B/-/"], "", "A - C\n", 0),
     (["sh", "-c", "seq 1 20000 | sort -rn | head -2; seq 1 100 | md5sum"], "",
      "20000\n19999\n" + hashlib.md5("".join(f"{i}\n" for i in range(1, 101)).encode()).hexdigest() + "  -\n", 0),
-    (["sh", "-c", "(cd /bin && pwd); pwd"], "", "/bin\n/tmp\n", 0),
+    (["sh", "-c", "(cd /bin && pwd); pwd"], "", "/bin\n/run\n", 0),
     (["sh", "-c", "f() { echo $1 | sed s/a/b/; }; for i in a aa; do f $i; done | sort"], "", "b\nba\n", 0),
     (["sh", "-c", "sh -c 'exit 4'; echo $?; (exit 3); echo $?"], "", "4\n3\n", 0),
-    (["sh", "-c", "cat /tmp/script.sh > /tmp/bg.out & wait $!; echo rc=$?; cat /tmp/bg.out"], "", "rc=0\n#!/bin/echo from\n", 0),
+    (["sh", "-c", "cat /run/script.sh > /run/bg.out & wait $!; echo rc=$?; cat /run/bg.out"], "", "rc=0\n#!/bin/echo from\n", 0),
     (["sh", "-c", "sleep 2 & p=$!; kill -STOP $p; kill -TERM $p; kill -CONT $p; wait $p; echo rc=$?"], "", "rc=143\n", 0),
     (["sh", "-c", "trap 'echo chld' CHLD; true & wait; echo done"], "", "chld\ndone\n", 0),
     # a loop without system calls takes its signals: Go interrupts it
@@ -87,7 +87,7 @@ CASES = [
     # vfork
     (["xargs", "-n1", "echo", "one"], "a b\n", "one a\none b\n", 0),
     (["xargs", "missing"], "x\n", "", 127),
-    (["find", "/tmp", "-maxdepth", "1", "-name", "shell.sh", "-exec", "echo", "found", "{}", ";"], "", "found /tmp/shell.sh\n", 0),
+    (["find", "/run", "-maxdepth", "1", "-name", "shell.sh", "-exec", "echo", "found", "{}", ";"], "", "found /run/shell.sh\n", 0),
     (["awk", "{ print $0 | \"sort -r\" }"], "a\nc\nb\n", "c\nb\na\n", 0),
     (["awk", "BEGIN { while ((\"echo x; echo y\" | getline l) > 0) print \"l=\" l }"], "", "l=x\nl=y\n", 0),
 ]
@@ -101,9 +101,9 @@ INTERRUPTS = [
 ]
 
 
-# Each boot of the system has a /tmp of its own: the files go there first,
+# Each boot of the system has a /run of its own: the files go there first,
 # and up, a link to the root.
-SETUP = "cp -a /tests/busybox/. /tmp && cd /tmp && ln -s / up"
+SETUP = "cp -a /tests/busybox/. /run && cd /run && ln -s / up"
 
 
 def boot(vm, rootfs, image, script):
@@ -200,9 +200,9 @@ def job_control(vm, rootfs, image):
 
 # files: a tree made, archived, compressed and read back, in one boot
 FILES = """\
-mkdir -p /tmp/d/e && cp /tmp/script.sh /tmp/d/e/copy && ln -s e/copy /tmp/d/link &&
-tar cf /tmp/d.tar -C /tmp d && gzip -k /tmp/d.tar && mv /tmp/d /tmp/old && tar xf /tmp/d.tar -C /tmp &&
-gzip -dc /tmp/d.tar.gz | cmp - /tmp/d.tar && readlink /tmp/d/link && cat /tmp/d/e/copy && find /tmp/d -type f"""
+mkdir -p /run/d/e && cp /run/script.sh /run/d/e/copy && ln -s e/copy /run/d/link &&
+tar cf /run/d.tar -C /run d && gzip -k /run/d.tar && mv /run/d /run/old && tar xf /run/d.tar -C /run &&
+gzip -dc /run/d.tar.gz | cmp - /run/d.tar && readlink /run/d/link && cat /run/d/e/copy && find /run/d -type f"""
 
 
 def main():
@@ -220,10 +220,10 @@ def main():
 
     r = subprocess.run(boot(vm, rootfs, image, FILES), capture_output=True, timeout=60)
 
-    if (r.returncode, r.stdout) != (0, b"e/copy\n#!/bin/echo from\n/tmp/d/e/copy\n"):
+    if (r.returncode, r.stdout) != (0, b"e/copy\n#!/bin/echo from\n/run/d/e/copy\n"):
         failed.append(f"files: exit {r.returncode}, stdout {r.stdout!r}, stderr {r.stderr!r}")
 
-    r = run(vm, rootfs, image, ["cat", "/tmp/missing"], "")
+    r = run(vm, rootfs, image, ["cat", "/run/missing"], "")
 
     if r.returncode != 1 or b"No such file or directory" not in r.stderr:
         failed.append(f"cat of a missing file: exit {r.returncode}, stderr {r.stderr!r}")

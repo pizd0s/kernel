@@ -18,27 +18,27 @@ HEX = r"0x[0-9a-f]+"
 # standard output and standard error have, a line each, in their order.
 CASES = {
     "a trace on the standard error": (
-        "spawn --strace --wait -- cat /tmp/none", 1, [],
-        [r'\[(\d+)\] exec "/bin/cat"', rf'\[\d+\] open\("/tmp/none", 0, {HEX}\) = -1 ENOENT \(no such file or directory\)',
-         r"cat: can't open '/tmp/none': No such file or directory", r"\[\d+\] write\(2, 0x[0-9a-f]+, \d+\) = \d+", r"\[\d+\] exit 1"]),
+        "spawn --strace --wait -- cat /run/none", 1, [],
+        [r'\[(\d+)\] exec "/bin/cat"', rf'\[\d+\] open\("/run/none", 0, {HEX}\) = -1 ENOENT \(no such file or directory\)',
+         r"cat: can't open '/run/none': No such file or directory", r"\[\d+\] write\(2, 0x[0-9a-f]+, \d+\) = \d+", r"\[\d+\] exit 1"]),
     "spawn becomes the command": (
         "spawn --strace=process --exec -- sh -c 'echo $$; exit 4'", 4, [r"(\d+)"], [r'\[(\d+)\] exec "/bin/sh"', r"\[\d+\] exit 4"]),
     "children, a signal and a file": (
-        "spawn --strace=process,signals --out /tmp/t --wait -- sh -c '/bin/true; kill -TERM $$'; echo $?; cat /tmp/t", 0,
+        "spawn --strace=process,signals --out /run/t --wait -- sh -c '/bin/true; kill -TERM $$'; echo $?; cat /run/t", 0,
         [r"143", r'\[(\d+)\] exec "/bin/sh"', r"\[\d+\] child of \d+", r'\[\d+\] exec "/bin/true"', r"\[\d+\] exit 0", r"\[\d+\] signal SIGCHLD",
          r"\[\d+\] signal SIGTERM", r"\[\d+\] killed SIGTERM"], []),
     "library calls": (
         "spawn --strace=library --wait -- /tests/asan/check ok", 0, [r"ok 14 data"], [rf"\[\d+\] malloc\(\d+\) = {HEX}", rf"\[\d+\] free\({HEX}\)"]),
     "the sanitizer": (
-        "cd /tmp && spawn --asan --wait -- /tests/asan/check overflow", 128 + 11, [],
+        "cd /run && spawn --asan --wait -- /tests/asan/check overflow", 128 + 11, [],
         [rf".*: asan: 1-byte store at {HEX}: past the end of the 20-byte block at {HEX}", r".*: +overflow\+0x[0-9a-f]+ +check\.c:51"]),
     "the sanitizer's report in a trace": (
-        "cd /tmp && spawn --asan --strace=faults --out /tmp/f --wait -- /tests/asan/check after_free; echo $?; cat /tmp/f", 0,
+        "cd /run && spawn --asan --strace=faults --out /run/f --wait -- /tests/asan/check after_free; echo $?; cat /run/f", 0,
         [r"139", rf".*: asan: 1-byte load at {HEX}: in the freed 32-byte block at {HEX}", r".*: +after_free\+0x[0-9a-f]+ +check\.c:60"], []),
-    "unchecked without spawn": ("cd /tmp && /tests/asan/check overflow > /dev/null; echo $?", 0, [r"\d+"], []),
+    "unchecked without spawn": ("cd /run && /tests/asan/check overflow > /dev/null; echo $?", 0, [r"\d+"], []),
     "no command": ("spawn --strace --", 2, [], [r"usage: spawn .*"]),
     "an unknown class": ("spawn --strace=calls -- true", 2, [], [r"usage: spawn .*", r"classes: system library process signals faults"]),
-    "a file without a trace": ("spawn --out /tmp/t -- true", 2, [], [r"usage: spawn .*"]),
+    "a file without a trace": ("spawn --out /run/t -- true", 2, [], [r"usage: spawn .*"]),
     "no such command": ("spawn --wait -- /bin/none", 127, [], [r"spawn: /bin/none: No such file or directory"]),
 }
 

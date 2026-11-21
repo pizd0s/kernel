@@ -30,13 +30,13 @@ int main() {
 
     // A domain keeps the directory it was bound to; one not bound has none.
     assert(bindtextdomain("tools", nullptr) == nullptr);
-    assert(strcmp(bindtextdomain("tools", "/tmp/locale"), "/tmp/locale") == 0);
-    assert(strcmp(bindtextdomain("tools", nullptr), "/tmp/locale") == 0);
-    assert(strcmp(bindtextdomain("tools", "/tmp/other"), "/tmp/other") == 0);
-    assert(strcmp(bindtextdomain("tools", nullptr), "/tmp/other") == 0);
-    assert(bindtextdomain("other", nullptr) == nullptr && bindtextdomain(nullptr, "/tmp") == nullptr);
+    assert(strcmp(bindtextdomain("tools", "/run/locale"), "/run/locale") == 0);
+    assert(strcmp(bindtextdomain("tools", nullptr), "/run/locale") == 0);
+    assert(strcmp(bindtextdomain("tools", "/run/other"), "/run/other") == 0);
+    assert(strcmp(bindtextdomain("tools", nullptr), "/run/other") == 0);
+    assert(bindtextdomain("other", nullptr) == nullptr && bindtextdomain(nullptr, "/run") == nullptr);
     errno = 0;
-    assert(bindtextdomain(longName, "/tmp") == nullptr && errno == EINVAL);
+    assert(bindtextdomain(longName, "/run") == nullptr && errno == EINVAL);
 
     // Messages come in UTF-8 and no other codeset.
     errno = 0;

@@ -397,7 +397,7 @@ def python(cc, ld, vm, rootfs, tarball, pyconfig, libc_include, libc, libpython,
 
     # The modules freeze in the system: rootfs, whose image has busybox and
     # the tools, takes a tar of the freezer and the sources on its standard
-    # input, freezes each, side by side, in a directory of /tmp, and gives
+    # input, freezes each, side by side, in a directory of /run, and gives
     # a tar of the headers back on its standard output.
     payload = io.BytesIO()
 
@@ -411,7 +411,7 @@ def python(cc, ld, vm, rootfs, tarball, pyconfig, libc_include, libc, libpython,
             archive.add(tree / source, source)
 
     jobs = " ".join(f"./freeze {name} {source} frozen/{header} & pids=\"$pids $!\";" for name, source, header in modules)
-    script = (f"mkdir -p /tmp/t/frozen && cd /tmp/t && tar xf - || exit 1; pids=; {jobs} "
+    script = (f"mkdir -p /run/t/frozen && cd /run/t && tar xf - || exit 1; pids=; {jobs} "
               "for p in $pids; do wait $p || exit 1; done; tar cf - frozen")
     frozen_tar = subprocess.run([vm, "run", "--", rootfs, "-c", script], input=payload.getvalue(), stdout=subprocess.PIPE, check=True)
 

@@ -5,9 +5,9 @@ rootfs what follows as its disk named image, as it gives a file of the
 host by --disk: the executable alone starts no system, and starts this
 one with its image for the disk. erofs serves the image at the root, the
 executables of busybox and python, whose modules
-the kernel compiles as they are executed, a /dev and a /tmp, and starts
+the kernel compiles as they are executed, a /dev and a /run, and starts
 busybox's shell on the terminal; the shell's status is vm's. The shell's
-HOME is /tmp, and its TERM the host's name of the console's type, which
+HOME and TMPDIR are /run, and its TERM the host's name of the console's type, which
 the terminfo database describes, under a terminal's other name by a
 link: none where the host has none. Each
 server's files are on a device of their own and belong to who made them,
@@ -16,7 +16,7 @@ removed whole, mkdir -p finds what is there, and rename keeps a directory
 out of itself and off a directory that is not empty. Appends from two
 shells lose no line, flock's and fcntl's locks are an open file's, a
 FIFO's readers and writers meet, a file has hard links, ctime is its own,
-statvfs tells the capacity of /tmp and a root that is read-only, and who
+statvfs tells the capacity of /run and a root that is read-only, and who
 is not root gets no more than the modes give.
 
     test_rootfs.py <vm> <rootfs>
@@ -30,51 +30,51 @@ from pathlib import Path
 
 SCRIPT = """\
 echo hello from $0
-echo "$PATH $HOME ${TERM-of no type}"; cd && pwd && cd /
-for i in 1 2 3; do ls /tmp > /dev/null; done; echo fresh > /tmp/fresh && cat /tmp/fresh && rm /tmp/fresh
+echo "$PATH $HOME $TMPDIR ${TERM-of no type}"; cd && pwd && cd /
+for i in 1 2 3; do ls /run > /dev/null; done; echo fresh > /run/fresh && cat /run/fresh && rm /run/fresh
 cat /etc/motd
 ls /bin | grep -x -e ash -e cat -e sh
 ls -d /dev/null /dev/tty /dev/zero
 echo dropped > /dev/null
 head -c 4 /dev/zero | wc -c
 readlink /usr && ls /usr && ls /usr/usr/bin/sh && ls -d /sbin /lib 2>&1
-readlink -f /usr/bin && readlink -f /usr/bin/../etc/motd && cd /usr/bin && pwd -P && cd /tmp && ln -s .. up && readlink -f up/usr/bin && rm up && cd /
-printf '#!/usr/bin/env sh\\necho through env\\n' > /tmp/e.sh && chmod +x /tmp/e.sh && /tmp/e.sh && rm /tmp/e.sh
+readlink -f /usr/bin && readlink -f /usr/bin/../etc/motd && cd /usr/bin && pwd -P && cd /run && ln -s .. up && readlink -f up/usr/bin && rm up && cd /
+printf '#!/usr/bin/env sh\\necho through env\\n' > /run/e.sh && chmod +x /run/e.sh && /run/e.sh && rm /run/e.sh
 readlink /bin/sh
 test -x /bin/busybox && echo executable
 head -c 4 /bin/busybox | od -An -tx1
 (echo nothing > /etc/x) 2>/dev/null || echo read-only
-echo hi > /tmp/a && echo more >> /tmp/a && cat /tmp/a | wc -l
-chmod 600 /tmp/a && stat -c %a /tmp/a && truncate -s 2 /tmp/a && wc -c < /tmp/a
-mkdir /tmp/d && mv /tmp/a /tmp/d/b && ls /tmp/d && rm -r /tmp/d && ls /tmp | wc -l
-cd /tmp && echo x > y && touch -d @1000000000 y && stat -c %Y y && cd /
+echo hi > /run/a && echo more >> /run/a && cat /run/a | wc -l
+chmod 600 /run/a && stat -c %a /run/a && truncate -s 2 /run/a && wc -c < /run/a
+mkdir /run/d && mv /run/a /run/d/b && ls /run/d && rm -r /run/d && ls /run | wc -l
+cd /run && echo x > y && touch -d @1000000000 y && stat -c %Y y && cd /
 sh -c 'exit 5'; echo inner=$?
 seq 1 20000 | sort -rn | head -1
 head -c 8 /dev/urandom | wc -c
 printf ab | od -An -tx1
 python3 -c 'import json, os, sys; print(2 ** 100, sys.version_info[:2], len(os.urandom(5)), json.__file__)'
 python3 -c 'import json, os; print(json.dumps(sorted(n for n in os.listdir("/usr/bin") if n.startswith("python"))))'
-python3 -c 'import tempfile; f = tempfile.NamedTemporaryFile("w+", dir="/tmp"); f.write("x" * 5000); f.seek(0); print(len(f.read()), f.name.startswith("/tmp/"))'
-python3 -c 'import os; d = os.urandom(3 << 20); f = os.open("/tmp/big", os.O_CREAT | os.O_RDWR); print(os.write(f, d), os.pread(f, 4 << 20, 0) == d, len(os.read(os.open("/dev/zero", os.O_RDONLY), 1 << 20)), len(os.read(os.open("/dev/urandom", os.O_RDONLY), 300000)))'; rm /tmp/big
-ln -s target /tmp/sl && readlink /tmp/sl
-ls -ld /tmp | cut -c1-10
-mkdir -m 700 /tmp/m && ls -ld /tmp/m | cut -c1-10 && chmod 750 /tmp/m && stat -c %a /tmp/m
-touch /tmp/o && test "$(stat -c %u /tmp/o)" = "$(id -u)" && echo owned
-stat -c %d / /dev /tmp | sort -u | wc -l
-mkdir -p /tmp/p/q /usr/bin && ls -d /tmp/p/q
-mkdir /usr /tmp 2>&1
-mkdir -p /tmp/r/s && mv /tmp/r /tmp/r/s/t 2>&1; ls -d /tmp/r/s
-mkdir /tmp/many && for i in $(seq 1 300); do : > /tmp/many/f$i; done && rm -r /tmp/many && ls /tmp/many 2>&1
-mkdir /tmp/u && touch /tmp/u/x /tmp/v && python3 -c 'import os; os.rename("/tmp/v", "/tmp/u")' 2>&1 | tail -1; ls /tmp/u
-(for i in $(seq 1 200); do echo a$i >> /tmp/log; done) & (for i in $(seq 1 200); do echo b$i >> /tmp/log; done) & wait
-sort -u /tmp/log | wc -l
-touch /tmp/lk && flock -n /tmp/lk -c 'flock -n /tmp/lk -c true || echo held' && flock -n /tmp/lk -c 'echo free'
+python3 -c 'import tempfile; f = tempfile.NamedTemporaryFile("w+"); f.write("x" * 5000); f.seek(0); print(len(f.read()), f.name.startswith("/run/"))'
+python3 -c 'import os; d = os.urandom(3 << 20); f = os.open("/run/big", os.O_CREAT | os.O_RDWR); print(os.write(f, d), os.pread(f, 4 << 20, 0) == d, len(os.read(os.open("/dev/zero", os.O_RDONLY), 1 << 20)), len(os.read(os.open("/dev/urandom", os.O_RDONLY), 300000)))'; rm /run/big
+ln -s target /run/sl && readlink /run/sl
+ls -ld /run | cut -c1-10
+mkdir -m 700 /run/m && ls -ld /run/m | cut -c1-10 && chmod 750 /run/m && stat -c %a /run/m
+touch /run/o && test "$(stat -c %u /run/o)" = "$(id -u)" && echo owned
+stat -c %d / /dev /run | sort -u | wc -l
+mkdir -p /run/p/q /usr/bin && ls -d /run/p/q
+mkdir /usr /run 2>&1
+mkdir -p /run/r/s && mv /run/r /run/r/s/t 2>&1; ls -d /run/r/s
+mkdir /run/many && for i in $(seq 1 300); do : > /run/many/f$i; done && rm -r /run/many && ls /run/many 2>&1
+mkdir /run/u && touch /run/u/x /run/v && python3 -c 'import os; os.rename("/run/v", "/run/u")' 2>&1 | tail -1; ls /run/u
+(for i in $(seq 1 200); do echo a$i >> /run/log; done) & (for i in $(seq 1 200); do echo b$i >> /run/log; done) & wait
+sort -u /run/log | wc -l
+touch /run/lk && flock -n /run/lk -c 'flock -n /run/lk -c true || echo held' && flock -n /run/lk -c 'echo free'
 python3 -c '
 import fcntl, os, sys
-f = open("/tmp/rl", "w")
+f = open("/run/rl", "w")
 fcntl.lockf(f, fcntl.LOCK_EX, 10, 0)
 if os.fork() == 0:
-    g = open("/tmp/rl", "a")
+    g = open("/run/rl", "a")
     for start in (0, 10):
         try:
             fcntl.lockf(g, fcntl.LOCK_EX | fcntl.LOCK_NB, 10, start); print("taken", start)
@@ -83,63 +83,63 @@ if os.fork() == 0:
     os._exit(0)
 os.wait()
 fcntl.lockf(f, fcntl.LOCK_UN, 10, 0)
-fcntl.lockf(open("/tmp/rl", "a"), fcntl.LOCK_EX | fcntl.LOCK_NB, 10, 0); print("taken after")
+fcntl.lockf(open("/run/rl", "a"), fcntl.LOCK_EX | fcntl.LOCK_NB, 10, 0); print("taken after")
 '
-mkfifo /tmp/ff && ls -l /tmp/ff | cut -c1
-(echo through > /tmp/ff &); cat /tmp/ff
+mkfifo /run/ff && ls -l /run/ff | cut -c1
+(echo through > /run/ff &); cat /run/ff
 python3 -c '
 import os
 try:
-    os.open("/tmp/ff", os.O_WRONLY | os.O_NONBLOCK)
+    os.open("/run/ff", os.O_WRONLY | os.O_NONBLOCK)
 except OSError as e: print(e.strerror)
-r = os.open("/tmp/ff", os.O_RDONLY | os.O_NONBLOCK)
-w = os.open("/tmp/ff", os.O_WRONLY); os.write(w, b"1"); os.close(w)
+r = os.open("/run/ff", os.O_RDONLY | os.O_NONBLOCK)
+w = os.open("/run/ff", os.O_WRONLY); os.write(w, b"1"); os.close(w)
 print(os.read(r, 10), os.read(r, 10))
-w = os.open("/tmp/ff", os.O_WRONLY); os.write(w, b"2"); os.close(w)
+w = os.open("/run/ff", os.O_WRONLY); os.write(w, b"2"); os.close(w)
 print(os.read(r, 10))
-w = os.open("/tmp/ro2", os.O_WRONLY | os.O_CREAT, 0o600)
+w = os.open("/run/ro2", os.O_WRONLY | os.O_CREAT, 0o600)
 try: os.read(w, 1)
 except OSError as e: print(e.strerror)
 '
-echo hl > /tmp/h1 && ln /tmp/h1 /tmp/h2 && stat -c %h /tmp/h1 && [ "$(stat -c %i /tmp/h1)" = "$(stat -c %i /tmp/h2)" ] && rm /tmp/h1 && cat /tmp/h2 && stat -c %h /tmp/h2
-mkdir /tmp/hd && ln /tmp/hd /tmp/hd2 2>&1; ln /bin/busybox /tmp/bb 2>&1
-mkdir -p /tmp/nl/a /tmp/nl/b && stat -c %h /tmp/nl
-touch -d @1000000000 /tmp/c && [ "$(stat -c %Z /tmp/c)" != 1000000000 ] && echo changed
-python3 -c 'import os; t, r = os.statvfs("/tmp"), os.statvfs("/"); print(t.f_blocks, t.f_bsize, t.f_bfree < t.f_blocks, t.f_ffree < t.f_files, t.f_flag & 1, r.f_flag & 1, r.f_bfree, r.f_blocks > 1000)'
+echo hl > /run/h1 && ln /run/h1 /run/h2 && stat -c %h /run/h1 && [ "$(stat -c %i /run/h1)" = "$(stat -c %i /run/h2)" ] && rm /run/h1 && cat /run/h2 && stat -c %h /run/h2
+mkdir /run/hd && ln /run/hd /run/hd2 2>&1; ln /bin/busybox /run/bb 2>&1
+mkdir -p /run/nl/a /run/nl/b && stat -c %h /run/nl
+touch -d @1000000000 /run/c && [ "$(stat -c %Z /run/c)" != 1000000000 ] && echo changed
+python3 -c 'import os; t, r = os.statvfs("/run"), os.statvfs("/"); print(t.f_blocks, t.f_bsize, t.f_bfree < t.f_blocks, t.f_ffree < t.f_files, t.f_flag & 1, r.f_flag & 1, r.f_bfree, r.f_blocks > 1000)'
 """
 
 # Who is not root may do no more than the modes say, as they are now: a
 # directory's mode changed holds for what was looked up in it before.
 PERMISSIONS = """\
-echo a > /tmp/ro && chmod 400 /tmp/ro && (echo b >> /tmp/ro) 2>&1; cat /tmp/ro
-mkdir /tmp/ns && touch /tmp/ns/f && chmod 600 /tmp/ns && ls /tmp/ns/f 2>&1; chmod 700 /tmp/ns
-chmod 777 /tmp 2>&1
-python3 -c 'import os; os.chown("/tmp/ro", 0, 0)' 2>&1 | tail -1
-printf '#!/bin/sh\\necho ran\\n' > /tmp/s.sh && /tmp/s.sh 2>&1; chmod +x /tmp/s.sh && /tmp/s.sh
-mkdir /tmp/cw && touch /tmp/cw/y && cd /tmp/cw && ls y && chmod 0 . && ls y 2>&1; chmod 700 . && ls y && cd /
-mkdir /tmp/sd && touch /tmp/sd/z && ls /tmp/sd/z && chmod 600 /tmp/sd && ls /tmp/sd/z 2>&1; chmod 700 /tmp/sd && ls /tmp/sd/z
+echo a > /run/ro && chmod 400 /run/ro && (echo b >> /run/ro) 2>&1; cat /run/ro
+mkdir /run/ns && touch /run/ns/f && chmod 600 /run/ns && ls /run/ns/f 2>&1; chmod 700 /run/ns
+chmod 777 /run 2>&1
+python3 -c 'import os; os.chown("/run/ro", 0, 0)' 2>&1 | tail -1
+printf '#!/bin/sh\\necho ran\\n' > /run/s.sh && /run/s.sh 2>&1; chmod +x /run/s.sh && /run/s.sh
+mkdir /run/cw && touch /run/cw/y && cd /run/cw && ls y && chmod 0 . && ls y 2>&1; chmod 700 . && ls y && cd /
+mkdir /run/sd && touch /run/sd/z && ls /run/sd/z && chmod 600 /run/sd && ls /run/sd/z 2>&1; chmod 700 /run/sd && ls /run/sd/z
 """
 
 PERMITTED = """\
-sh: can't create /tmp/ro: Permission denied
+sh: can't create /run/ro: Permission denied
 a
-ls: /tmp/ns/f: Permission denied
-chmod: /tmp: Operation not permitted
-PermissionError: [Errno 1] Operation not permitted: '/tmp/ro'
-sh: /tmp/s.sh: Permission denied
+ls: /run/ns/f: Permission denied
+chmod: /run: Operation not permitted
+PermissionError: [Errno 1] Operation not permitted: '/run/ro'
+sh: /run/s.sh: Permission denied
 ran
 y
 ls: y: Permission denied
 y
-/tmp/sd/z
-ls: /tmp/sd/z: Permission denied
-/tmp/sd/z
+/run/sd/z
+ls: /run/sd/z: Permission denied
+/run/sd/z
 """
 
 WANT = """\
 hello from sh
-/bin /tmp of no type
-/tmp
+/bin /run /run of no type
+/run
 fresh
 pizdos
 ash
@@ -154,10 +154,9 @@ bin
 dev
 etc
 libexec
+run
 share
-tmp
 usr
-var
 /usr/usr/bin/sh
 ls: /sbin: No such file or directory
 ls: /lib: No such file or directory
@@ -190,13 +189,13 @@ drwx------
 750
 owned
 3
-/tmp/p/q
+/run/p/q
 mkdir: can't create directory '/usr': File exists
-mkdir: can't create directory '/tmp': File exists
-mv: can't rename '/tmp/r': Invalid argument
-/tmp/r/s
-ls: /tmp/many: No such file or directory
-IsADirectoryError: [Errno 21] Is a directory: '/tmp/v' -> '/tmp/u'
+mkdir: can't create directory '/run': File exists
+mv: can't rename '/run/r': Invalid argument
+/run/r/s
+ls: /run/many: No such file or directory
+IsADirectoryError: [Errno 21] Is a directory: '/run/v' -> '/run/u'
 x
 400
 held
@@ -213,8 +212,8 @@ Bad file descriptor
 2
 hl
 1
-ln: /tmp/hd2: Operation not permitted
-ln: /tmp/bb: Invalid cross-device link
+ln: /run/hd2: Operation not permitted
+ln: /run/bb: Invalid cross-device link
 4
 changed
 262144 4096 True True 0 1 0 True

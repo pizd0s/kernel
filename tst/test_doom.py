@@ -20,8 +20,8 @@ import sys
 import termios
 import time
 
-COMMAND = "cd /tmp && exec env DG_HEADLESS=1 HOME=/tmp /tests/doom/doom -iwad /tests/doom/doom1.wad -nosound -timedemo demo1"
-TERMINAL = "cd /tmp && exec env TERM=xterm-256color DG_COLS=80 DG_ROWS=50 HOME=/tmp /tests/doom/doom -iwad /tests/doom/doom1.wad -nosound"
+COMMAND = "cd /run && exec env DG_HEADLESS=1 HOME=/run /tests/doom/doom -iwad /tests/doom/doom1.wad -nosound -timedemo demo1"
+TERMINAL = "cd /run && exec env TERM=xterm-256color DG_COLS=80 DG_ROWS=50 HOME=/run /tests/doom/doom -iwad /tests/doom/doom1.wad -nosound"
 
 
 def timedemo(vm, rootfs, image):

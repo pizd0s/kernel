@@ -3,7 +3,7 @@
 server's directory on a directory of rootfs's: a walk into it, and a call
 on its name, go on to that server, which answers the kernel itself.
 
-A directory of /tmp mounted on another, rootfs its server: the names, the
+A directory of /run mounted on another, rootfs its server: the names, the
 bytes and what is written are the mounted directory's. A mount point is
 busy to rmdir and to another mount; umount lets go of it; what is not
 there, not a directory, or a device is refused.
@@ -280,81 +280,81 @@ def tree(image):
 
 
 BIND = """\
-mkdir /tmp/where /tmp/what && echo inside > /tmp/what/f && mkdir /tmp/what/d
-mount /tmp/where /tmp/what && ls /tmp/where && cat /tmp/where/f && ls -d /tmp/where/d
-stat -c %i /tmp/where /tmp/what | uniq | wc -l
-echo more > /tmp/where/g && cat /tmp/what/g
-find /tmp/where | sort
-rmdir /tmp/where
-mount /tmp/where /tmp/what
-umount /tmp/where && ls /tmp/where | wc -l
-umount /tmp/where
-mount /tmp/missing /tmp/what
-mount /tmp/where /tmp/what/f
-mount /tmp/where /dev/null
-mount /tmp /tmp/what
+mkdir /run/where /run/what && echo inside > /run/what/f && mkdir /run/what/d
+mount /run/where /run/what && ls /run/where && cat /run/where/f && ls -d /run/where/d
+stat -c %i /run/where /run/what | uniq | wc -l
+echo more > /run/where/g && cat /run/what/g
+find /run/where | sort
+rmdir /run/where
+mount /run/where /run/what
+umount /run/where && ls /run/where | wc -l
+umount /run/where
+mount /run/missing /run/what
+mount /run/where /run/what/f
+mount /run/where /dev/null
+mount /run /run/what
 """
 
 BIND_WANT = """\
 d
 f
 inside
-/tmp/where/d
+/run/where/d
 1
 more
-/tmp/where
-/tmp/where/d
-/tmp/where/f
-/tmp/where/g
+/run/where
+/run/where/d
+/run/where/f
+/run/where/g
 0
 """
 
 BIND_ERRORS = """\
-rmdir: '/tmp/where': Device or resource busy
-mount: /tmp/what on /tmp/where: Device or resource busy
-umount: /tmp/where: Invalid argument
-mount: /tmp/what on /tmp/missing: No such file or directory
-mount: /tmp/what/f on /tmp/where: Not a directory
-mount: /dev/null on /tmp/where: Not a directory
-mount: /tmp/what on /tmp: Device or resource busy
+rmdir: '/run/where': Device or resource busy
+mount: /run/what on /run/where: Device or resource busy
+umount: /run/where: Invalid argument
+mount: /run/what on /run/missing: No such file or directory
+mount: /run/what/f on /run/where: Not a directory
+mount: /dev/null on /run/where: Not a directory
+mount: /run/what on /run: Device or resource busy
 """
 
 EXT = """\
 ls /dev | grep fs
-mkdir /tmp/two /tmp/four
-mount /tmp/two /dev/sda1fs && mount /tmp/four /dev/sda2fs && ls /tmp/four
-cat /tmp/two/hello.txt /tmp/four/sub/deep.txt /tmp/two/link /tmp/four/long /tmp/two/long
-readlink /tmp/two/abs; head -1 /tmp/four/abs
+mkdir /run/two /run/four
+mount /run/two /dev/sda1fs && mount /run/four /dev/sda2fs && ls /run/four
+cat /run/two/hello.txt /run/four/sub/deep.txt /run/two/link /run/four/long /run/two/long
+readlink /run/two/abs; head -1 /run/four/abs
 python3 -c '
 import os
-for root in ("/tmp/two", "/tmp/four"):
+for root in ("/run/two", "/run/four"):
     big = open(root + "/big", "rb").read()
     frag = open(root + "/frag", "rb").read()
     sparse = open(root + "/sparse", "rb").read()
     print(len(big), big == bytes(i % 251 for i in range(1 << 20)), frag == bytes(i * 7 % 256 for i in range(64 * 1024)), len(sparse), sparse[:4], sparse[-3:])
     f = os.open(root + "/big", os.O_RDONLY)
     print(os.pread(f, 6, 5000) == bytes(i % 251 for i in range(5000, 5006)), os.pread(f, 4, 1 << 19), os.pread(f, 10, (1 << 20) - 4), os.pread(f, 10, 1 << 20))
-print(open("/tmp/four/unwritten", "rb").read() == b"\\x11" * 4096 + bytes(4096) + b"\\x11" * 4096)
+print(open("/run/four/unwritten", "rb").read() == b"\\x11" * 4096 + bytes(4096) + b"\\x11" * 4096)
 '
-cd /tmp/two/sub && pwd -P && ls .. | head -2 && cd /
-ls /tmp/four/sub/../..
-stat -c '%F %s %h' /tmp/two/sub /tmp/four/big /tmp/two/link
-python3 -c 'import os; s = os.statvfs("/tmp/four"); print(s.f_bsize, s.f_flag & 1, s.f_blocks)'
-for root in /tmp/two /tmp/four; do echo new > $root/new.txt && mkdir $root/dir && mv $root/new.txt $root/dir/moved.txt && ln -s hello.txt $root/sym && chmod 600 $root/hello.txt && touch -d @1500000000 $root/hello.txt && rm $root/filler && ls $root/dir; done
-rmdir /tmp/two/dir
-for root in /tmp/two /tmp/four; do mkdir $root/up $root/up/gone && touch $root/up/gone/x && a=$(stat -c %i $root/up/gone) && stat -c %i $root/up/gone/.. > /dev/null && rm $root/up/gone/x && rmdir $root/up/gone && mkdir $root/back && [ "$(stat -c %i $root/back)" = "$a" ] && test ! -e $root/back/x && [ "$(stat -c %i $root/back/..)" = "$(stat -c %i $root)" ] && echo nothing of gone in back; done
+cd /run/two/sub && pwd -P && ls .. | head -2 && cd /
+ls /run/four/sub/../..
+stat -c '%F %s %h' /run/two/sub /run/four/big /run/two/link
+python3 -c 'import os; s = os.statvfs("/run/four"); print(s.f_bsize, s.f_flag & 1, s.f_blocks)'
+for root in /run/two /run/four; do echo new > $root/new.txt && mkdir $root/dir && mv $root/new.txt $root/dir/moved.txt && ln -s hello.txt $root/sym && chmod 600 $root/hello.txt && touch -d @1500000000 $root/hello.txt && rm $root/filler && ls $root/dir; done
+rmdir /run/two/dir
+for root in /run/two /run/four; do mkdir $root/up $root/up/gone && touch $root/up/gone/x && a=$(stat -c %i $root/up/gone) && stat -c %i $root/up/gone/.. > /dev/null && rm $root/up/gone/x && rmdir $root/up/gone && mkdir $root/back && [ "$(stat -c %i $root/back)" = "$a" ] && test ! -e $root/back/x && [ "$(stat -c %i $root/back/..)" = "$(stat -c %i $root)" ] && echo nothing of gone in back; done
 python3 -c '
 import os
 p = bytes(i * 13 % 256 for i in range(1 << 20))
-f = os.open("/tmp/four/written", os.O_CREAT | os.O_RDWR, 0o644)
+f = os.open("/run/four/written", os.O_CREAT | os.O_RDWR, 0o644)
 print(os.write(f, p), os.pread(f, 1 << 20, 0) == p)
 os.ftruncate(f, 1000)
-os.write(os.open("/tmp/four/written", os.O_WRONLY | os.O_APPEND), b"tail")
+os.write(os.open("/run/four/written", os.O_WRONLY | os.O_APPEND), b"tail")
 print(os.fstat(f).st_size, os.pread(f, 4, 1000))
 '
 python3 -c '
 import fcntl, os, time
-for root in ("/tmp/two", "/tmp/four"):
+for root in ("/run/two", "/run/four"):
     a = os.open(root + "/big", os.O_RDWR)
     b = os.open(root + "/big", os.O_RDWR)
     fcntl.flock(a, fcntl.LOCK_EX)
@@ -406,7 +406,7 @@ True b'\\xc8\\xc9\\xca\\xcb' b'\\x91\\x92\\x93\\x94' b''
 1048576 True True 1048579 b'\\x00\\x00\\x00\\x00' b'end'
 True b'\\xc8\\xc9\\xca\\xcb' b'\\x91\\x92\\x93\\x94' b''
 True
-/tmp/two/sub
+/run/two/sub
 abs
 big
 four
@@ -428,20 +428,20 @@ locks: busy b'pc' busy
 EXT_ERRORS = """\
 FUSE2FS (sda3): Filesystem has unsupported feature(s).
 FUSE2FS (sda3): Please run e2fsck -fy.
-rmdir: '/tmp/two/dir': Directory not empty
+rmdir: '/run/two/dir': Directory not empty
 """
 
 # What the first start wrote, there when the system starts again.
 AGAIN = """\
-mkdir /tmp/two /tmp/four
-mount /tmp/two /dev/sda1fs && mount /tmp/four /dev/sda2fs
-cat /tmp/two/dir/moved.txt /tmp/four/dir/moved.txt
-readlink /tmp/two/sym; readlink /tmp/four/sym
-stat -c '%a %Y' /tmp/two/hello.txt /tmp/four/hello.txt
-ls /tmp/two /tmp/four | grep -c filler
+mkdir /run/two /run/four
+mount /run/two /dev/sda1fs && mount /run/four /dev/sda2fs
+cat /run/two/dir/moved.txt /run/four/dir/moved.txt
+readlink /run/two/sym; readlink /run/four/sym
+stat -c '%a %Y' /run/two/hello.txt /run/four/hello.txt
+ls /run/two /run/four | grep -c filler
 python3 -c '
 import os
-f = os.open("/tmp/four/written", os.O_RDONLY)
+f = os.open("/run/four/written", os.O_RDONLY)
 print(os.fstat(f).st_size, os.pread(f, 4, 1000), os.pread(f, 1000, 0) == bytes(i * 13 % 256 for i in range(1000)))
 '
 """

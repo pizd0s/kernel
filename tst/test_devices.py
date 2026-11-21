@@ -37,11 +37,11 @@ import os
 try: os.read(os.open("/dev/zero", os.O_WRONLY), 1)
 except OSError as e: print(e.strerror)
 '
-python3 -c 'import base64, sys; open("/tmp/service", "wb").write(base64.b64decode(sys.stdin.read()))' <<'EOF'
+python3 -c 'import base64, sys; open("/run/service", "wb").write(base64.b64decode(sys.stdin.read()))' <<'EOF'
 {service}
 EOF
-chmod +x /tmp/service
-/tmp/service hello 020644 'hello, world'
+chmod +x /run/service
+/run/service hello 020644 'hello, world'
 cat /dev/hello; echo
 stat -c '%F %a' /dev/hello
 python3 -c 'import os; f = os.open("/dev/hello", os.O_RDONLY); print(os.pread(f, 5, 7), os.fstat(f).st_ino == os.stat("/dev/hello").st_ino)'
@@ -50,21 +50,21 @@ import os
 try: os.read(os.open("/dev/hello", os.O_WRONLY), 1)
 except OSError as e: print(e.strerror)
 '
-/tmp/service copy /dev/hello 7 3 5
-/tmp/service put /dev/null hello
-/tmp/service kept 020644 'kept' keep
-/tmp/service pass /dev/kept
+/run/service copy /dev/hello 7 3 5
+/run/service put /dev/null hello
+/run/service kept 020644 'kept' keep
+/run/service pass /dev/kept
 printf x > /dev/kept && echo written
-/tmp/service hello 020644 again
-/tmp/service a/b/c 020644 bad
-/tmp/service fifo 010644 bad
-/tmp/service readonly 020644 bad ro
-/tmp/service disk 060640 'the blocks'
+/run/service hello 020644 again
+/run/service a/b/c 020644 bad
+/run/service fifo 010644 bad
+/run/service readonly 020644 bad ro
+/run/service disk 060640 'the blocks'
 stat -c '%F %a' /dev/disk && head -c 3 /dev/disk; echo
 python3 -c '
 import os, signal, time
 f = os.open("/dev/hello", os.O_RDONLY)
-os.kill(int(open("/tmp/hello.pid").read()), signal.SIGKILL)
+os.kill(int(open("/run/hello.pid").read()), signal.SIGKILL)
 for _ in range(1000):
     if not os.path.exists("/dev/hello"): break
     time.sleep(0.01)
@@ -73,18 +73,18 @@ try: os.pread(f, 5, 0)
 except OSError as e: print(e.strerror)
 '
 ls /dev/hello 2>&1
-/tmp/service hello 020644 'hello again' && cat /dev/hello; echo
-/tmp/service pts/x 020644 'in a dir'
+/run/service hello 020644 'hello again' && cat /dev/hello; echo
+/run/service pts/x 020644 'in a dir'
 ls /dev/pts && cat /dev/pts/x; echo
 stat -c '%F %a' /dev/pts
-kill -9 $(cat /tmp/pts_x.pid); for i in 1 2 3 4 5 6 7 8 9 10; do [ -e /dev/pts ] || break; sleep 0.1; done
+kill -9 $(cat /run/pts_x.pid); for i in 1 2 3 4 5 6 7 8 9 10; do [ -e /dev/pts ] || break; sleep 0.1; done
 ls /dev/pts 2>&1
-/tmp/service mbox 020666 '' wait
-/tmp/service wait /dev/mbox 0
-(sleep 2; printf ping > /dev/mbox) & /tmp/service wait /dev/mbox 1; wait
-/tmp/service wait /dev/mbox 1 & sleep 1.5; kill -9 $!; wait $! 2> /dev/null; echo $?
-(sleep 2; printf pong > /dev/mbox) & /tmp/service wait /dev/mbox 1; wait
-printf mail > /dev/mbox; /tmp/service wait /dev/mbox 1
+/run/service mbox 020666 '' wait
+/run/service wait /dev/mbox 0
+(sleep 2; printf ping > /dev/mbox) & /run/service wait /dev/mbox 1; wait
+/run/service wait /dev/mbox 1 & sleep 1.5; kill -9 $!; wait $! 2> /dev/null; echo $?
+(sleep 2; printf pong > /dev/mbox) & /run/service wait /dev/mbox 1; wait
+printf mail > /dev/mbox; /run/service wait /dev/mbox 1
 python3 -c '
 import os, select
 f = os.open("/dev/mbox", os.O_RDWR | os.O_NONBLOCK)

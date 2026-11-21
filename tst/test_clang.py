@@ -2,7 +2,7 @@
 """clang in the system: LLVM's multicall program, as /bin/llvm with clang,
 clang++ and wasm-ld naming it, of the image of the system and the
 toolchain, with lib/c's and lib/cxx's headers and libraries, compiles and
-links a C and a C++ program in /tmp, its driver running cc1 and the linker
+links a C and a C++ program in /run, its driver running cc1 and the linker
 as processes of their own, and the shell runs what they link, packed by
 pzd into executables: the kernel compiles each module once, LLVM's for all
 its processes.
@@ -63,12 +63,12 @@ LINK = ["-nostdlib", "-Wl,--stack-first", "-Wl,--max-memory=4294967296",
 
 def main():
     vm, rootfs, image = sys.argv[1:4]
-    c = ["clang", *wasm.CFLAGS, "-isystem", "/usr/include", "-O2", "/tmp/src/hello.c", "-o", "/tmp/src/hello.wasm", *LINK, "/usr/lib/libc.a"]
+    c = ["clang", *wasm.CFLAGS, "-isystem", "/usr/include", "-O2", "/run/src/hello.c", "-o", "/run/src/hello.wasm", *LINK, "/usr/lib/libc.a"]
     cxx = ["clang++", *wasm.CFLAGS, "-nostdinc++", "-fno-exceptions", "-std=c++23", "-isystem", "/usr/include/c++/v1",
-           "-isystem", "/usr/include", "-O2", "/tmp/src/hello.cpp", "-o", "/tmp/src/hello-cxx.wasm", *LINK, "/usr/lib/libc++.a", "/usr/lib/libc.a"]
-    script = (f"set -e\nmkdir -p /tmp/src /tmp/bin\ncat > /tmp/src/hello.c <<'C_EOF'\n{C}C_EOF\n"
-              f"cat > /tmp/src/hello.cpp <<'CXX_EOF'\n{CXX}CXX_EOF\nclang --version\necho ---\n{shlex.join(c)}\n{shlex.join(cxx)}\n"
-              "pzd /tmp/src/hello.wasm /tmp/bin/hello\npzd /tmp/src/hello-cxx.wasm /tmp/bin/hello-cxx\nPATH=/tmp/bin:$PATH\nhello\nhello-cxx\n")
+           "-isystem", "/usr/include", "-O2", "/run/src/hello.cpp", "-o", "/run/src/hello-cxx.wasm", *LINK, "/usr/lib/libc++.a", "/usr/lib/libc.a"]
+    script = (f"set -e\nmkdir -p /run/src /run/bin\ncat > /run/src/hello.c <<'C_EOF'\n{C}C_EOF\n"
+              f"cat > /run/src/hello.cpp <<'CXX_EOF'\n{CXX}CXX_EOF\nclang --version\necho ---\n{shlex.join(c)}\n{shlex.join(cxx)}\n"
+              "pzd /run/src/hello.wasm /run/bin/hello\npzd /run/src/hello-cxx.wasm /run/bin/hello-cxx\nPATH=/run/bin:$PATH\nhello\nhello-cxx\n")
     r = subprocess.run([vm, "run", "--disk", f"image={image}", "--", rootfs, "-c", script], capture_output=True, text=True, timeout=1200)
     version, _, ran = r.stdout.partition("---\n")
     version = version.splitlines()[0] if version else ""

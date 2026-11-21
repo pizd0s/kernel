@@ -355,8 +355,8 @@ class Terminal:
         raise AssertionError(f"the system did not end: the screen is\n{self.screen.text()}")
 
 
-SETUP = ("cd /tmp && mkdir -p work/sub other && cd work && printf 'hello mc\\nsecond line\\n' > a.txt && "
-         "printf 'inside\\n' > sub/in.txt && tar cf t.tar a.txt sub && cd /tmp && clear\r")
+SETUP = ("cd /run && mkdir -p work/sub other && cd work && printf 'hello mc\\nsecond line\\n' > a.txt && "
+         "printf 'inside\\n' > sub/in.txt && tar cf t.tar a.txt sub && cd /run && clear\r")
 
 
 def status(term, name, what, side=0):
@@ -377,7 +377,7 @@ def xterm(vm, rootfs, image):
     term = Terminal(vm, rootfs, image)
     term.send(SETUP)
     term.until(lambda text: text.strip() == "~ #", "the files of the test")
-    term.send("mc /tmp/work /tmp/other\r")
+    term.send("mc /run/work /run/other\r")
     term.until("10Quit", "mc's keys line")
     text = term.screen.text()
     assert term.row(0).split() == ["Left", "File", "Command", "Options", "Right"], text
@@ -396,7 +396,7 @@ def xterm(vm, rootfs, image):
     term.key("f3")
     term.until("3Quit", "the viewer")
     text = term.screen.text()
-    assert term.row(0).startswith("/tmp/work/a.txt") and term.row(1) == "hello mc" and term.row(2) == "second line", text
+    assert term.row(0).startswith("/run/work/a.txt") and term.row(1) == "hello mc" and term.row(2) == "second line", text
     term.key("f10")
     term.until("10Quit", "the panels after the viewer")
 
@@ -476,7 +476,7 @@ def xterm(vm, rootfs, image):
     assert 1049 not in term.screen.modes and 1002 not in term.screen.modes, sorted(term.screen.modes)
 
     # the files are as mc left them
-    term.send("clear; cd /tmp; cat work/a.txt other/a.txt work/typed; ls -d work/made; echo status $?\r")
+    term.send("clear; cd /run; cat work/a.txt other/a.txt work/typed; ls -d work/made; echo status $?\r")
     term.until("status 0", "the files after mc")
     text = term.screen.text()
     assert text.startswith("XYZ hello mc\nsecond line\nXYZ hello mc\nsecond line\nfrom-mc\nwork/made\nstatus 0\n"), text
@@ -504,7 +504,7 @@ def vt100(vm, rootfs, image):
     term = Terminal(vm, rootfs, image, kind="vt100-am")
     term.send(SETUP)
     term.until(lambda text: text.strip() == "~ #", "the files of the test")
-    term.send("echo $TERM; mc /tmp/work /tmp/other\r")
+    term.send("echo $TERM; mc /run/work /run/other\r")
     term.until("10Quit", "mc's keys line")
     text = term.screen.text()
     assert term.row(0).split() == ["Left", "File", "Command", "Options", "Right"], text
@@ -534,7 +534,7 @@ def trees(vm, rootfs, image):
     term = Terminal(vm, rootfs, image, flags=["--asan"])
     term.send(SETUP)
     term.until(lambda text: text.strip() == "~ #", "the files of the test")
-    term.send("mc /tmp/work /tmp/other\r")
+    term.send("mc /run/work /run/other\r")
     term.until("10Quit", "mc's keys line")
 
     # the left panel is a tree

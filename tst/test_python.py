@@ -7,7 +7,7 @@ the user database, locales and the tokenizer's positions. Then a set of
 CPython's own tests, from the release tarball's Lib/test, the image of the
 tests' /lib/python3.14/test, which python searches after its file, runs
 with its regrtest, but for the cases XFAIL names, which run apart and
-must fail. Each boots rootfs from the image of the tests and runs in /tmp.
+must fail. Each boots rootfs from the image of the tests and runs in /run.
 
     test_python.py <vm> <rootfs> <tests.img>
 """
@@ -97,7 +97,7 @@ os.kill(os.getpid(), signal.SIGUSR2)
 print("sigwait", signal.sigwait([signal.SIGUSR2]) == signal.SIGUSR2)
 
 # files: locks, a shared mapping written back, times
-path = "/tmp/data"
+path = "/run/data"
 with open(path, "wb") as f:
     f.write(b"hello world")
 fd = os.open(path, os.O_RDWR)
@@ -147,7 +147,7 @@ clock True True
 
 def python(vm, rootfs, image, args, timeout, stdin=None):
     command = [vm, "run", "--disk", f"image={image}", "--", rootfs, "-c",
-               "cd /tmp && exec env HOME=/tmp TZ=UTC python3 " + " ".join(args)]
+               "cd /run && exec env HOME=/run TZ=UTC python3 " + " ".join(args)]
 
     return subprocess.run(command, input=stdin, capture_output=True, text=True, timeout=timeout)
 

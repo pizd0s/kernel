@@ -18,7 +18,7 @@ typedef struct {
 #define TMP_MAX 10000
 #define L_tmpnam 20
 #define L_ctermid 20
-#define P_tmpdir "/tmp"
+#define P_tmpdir "/run"
 
 #define _IOFBF 0
 #define _IOLBF 1

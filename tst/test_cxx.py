@@ -2,7 +2,7 @@
 """lib/cxx's C++ library in the system: tst/cxx/check.cpp, the image of
 the tests' /tests/cxx/check, prints one line of results per area, between
 its static and thread_local objects' lines, which must be these. It makes
-its files in /tmp.
+its files in /run.
 
     test_cxx.py <vm> <rootfs> <tests.img>
 """
@@ -35,7 +35,7 @@ destroy first
 
 def main():
     vm, rootfs, image = sys.argv[1:4]
-    r = subprocess.run([vm, "run", "--disk", f"image={image}", "--", rootfs, "-c", "cd /tmp && exec /tests/cxx/check"],
+    r = subprocess.run([vm, "run", "--disk", f"image={image}", "--", rootfs, "-c", "cd /run && exec /tests/cxx/check"],
                        capture_output=True, text=True, timeout=120)
 
     if r.returncode != 0 or r.stdout != EXPECTED:

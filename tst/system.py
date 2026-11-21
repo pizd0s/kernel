@@ -1,6 +1,6 @@
 """Programs run in the system, a batch to a boot: rootfs boots once, from
 the image after it in its file, and runs each program of a batch in turn, in a
-directory of its own under /tmp, its standard input given; its standard
+directory of its own under /run, its standard input given; its standard
 output and error and its exit status come back.
 
     run(vm, rootfs, programs, env=None, flags=(), timeout=600)
@@ -28,7 +28,7 @@ import exe  # noqa: E402
 # what the shell says of a program a signal ended is none of its standard
 # error; a tar of what they gave goes out on the standard output.
 SCRIPT = """\
-mkdir /tmp/b && cd /tmp/b && tar xf - || exit 1
+mkdir /run/b && cd /run/b && tar xf - || exit 1
 for d in *; do
     (cd "$d" && PATH="$PWD:$PATH" sh ./run 2> /dev/null; echo $? > status)
 done

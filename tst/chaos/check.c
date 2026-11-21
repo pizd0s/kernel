@@ -349,7 +349,7 @@ static int attempt(const char* operation) {
         return 0;
     }
     if (strcmp(operation, "msync") == 0) {
-        int fd = open("/tmp/mapping", O_CREAT | O_TRUNC | O_RDWR, 0600);
+        int fd = open("/run/mapping", O_CREAT | O_TRUNC | O_RDWR, 0600);
         assert(fd >= 0 && ftruncate(fd, 4096) == 0);
         char* mapping = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         assert(mapping != MAP_FAILED);
@@ -360,7 +360,7 @@ static int attempt(const char* operation) {
         assert(mapping[0] == 'x' && munmap(mapping, 4096) == 0);
         char byte;
         assert(pread(fd, &byte, 1, 0) == 1 && byte == 'x');
-        assert(close(fd) == 0 && unlink("/tmp/mapping") == 0);
+        assert(close(fd) == 0 && unlink("/run/mapping") == 0);
         return failed;
     }
     if (strcmp(operation, "memory-grow") == 0) {

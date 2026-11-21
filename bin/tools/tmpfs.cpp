@@ -1,7 +1,7 @@
-// tmpfs: /tmp, a tree in the memory of its own process, of at most
+// tmpfs: /run, a tree in the memory of its own process, of at most
 // tmpCapacity bytes, a quarter of what a memory of wasm32 holds: a file
 // system of the VFS's (lib/protocol/protocol.h), which rootfs starts and
-// mounts on /tmp with the channel it gives it. rootfs walks the VFS's
+// mounts on /run with the channel it gives it. rootfs walks the VFS's
 // paths and asks it by node, its root node 1, one name at a time; an open
 // file is an endpoint of tmpfs's, which the kernel reads and writes. It
 // ends when rootfs has let go of its channel and the last open file is

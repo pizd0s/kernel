@@ -18,12 +18,12 @@ static void fixture(const char* path, const char* text) {
 }
 
 int main() {
-    assert(mkdir("/etc", 0700) == 0 && mkdir("/tmp/test-home", 0700) == 0);
-    fixture("/etc/passwd", "malformed\nbad:x:no:20:Bad:/tmp:/bin/sh\ntest:x:1234:100:Test User:/tmp/test-home:/bin/sh\nother:*:4321:200:Other:/tmp:/bin/false\n");
+    assert(mkdir("/etc", 0700) == 0 && mkdir("/run/test-home", 0700) == 0);
+    fixture("/etc/passwd", "malformed\nbad:x:no:20:Bad:/run:/bin/sh\ntest:x:1234:100:Test User:/run/test-home:/bin/sh\nother:*:4321:200:Other:/run:/bin/false\n");
     fixture("/etc/group", "malformed\nbad:x:invalid:test\nbase:x:100:test\nshared:x:200:test,other\nduplicate:x:200:test\nextra:x:300:test\n");
     passwd* user = getpwuid(1234);
     assert(user && strcmp(user->pw_name, "test") == 0 && user->pw_gid == 100);
-    assert(strcmp(user->pw_gecos, "Test User") == 0 && strcmp(user->pw_dir, "/tmp/test-home") == 0);
+    assert(strcmp(user->pw_gecos, "Test User") == 0 && strcmp(user->pw_dir, "/run/test-home") == 0);
     assert(getpwuid(9999) == nullptr);
     passwd password{}, *passwordResult = reinterpret_cast<passwd*>(1);
     char passwordBuffer[256];
@@ -72,11 +72,11 @@ int main() {
 
     glob_t paths{};
     assert(glob("~test", GLOB_TILDE | GLOB_NOESCAPE, nullptr, &paths) == 0 && paths.gl_pathc == 1);
-    assert(strcmp(paths.gl_pathv[0], "/tmp/test-home") == 0);
+    assert(strcmp(paths.gl_pathv[0], "/run/test-home") == 0);
     globfree(&paths);
     paths = {};
     assert(glob("~test/", GLOB_TILDE, nullptr, &paths) == 0 && paths.gl_pathc == 1);
-    assert(strcmp(paths.gl_pathv[0], "/tmp/test-home/") == 0);
+    assert(strcmp(paths.gl_pathv[0], "/run/test-home/") == 0);
     globfree(&paths);
     // A database path can exist while being unreadable as a file.
     assert(remove("/etc/group") == 0 && mkdir("/etc/group", 0700) == 0);

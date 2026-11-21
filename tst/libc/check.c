@@ -223,8 +223,8 @@ static void heap(void) {
 }
 
 static void files(void) {
-    mkdir("/tmp/d", 0755);
-    int dir = open("/tmp/d", O_RDONLY | O_DIRECTORY);
+    mkdir("/run/d", 0755);
+    int dir = open("/run/d", O_RDONLY | O_DIRECTORY);
     int fd = openat(dir, "f", O_CREAT | O_RDWR, 0644);
     printf("openat %d pwrite %zd pread", fd >= 0, pwrite(fd, "abcdef", 6, 0));
     char buf[8] = {0};
@@ -246,15 +246,15 @@ static void files(void) {
     printf(" symlinkat %d", symlinkat("g", dir, "s"));
     char link[8] = {0};
     printf(" readlinkat %zd %s", readlinkat(dir, "s", link, sizeof link), link);
-    printf(" truncate %d", truncate("/tmp/d/g", 2));
-    stat("/tmp/d/h", &st);
+    printf(" truncate %d", truncate("/run/d/g", 2));
+    stat("/run/d/h", &st);
     printf(" %lld", (long long)st.st_size);
     printf(" unlinkat %d %d\n", unlinkat(dir, "h", 0), unlinkat(dir, "s", 0));
-    printf("mkfifo %d", mkfifo("/tmp/d/p", 0600));
-    stat("/tmp/d/p", &st);
+    printf("mkfifo %d", mkfifo("/run/d/p", 0600));
+    stat("/run/d/p", &st);
     printf(" %d", S_ISFIFO(st.st_mode));
     struct statvfs vfs;
-    printf(" statvfs %d %d", statvfs("/tmp", &vfs), vfs.f_bsize > 0);
+    printf(" statvfs %d %d", statvfs("/run", &vfs), vfs.f_bsize > 0);
     printf(" flock %d lockf %d %d\n", flock(fd, LOCK_EX), lockf(fd, F_LOCK, 0), lockf(fd, F_TEST, 0));
     close(fd);
     // A directory opened before its entries were made may not list them
@@ -283,7 +283,7 @@ static void files(void) {
     printf("dir %d %d %d", entries, rest, readdir_r(dd, &entry, &result) == 0 && result == &entry);
     closedir(dd);
     struct dirent** list;
-    int n = scandir("/tmp/d", &list, 0, alphasort);
+    int n = scandir("/run/d", &list, 0, alphasort);
     printf(" scandir %d", n);
 
     for (int i = 0; i < n; i++) {
@@ -293,15 +293,15 @@ static void files(void) {
 
     free(list);
     glob_t g;
-    printf(" glob %d", glob("/tmp/d/*", GLOB_MARK, 0, &g));
+    printf(" glob %d", glob("/run/d/*", GLOB_MARK, 0, &g));
 
     for (size_t i = 0; i < g.gl_pathc; i++) {
         printf(" %s", g.gl_pathv[i]);
     }
 
-    printf(" %d\n", glob("/tmp/d/none*", 0, 0, &g) == GLOB_NOMATCH);
+    printf(" %d\n", glob("/run/d/none*", 0, 0, &g) == GLOB_NOMATCH);
     globfree(&g);
-    char template[] = "/tmp/fileXXXXXXsuffix";
+    char template[] = "/run/fileXXXXXXsuffix";
     int t = mkstemps(template, 6);
     printf("mkstemps %d %s", t >= 0, strstr(template, "suffix") ? "suffix" : "-");
     unlink(template);
@@ -313,9 +313,9 @@ static void files(void) {
     printf(" tmpfile %s", back);
     fclose(tmp);
     char name[L_tmpnam];
-    char* other = tempnam("/tmp", "pre");
-    printf(" tmpnam %d tempnam %d\n", tmpnam(name) == name && strncmp(name, "/tmp/tmpnam_", 12) == 0,
-           strncmp(other, "/tmp/pre_", 9) == 0);
+    char* other = tempnam("/run", "pre");
+    printf(" tmpnam %d tempnam %d\n", tmpnam(name) == name && strncmp(name, "/run/tmpnam_", 12) == 0,
+           strncmp(other, "/run/pre_", 9) == 0);
     free(other);
 }
 
@@ -354,7 +354,7 @@ static void users(void) {
     struct group* fg = fgetgrent(f);
     printf(" fgetgrent %s %s\n", fg->gr_name, fg->gr_mem[0]);
     fclose(f);
-    f = fopen("/tmp/mtab", "w+");
+    f = fopen("/run/mtab", "w+");
     struct mntent m = {"/dev/root", "/", "ext4", "rw,noatime", 0, 1};
     addmntent(f, &m);
     rewind(f);
@@ -442,10 +442,10 @@ static void network(void) {
     recv(pair[1], buf, sizeof buf, 0);
     int server = socket(AF_UNIX, SOCK_STREAM, 0);
     struct sockaddr_un sun = {.sun_family = AF_UNIX};
-    strcpy(sun.sun_path, "/tmp/socket");
+    strcpy(sun.sun_path, "/run/socket");
     printf("socketpair %s bind %d listen %d", buf, bind(server, (struct sockaddr*)&sun, sizeof sun), listen(server, 4));
     struct stat st;
-    stat("/tmp/socket", &st);
+    stat("/run/socket", &st);
     int client = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     printf(" %d connect %d", S_ISSOCK(st.st_mode), connect(client, (struct sockaddr*)&sun, sizeof sun));
     struct sockaddr_un name;

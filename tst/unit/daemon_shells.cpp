@@ -40,7 +40,7 @@ int main() {
     alarm(10);
     int reports[2], release[2];
     assert(pipe(reports) == 0 && pipe(release) == 0);
-    assert(chdir("/tmp") == 0);
+    assert(chdir("/run") == 0);
     pid_t child = fork();
     assert(child >= 0);
     if (child == 0) {
@@ -79,7 +79,7 @@ int main() {
     if (child == 0) {
         assert(daemon(1, 1) == 0);
         char cwd[16];
-        assert(getcwd(cwd, sizeof(cwd)) && strcmp(cwd, "/tmp") == 0);
+        assert(getcwd(cwd, sizeof(cwd)) && strcmp(cwd, "/run") == 0);
         transfer(reports[1], &byte, 1, true);
         _exit(0);
     }
@@ -102,7 +102,7 @@ int main() {
     assert(getusershell() == nullptr);
     endusershell();
     assert(strcmp(getusershell(), "/bin/sh") == 0);
-    assert(mkdir("/tmp/shells", 0755) == 0 && chroot("/tmp/shells") == 0 && chdir("/") == 0);
+    assert(mkdir("/run/shells", 0755) == 0 && chroot("/run/shells") == 0 && chdir("/") == 0);
     assert(mkdir("/etc", 0755) == 0);
     FILE* file = fopen("/etc/shells", "w");
     assert(file);

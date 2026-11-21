@@ -36,7 +36,7 @@ CASES = {
 
 def run(vm, rootfs, image, args, asan=True):
     command = [vm, "run", *(["--asan"] if asan else []), "--disk", f"image={image}", "--", rootfs, "-c",
-               "cd /tmp && exec /tests/asan/check " + " ".join(args)]
+               "cd /run && exec /tests/asan/check " + " ".join(args)]
 
     return subprocess.run(command, capture_output=True, text=True, timeout=120)
 

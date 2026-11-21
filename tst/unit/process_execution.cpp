@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
         return strcmp(argv[2], "exit23") == 0 ? 23 : 0;
     }
     if (argc >= 2 && strcmp(argv[1], "interpreter-arg") == 0) {
-        assert(argc == 4 && strcmp(argv[2], "/tmp/script") == 0 && strcmp(argv[3], "tail") == 0);
+        assert(argc == 4 && strcmp(argv[2], "/run/script") == 0 && strcmp(argv[3], "tail") == 0);
         return 23;
     }
     if (argc >= 2 && strcmp(argv[1], "child") == 0) {
@@ -128,26 +128,26 @@ int main(int argc, char** argv) {
     assert(fexecve(-1, inherited, nullptr) == -1 && errno == EBADF);
     int dir = open("/", O_RDONLY | O_DIRECTORY);
     assert(dir >= 0 && fexecve(dir, inherited, nullptr) == -1 && errno == EACCES && close(dir) == 0);
-    script("/tmp/empty", "");
-    assert(execv("/tmp/empty", inherited) == -1 && errno == ENOEXEC);
-    script("/tmp/bad", "#!   \n");
-    assert(execv("/tmp/bad", inherited) == -1 && errno == ENOEXEC);
-    script("/tmp/recursive", "#!/tmp/recursive\n");
-    assert(execv("/tmp/recursive", inherited) == -1 && errno == ELOOP);
-    script("/tmp/script", "#!/bin/check interpreter-arg\nignored\n");
+    script("/run/empty", "");
+    assert(execv("/run/empty", inherited) == -1 && errno == ENOEXEC);
+    script("/run/bad", "#!   \n");
+    assert(execv("/run/bad", inherited) == -1 && errno == ENOEXEC);
+    script("/run/recursive", "#!/run/recursive\n");
+    assert(execv("/run/recursive", inherited) == -1 && errno == ELOOP);
+    script("/run/script", "#!/bin/check interpreter-arg\nignored\n");
     pid_t child = fork();
     assert(child >= 0);
     if (child == 0) {
-        execl("/tmp/script", "ignored", "tail", nullptr);
+        execl("/run/script", "ignored", "tail", nullptr);
         abort();
     }
     waitFor(child, 23);
 
-    assert(mkdir("/tmp/denied", 0700) == 0);
-    copy("/bin/check", "/tmp/denied/check", 0600);
-    assert(setenv("PATH", "/tmp/denied:/missing", 1) == 0);
+    assert(mkdir("/run/denied", 0700) == 0);
+    copy("/bin/check", "/run/denied/check", 0600);
+    assert(setenv("PATH", "/run/denied:/missing", 1) == 0);
     assert(execvp("check", inherited) == -1 && errno == EACCES);
-    assert(setenv("PATH", "/tmp", 1) == 0);
+    assert(setenv("PATH", "/run", 1) == 0);
     assert(execvp("recursive", inherited) == -1 && errno == ELOOP);
     child = fork();
     assert(child >= 0);

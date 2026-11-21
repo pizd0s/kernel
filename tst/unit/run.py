@@ -10,9 +10,9 @@ build compiles the case to <prefix>.wasm, checks that aot and vm -o make
 the same object of it and that the native reference behaves as expected,
 and packs <prefix>.exe, the image of the tests' /tests/unit/<name>. run
 boots rootfs from that image (--disk image=) and runs the program there,
-in /tmp, its environment rootfs's with the env directives; with root:
-own, in a root of its own under /tmp instead, chroot's, which has /bin/check,
-the program, and /tmp, its working directory the root, for a program
+in /run, its environment rootfs's with the env directives; with root:
+own, in a root of its own under /run instead, chroot's, which has /bin/check,
+the program, and /run, its working directory the root, for a program
 that makes /etc's files or execs itself as /bin/check. all is build and
 run, as coverage runs a case with its own vm and aot.
 
@@ -197,10 +197,10 @@ def run(source, prefix, name, tools):
         if named:
             variables.append("DISKS=" + " ".join(disk for disk, _ in named))
         if case.get("root", "system") == "own":
-            setup = f"mkdir /tmp/root /tmp/root/bin /tmp/root/tmp && cp /tests/unit/{name} /tmp/root/bin/check"
-            program = ["chroot", "/tmp/root", "/bin/check"]
+            setup = f"mkdir /run/root /run/root/bin /run/root/run && cp /tests/unit/{name} /run/root/bin/check"
+            program = ["chroot", "/run/root", "/bin/check"]
         else:
-            setup, program = "cd /tmp", ["/tests/unit/" + name]
+            setup, program = "cd /run", ["/tests/unit/" + name]
         script = f"{setup} && " + (f"exec {opened} && " if opened else "") + shlex.join(["exec", "env", *variables, *program, *args])
         result = invoke([tools["vm"], "run", *flags, "--disk", f"image={tools['image']}", "--", tools["rootfs"], "-c", script],
                         env=env, timeout=timeout)
