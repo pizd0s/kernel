@@ -594,6 +594,18 @@ devices_service = executable("devices_service_exe", command(
     color="cyan",
 ), "$(B)/tst/devices_service")
 
+# The program of tst/test_watchdir.py, which hands it to the system.
+watch_dir = executable("watch_dir_exe", command(
+    name="watch_dir_module",
+    inputs=["$(S)/tst/watch_dir.cpp", *PROTOCOL_SOURCES, *TOOL_INPUTS],
+    outputs=["$(B)/tst/watch_dir.wasm"],
+    deps=[libc],
+    cmd=["python3", "$(S)/bin/tools/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], "$(B)/tst/watch_dir.wasm",
+         "$(S)/tst/watch_dir.cpp", *PROTOCOL_SOURCES],
+    descr="CC",
+    color="cyan",
+), "$(B)/tst/watch_dir")
+
 # The probe of vm's network device of tst/test_net.py, which vm runs.
 net_probe = executable("net_probe_exe", command(
     name="net_probe_module",
@@ -1167,6 +1179,7 @@ APPLICATION_TESTED = {
     "disks": [vm, rootfs],
     "mounts": [vm, rootfs],
     "net": [vm, net_probe, inet_exe],
+    "watchdir": [vm, rootfs, watch_dir],
     "unix_sockets": [vm, rootfs, unix_sockets],
     "vfs": [vm, rootfs],
     "busybox_abi": [busybox],

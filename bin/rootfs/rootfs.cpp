@@ -2796,8 +2796,8 @@ Name Path::text() const {
 // An open file's call on a handle: FSTAT rootfs answers, with the
 // handle's id, and SEEK, GETFL and SETFL of the position and the flags
 // the handle keeps; READDIR asks the file system for the entries after
-// the position; the others are handed on to the file system its place
-// is of. O_PATH's handle reads, changes and locks nothing: EBADF; a
+// the position; the others, WATCH among them, whose watcher the file
+// system answers with, are handed on to the file system its place is of. O_PATH's handle reads, changes and locks nothing: EBADF; a
 // handle locks nothing, EINVAL; a directory reads by READDIR, not READ,
 // EISDIR; a call no handle serves fails as the protocol has it.
 static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
@@ -2818,6 +2818,14 @@ static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
             }
             readdirCall(h, fd, at, ep->id, ep->pos);
             return true;
+        case opWatch:
+            if (opath) {
+                return error(fd, EBADF);
+            }
+            if (!isDir(at)) {
+                return error(fd, ENOTDIR);
+            }
+            return hand(at, h, fsWatch, h.arg, nullptr, 0, {}, fd);
         case opSeek:
             return seekCall(ep, h, body, fd);
         case opGetfl:

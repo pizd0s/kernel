@@ -46,6 +46,7 @@
 #include <strings.h>
 #include <sys/epoll.h>
 #include <sys/execmode.h>
+#include <sys/watchdir.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -595,6 +596,7 @@ KERNEL(int, chdir, (const char* a), (a))
 KERNEL(int, fchdir, (int a), (a))
 KERNEL(int, chroot, (const char* a), (a))
 KERNEL(int, attach, (int a), (a))
+KERNEL(int, watchdir, (int a, int b), (a, b))
 KERNEL(char*, getcwd, (char* a, size_t b), (a, b))
 KERNEL(char*, get_current_dir_name, (void), ())
 KERNEL(int, unlink, (const char* a), (a))

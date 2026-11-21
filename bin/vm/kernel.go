@@ -601,6 +601,7 @@ func (k *Kernel) functionTable() map[string]any {
 		"fchdir":                 libcFchdir,
 		"chroot":                 libcChroot,
 		"attach":                 libcAttach,
+		"watchdir":               libcWatchdir,
 		"chdir":                  libcChdir,
 		"getcwd":                 libcGetcwd,
 		"mkdir":                  libcMkdir,

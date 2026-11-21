@@ -362,6 +362,10 @@ func libcAttach(fd uint32) uint32 {
 	return proc().libcAttach(fd)
 }
 
+func libcWatchdir(fd, flags uint32) uint32 {
+	return proc().libcWatchdir(fd, flags)
+}
+
 func libcChroot(path uint32) uint32 {
 	return proc().libcChroot(path)
 }

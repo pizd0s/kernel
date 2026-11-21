@@ -96,7 +96,7 @@ var callFormats = func() map[string]string {
 		tcsetattr:dddpd tcsetpgrp:ddd telldir:dp time:dp timegm:dpd times:dpd toascii:dd tolower:dd toupper:dd towctrans:ddd towlower:dd
 		towupper:dd truncate:dsd ttyname:sd ttyname_r:ddpd tzset:v ualarm:ddd umask:oo umount:ds umount2:dsd uname:dpd unlink:ds
 		unlinkat:ddsd unlockpt:dd unsetenv:ds usleep:dd utime:dspd utimensat:ddspdd utimes:dspd valloc:pd versionsort:dpdpd vfork:d
-		vhangup:d wait:dp wait3:dpdpd wait4:ddpdpd waitid:dddpdd waitpid:ddpd wcscat:ppp wcschr:ppd wcscmp:dpp wcscoll:dpp wcscpy:ppp
+		vhangup:d wait:dp wait3:dpdpd wait4:ddpdpd waitid:dddpdd waitpid:ddpd watchdir:ddd wcscat:ppp wcschr:ppd wcscmp:dpp wcscoll:dpp wcscpy:ppp
 		wcscspn:dpp wcsdup:pp wcsftime:dpdppd wcslen:dp wcsncmp:dppd wcsncpy:pppd wcsnlen:dpd wcspbrk:ppp wcsrchr:ppd wcsspn:dpp
 		wcsstr:ppp wcstok:pppp wcswidth:dpd wcsxfrm:dppd wctrans:ds wctype:ds wcwidth:dd wmemchr:ppdd wmemcmp:dppd wmemcpy:pppd
 		wmemmove:pppd wmemset:ppdd write:ddpd writev:ddpdd

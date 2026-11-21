@@ -130,7 +130,7 @@ registered kept
 4
 written
 register hello: File exists
-register a/b/c: Invalid argument
+registered a/b/c
 register fifo: Invalid argument
 register readonly: Bad file descriptor
 registered disk

@@ -6428,6 +6428,26 @@ func (p *Process) libcAttach(fd uint32) uint32 {
 	return p.result(p.install(d, 0, false))
 }
 
+func (p *Process) libcWatchdir(fd, flags uint32) uint32 {
+	if flags&^(O_CLOEXEC|O_NONBLOCK) != 0 {
+		return p.result(0, EINVAL)
+	}
+
+	obj, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	r := DirWatch{flags: O_RDONLY | flags&O_NONBLOCK}
+
+	if err := p.request(obj, &r); err != nil {
+		return p.result(0, err)
+	}
+
+	return p.result(p.install(r.file, 0, flags&O_CLOEXEC != 0))
+}
+
 func (p *Process) libcFchdir(fd uint32) uint32 {
 	obj, err := p.fd(fd)
 

@@ -116,6 +116,7 @@
 //     READDIR   arg room    node u64, after u64   an open file's READDIR's
 //                                         reply: the entries after the
 //                                         position after that room holds
+//     WATCH     arg flags   node u64          as an open file's
 //     OPEN      arg flags   node u64          OK, fds[0] the open file; a
 //                                         FIFO's OK is its stat alone
 //     CREATE    arg flags   node u64, mode u32, name   OK, fds[0] the open
@@ -175,6 +176,20 @@
 //                                         dirent64 hold, (19 + length + 1
 //                                         + 7) & ~7 each; the position moves
 //                                         to the last one's
+//     WATCH     arg flags                 OK opened, fds[0] the watcher of
+//                                         the directory, an open file of
+//                                         its flags, O_NONBLOCK of them,
+//                                         whose READ gives records of its
+//                                         names, kind u8, name, 0, as many
+//                                         as fit: watchExisting of each
+//                                         name there, then watchIdle once,
+//                                         then watchAdded and watchRemoved,
+//                                         each of what changed since the
+//                                         READ before; a name gone and back
+//                                         is another, removed and added. A
+//                                         READ that finds none waits, but
+//                                         of O_NONBLOCK; one of a directory
+//                                         gone is 0
 //     FSTAT                               OK stat
 //     FCHMOD    arg mode
 //     FCHOWN                uid u32 gid u32
@@ -377,6 +392,7 @@ enum : uint32_t {
     fsBind,
     fsConnect,
     fsRoot,
+    fsWatch,
     // An open file's.
     opRead = 64,
     opWrite,
@@ -393,6 +409,7 @@ enum : uint32_t {
     opSeek,
     opGetfl,
     opSetfl,
+    opWatch,
     // A service's.
     opOpen = 96,
     opRegister,
@@ -443,6 +460,12 @@ constexpr uint32_t cttyGone = 2;
 constexpr uint32_t cttyDropped = 3;
 // Io's flags.
 constexpr uint32_t ioAt = 4;
+
+// The kinds of a WATCH's records, as <sys/watchdir.h> has them.
+constexpr uint8_t watchExisting = 1;
+constexpr uint8_t watchIdle = 2;
+constexpr uint8_t watchAdded = 3;
+constexpr uint8_t watchRemoved = 4;
 
 // The room an entry of a READDIR's takes of struct dirent64, of a name of
 // length.
