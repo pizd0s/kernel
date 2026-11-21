@@ -44,6 +44,7 @@ GLIB = "2.90.1"
 SLANG = "2.3.3"
 PCRE2 = "10.49"
 NCURSES = "6.6"
+FSTACK = "2.0"
 
 
 def fetch(name, url, sha256, output):
@@ -70,6 +71,13 @@ busybox_tarball = fetch(
     f"https://busybox.net/downloads/busybox-{BUSYBOX}.tar.bz2",
     "b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314",
     f"$(B)/ext/busybox-{BUSYBOX}.tar.bz2",
+)
+
+fstack_tarball = fetch(
+    "fstack_tarball",
+    f"https://github.com/F-Stack/f-stack/archive/refs/tags/v{FSTACK}.tar.gz",
+    "edc80768b31f1582044e9e4183b97160ce2abb887265b3a98db59f1522b6a2ad",
+    f"$(B)/ext/f-stack-{FSTACK}.tar.gz",
 )
 
 doomgeneric_tarball = fetch(
@@ -625,6 +633,22 @@ fuse2fs = command(
     color="cyan",
 )
 fuse2fs_exe = executable("fuse2fs_exe", fuse2fs, "$(B)/bin/fuse2fs/fuse2fs")
+
+# inet, the system's TCP/IP: FreeBSD's stack as F-Stack runs it in a
+# program, on the network device of vm run --net (bin/inet).
+inet = command(
+    name="inet",
+    inputs=["$(S)/bin/inet/make.py", "$(S)/bin/inet/fstack-wasm32.patch", "$(S)/bin/inet/names.h", "$(S)/bin/inet/glue.c",
+            "$(S)/bin/inet/host.c", "$(S)/bin/inet/host.h", "$(S)/bin/inet/inet.cpp", *build.glob("$(S)/bin/inet/machine/*.h"),
+            "$(S)/dev/wasm.py", *LIBC_HEADERS],
+    outputs=["$(B)/bin/inet/inet.wasm"],
+    deps=[libc, fstack_tarball],
+    cmd=["python3", "$(S)/bin/inet/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], fstack_tarball.outputs[0],
+         "$(B)/bin/inet/inet.wasm"],
+    descr="CC",
+    color="cyan",
+)
+inet_exe = executable("inet_exe", inet, "$(B)/bin/inet/inet")
 fuse2fs_pkg = package("bin/fuse2fs", ["--file", "bin/fuse2fs", fuse2fs_exe.outputs[0]], deps=[fuse2fs_exe])
 
 # The system's own /etc: its message of the day and its users, root alone.
@@ -1142,7 +1166,7 @@ APPLICATION_TESTED = {
     "devices": [vm, rootfs, devices_service],
     "disks": [vm, rootfs],
     "mounts": [vm, rootfs],
-    "net": [vm, net_probe],
+    "net": [vm, net_probe, inet_exe],
     "unix_sockets": [vm, rootfs, unix_sockets],
     "vfs": [vm, rootfs],
     "busybox_abi": [busybox],

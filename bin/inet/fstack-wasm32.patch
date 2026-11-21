@@ -1,0 +1,287 @@
+F-Stack builds for amd64 and arm64 with glibc, where a function's
+declaration and its definition may disagree and still be called, and
+long, a pointer and register_t are one 64-bit word. On wasm32 a call
+through a declaration of another signature than the function's traps,
+long and pointers are 32 bits and register_t is int, as on FreeBSD's
+32-bit machines; the C library is lib/c. Its own files, then:
+
+- its stub of VOP_PATHCONF takes a register_t pointer where FreeBSD's
+  vnode interface has long (kern_descrip.c passes its long);
+- its malloc, realloc and reallocf of malloc(9) take unsigned long where
+  sys/malloc.h declares size_t;
+- its linker's relocation is amd64's, of Elf64 relocations: on another
+  machine no module is loaded, and the relocation fails;
+- ff_ioctl takes every negative long its translation of Linux's
+  commands gives for -1, the unknown one: of 32 bits, a command that
+  copies in (IOC_IN, the high bit, FIONBIO's) is negative;
+- ff_compat.c declares ff_adapt_user_proc_exit int, ff_init_main.c
+  defines it void;
+- its stubs of FreeBSD 14's functions in ff_stub_14_extra.c have other
+  signatures than FreeBSD's headers, which their callers use:
+  aio_clear_cancel_function and nlmsg_report_err_msg return bool,
+  m_rcvif_serialize returns nothing and m_rcvif_restore an ifnet of the
+  mbuf alone, nl_modify_ifp_generic takes the parsed link too and
+  nl_parse_attrs_raw a 16-bit length and the parsers' count;
+- its ff_event.h, of the programs' side, names glibc's own types of
+  64-bit integers, __int64_t and __uint64_t, where it includes stdint.h.
+
+And of FreeBSD's sys/kernel.h: a SYSINIT's function is called through
+sysinit_cfunc_t, with its argument, whatever its own type, and many are
+of no argument; a call of another signature than the function's traps
+on wasm32. Each SYSINIT and SYSUNINIT has a function of sysinit_cfunc_t
+of its own, which calls the given one by its type, with no argument or
+with the argument; so has each VNET_SYSINIT and VNET_SYSUNINIT of
+net/vnet.h, called through its vnet_sysinit.
+
+--- a/lib/include/sys/vnode.h
++++ b/lib/include/sys/vnode.h
+@@ -133,7 +133,7 @@
+ #define    VV_PROCDEP    0x0100    /* vnode is process dependent */
+ 
+ static __inline int
+-VOP_PATHCONF(struct vnode *vp, int name, register_t *retval)
++VOP_PATHCONF(struct vnode *vp, int name, long *retval)
+ {
+     return (0);
+ }
+--- a/lib/ff_glue.c
++++ b/lib/ff_glue.c
+@@ -1064,7 +1064,7 @@
+ }
+ 
+ void *
+-malloc(unsigned long size, struct malloc_type *type, int flags)
++malloc(size_t size, struct malloc_type *type, int flags)
+ {
+     void *alloc;
+ 
+@@ -1088,14 +1088,14 @@
+ }
+ 
+ void *
+-realloc(void *addr, unsigned long size, struct malloc_type *type,
++realloc(void *addr, size_t size, struct malloc_type *type,
+     int flags)
+ {
+     return (ff_realloc(addr, size));
+ }
+ 
+ void *
+-reallocf(void *addr, unsigned long size, struct malloc_type *type,
++reallocf(void *addr, size_t size, struct malloc_type *type,
+      int flags)
+ {
+     void *mem;
+--- a/lib/ff_compat.c
++++ b/lib/ff_compat.c
+@@ -76,7 +76,7 @@
+ uma_zone_t namei_zone;
+ extern unsigned int rand_r(unsigned int *seed);
+ extern int ff_adapt_user_proc_add(struct thread *parent_td, struct thread *td);
+-extern int ff_adapt_user_proc_exit(struct thread *td);
++extern void ff_adapt_user_proc_exit(struct thread *td);
+ __thread unsigned int seed = 0;
+ 
+ #define M_ZERO        0x0100        /* bzero the allocation */
+@@ -222,6 +222,7 @@
+ }
+ 
+ /* Process one elf relocation with addend. */
++#ifdef __amd64__
+ static int
+ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
+     int type, int local, elf_lookup_fn lookup)
+@@ -328,6 +329,14 @@
+     }
+     return(0);
+ }
++#else
++static int
++elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
++    int type, int local, elf_lookup_fn lookup)
++{
++    return (-1); /* no module is loaded but on amd64 */
++}
++#endif
+ 
+ int
+ elf_reloc(linker_file_t lf, Elf_Addr relocbase, const void *data, int type,
+--- a/lib/ff_stub_14_extra.c
++++ b/lib/ff_stub_14_extra.c
+@@ -88,10 +88,10 @@
+     return (0);
+ }
+ 
+-void aio_clear_cancel_function(struct kaiocb *job);
+-void aio_clear_cancel_function(struct kaiocb *job)
++bool aio_clear_cancel_function(struct kaiocb *job);
++bool aio_clear_cancel_function(struct kaiocb *job)
+ {
+-    
++    return (false);
+ }
+ 
+ void aio_complete(struct kaiocb *job, long status, int error);
+@@ -260,16 +260,16 @@
+ 
+ MALLOC_DEFINE(M_NVLIST, "nvlist", "kernel nvlist");
+ 
+-void m_rcvif_restore(struct mbuf *m, if_t ifp, void *cookie);
+-void m_rcvif_restore(struct mbuf *m, if_t ifp, void *cookie)
++struct ifnet *m_rcvif_restore(struct mbuf *m);
++struct ifnet *m_rcvif_restore(struct mbuf *m)
+ {
+-    
++    return (NULL);
+ }
+ 
+-void *m_rcvif_serialize(struct mbuf *m);
+-void *m_rcvif_serialize(struct mbuf *m)
++void m_rcvif_serialize(struct mbuf *m);
++void m_rcvif_serialize(struct mbuf *m)
+ {
+-    return (NULL);
++    return;
+ }
+ 
+ int m_snd_tag_alloc(if_t ifp, union if_snd_tag_alloc_params *params, struct m_snd_tag **mstp);
+@@ -382,8 +382,8 @@
+     return (0);
+ }
+ 
+-int nl_modify_ifp_generic(if_t ifp, struct nlattr_bmask *bm, struct nl_pstate *npt);
+-int nl_modify_ifp_generic(if_t ifp, struct nlattr_bmask *bm, struct nl_pstate *npt)
++int nl_modify_ifp_generic(if_t ifp, void *lattrs, struct nlattr_bmask *bm, struct nl_pstate *npt);
++int nl_modify_ifp_generic(if_t ifp, void *lattrs, struct nlattr_bmask *bm, struct nl_pstate *npt)
+ {
+     return (EOPNOTSUPP);
+ }
+@@ -412,10 +412,10 @@
+     return (false);
+ }
+ 
+-void nlmsg_report_err_msg(struct nl_pstate *npt, const char *fmt, ...);
+-void nlmsg_report_err_msg(struct nl_pstate *npt, const char *fmt, ...)
++bool nlmsg_report_err_msg(struct nl_pstate *npt, const char *fmt, ...);
++bool nlmsg_report_err_msg(struct nl_pstate *npt, const char *fmt, ...)
+ {
+-    
++    return (false);
+ }
+ 
+ void *nlmsg_reserve_data_raw(struct nl_writer *nw, size_t sz);
+@@ -424,8 +424,8 @@
+     return (NULL);
+ }
+ 
+-int nl_parse_attrs_raw(struct nlattr *nla_head, int len, const void *parser, struct nl_pstate *npt, void *target);
+-int nl_parse_attrs_raw(struct nlattr *nla_head, int len, const void *parser, struct nl_pstate *npt, void *target)
++int nl_parse_attrs_raw(struct nlattr *nla_head, uint16_t len, const void *parser, u_int pslen, struct nl_pstate *npt, void *target);
++int nl_parse_attrs_raw(struct nlattr *nla_head, uint16_t len, const void *parser, u_int pslen, struct nl_pstate *npt, void *target)
+ {
+     return (EINVAL);
+ }
+--- a/lib/ff_event.h
++++ b/lib/ff_event.h
+@@ -87,9 +87,9 @@
+     short filter;           /* filter for event */
+     unsigned short flags;   /* action flags for kqueue */
+     unsigned int fflags;    /* filter flag value */
+-    __int64_t data;         /* filter data value */
++    int64_t data;         /* filter data value */
+     void *udata;            /* opaque user data identifier */
+-    __uint64_t ext[4];      /* extensions */
++    uint64_t ext[4];      /* extensions */
+ };
+ 
+ #if defined(_WANT_FREEBSD11_KEVENT)
+--- a/lib/ff_syscall_wrapper.c
++++ b/lib/ff_syscall_wrapper.c
+@@ -1101,7 +1101,7 @@
+ #endif /* FF_KERNEL_COEXIST */
+ 
+     req = linux2freebsd_ioctl(request);
+-    if (req < 0) {
++    if (req == -1) {
+         rc = EINVAL;
+         goto kern_fail;
+     }
+--- a/freebsd/sys/kernel.h
++++ b/freebsd/sys/kernel.h
+@@ -278,8 +278,17 @@
+ #endif
+ 
+ #define	SYSINIT(uniquifier, subsystem, order, func, ident)	\
++	_SYSINIT_CALLED(uniquifier, subsystem, order, func, ident)
++
++#define	_SYSINIT_CALLED(uniquifier, subsystem, order, func, ident)	\
++	static void uniquifier ## _sys_init_call(const void *udata)	\
++	{							\
++		_Generic((func),				\
++		    void (*)(void): ((void (*)(void))(func))(),	\
++		    default: ((sysinit_nfunc_t)(func))((void *)(uintptr_t)udata)); \
++	}							\
+ 	C_SYSINIT(uniquifier, subsystem, order,			\
+-	(sysinit_cfunc_t)(sysinit_nfunc_t)func, (void *)(ident))
++	    uniquifier ## _sys_init_call, (void *)(ident))
+ 
+ /*
+  * Called on module unload: no special processing
+@@ -295,8 +304,17 @@
+ 	DATA_WSET(sysuninit_set, uniquifier ## _sys_uninit)
+ 
+ #define	SYSUNINIT(uniquifier, subsystem, order, func, ident)	\
+-	C_SYSUNINIT(uniquifier, subsystem, order,		\
+-	(sysinit_cfunc_t)(sysinit_nfunc_t)func, (void *)(ident))
++	_SYSUNINIT_CALLED(uniquifier, subsystem, order, func, ident)
++
++#define	_SYSUNINIT_CALLED(uniquifier, subsystem, order, func, ident)	\
++	static void uniquifier ## _sys_uninit_call(const void *udata)	\
++	{							\
++		_Generic((func),				\
++		    void (*)(void): ((void (*)(void))(func))(),	\
++		    default: ((sysinit_nfunc_t)(func))((void *)(uintptr_t)udata)); \
++	}							\
++	C_SYSUNINIT(uniquifier, subsystem, order,			\
++	    uniquifier ## _sys_uninit_call, (void *)(ident))
+ 
+ void	sysinit_add(struct sysinit **set, struct sysinit **set_end);
+ 
+--- a/freebsd/net/vnet.h
++++ b/freebsd/net/vnet.h
+@@ -339,10 +339,16 @@
+ #define	VNET_SYSINIT(ident, subsystem, order, func, arg)		\
+ 	CTASSERT((subsystem) > SI_SUB_VNET &&				\
+ 	    (subsystem) <= SI_SUB_VNET_DONE);				\
++	static void ident ## _vnet_init_call(const void *udata)		\
++	{								\
++		_Generic((func),					\
++		    void (*)(void): ((void (*)(void))(func))(),		\
++		    default: ((sysinit_nfunc_t)(func))((void *)(uintptr_t)udata)); \
++	}								\
+ 	static struct vnet_sysinit ident ## _vnet_init = {		\
+ 		subsystem,						\
+ 		order,							\
+-		(sysinit_cfunc_t)(sysinit_nfunc_t)func,			\
++		ident ## _vnet_init_call,					\
+ 		(arg)							\
+ 	};								\
+ 	SYSINIT(vnet_init_ ## ident, subsystem, order,			\
+@@ -353,10 +359,16 @@
+ #define	VNET_SYSUNINIT(ident, subsystem, order, func, arg)		\
+ 	CTASSERT((subsystem) > SI_SUB_VNET &&				\
+ 	    (subsystem) <= SI_SUB_VNET_DONE);				\
++	static void ident ## _vnet_uninit_call(const void *udata)		\
++	{								\
++		_Generic((func),					\
++		    void (*)(void): ((void (*)(void))(func))(),		\
++		    default: ((sysinit_nfunc_t)(func))((void *)(uintptr_t)udata)); \
++	}								\
+ 	static struct vnet_sysinit ident ## _vnet_uninit = {		\
+ 		subsystem,						\
+ 		order,							\
+-		(sysinit_cfunc_t)(sysinit_nfunc_t)func,			\
++		ident ## _vnet_uninit_call,					\
+ 		(arg)							\
+ 	};								\
+ 	SYSINIT(vnet_uninit_ ## ident, subsystem, order,		\
