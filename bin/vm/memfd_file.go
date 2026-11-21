@@ -138,9 +138,9 @@ func (f *MemfdFile) write(p *Process, from *MemfdFile, n int, mode IoMode) (int,
 }
 
 func (f *MemfdFile) pread(p *Process, into *MemfdFile, n int, off int64) (int, error) {
-	f.mem.enter()
+	enterBoth(f.mem, into.mem)
 
-	defer f.mem.leave()
+	defer leaveBoth(f.mem, into.mem)
 
 	b := f.bytes()
 	size := int64(len(b))
@@ -156,7 +156,7 @@ func (f *MemfdFile) pread(p *Process, into *MemfdFile, n int, off int64) (int, e
 
 	src := b[off : off+min(int64(n), size-off)]
 
-	return into.with(0, len(src), true, func(dst []byte) (int, error) {
+	return into.within(0, len(src), true, func(dst []byte) (int, error) {
 		moveMemory(dst, src[:len(dst)])
 
 		return len(dst), nil
@@ -164,9 +164,9 @@ func (f *MemfdFile) pread(p *Process, into *MemfdFile, n int, off int64) (int, e
 }
 
 func (f *MemfdFile) pwrite(p *Process, from *MemfdFile, n int, off int64) (int, error) {
-	f.mem.enter()
+	enterBoth(f.mem, from.mem)
 
-	defer f.mem.leave()
+	defer leaveBoth(f.mem, from.mem)
 
 	b := f.bytes()
 	size := int64(len(b))
@@ -184,7 +184,7 @@ func (f *MemfdFile) pwrite(p *Process, from *MemfdFile, n int, off int64) (int, 
 
 	dst := b[off : off+min(int64(n), size-off)]
 
-	return from.with(0, len(dst), false, func(src []byte) (int, error) {
+	return from.within(0, len(dst), false, func(src []byte) (int, error) {
 		moveMemory(dst, src)
 
 		return len(src), nil
@@ -228,6 +228,10 @@ func (f *MemfdFile) with(at int64, n int, writes bool, fn func(b []byte) (int, e
 
 	defer f.mem.leave()
 
+	return f.within(at, n, writes, fn)
+}
+
+func (f *MemfdFile) within(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
 	b := f.bytes()
 	size := int64(len(b))
 

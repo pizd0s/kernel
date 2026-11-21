@@ -4,9 +4,9 @@ package main
 
 import (
 	"math"
-	"runtime"
 	"sync"
 	"syscall"
+	"unsafe"
 )
 
 const (
@@ -24,9 +24,7 @@ type LinearMemory struct {
 
 	owner *Instance
 
-	gate    sync.Mutex
-	readers int
-	moving  bool
+	gate sync.RWMutex
 }
 
 func mmap(size int, prot int) []byte {
@@ -68,44 +66,39 @@ func (m *LinearMemory) bytes() []byte {
 }
 
 func (m *LinearMemory) enter() {
-	m.gate.Lock()
-
-	for m.moving {
-		m.gate.Unlock()
-		runtime.Gosched()
-		m.gate.Lock()
-	}
-
-	m.readers++
-	m.gate.Unlock()
+	m.gate.RLock()
 }
 
 func (m *LinearMemory) leave() {
-	m.gate.Lock()
-	m.readers--
-	m.gate.Unlock()
+	m.gate.RUnlock()
 }
 
 func (m *LinearMemory) shut() {
-	for {
-		m.gate.Lock()
-
-		if m.readers == 0 {
-			m.moving = true
-			m.gate.Unlock()
-
-			return
-		}
-
-		m.gate.Unlock()
-		runtime.Gosched()
-	}
+	m.gate.Lock()
 }
 
 func (m *LinearMemory) open() {
-	m.gate.Lock()
-	m.moving = false
 	m.gate.Unlock()
+}
+
+func enterBoth(a, b *LinearMemory) {
+	if uintptr(unsafe.Pointer(a)) > uintptr(unsafe.Pointer(b)) {
+		a, b = b, a
+	}
+
+	a.enter()
+
+	if b != a {
+		b.enter()
+	}
+}
+
+func leaveBoth(a, b *LinearMemory) {
+	a.leave()
+
+	if b != a {
+		b.leave()
+	}
 }
 
 func (m *LinearMemory) grow(delta uint32, by *Process) uint32 {
