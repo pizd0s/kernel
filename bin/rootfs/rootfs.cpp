@@ -3105,7 +3105,8 @@ static void reapOnChild() {
 constexpr int maxKept = 2 + 32;
 
 // A program run in a child whose root and working directory are root,
-// an end of a pair of ours: the child asks us, who serve when it does;
+// a directory over an end of a pair of ours (attach): the child asks us,
+// who serve when it does;
 // with no root, rootfs's own, which has no path. The descriptors kept
 // are the child's 3 and on, in order. The program is the file path
 // names, or the one of the descriptor program. A session's leads one of
@@ -3159,8 +3160,8 @@ static pid_t spawn(const char* path, char* const* argv, char* const* env, int ro
     return pid;
 }
 
-// What rootfs starts runs with a clean environment, its root the far
-// end of our own pair, never ours: a server does not walk its own tree
+// What rootfs starts runs with a clean environment, its root a directory
+// over the far end of our own pair, never ours: a server does not walk its own tree
 // by path, and could not ask itself before it serves. erofs has none.
 // HOME and TMPDIR are /run, where a program may write what it keeps.
 // TERM is the console's type (consoleType).
@@ -3322,14 +3323,19 @@ static Task boot() {
         rootMount->fs->cached = !nocacheIn(a);
     }
     // The root of the processes rootfs starts: a pair, whose first end is
-    // the handle of id 0, at the root, and whose second each of them makes
-    // its working directory and its root (spawn).
+    // the handle of id 0, at the root, and a directory over whose second
+    // (attach) each of them makes its working directory and its root
+    // (spawn).
     int root[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, root) != 0) {
         fatal("rootfs: a pair for the root: errno %d", errno);
     }
     listenHandle(root[0], rootOf(rootMount), false, 0);
-    rootEnd = root[1];
+    rootEnd = attach(root[1]);
+    if (rootEnd < 0 || fcntl(rootEnd, F_SETFD, FD_CLOEXEC) != 0) {
+        fatal("rootfs: attach: errno %d", errno);
+    }
+    close(root[1]);
 
     const struct {
         const char* name;

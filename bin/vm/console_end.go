@@ -3,7 +3,9 @@
 package main
 
 import (
+	"encoding/binary"
 	"sync/atomic"
+	"time"
 	"unsafe"
 )
 
@@ -46,66 +48,6 @@ func (c *ConsoleEnd) unref() {
 			e.unref()
 		}
 	}
-}
-
-func (c *ConsoleEnd) asFile() File {
-	return c
-}
-
-func (c *ConsoleEnd) asTransfer() Transfer {
-	return c
-}
-
-func (c *ConsoleEnd) asSeeker() Seeker {
-	return nil
-}
-
-func (c *ConsoleEnd) asDir() Dir {
-	return nil
-}
-
-func (c *ConsoleEnd) asTerminal() Terminal {
-	return nil
-}
-
-func (c *ConsoleEnd) asLink() Link {
-	return nil
-}
-
-func (c *ConsoleEnd) asAttrs() Attrs {
-	return nil
-}
-
-func (c *ConsoleEnd) asSocket() Socket {
-	return nil
-}
-
-func (c *ConsoleEnd) asIoctl() Ioctl {
-	return c
-}
-
-func (c *ConsoleEnd) asLocker() Locker {
-	return nil
-}
-
-func (c *ConsoleEnd) asEpoll() *Epoll {
-	return nil
-}
-
-func (c *ConsoleEnd) asPair() *PairEnd {
-	return nil
-}
-
-func (c *ConsoleEnd) asListener() *UnixListener {
-	return nil
-}
-
-func (c *ConsoleEnd) asConsole() *ConsoleEnd {
-	return c
-}
-
-func (c *ConsoleEnd) asRemote() *RemoteFD {
-	return nil
 }
 
 func (c *ConsoleEnd) stat(p *Process, st *Stat) error {
@@ -162,7 +104,7 @@ func (c *ConsoleEnd) setFlags(fl int) error {
 	return nil
 }
 
-func (c *ConsoleEnd) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
+func (c *ConsoleEnd) read(p *Process, into Object, n int, mode IoMode) (int, error) {
 	if c.in == nil {
 		return 0, EBADF
 	}
@@ -172,7 +114,7 @@ func (c *ConsoleEnd) read(p *Process, into Transfer, n int, mode IoMode) (int, e
 	return c.in.read(p, into, n, mode)
 }
 
-func (c *ConsoleEnd) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
+func (c *ConsoleEnd) write(p *Process, from Object, n int, mode IoMode) (int, error) {
 	if c.out == nil {
 		return 0, EBADF
 	}
@@ -182,27 +124,23 @@ func (c *ConsoleEnd) write(p *Process, from Transfer, n int, mode IoMode) (int, 
 	return c.out.write(p, from, n, mode)
 }
 
-func (c *ConsoleEnd) pread(p *Process, into Transfer, n int, off int64) (int, error) {
+func (c *ConsoleEnd) pread(p *Process, into Object, n int, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (c *ConsoleEnd) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
+func (c *ConsoleEnd) pwrite(p *Process, from Object, n int, off int64) (int, error) {
 	return 0, ESPIPE
-}
-
-func (c *ConsoleEnd) splice(at int64, n int, mode int) Transfer {
-	return newSpliced(c, at, n, mode)
 }
 
 func (c *ConsoleEnd) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
 	return 0, EINVAL
 }
 
-func (c *ConsoleEnd) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+func (c *ConsoleEnd) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 
-func (c *ConsoleEnd) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
+func (c *ConsoleEnd) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 
@@ -212,4 +150,134 @@ func (c *ConsoleEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
 	}
 
 	return c.in.ioctl(req, arg)
+}
+
+func (c *ConsoleEnd) seek(p *Process, off int64, whence int) (int64, error) {
+	return 0, ESPIPE
+}
+
+func (c *ConsoleEnd) readdir(p *Process, into Object, n int) (int, error) {
+	return 0, ENOTDIR
+}
+
+func (c *ConsoleEnd) truncate(p *Process, size int64) error {
+	return EINVAL
+}
+
+func (c *ConsoleEnd) sync(p *Process, data bool) error {
+	return EINVAL
+}
+
+func (c *ConsoleEnd) chmod(p *Process, mode uint32) error {
+	return EINVAL
+}
+
+func (c *ConsoleEnd) chown(p *Process, uid, gid int) error {
+	return EINVAL
+}
+
+func (c *ConsoleEnd) utimes(p *Process, ts []Timespec) error {
+	return EINVAL
+}
+
+func (c *ConsoleEnd) statfs(p *Process, st *Statfs) error {
+	return EINVAL
+}
+
+func (c *ConsoleEnd) flock(p *Process, op int) error {
+	return EBADF
+}
+
+func (c *ConsoleEnd) recordLock(p *Process, cmd int, lk *Flock) error {
+	return EBADF
+}
+
+func (c *ConsoleEnd) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
+	switch op {
+	case rGetWinsize:
+		w, err := hostWindow()
+
+		return Packet{data: w[:]}, false, err
+	case rGetPgrp:
+		return Packet{data: binary.LittleEndian.AppendUint64(nil, uint64(uint32(p.k.foreground())))}, false, nil
+	case rSetPgrp:
+		p.k.mu.Lock()
+		p.k.fg = int32(arg)
+		p.k.mu.Unlock()
+
+		return Packet{}, false, nil
+	}
+
+	return Packet{}, false, errUnserved
+}
+
+func (c *ConsoleEnd) token() (uint64, error) {
+	return 0, EXDEV
+}
+
+func (c *ConsoleEnd) device() FileKey {
+	return FileKey{}
+}
+
+func (c *ConsoleEnd) bind(p *Process, a Address) error {
+	return ENOTSOCK
+}
+
+func (c *ConsoleEnd) connect(p *Process, a Address) error {
+	return ENOTSOCK
+}
+
+func (c *ConsoleEnd) listen(backlog int) error {
+	return ENOTSOCK
+}
+
+func (c *ConsoleEnd) accept(p *Process, flags uint32) (Object, []byte, error) {
+	return nil, nil, ENOTSOCK
+}
+
+func (c *ConsoleEnd) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
+	return nil, ECONNREFUSED
+}
+
+func (c *ConsoleEnd) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
+	return 0, ENOTSOCK
+}
+
+func (c *ConsoleEnd) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
+	return 0, Packet{}, 0, ENOTSOCK
+}
+
+func (c *ConsoleEnd) sockname(p *Process) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (c *ConsoleEnd) peername(p *Process) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (c *ConsoleEnd) getsockopt(p *Process, level, name uint32) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (c *ConsoleEnd) setsockopt(level, name uint32, value []byte) error {
+	return ENOTSOCK
+}
+
+func (c *ConsoleEnd) shutdown(how int) error {
+	return ENOTSOCK
+}
+
+func (c *ConsoleEnd) consume(sink func(pk *Packet)) {
+}
+
+func (c *ConsoleEnd) socketKind() int {
+	return 0
+}
+
+func (c *ConsoleEnd) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
+	return EINVAL
+}
+
+func (c *ConsoleEnd) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
+	return 0, EINVAL
 }

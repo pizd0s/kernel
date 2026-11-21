@@ -148,6 +148,13 @@ int eaccess(const char*, int);
 int chdir(const char*);
 int fchdir(int);
 int chroot(const char*);
+/*
+ * attach gives a directory over a connection: fd an end of a pair whose
+ * other end speaks the file protocol (lib/protocol/protocol.h), the new
+ * descriptor a directory whose calls by path go to who serves that end,
+ * as rootfs gives its processes their root (fchdir, then chroot(".")).
+ */
+int attach(int);
 char* getcwd(char*, size_t);
 char* get_current_dir_name(void);
 int unlink(const char*);

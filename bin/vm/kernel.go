@@ -27,7 +27,7 @@ var hostSignals = map[syscall.Signal]int{
 }
 
 type Kernel struct {
-	root    Dir
+	root    Object
 	user    Cred
 	console *Console
 
@@ -42,7 +42,7 @@ type Kernel struct {
 	locks LockTable
 
 	fg        int32
-	cttys     map[int32]Terminal
+	cttys     map[int32]Object
 	first     *Process
 	exit      chan int
 	functions map[string]any
@@ -52,7 +52,7 @@ type Kernel struct {
 
 func newKernel(user Cred, memory uint64) *Kernel {
 	k := &Kernel{procs: map[int32]*Process{}, codes: map[CodeKey]*CodeEntry{}, fifos: map[FileKey]*Pipe{},
-		exit: make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]Terminal{}, pool: newPool(memory)}
+		exit: make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]Object{}, pool: newPool(memory)}
 
 	k.locks.files = map[FileKey]*LockedFile{}
 	k.names.host, k.names.domain = "pizdos", "(none)"
@@ -144,25 +144,19 @@ func (k *Kernel) code(p *Process, f Object, name string) (*Code, error) {
 }
 
 func programData(p *Process, f Object, module bool) (data []byte, ok bool, err error) {
-	file := f.asFile()
-
-	if file == nil {
-		return nil, false, EACCES
-	}
-
 	var st Stat
 
-	if err := file.stat(p, &st); err != nil {
+	if err := f.stat(p, &st); err == EBADF {
+		return nil, false, EACCES
+	} else if err != nil {
 		return nil, false, err
 	}
 
-	t := f.asTransfer()
-
-	if t == nil {
+	if fl, _ := f.flags(); fl&O_PATH != 0 {
 		return nil, false, EACCES
 	}
 
-	return readProgram(st.Size, func(b []byte, off int64) error { return readAt(p, t, b, off) }, module)
+	return readProgram(st.Size, func(b []byte, off int64) error { return readAt(p, f, b, off) }, module)
 }
 
 func readProgram(size int64, readAt func(b []byte, off int64) error, module bool) (data []byte, ok bool, err error) {
@@ -192,7 +186,7 @@ func readProgram(size int64, readAt func(b []byte, off int64) error, module bool
 	return data, length > 0, nil
 }
 
-func readAt(p *Process, t Transfer, b []byte, off int64) error {
+func readAt(p *Process, t Object, b []byte, off int64) error {
 	for at := 0; at < len(b); {
 		n, err := t.pread(p, bytesFile(b[at:]), len(b)-at, off+int64(at))
 
@@ -606,6 +600,7 @@ func (k *Kernel) functionTable() map[string]any {
 		"fstatvfs":               libcFstatvfs,
 		"fchdir":                 libcFchdir,
 		"chroot":                 libcChroot,
+		"attach":                 libcAttach,
 		"chdir":                  libcChdir,
 		"getcwd":                 libcGetcwd,
 		"mkdir":                  libcMkdir,

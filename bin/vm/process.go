@@ -207,8 +207,8 @@ type Process struct {
 	image *ExecImage
 	files FdTable
 
-	root  Dir
-	cwd   Dir
+	root  Object
+	cwd   Object
 	umask uint32
 
 	errnoAt    uint32
@@ -228,7 +228,7 @@ type Process struct {
 	chaos     *ChaosRulesOf
 	modes     uint32
 	classes   uint32
-	sink      Transfer
+	sink      Object
 	failure   Errno
 	regexes   map[uint32]*PosixRegex
 	nextRegex uint32
@@ -300,10 +300,10 @@ func (p *Process) libcExecmode(modes, classes, sink uint32) uint32 {
 		return p.result(0, EINVAL)
 	}
 
-	var to Transfer
+	var to Object
 
 	if int32(sink) != -1 {
-		t, err := p.transferAt(sink, false)
+		t, err := p.fd(sink)
 
 		if err != nil {
 			return p.result(0, err)
@@ -326,7 +326,7 @@ func (p *Process) libcExecmode(modes, classes, sink uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) setSink(to Transfer) {
+func (p *Process) setSink(to Object) {
 	if p.sink != nil {
 		p.sink.unref()
 	}
@@ -480,7 +480,7 @@ func (p *Process) chaosCompacts() bool {
 	return p != nil && p.chaos.holds("memory-compact")
 }
 
-func (p *Process) firstCwd() (Dir, string) {
+func (p *Process) firstCwd() (Object, string) {
 	p.root.ref()
 
 	return p.root, "/"
@@ -806,7 +806,7 @@ func oob() {
 	panic(newTrap(trapMemoryOOB, 1))
 }
 
-func (p *Process) memory(at, n uint32, mode int) Transfer {
+func (p *Process) memory(at, n uint32, mode int) Object {
 	p.span(at, n)
 
 	return p.inst.memfd.splice(int64(at), int(n), mode)
@@ -1033,7 +1033,7 @@ func (p *Process) loadFrom(path string, first Object, argv []string) (*ExecImage
 
 		var st Stat
 
-		t := f.asTransfer()
+		t := f
 
 		if err := statFile(p, f, &st); err != nil {
 			f.unref()
@@ -1041,7 +1041,7 @@ func (p *Process) loadFrom(path string, first Object, argv []string) (*ExecImage
 			return nil, err
 		}
 
-		if t == nil || st.Mode&S_IFMT != S_IFREG {
+		if fl, _ := f.flags(); fl&O_PATH != 0 || st.Mode&S_IFMT != S_IFREG {
 			f.unref()
 
 			return nil, EACCES
@@ -1102,14 +1102,14 @@ func (p *Process) openProgram(path string) (Object, string, error) {
 	var f Object
 	var program string
 
-	err := p.onPath(AT_FDCWD, path, func(d Dir) error {
+	err := p.onPath(AT_FDCWD, path, func(d Object) error {
 		var err error
 
-		if f, err = d.openPath(p, path, O_RDONLY, 0); err != nil {
+		if f, err = p.dirOpen(d, path, O_RDONLY, 0); err != nil {
 			return err
 		}
 
-		if real, err := d.realpathOf(p, path); err == nil {
+		if real, err := p.dirRealpath(d, path); err == nil {
 			program = real
 		}
 
@@ -1644,16 +1644,6 @@ func (p *Process) libcSetpgid(pid, pgid uint32) uint32 {
 	p.k.mu.Unlock()
 
 	return p.result(0, nil)
-}
-
-func (p *Process) consoleAt(fd uint32) error {
-	ok, err := p.isConsole(fd)
-
-	if err == nil && !ok {
-		err = ENOTTY
-	}
-
-	return err
 }
 
 func (p *Process) setIds(ids *[3]uint32, r, e, s uint32) error {
@@ -4149,7 +4139,7 @@ func (p *Process) crash(msg string, stack []uintptr) {
 		}
 	}
 
-	if t, err := p.transferAt(2, false); err == nil {
+	if t, err := p.fd(2); err == nil {
 		if _, err := t.write(p, bytesFile([]byte(b.String())), b.Len(), IoMode{quiet: true}); err == nil {
 			return
 		}
@@ -4275,7 +4265,7 @@ func (p *Process) stackRelease(at uint32) {
 
 type Mapping struct {
 	length uint32
-	file   Transfer
+	file   Object
 	offset int64
 	read   []byte
 }
@@ -4445,15 +4435,13 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 	if flags&MAP_ANONYMOUS == 0 {
 		obj, err := p.fd(fd)
 
-		var f Transfer
+		var f Object
 
 		if err == nil {
-			t := obj.asTransfer()
-
-			if t == nil || obj.asSeeker() == nil {
+			if _, failed := obj.seek(p, 0, 1); failed != nil {
 				err = ENODEV
 			} else {
-				f = t
+				f = obj
 
 				w := p.memory(at, n, O_WRONLY)
 
@@ -4850,108 +4838,6 @@ func (p *Process) fd(fd uint32) (Object, error) {
 	return d.obj, nil
 }
 
-func (p *Process) fileAt(fd uint32) (File, error) {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if f := obj.asFile(); f != nil {
-		return f, nil
-	}
-
-	return nil, EBADF
-}
-
-func (p *Process) transferAt(fd uint32, read bool) (Transfer, error) {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if t := obj.asTransfer(); t != nil {
-		return t, nil
-	}
-
-	if obj.asDir() != nil && read {
-		return nil, EISDIR
-	}
-
-	return nil, EBADF
-}
-
-func (p *Process) seekerAt(fd uint32) (Seeker, error) {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if s := obj.asSeeker(); s != nil {
-		return s, nil
-	}
-
-	return nil, ESPIPE
-}
-
-func (p *Process) dirAt(fd uint32) (Dir, error) {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if d := obj.asDir(); d != nil {
-		return d, nil
-	}
-
-	return nil, ENOTDIR
-}
-
-func (p *Process) attrsAt(fd uint32) (Attrs, error) {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if a := obj.asAttrs(); a != nil {
-		return a, nil
-	}
-
-	return nil, EINVAL
-}
-
-func (p *Process) socketAt(fd uint32) (Socket, error) {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if s := obj.asSocket(); s != nil {
-		return s, nil
-	}
-
-	return nil, ENOTSOCK
-}
-
-func (p *Process) lockerAt(fd uint32) (Locker, error) {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if l := obj.asLocker(); l != nil {
-		return l, nil
-	}
-
-	return nil, EBADF
-}
-
 func (p *Process) install(obj Object, min int, cloexec bool) (int, error) {
 	if fd := p.files.lowest(min); fd < p.fdLimit() {
 		p.files.put(fd, obj, cloexec)
@@ -5145,7 +5031,7 @@ func (p *Process) gatherIn(small []byte, iovs, count uint32, max int) ([]byte, e
 }
 
 func (p *Process) vectored(fd, iovs, count uint32, events int16, positioned bool, off uint64) uint32 {
-	t, err := p.transferAt(fd, events == POLLIN)
+	t, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5201,7 +5087,7 @@ func (p *Process) vectored(fd, iovs, count uint32, events int16, positioned bool
 	return p.result(n, err)
 }
 
-func (p *Process) recordLock(l Locker, cmd, at uint32) error {
+func (p *Process) recordLock(l Object, cmd, at uint32) error {
 	lk := Flock{Type: int16(p.u16(at)), Whence: int16(p.u16(at + 2)), Start: int64(p.u64(at + 8)), Len: int64(p.u64(at + 16))}
 
 	if cmd == F_GETLK {
@@ -5316,7 +5202,7 @@ func (p *Process) withMask(mask uint32, wait func() (int, error)) (int, error) {
 }
 
 func (p *Process) libcRead(fd, buf, n uint32) uint32 {
-	t, err := p.transferAt(fd, true)
+	t, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5331,7 +5217,7 @@ func (p *Process) libcRead(fd, buf, n uint32) uint32 {
 }
 
 func (p *Process) libcWrite(fd, buf, n uint32) uint32 {
-	t, err := p.transferAt(fd, false)
+	t, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5346,7 +5232,7 @@ func (p *Process) libcWrite(fd, buf, n uint32) uint32 {
 }
 
 func (p *Process) libcPread(fd, buf, n uint32, off uint64) uint32 {
-	t, err := p.transferAt(fd, true)
+	t, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5361,7 +5247,7 @@ func (p *Process) libcPread(fd, buf, n uint32, off uint64) uint32 {
 }
 
 func (p *Process) libcPwrite(fd, buf, n uint32, off uint64) uint32 {
-	t, err := p.transferAt(fd, false)
+	t, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5376,13 +5262,13 @@ func (p *Process) libcPwrite(fd, buf, n uint32, off uint64) uint32 {
 }
 
 func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) uint32 {
-	src, err := p.fileAt(in)
+	src, err := p.fd(in)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	dst, err := p.fileAt(out)
+	dst, err := p.fd(out)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5394,9 +5280,9 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 
 	inFlags, _ := src.flags()
 	outFlags, _ := dst.flags()
-	r, w := src.asTransfer(), dst.asTransfer()
+	r, w := src, dst
 
-	if r == nil || w == nil || inFlags&O_ACCMODE == O_WRONLY || outFlags&O_ACCMODE == O_RDONLY || outFlags&O_APPEND != 0 {
+	if inFlags&O_ACCMODE == O_WRONLY || outFlags&O_ACCMODE == O_RDONLY || outFlags&O_APPEND != 0 {
 		return p.result(0, EBADF)
 	}
 
@@ -5424,14 +5310,12 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 	return p.result(count, nil)
 }
 
-func (p *Process) copyOffset(f File, at uint32) (int64, error) {
+func (p *Process) copyOffset(f Object, at uint32) (int64, error) {
 	off := int64(0)
 
 	if at != 0 {
 		off = int64(p.u64(at))
-	} else if s := f.asSeeker(); s == nil {
-		return 0, EINVAL
-	} else if pos, err := s.seek(p, 0, 1); err != nil {
+	} else if pos, err := f.seek(p, 0, 1); err != nil {
 		return 0, EINVAL
 	} else {
 		off = pos
@@ -5444,27 +5328,23 @@ func (p *Process) copyOffset(f File, at uint32) (int64, error) {
 	return off, nil
 }
 
-func (p *Process) copied(f File, at uint32, off int64) {
+func (p *Process) copied(f Object, at uint32, off int64) {
 	if at != 0 {
 		p.put64(at, uint64(off))
 
 		return
 	}
 
-	f.asSeeker().seek(p, off, 0)
+	f.seek(p, off, 0)
 }
 
-func copyThrough(p *Process, in, out Transfer, from, to int64, n int) (int, error) {
-	for _, t := range []Transfer{in, out} {
-		f := t.asFile()
-
-		if f == nil {
-			return 0, EINVAL
-		}
-
+func copyThrough(p *Process, in, out Object, from, to int64, n int) (int, error) {
+	for _, t := range []Object{in, out} {
 		var st Stat
 
-		if err := f.stat(p, &st); err != nil {
+		if err := t.stat(p, &st); err == EBADF {
+			return 0, EINVAL
+		} else if err != nil {
 			return 0, err
 		}
 
@@ -5510,7 +5390,7 @@ func copyThrough(p *Process, in, out Transfer, from, to int64, n int) (int, erro
 }
 
 func (p *Process) libcFdatasync(fd uint32) uint32 {
-	n, err := p.attrsAt(fd)
+	n, err := p.fd(fd)
 
 	if err == nil {
 		err = n.sync(p, true)
@@ -5530,7 +5410,7 @@ func (p *Process) libcSyncfs(fd uint32) uint32 {
 }
 
 func (p *Process) libcFlock(fd, op uint32) uint32 {
-	l, err := p.lockerAt(fd)
+	l, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5540,7 +5420,7 @@ func (p *Process) libcFlock(fd, op uint32) uint32 {
 }
 
 func (p *Process) libcLockf(fd, cmd uint32, n uint64) uint32 {
-	l, err := p.lockerAt(fd)
+	l, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5570,7 +5450,7 @@ func (p *Process) libcLockf(fd, cmd uint32, n uint64) uint32 {
 }
 
 func (p *Process) libcPosix_fadvise(fd uint32, off, n uint64, advice uint32) uint32 {
-	obj, err := p.fileAt(fd)
+	obj, err := p.fd(fd)
 
 	if err != nil {
 		return uint32(errnoOf(err))
@@ -5593,7 +5473,7 @@ func (p *Process) libcPosix_fadvise(fd uint32, off, n uint64, advice uint32) uin
 }
 
 func (p *Process) libcPosix_fallocate(fd uint32, off, n uint64) uint32 {
-	obj, err := p.fileAt(fd)
+	obj, err := p.fd(fd)
 
 	if err != nil {
 		return uint32(errnoOf(err))
@@ -5602,7 +5482,7 @@ func (p *Process) libcPosix_fallocate(fd uint32, off, n uint64) uint32 {
 	return uint32(errnoOf(p.fallocate(obj, int64(off), int64(n))))
 }
 
-func (p *Process) fallocate(obj File, off, n int64) error {
+func (p *Process) fallocate(obj Object, off, n int64) error {
 	if off < 0 || n <= 0 {
 		return EINVAL
 	}
@@ -5617,14 +5497,12 @@ func (p *Process) fallocate(obj File, off, n int64) error {
 		return err
 	}
 
-	a := obj.asAttrs()
-
 	switch {
 	case st.Mode&S_IFMT == S_IFIFO:
 		return ESPIPE
 	case st.Mode&S_IFMT == S_IFDIR:
 		return EISDIR
-	case st.Mode&S_IFMT != S_IFREG || a == nil:
+	case st.Mode&S_IFMT != S_IFREG:
 		return ENODEV
 	case off > math.MaxInt64-n:
 		return EFBIG
@@ -5632,7 +5510,11 @@ func (p *Process) fallocate(obj File, off, n int64) error {
 		return nil
 	}
 
-	return a.truncate(p, off+n)
+	if err := obj.truncate(p, off+n); err != EINVAL {
+		return err
+	}
+
+	return ENODEV
 }
 
 func (p *Process) libcSelect(n, r, w, e, tv uint32) uint32 {
@@ -5679,7 +5561,7 @@ func (p *Process) libcPselect(n, r, w, e, ts, mask uint32) uint32 {
 }
 
 func (p *Process) libcLseek(fd uint32, off uint64, whence uint32) uint64 {
-	s, err := p.seekerAt(fd)
+	s, err := p.fd(fd)
 
 	if err != nil {
 		return p.result64(0, err)
@@ -5741,7 +5623,7 @@ func (p *Process) libcCfsetispeed(at, speed uint32) uint32 {
 }
 
 func (p *Process) libcFsync(fd uint32) uint32 {
-	n, err := p.attrsAt(fd)
+	n, err := p.fd(fd)
 
 	if err == nil {
 		err = n.sync(p, false)
@@ -5751,7 +5633,7 @@ func (p *Process) libcFsync(fd uint32) uint32 {
 }
 
 func (p *Process) libcFtruncate(fd uint32, size uint64) uint32 {
-	n, err := p.attrsAt(fd)
+	n, err := p.fd(fd)
 
 	if err == nil {
 		err = n.truncate(p, int64(size))
@@ -5765,13 +5647,7 @@ func statFile(p *Process, obj Object, st *Stat) error {
 		return EIO
 	}
 
-	f := obj.asFile()
-
-	if f == nil {
-		return EBADF
-	}
-
-	return f.stat(p, st)
+	return obj.stat(p, st)
 }
 
 func (p *Process) libcFstat(fd, at uint32) uint32 {
@@ -5793,7 +5669,7 @@ func (p *Process) libcFstat(fd, at uint32) uint32 {
 }
 
 func (p *Process) libcFchmod(fd, mode uint32) uint32 {
-	n, err := p.attrsAt(fd)
+	n, err := p.fd(fd)
 
 	if err == nil {
 		err = n.chmod(p, mode&0o7777)
@@ -5803,7 +5679,7 @@ func (p *Process) libcFchmod(fd, mode uint32) uint32 {
 }
 
 func (p *Process) libcFchown(fd, uid, gid uint32) uint32 {
-	n, err := p.attrsAt(fd)
+	n, err := p.fd(fd)
 
 	if err == nil {
 		err = n.chown(p, int(int32(uid)), int(int32(gid)))
@@ -5813,7 +5689,7 @@ func (p *Process) libcFchown(fd, uid, gid uint32) uint32 {
 }
 
 func (p *Process) libcFutimes(fd, times uint32) uint32 {
-	n, err := p.attrsAt(fd)
+	n, err := p.fd(fd)
 
 	if err == nil {
 		err = n.utimes(p, p.timevals(times))
@@ -5823,7 +5699,7 @@ func (p *Process) libcFutimes(fd, times uint32) uint32 {
 }
 
 func (p *Process) libcFutimens(fd, times uint32) uint32 {
-	n, err := p.attrsAt(fd)
+	n, err := p.fd(fd)
 
 	if err == nil {
 		err = n.utimes(p, p.timespecs(times))
@@ -5837,7 +5713,7 @@ func (p *Process) varArg(va uint32, i uint32) uint32 {
 }
 
 func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
-	obj, err := p.fileAt(fd)
+	obj, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5867,7 +5743,7 @@ func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
 	case F_GETFL:
 		return p.result(obj.flags())
 	case F_GETLK, F_SETLK, F_SETLKW:
-		l, err := p.lockerAt(fd)
+		l, err := p.fd(fd)
 
 		if err != nil {
 			return p.result(0, err)
@@ -6059,14 +5935,14 @@ func (p *Process) libcCfsetspeed(at, speed uint32) uint32 {
 }
 
 func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
-	obj, err := p.fileAt(fd)
+	obj, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	if t := obj.asTerminal(); t != nil {
-		if r, done := p.terminalIoctl(t, fd, req, va); done {
+	if obj.device() != (FileKey{}) {
+		if r, done := p.terminalIoctl(obj, fd, req, va); done {
 			return r
 		}
 	}
@@ -6102,27 +5978,23 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 	case TIOCSPGRP:
 		return p.libcTcsetpgrp(fd, p.u32(p.varArg(va, 0)))
 	case TIOCGWINSZ:
-		if obj.asConsole() == nil {
+		w, err := p.ttyWindow(obj)
+
+		if err == ENOTTY {
 			break
 		}
 
-		w, err := hostWindow()
-
 		if err == nil {
-			copy(p.span(p.varArg(va, 0), sizeofWinsize), w[:])
+			copy(p.span(p.varArg(va, 0), sizeofWinsize), w)
 		}
 
 		return p.result(0, err)
 	case FIONREAD:
-		i := obj.asIoctl()
-
-		if i == nil {
-			break
-		}
-
 		var n int32
 
-		if err := i.ioctl(FIONREAD, unsafe.Pointer(&n)); err != nil {
+		if err := obj.ioctl(FIONREAD, unsafe.Pointer(&n)); err == ENOTTY {
+			break
+		} else if err != nil {
 			return p.result(0, err)
 		}
 
@@ -6145,7 +6017,7 @@ func checked(path string) error {
 	return nil
 }
 
-func (p *Process) onPath(dirfd int32, path string, call func(d Dir) error) error {
+func (p *Process) onPath(dirfd int32, path string, call func(d Object) error) error {
 	if err := checked(path); err != nil {
 		return err
 	}
@@ -6161,15 +6033,15 @@ func (p *Process) onPath(dirfd int32, path string, call func(d Dir) error) error
 	return call(d)
 }
 
-func (p *Process) onPaths(olddir int32, old string, newdir int32, new string, call func(from, to Dir) error) error {
-	return p.onPath(olddir, old, func(from Dir) error {
-		return p.onPath(newdir, new, func(to Dir) error {
+func (p *Process) onPaths(olddir int32, old string, newdir int32, new string, call func(from, to Object) error) error {
+	return p.onPath(olddir, old, func(from Object) error {
+		return p.onPath(newdir, new, func(to Object) error {
 			return call(from, to)
 		})
 	})
 }
 
-func (p *Process) start(dirfd int32, path string) (Dir, error) {
+func (p *Process) start(dirfd int32, path string) (Object, error) {
 	d := p.root
 
 	if !strings.HasPrefix(path, "/") {
@@ -6178,7 +6050,7 @@ func (p *Process) start(dirfd int32, path string) (Dir, error) {
 		if dirfd != AT_FDCWD {
 			var err error
 
-			if d, err = p.dirAt(uint32(dirfd)); err != nil {
+			if d, err = p.fd(uint32(dirfd)); err != nil {
 				return nil, err
 			}
 		}
@@ -6189,7 +6061,7 @@ func (p *Process) start(dirfd int32, path string) (Dir, error) {
 	return d, nil
 }
 
-func (p *Process) onAt(dirfd int32, path string, flags uint32, byFile func(f Object) error, byPath func(d Dir, follow bool) error) error {
+func (p *Process) onAt(dirfd int32, path string, flags uint32, byFile func(f Object) error, byPath func(d Object, follow bool) error) error {
 	if path == "" && flags&AT_EMPTY_PATH != 0 {
 		if dirfd == AT_FDCWD {
 			return byFile(p.cwd)
@@ -6204,27 +6076,17 @@ func (p *Process) onAt(dirfd int32, path string, flags uint32, byFile func(f Obj
 		return byFile(obj)
 	}
 
-	return p.onPath(dirfd, path, func(d Dir) error {
+	return p.onPath(dirfd, path, func(d Object) error {
 		return byPath(d, flags&AT_SYMLINK_NOFOLLOW == 0)
 	})
-}
-
-func attrsCall(call func(a Attrs) error) func(f Object) error {
-	return func(f Object) error {
-		if a := f.asAttrs(); a != nil {
-			return call(a)
-		}
-
-		return EINVAL
-	}
 }
 
 func (p *Process) openAt(dirfd int32, path string, flags int, mode uint32) (Object, error) {
 	var f Object
 
-	err := p.onPath(dirfd, path, func(d Dir) error {
+	err := p.onPath(dirfd, path, func(d Object) error {
 		var err error
-		f, err = d.openPath(p, path, flags, mode)
+		f, err = p.dirOpen(d, path, flags, mode)
 
 		return err
 	})
@@ -6265,11 +6127,7 @@ func (p *Process) readPath(path string, max int) ([]byte, error) {
 
 	defer f.unref()
 
-	t := f.asTransfer()
-
-	if t == nil {
-		return nil, nil
-	}
+	t := f
 
 	var data []byte
 
@@ -6290,8 +6148,8 @@ func (p *Process) readPath(path string, max int) ([]byte, error) {
 }
 
 func (p *Process) mkdir(dirfd int32, path string, mode uint32) error {
-	return p.onPath(dirfd, path, func(d Dir) error {
-		return d.mkdirPath(p, path, mode&0o7777&^p.umask)
+	return p.onPath(dirfd, path, func(d Object) error {
+		return p.dirMkdir(d, path, mode&0o7777&^p.umask)
 	})
 }
 
@@ -6302,8 +6160,8 @@ func (p *Process) mknod(dirfd int32, path string, mode uint32, dev uint64) error
 		return EPERM
 	}
 
-	return p.onPath(dirfd, path, func(d Dir) error {
-		return d.mknodPath(p, path, mode&^(p.umask&0o777))
+	return p.onPath(dirfd, path, func(d Object) error {
+		return p.dirMknod(d, path, mode&^(p.umask&0o777))
 	})
 }
 
@@ -6312,45 +6170,45 @@ func (p *Process) symlink(target string, dirfd int32, path string) error {
 		return ENOENT
 	}
 
-	return p.onPath(dirfd, path, func(d Dir) error {
-		return d.symlinkPath(p, target, path)
+	return p.onPath(dirfd, path, func(d Object) error {
+		return p.dirSymlink(d, target, path)
 	})
 }
 
 func (p *Process) remove(dirfd int32, path string, dir bool) error {
-	return p.onPath(dirfd, path, func(d Dir) error {
-		return d.unlinkPath(p, path, dir)
+	return p.onPath(dirfd, path, func(d Object) error {
+		return p.dirUnlink(d, path, dir)
 	})
 }
 
 func (p *Process) rename(olddir int32, old string, newdir int32, new string) error {
-	return p.onPaths(olddir, old, newdir, new, func(from, to Dir) error {
-		return from.renamePath(p, old, to, new)
+	return p.onPaths(olddir, old, newdir, new, func(from, to Object) error {
+		return p.dirRename(from, old, to, new)
 	})
 }
 
 func (p *Process) link(olddir int32, old string, newdir int32, new string, follow bool) error {
-	return p.onPaths(olddir, old, newdir, new, func(from, to Dir) error {
-		return from.linkPath(p, old, to, new, follow)
+	return p.onPaths(olddir, old, newdir, new, func(from, to Object) error {
+		return p.dirLink(from, old, to, new, follow)
 	})
 }
 
 func (p *Process) statPath(path string, follow bool, st *Stat) error {
-	return p.onPath(AT_FDCWD, path, func(d Dir) error {
-		return d.statPath(p, path, follow, st)
+	return p.onPath(AT_FDCWD, path, func(d Object) error {
+		return p.dirStat(d, path, follow, st)
 	})
 }
 
 func (p *Process) accessAt(dirfd int32, path string, mode, flags uint32) error {
-	return p.onPath(dirfd, path, func(d Dir) error {
+	return p.onPath(dirfd, path, func(d Object) error {
 		return p.access(d, path, mode, flags)
 	})
 }
 
-func (p *Process) access(d Dir, path string, mode, flags uint32) error {
+func (p *Process) access(d Object, path string, mode, flags uint32) error {
 	var st Stat
 
-	if err := d.statPath(p, path, flags&AT_SYMLINK_NOFOLLOW == 0, &st); err != nil {
+	if err := p.dirStat(d, path, flags&AT_SYMLINK_NOFOLLOW == 0, &st); err != nil {
 		return err
 	}
 
@@ -6403,8 +6261,8 @@ func (p *Process) putStatfsOf(at uint32, st *Statfs) {
 }
 
 func (p *Process) statfsPath(path string, st *Statfs) error {
-	return p.onPath(AT_FDCWD, path, func(d Dir) error {
-		return d.statfsPath(p, path, st)
+	return p.onPath(AT_FDCWD, path, func(d Object) error {
+		return p.dirStatfs(d, path, st)
 	})
 }
 
@@ -6431,8 +6289,8 @@ func (p *Process) libcFstatat(dirfd, path, at, flags uint32) uint32 {
 func (p *Process) statFlags(dirfd int32, path string, flags uint32, st *Stat) error {
 	return p.onAt(dirfd, path, flags, func(f Object) error {
 		return statFile(p, f, st)
-	}, func(d Dir, follow bool) error {
-		return d.statPath(p, path, follow, st)
+	}, func(d Object, follow bool) error {
+		return p.dirStat(d, path, follow, st)
 	})
 }
 
@@ -6451,14 +6309,14 @@ func (p *Process) libcAccess(path, mode uint32) uint32 {
 func (p *Process) libcFaccessat(dirfd, path, mode, flags uint32) uint32 {
 	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(f Object) error {
 		return nil
-	}, func(d Dir, follow bool) error {
+	}, func(d Object, follow bool) error {
 		return p.access(d, p.str(path), mode, flags)
 	}))
 }
 
 func (p *Process) libcTruncate(path uint32, size uint64) uint32 {
-	return p.result(0, p.onPath(AT_FDCWD, p.str(path), func(d Dir) error {
-		return d.truncatePath(p, p.str(path), int64(size))
+	return p.result(0, p.onPath(AT_FDCWD, p.str(path), func(d Object) error {
+		return p.dirTruncate(d, p.str(path), int64(size))
 	}))
 }
 
@@ -6475,7 +6333,7 @@ func (p *Process) libcStatvfs(path, at uint32) uint32 {
 }
 
 func (p *Process) libcFstatvfs(fd, at uint32) uint32 {
-	n, err := p.attrsAt(fd)
+	n, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6492,7 +6350,7 @@ func (p *Process) libcFstatvfs(fd, at uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) setCwd(d Dir) {
+func (p *Process) setCwd(d Object) {
 	old := p.cwd
 
 	p.cwd = d
@@ -6502,23 +6360,17 @@ func (p *Process) setCwd(d Dir) {
 	}
 }
 
-func (p *Process) directory(path string) (Dir, error) {
-	var nd Dir
+func (p *Process) directory(path string) (Object, error) {
+	var nd Object
 
-	err := p.onPath(AT_FDCWD, path, func(d Dir) error {
-		f, err := d.openPath(p, path, O_PATH|O_DIRECTORY, 0)
+	err := p.onPath(AT_FDCWD, path, func(d Object) error {
+		f, err := p.dirOpen(d, path, O_PATH|O_DIRECTORY, 0)
 
 		if err != nil {
 			return err
 		}
 
-		h := f.asDir()
-
-		if h == nil {
-			f.unref()
-
-			return ENOTDIR
-		}
+		h := f
 
 		if err := p.access(h, "", 1, 0); err != nil {
 			h.unref()
@@ -6550,6 +6402,26 @@ func (p *Process) libcChdir(path uint32) uint32 {
 	return p.result(0, p.chdir(p.str(path)))
 }
 
+func (p *Process) libcAttach(fd uint32) uint32 {
+	obj, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	obj.ref()
+
+	d, err := served(p, openedDir, O_RDONLY, 0, 0, 0, POLLIN|POLLOUT, obj)
+
+	if err != nil {
+		obj.unref()
+
+		return p.result(0, err)
+	}
+
+	return p.result(p.install(d, 0, false))
+}
+
 func (p *Process) libcFchdir(fd uint32) uint32 {
 	obj, err := p.fd(fd)
 
@@ -6557,25 +6429,13 @@ func (p *Process) libcFchdir(fd uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	d := obj.asDir()
-
-	if e := obj.asPair(); d == nil && e != nil && e.shared.kind == SOCK_SEQPACKET {
-		made := e.directory(p)
-
-		defer made.unref()
-
-		d = made
-	}
-
-	if d == nil {
-		return p.result(0, ENOTDIR)
-	}
+	d := obj
 
 	d.ref()
 
 	var st Stat
 
-	if err := d.statPath(p, "", true, &st); err != nil || st.Mode&S_IFMT != S_IFDIR || !p.permits(&st, 1) {
+	if err := p.dirStat(d, "", true, &st); err != nil || st.Mode&S_IFMT != S_IFDIR || !p.permits(&st, 1) {
 		d.unref()
 
 		switch {
@@ -6608,7 +6468,7 @@ func (p *Process) libcChroot(path uint32) uint32 {
 }
 
 func (p *Process) cwdPath() (string, error) {
-	cwd, err := p.cwd.path(p)
+	cwd, err := p.dirPath(p.cwd)
 
 	if err == nil && len(cwd) >= 4096 {
 		err = ENAMETOOLONG
@@ -6712,9 +6572,9 @@ func (p *Process) readlinkAt(dirfd int32, path string, buf, size uint32) (int, e
 
 	var target string
 
-	err := p.onPath(dirfd, path, func(d Dir) error {
+	err := p.onPath(dirfd, path, func(d Object) error {
 		var err error
-		target, err = d.readlinkPath(p, path)
+		target, err = p.dirReadlink(d, path)
 
 		return err
 	})
@@ -6745,13 +6605,11 @@ func (p *Process) libcReadlinkat(dirfd, path, buf, size uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	l := obj.asLink()
-
-	if l == nil {
+	if fl, _ := obj.flags(); fl&O_PATH == 0 {
 		return p.result(0, ENOENT)
 	}
 
-	target, err := l.readlink(p)
+	target, err := p.dirReadlink(obj, "")
 
 	if err != nil {
 		return p.result(0, err)
@@ -6763,9 +6621,9 @@ func (p *Process) libcReadlinkat(dirfd, path, buf, size uint32) uint32 {
 func (p *Process) realpath(path string) (string, error) {
 	var out string
 
-	err := p.onPath(AT_FDCWD, path, func(d Dir) error {
+	err := p.onPath(AT_FDCWD, path, func(d Object) error {
 		var err error
-		out, err = d.realpathOf(p, path)
+		out, err = p.dirRealpath(d, path)
 
 		return err
 	})
@@ -6840,7 +6698,7 @@ func (p *Process) libcStatfs(path, at uint32) uint32 {
 }
 
 func (p *Process) libcFstatfs(fd, at uint32) uint32 {
-	n, err := p.attrsAt(fd)
+	n, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6880,24 +6738,24 @@ func (p *Process) libcRealpath(path, resolved uint32) uint32 {
 }
 
 func (p *Process) libcChmod(path, mode uint32) uint32 {
-	return p.result(0, p.onPath(AT_FDCWD, p.str(path), func(d Dir) error {
-		return d.chmodPath(p, p.str(path), mode&0o7777, true)
+	return p.result(0, p.onPath(AT_FDCWD, p.str(path), func(d Object) error {
+		return p.dirChmod(d, p.str(path), mode&0o7777, true)
 	}))
 }
 
 func (p *Process) libcFchmodat(dirfd, path, mode, flags uint32) uint32 {
-	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, attrsCall(func(a Attrs) error {
+	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(a Object) error {
 		return a.chmod(p, mode&0o7777)
-	}), func(d Dir, follow bool) error {
-		return d.chmodPath(p, p.str(path), mode&0o7777, follow)
+	}, func(d Object, follow bool) error {
+		return p.dirChmod(d, p.str(path), mode&0o7777, follow)
 	}))
 }
 
 func (p *Process) libcFchownat(dirfd, path, uid, gid, flags uint32) uint32 {
-	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, attrsCall(func(a Attrs) error {
+	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(a Object) error {
 		return a.chown(p, int(int32(uid)), int(int32(gid)))
-	}), func(d Dir, follow bool) error {
-		return d.chownPath(p, p.str(path), int(int32(uid)), int(int32(gid)), follow)
+	}, func(d Object, follow bool) error {
+		return p.dirChown(d, p.str(path), int(int32(uid)), int(int32(gid)), follow)
 	}))
 }
 
@@ -6937,7 +6795,7 @@ func (p *Process) libcUtime(path, times uint32) uint32 {
 
 func (p *Process) libcUtimensat(dirfd, path, times, flags uint32) uint32 {
 	if path == 0 {
-		n, err := p.attrsAt(dirfd)
+		n, err := p.fd(dirfd)
 
 		if err == nil {
 			err = n.utimes(p, p.timespecs(times))
@@ -7041,14 +6899,14 @@ func (p *Process) stat(path, at uint32, follow bool) uint32 {
 }
 
 func (p *Process) chown(path, uid, gid uint32, follow bool) uint32 {
-	return p.result(0, p.onPath(AT_FDCWD, p.str(path), func(d Dir) error {
-		return d.chownPath(p, p.str(path), int(int32(uid)), int(int32(gid)), follow)
+	return p.result(0, p.onPath(AT_FDCWD, p.str(path), func(d Object) error {
+		return p.dirChown(d, p.str(path), int(int32(uid)), int(int32(gid)), follow)
 	}))
 }
 
 func (p *Process) utimens(dirfd int32, path string, ts []Timespec, follow bool) error {
-	return p.onPath(dirfd, path, func(d Dir) error {
-		return d.utimesPath(p, path, ts, follow)
+	return p.onPath(dirfd, path, func(d Object) error {
+		return p.dirUtimes(d, path, ts, follow)
 	})
 }
 
@@ -7139,7 +6997,7 @@ func (p *Process) libcFdopendir(fd uint32) uint32 {
 		return p.pointer(0, err)
 	}
 
-	if obj.asDir() == nil || st.Mode&S_IFMT != S_IFDIR {
+	if st.Mode&S_IFMT != S_IFDIR {
 		return p.pointer(0, ENOTDIR)
 	}
 
@@ -7155,7 +7013,7 @@ func (p *Process) libcFdopendir(fd uint32) uint32 {
 }
 
 func (p *Process) rewinddir(dir uint32) {
-	if s, err := p.seekerAt(p.u32(dir + dirFd)); err == nil {
+	if s, err := p.fd(p.u32(dir + dirFd)); err == nil {
 		s.seek(p, 0, 0)
 	}
 
@@ -7180,7 +7038,7 @@ func (p *Process) readdir(dir uint32) (uint32, error) {
 	pos, end := p.u32(dir+dirPos), p.u32(dir+dirEnd)
 
 	if pos >= end {
-		d, err := p.dirAt(p.u32(dir + dirFd))
+		d, err := p.fd(p.u32(dir + dirFd))
 
 		if err != nil {
 			return 0, err
@@ -7280,11 +7138,11 @@ func (p *Process) libcMount(source, target, fstype, flags, data uint32) uint32 {
 		}
 	}
 
-	err := p.onPath(AT_FDCWD, ".", func(v Dir) error {
+	err := p.onPath(AT_FDCWD, ".", func(v Object) error {
 		var st Stat
 
-		if v.statPath(p, from, true, &st) != nil || st.Mode&S_IFMT != S_IFSOCK {
-			return v.mountPath(p, to, from, nil)
+		if p.dirStat(v, from, true, &st) != nil || st.Mode&S_IFMT != S_IFSOCK {
+			return p.dirMount(v, to, from, nil)
 		}
 
 		conn, err := p.connectUnix(v, from, SOCK_SEQPACKET, false, new(atomic.Int64))
@@ -7295,15 +7153,15 @@ func (p *Process) libcMount(source, target, fstype, flags, data uint32) uint32 {
 
 		defer conn.unref()
 
-		return v.mountPath(p, to, from, conn)
+		return p.dirMount(v, to, from, conn)
 	})
 
 	return p.result(0, err)
 }
 
 func (p *Process) libcUmount2(target, flags uint32) uint32 {
-	err := p.onPath(AT_FDCWD, p.str(target), func(v Dir) error {
-		return v.unmountPath(p, p.str(target), flags&UMOUNT_NOFOLLOW)
+	err := p.onPath(AT_FDCWD, p.str(target), func(v Object) error {
+		return p.dirUnmount(v, p.str(target), flags&UMOUNT_NOFOLLOW)
 	})
 
 	return p.result(0, err)
@@ -7521,7 +7379,7 @@ func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 }
 
 func (p *Process) libcBind(fd, addr, n uint32) uint32 {
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err == nil {
 		err = s.bind(p, p.socketAddress(addr, n))
@@ -7531,7 +7389,7 @@ func (p *Process) libcBind(fd, addr, n uint32) uint32 {
 }
 
 func (p *Process) libcConnect(fd, addr, n uint32) uint32 {
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err == nil {
 		err = s.connect(p, p.socketAddress(addr, n))
@@ -7541,7 +7399,7 @@ func (p *Process) libcConnect(fd, addr, n uint32) uint32 {
 }
 
 func (p *Process) libcListen(fd, backlog uint32) uint32 {
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err == nil {
 		err = s.listen(int(int32(backlog)))
@@ -7559,7 +7417,7 @@ func (p *Process) libcAccept4(fd, addr, lenAt, flags uint32) uint32 {
 }
 
 func (p *Process) libcGetsockname(fd, addr, lenAt uint32) uint32 {
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -7577,7 +7435,7 @@ func (p *Process) libcGetsockname(fd, addr, lenAt uint32) uint32 {
 }
 
 func (p *Process) libcGetpeername(fd, addr, lenAt uint32) uint32 {
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -7595,7 +7453,7 @@ func (p *Process) libcGetpeername(fd, addr, lenAt uint32) uint32 {
 }
 
 func (p *Process) libcGetsockopt(fd, level, name, at, lenAt uint32) uint32 {
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -7614,7 +7472,7 @@ func (p *Process) libcGetsockopt(fd, level, name, at, lenAt uint32) uint32 {
 }
 
 func (p *Process) libcSetsockopt(fd, level, name, at, n uint32) uint32 {
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err == nil {
 		err = s.setsockopt(level, name, slices.Clone(p.span(at, min(n, 16))))
@@ -7640,7 +7498,7 @@ func (p *Process) libcRecvfrom(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 }
 
 func (p *Process) libcSendmsg(fd, msg, flags uint32) uint32 {
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -7676,7 +7534,7 @@ func sendMode(flags uint32) IoMode {
 func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
 	var few [4][]byte
 
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -7711,7 +7569,7 @@ func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
 }
 
 func (p *Process) libcShutdown(fd, how uint32) uint32 {
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err == nil {
 		err = s.shutdown(int(how))
@@ -7721,13 +7579,16 @@ func (p *Process) libcShutdown(fd, how uint32) uint32 {
 }
 
 func (p *Process) libcSockatmark(fd uint32) uint32 {
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	if s.socketKind() == SOCK_STREAM {
+	switch s.socketKind() {
+	case 0:
+		return p.result(0, ENOTSOCK)
+	case SOCK_STREAM:
 		return p.result(0, nil)
 	}
 
@@ -7735,7 +7596,7 @@ func (p *Process) libcSockatmark(fd uint32) uint32 {
 }
 
 func (p *Process) socketAccept(fd, addr, lenAt, flags uint32) uint32 {
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -7767,7 +7628,7 @@ func (p *Process) socketAccept(fd, addr, lenAt, flags uint32) uint32 {
 }
 
 func (p *Process) socketSend(fd, buf, n, flags, addr, alen uint32) uint32 {
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -7779,7 +7640,7 @@ func (p *Process) socketSend(fd, buf, n, flags, addr, alen uint32) uint32 {
 }
 
 func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
-	s, err := p.socketAt(fd)
+	s, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -7932,74 +7793,35 @@ func (p *Process) unixSocketPath(at, n uint32) (string, error) {
 	return string(path), nil
 }
 
-func (p *Process) connectUnix(v Dir, path string, kind int, nonblock bool, to *atomic.Int64) (*PairEnd, error) {
-	f, err := v.connectPath(p, path)
+func (p *Process) connectUnix(v Object, path string, kind int, nonblock bool, to *atomic.Int64) (*PairEnd, error) {
+	f, err := p.dirConnect(v, path)
 
 	if err != nil {
 		return nil, err
 	}
 
-	l := f.asListener()
+	defer f.unref()
 
-	if l == nil || l.kind != kind {
-		f.unref()
-
-		if f.asPair() != nil || l != nil {
-			return nil, EPROTOTYPE
-		}
-
-		return nil, ECONNREFUSED
-	}
-
-	defer l.unref()
-
-	mine, theirs := newPairOf(kind, nonblock)
-
-	for {
-		queued, refused := l.push(theirs)
-
-		if queued {
-			return mine, nil
-		}
-
-		if !refused && !nonblock {
-			end, how := until(to)
-
-			var timedOut bool
-
-			if timedOut, err = l.awaitRoom(p, end, how); err == nil && !timedOut {
-				continue
-			} else if err == nil {
-				err = EAGAIN
-			}
-		} else if refused {
-			err = ECONNREFUSED
-		} else {
-			err = EAGAIN
-		}
-
-		mine.unref()
-		theirs.unref()
-
-		return nil, err
-	}
+	return f.knock(p, kind, nonblock, to)
 }
 
-func (p *Process) mouthOf(path string) (Socket, error) {
-	var mouth Socket
+func (p *Process) mouthOf(path string) (Object, error) {
+	var mouth Object
 
-	err := p.onPath(AT_FDCWD, path, func(v Dir) error {
-		f, err := v.connectPath(p, path)
+	err := p.onPath(AT_FDCWD, path, func(v Object) error {
+		f, err := p.dirConnect(v, path)
 
 		if err != nil {
 			return err
 		}
 
-		if mouth = f.asSocket(); mouth == nil {
+		if f.socketKind() != SOCK_DGRAM {
 			f.unref()
 
 			return EPROTOTYPE
 		}
+
+		mouth = f
 
 		return nil
 	})
@@ -8021,20 +7843,6 @@ func (p *Process) socketAddress(at, n uint32) Address {
 	return Address{given: true, path: path, err: err}
 }
 
-func (p *Process) epollAt(fd uint32) (*Epoll, error) {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if ep := obj.asEpoll(); ep != nil {
-		return ep, nil
-	}
-
-	return nil, EINVAL
-}
-
 func (p *Process) libcEpoll_create(size uint32) uint32 {
 	if int32(size) <= 0 {
 		return p.result(0, EINVAL)
@@ -8052,7 +7860,7 @@ func (p *Process) libcEpoll_create1(flags uint32) uint32 {
 }
 
 func (p *Process) libcEpoll_ctl(epfd, op, fd, at uint32) uint32 {
-	ep, err := p.epollAt(epfd)
+	ep, err := p.fd(epfd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -8081,7 +7889,7 @@ func (p *Process) libcEpoll_ctl(epfd, op, fd, at uint32) uint32 {
 		events, data = binary.LittleEndian.Uint32(b), binary.LittleEndian.Uint64(b[8:])
 	}
 
-	return p.result(0, ep.ctl(op, EpollKey{fd, obj}, events, data))
+	return p.result(0, ep.epollCtl(op, EpollKey{fd, obj}, events, data))
 }
 
 func (p *Process) epollWait(epfd, at, max uint32, timeout int) (int, error) {
@@ -8089,13 +7897,13 @@ func (p *Process) epollWait(epfd, at, max uint32, timeout int) (int, error) {
 		return 0, EINVAL
 	}
 
-	ep, err := p.epollAt(epfd)
+	ep, err := p.fd(epfd)
 
 	if err != nil {
 		return 0, err
 	}
 
-	return ep.wait(p, func() []byte {
+	return ep.epollWait(p, func() []byte {
 		return p.span(at, max*sizeofEpollEvent)
 	}, int(max), deadline(timeout))
 }
@@ -8117,9 +7925,9 @@ func (p *Process) opened(pk *Packet) (Object, bool, error) {
 		return f, false, nil
 	}
 
-	end := f.asSocket()
+	end := f
 
-	if len(pk.data) != sizeofOpened || end == nil {
+	if len(pk.data) != sizeofOpened {
 		f.unref()
 
 		return nil, false, EIO
@@ -8166,19 +7974,11 @@ func (p *Process) permits(st *Stat, want uint32) bool {
 	return bits&want == want
 }
 
-func (p *Process) rootID(id uint64) uint64 {
-	if root := p.root.asRemote(); root != nil {
-		return root.id
-	}
-
-	return id
-}
-
-func sameTerminal(a, b Terminal) bool {
+func sameTerminal(a, b Object) bool {
 	return a.device() == b.device()
 }
 
-func (p *Process) isCtty(t Terminal) bool {
+func (p *Process) isCtty(t Object) bool {
 	p.k.mu.Lock()
 
 	c := p.k.cttys[p.sid.Load()]
@@ -8205,10 +8005,10 @@ func (p *Process) openControlling(flags int) (Object, error) {
 
 	defer c.unref()
 
-	return c.reopen(p, flags)
+	return p.ttyReopen(c, flags)
 }
 
-func (p *Process) acquire(t Terminal) {
+func (p *Process) acquire(t Object) {
 	p.k.mu.Lock()
 
 	_, has := p.k.cttys[p.sid.Load()]
@@ -8279,31 +8079,15 @@ func (p *Process) leaveSession(going bool) {
 		how = cttyGone
 	}
 
-	t.control(p, how)
+	p.ttyControl(t, how)
 	t.unref()
 }
 
-func (p *Process) terminalAt(fd uint32) (Terminal, error) {
-	f, err := p.fd(fd)
-
-	if err != nil {
-		return nil, err
-	}
-
-	t := f.asTerminal()
-
-	if t == nil {
-		return nil, ENOTTY
-	}
-
-	return t, nil
-}
-
 func (p *Process) libcIsatty(fd uint32) uint32 {
-	t, err := p.terminalAt(fd)
+	t, err := p.fd(fd)
 
 	if err == nil {
-		_, err = t.getattr(p)
+		_, err = p.ttyGetattr(t)
 	}
 
 	if err != nil {
@@ -8320,13 +8104,13 @@ func (p *Process) libcTcgetattr(fd, at uint32) uint32 {
 }
 
 func (p *Process) tcgetattr(fd, at uint32) error {
-	t, err := p.terminalAt(fd)
+	t, err := p.fd(fd)
 
 	if err != nil {
 		return err
 	}
 
-	settings, err := t.getattr(p)
+	settings, err := p.ttyGetattr(t)
 
 	if err == nil {
 		copy(p.span(at, sizeofTermios), settings)
@@ -8344,79 +8128,72 @@ func (p *Process) tcsetattr(fd, action, at uint32) error {
 		return EINVAL
 	}
 
-	t, err := p.terminalAt(fd)
+	t, err := p.fd(fd)
 
 	if err != nil {
 		return err
 	}
 
-	return t.setattr(p, action, append([]byte(nil), p.span(at, sizeofTermios)...))
+	return p.ttySetattr(t, action, append([]byte(nil), p.span(at, sizeofTermios)...))
 }
 
 func (p *Process) libcTcflow(fd, action uint32) uint32 {
-	t, err := p.terminalAt(fd)
+	t, err := p.fd(fd)
 
 	if err == nil {
-		err = t.flow(p, action)
+		err = p.ttyFlow(t, action)
 	}
 
 	return p.result(0, err)
 }
 
 func (p *Process) libcTcflush(fd, queue uint32) uint32 {
-	t, err := p.terminalAt(fd)
+	t, err := p.fd(fd)
 
 	if err == nil {
-		err = t.flush(p, queue)
+		err = p.ttyFlush(t, queue)
 	}
 
 	return p.result(0, err)
 }
 
 func (p *Process) libcTcdrain(fd uint32) uint32 {
-	t, err := p.terminalAt(fd)
+	t, err := p.fd(fd)
 
 	if err == nil {
-		err = t.drain(p)
+		err = p.ttyDrain(t)
 	}
 
 	return p.result(0, err)
 }
 
 func (p *Process) libcTcsendbreak(fd, duration uint32) uint32 {
-	t, err := p.terminalAt(fd)
+	t, err := p.fd(fd)
 
 	if err == nil {
-		err = t.brk(p)
+		err = p.ttyBreak(t)
 	}
 
 	return p.result(0, err)
 }
 
 func (p *Process) libcTcgetpgrp(fd uint32) uint32 {
-	if t, err := p.terminalAt(fd); err != ENOTTY {
-		if err != nil {
-			return p.result(0, err)
-		}
+	t, err := p.fd(fd)
 
-		group, _, err := t.foreground(p)
-
-		return p.result(int(group), err)
-	}
-
-	if err := p.consoleAt(fd); err != nil {
+	if err != nil {
 		return p.result(0, err)
 	}
 
-	return p.result(int(p.k.foreground()), nil)
+	group, _, err := p.ttyForeground(t)
+
+	return p.result(int(group), err)
 }
 
 func (p *Process) libcTcsetpgrp(fd, pgrp uint32) uint32 {
-	t, err := p.terminalAt(fd)
+	t, err := p.fd(fd)
 
-	if err == ENOTTY {
-		err = p.consoleAt(fd)
-		t = nil
+	if err == nil && t.device() == (FileKey{}) {
+		_, _, err = p.ttyForeground(t)
 	}
 
 	switch {
@@ -8426,25 +8203,19 @@ func (p *Process) libcTcsetpgrp(fd, pgrp uint32) uint32 {
 		return p.result(0, EINVAL)
 	case !p.groupExists(int32(pgrp)):
 		return p.result(0, EPERM)
-	case t != nil:
-		return p.result(0, t.setForeground(p, pgrp))
 	}
 
-	p.k.mu.Lock()
-	p.k.fg = int32(pgrp)
-	p.k.mu.Unlock()
-
-	return p.result(0, nil)
+	return p.result(0, p.ttySetForeground(t, pgrp))
 }
 
 func (p *Process) libcTcgetsid(fd uint32) uint32 {
-	t, err := p.terminalAt(fd)
+	t, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	_, sid, err := t.foreground(p)
+	_, sid, err := p.ttyForeground(t)
 
 	if err == nil && sid == 0 {
 		err = ENOTTY
@@ -8453,7 +8224,7 @@ func (p *Process) libcTcgetsid(fd uint32) uint32 {
 	return p.result(int(sid), err)
 }
 
-func (p *Process) controls(t Terminal) error {
+func (p *Process) controls(t Object) error {
 	p.k.mu.Lock()
 
 	sid := p.sid.Load()
@@ -8469,7 +8240,7 @@ func (p *Process) controls(t Terminal) error {
 		return EPERM
 	}
 
-	if err := t.control(p, cttyTake); err != nil {
+	if err := p.ttyControl(t, cttyTake); err != nil {
 		return err
 	}
 
@@ -8481,7 +8252,7 @@ func (p *Process) controls(t Terminal) error {
 	return nil
 }
 
-func (p *Process) notty(t Terminal) error {
+func (p *Process) notty(t Object) error {
 	if !p.isCtty(t) {
 		return ENOTTY
 	}
@@ -8491,7 +8262,7 @@ func (p *Process) notty(t Terminal) error {
 	return nil
 }
 
-func (p *Process) terminalIoctl(t Terminal, fd, req, va uint32) (uint32, bool) {
+func (p *Process) terminalIoctl(t Object, fd, req, va uint32) (uint32, bool) {
 	arg := p.varArg(va, 0)
 
 	switch req {
@@ -8505,12 +8276,12 @@ func (p *Process) terminalIoctl(t Terminal, fd, req, va uint32) (uint32, bool) {
 		return p.libcTcflow(fd, arg), true
 	case TCSBRK:
 		if arg == 0 {
-			return p.result(0, t.brk(p)), true
+			return p.result(0, p.ttyBreak(t)), true
 		}
 
-		return p.result(0, t.drain(p)), true
+		return p.result(0, p.ttyDrain(t)), true
 	case TIOCGWINSZ:
-		size, err := t.window(p)
+		size, err := p.ttyWindow(t)
 
 		if err == nil {
 			copy(p.span(arg, sizeofWinsize), size)
@@ -8518,15 +8289,15 @@ func (p *Process) terminalIoctl(t Terminal, fd, req, va uint32) (uint32, bool) {
 
 		return p.result(0, err), true
 	case TIOCSWINSZ:
-		return p.result(0, t.setWindow(p, append([]byte(nil), p.span(arg, sizeofWinsize)...))), true
+		return p.result(0, p.ttySetWindow(t, append([]byte(nil), p.span(arg, sizeofWinsize)...))), true
 	case FIONREAD, TIOCOUTQ:
-		count := t.pending
+		count := p.ttyPending
 
 		if req == TIOCOUTQ {
-			count = t.unsent
+			count = p.ttyUnsent
 		}
 
-		n, err := count(p)
+		n, err := count(t)
 
 		if err == nil {
 			p.put32(arg, n)
@@ -8542,7 +8313,7 @@ func (p *Process) terminalIoctl(t Terminal, fd, req, va uint32) (uint32, bool) {
 
 		return p.result(0, err), true
 	case TIOCSPTLCK:
-		_, err := t.name(p, true)
+		_, err := p.ttyName(t, true)
 
 		return p.result(0, err), true
 	case TIOCSCTTY:
@@ -8563,8 +8334,8 @@ func (p *Process) terminalIoctl(t Terminal, fd, req, va uint32) (uint32, bool) {
 	return 0, false
 }
 
-func (p *Process) slaveNumber(t Terminal) (int, error) {
-	name, err := t.name(p, true)
+func (p *Process) slaveNumber(t Object) (int, error) {
+	name, err := p.ttyName(t, true)
 
 	if err != nil {
 		return 0, err
@@ -8580,12 +8351,12 @@ func (p *Process) slaveNumber(t Terminal) (int, error) {
 }
 
 func (p *Process) terminalName(fd uint32) (string, Errno) {
-	t, err := p.terminalAt(fd)
+	t, err := p.fd(fd)
 
 	if err == nil {
 		var name string
 
-		if name, err = t.name(p, false); err == nil {
+		if name, err = p.ttyName(t, false); err == nil {
 			return name, 0
 		}
 	}
@@ -8604,10 +8375,10 @@ func (p *Process) libcGrantpt(fd uint32) uint32 {
 }
 
 func (p *Process) libcUnlockpt(fd uint32) uint32 {
-	t, err := p.terminalAt(fd)
+	t, err := p.fd(fd)
 
 	if err == nil {
-		_, err = t.name(p, true)
+		_, err = p.ttyName(t, true)
 	}
 
 	return p.result(0, err)
@@ -8641,13 +8412,13 @@ func (p *Process) libcPtsname_r(fd, buf, size uint32) uint32 {
 }
 
 func (p *Process) ptsname(fd uint32) (string, error) {
-	t, err := p.terminalAt(fd)
+	t, err := p.fd(fd)
 
 	if err != nil {
 		return "", err
 	}
 
-	return t.name(p, true)
+	return p.ttyName(t, true)
 }
 
 func (p *Process) openPty(termp, winp uint32) (int, int, string, error) {
@@ -8669,10 +8440,10 @@ func (p *Process) openPty(termp, winp uint32) (int, int, string, error) {
 	}
 
 	if err == nil && winp != 0 {
-		var t Terminal
+		var t Object
 
-		if t, err = p.terminalAt(uint32(slave)); err == nil {
-			err = t.setWindow(p, append([]byte(nil), p.span(winp, sizeofWinsize)...))
+		if t, err = p.fd(uint32(slave)); err == nil {
+			err = p.ttySetWindow(t, append([]byte(nil), p.span(winp, sizeofWinsize)...))
 		}
 	}
 
@@ -8713,7 +8484,7 @@ func (p *Process) libcForkpty(amaster, name, termp, winp uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	t, err := p.terminalAt(uint32(slave))
+	t, err := p.fd(uint32(slave))
 
 	if err != nil {
 		return p.result(0, err)
@@ -8767,7 +8538,7 @@ func (p *Process) libcGetpass(prompt uint32) uint32 {
 
 	defer p.closeFd(fd)
 
-	t, err := p.terminalAt(uint32(fd))
+	t, err := p.fd(uint32(fd))
 
 	if err != nil {
 		p.setErrno(errnoOf(err))
@@ -8786,7 +8557,7 @@ func (p *Process) libcGetpass(prompt uint32) uint32 {
 	}
 
 	at := p.passwordAt
-	saved, err := t.getattr(p)
+	saved, err := p.ttyGetattr(t)
 
 	if err != nil {
 		p.setErrno(errnoOf(err))
@@ -8799,7 +8570,7 @@ func (p *Process) libcGetpass(prompt uint32) uint32 {
 
 	le.PutUint32(quiet, le.Uint32(quiet)&^(INLCR|IGNCR)|ICRNL)
 	le.PutUint32(quiet[12:], le.Uint32(quiet[12:])&^(ECHO|ISIG)|ICANON)
-	t.setattr(p, 2, quiet)
+	p.ttySetattr(t, 2, quiet)
 
 	asked := uint32(len(p.str(prompt)))
 	shown := p.memory(prompt, asked, O_RDONLY)
@@ -8820,7 +8591,7 @@ func (p *Process) libcGetpass(prompt uint32) uint32 {
 		p.span(at, passwordSize)[n] = 0
 	}
 
-	t.setattr(p, 2, saved)
+	p.ttySetattr(t, 2, saved)
 
 	t.write(p, bytesFile([]byte{'\n'}), 1, IoMode{})
 
@@ -8831,16 +8602,6 @@ func (p *Process) libcGetpass(prompt uint32) uint32 {
 	}
 
 	return at
-}
-
-func (p *Process) isConsole(fd uint32) (bool, error) {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return false, err
-	}
-
-	return obj.asConsole() != nil, nil
 }
 
 func (p *Process) putTimespec(at uint32, d time.Duration) {
@@ -9486,7 +9247,7 @@ func (p *Process) syslog(priority, message uint32) {
 		line += "\n"
 	}
 
-	if t, err := p.transferAt(2, false); err == nil {
+	if t, err := p.fd(2); err == nil {
 		t.write(p, bytesFile([]byte(line)), len(line), IoMode{})
 	}
 }
@@ -10188,7 +9949,7 @@ func (p *Process) libcPsiginfo(info, s uint32) {
 func (p *Process) libc__assert_fail(expr, file, line, function uint32) {
 	msg := fmt.Sprintf("Assertion failed: %s (%s: %s: %d)\n", p.str(expr), p.str(file), p.str(function), int32(line))
 
-	if t, err := p.transferAt(2, false); err == nil {
+	if t, err := p.fd(2); err == nil {
 		t.write(p, bytesFile([]byte(msg)), len(msg), IoMode{})
 	}
 
@@ -10200,7 +9961,7 @@ func (p *Process) complain(prefix uint32, msg string) {
 		msg = p.str(prefix) + ": " + msg
 	}
 
-	if t, err := p.transferAt(2, false); err == nil {
+	if t, err := p.fd(2); err == nil {
 		t.write(p, bytesFile([]byte(msg+"\n")), len(msg)+1, IoMode{})
 	}
 }
@@ -13218,4 +12979,462 @@ func (p *Process) sized(call string, sizes ...uint32) {
 			p.exitWith(SIGSYS)
 		}
 	}
+}
+
+func (p *Process) job(fn func(group uint32) (int, error)) (int, error) {
+	free := false
+
+	for {
+		group := uint32(0)
+
+		if !free {
+			group = p.group()
+		}
+
+		n, err := fn(group)
+		sig, held := err.(Background)
+
+		if !held {
+			return n, err
+		}
+
+		if free, err = p.background(int(sig)); err != nil {
+			return 0, err
+		}
+	}
+}
+
+func (p *Process) vfs(d Object, op, arg uint32, body []byte, files ...Object) (Packet, error) {
+	id, _ := d.token()
+
+	if root, err := p.root.token(); err == nil {
+		id = root
+	}
+
+	pk, _, err := d.call(p, op, arg, p.group(), append(binary.LittleEndian.AppendUint64(make([]byte, 0, 8+len(body)), id), body...), files, false)
+
+	if err == errUnserved {
+		err = ENOTDIR
+	}
+
+	return pk, err
+}
+
+func flagOf(follow bool) uint32 {
+	if follow {
+		return 0
+	}
+
+	return AT_SYMLINK_NOFOLLOW
+}
+
+func twoPaths(to Object, old, new string) ([]byte, error) {
+	id, err := to.token()
+
+	if err != nil {
+		return nil, err
+	}
+
+	body := make([]byte, 8, 8+len(old)+1+len(new))
+
+	binary.LittleEndian.PutUint64(body, id)
+
+	return append(append(append(body, old...), 0), new...), nil
+}
+
+func (p *Process) dirOpen(d Object, path string, flags int, mode uint32) (Object, error) {
+	if p.chaosFail("openat") {
+		return nil, EIO
+	}
+
+	body := make([]byte, 4, 4+len(path))
+
+	binary.LittleEndian.PutUint32(body, mode)
+
+	pk, err := p.vfs(d, vOpen, uint32(flags), append(body, path...))
+
+	if err != nil {
+		return nil, err
+	}
+
+	if pk.arg&openControlling != 0 {
+		dropFiles(pk.files)
+
+		return p.openControlling(flags)
+	}
+
+	if len(pk.files) == 0 {
+		var st Stat
+
+		if err := decodeStat(pk.data, &st); err != nil || st.Mode&S_IFMT != S_IFIFO {
+			return nil, EIO
+		}
+
+		return p.openFifo(&st, flags)
+	}
+
+	obj, terminal, err := p.opened(&pk)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if terminal && flags&O_NOCTTY == 0 {
+		p.acquire(obj)
+	}
+
+	return obj, nil
+}
+
+func (p *Process) dirStat(d Object, path string, follow bool, st *Stat) error {
+	if p.chaosFail("file-stat") {
+		return EIO
+	}
+
+	arg := uint32(0)
+
+	if follow {
+		arg = 1
+	}
+
+	pk, err := p.vfs(d, vStat, arg, []byte(path))
+
+	if err != nil {
+		return err
+	}
+
+	return decodeStat(pk.data, st)
+}
+
+func (p *Process) dirReadlink(d Object, path string) (string, error) {
+	pk, err := p.vfs(d, vReadlink, 0, []byte(path))
+
+	if err != nil {
+		return "", err
+	}
+
+	return string(pk.data), nil
+}
+
+func (p *Process) dirMkdir(d Object, path string, mode uint32) error {
+	_, err := p.vfs(d, vMkdir, mode, []byte(path))
+
+	return err
+}
+
+func (p *Process) dirMknod(d Object, path string, mode uint32) error {
+	_, err := p.vfs(d, vMknod, mode, []byte(path))
+
+	return err
+}
+
+func (p *Process) dirSymlink(d Object, target, path string) error {
+	_, err := p.vfs(d, vSymlink, 0, append(append([]byte(target), 0), path...))
+
+	return err
+}
+
+func (p *Process) dirUnlink(d Object, path string, dir bool) error {
+	flags := uint32(0)
+
+	if dir {
+		flags = AT_REMOVEDIR
+	}
+
+	_, err := p.vfs(d, vUnlink, flags, []byte(path))
+
+	return err
+}
+
+func (p *Process) dirRename(d Object, old string, to Object, new string) error {
+	body, err := twoPaths(to, old, new)
+
+	if err == nil {
+		_, err = p.vfs(d, vRename, 0, body)
+	}
+
+	return err
+}
+
+func (p *Process) dirLink(d Object, old string, to Object, new string, follow bool) error {
+	body, err := twoPaths(to, old, new)
+	arg := uint32(0)
+
+	if follow {
+		arg = 1
+	}
+
+	if err == nil {
+		_, err = p.vfs(d, vLink, arg, body)
+	}
+
+	return err
+}
+
+func (p *Process) dirChmod(d Object, path string, mode uint32, follow bool) error {
+	body := make([]byte, 4, 4+len(path))
+
+	binary.LittleEndian.PutUint32(body, flagOf(follow))
+
+	_, err := p.vfs(d, vChmod, mode, append(body, path...))
+
+	return err
+}
+
+func (p *Process) dirChown(d Object, path string, uid, gid int, follow bool) error {
+	body := make([]byte, 12, 12+len(path))
+
+	binary.LittleEndian.PutUint32(body, flagOf(follow))
+	binary.LittleEndian.PutUint32(body[4:], uint32(uid))
+	binary.LittleEndian.PutUint32(body[8:], uint32(gid))
+
+	_, err := p.vfs(d, vChown, 0, append(body, path...))
+
+	return err
+}
+
+func (p *Process) dirUtimes(d Object, path string, ts []Timespec, follow bool) error {
+	when, times := whens(ts)
+	body := make([]byte, 4, 4+len(times)+len(path))
+
+	binary.LittleEndian.PutUint32(body, flagOf(follow))
+
+	_, err := p.vfs(d, vUtimes, when, append(append(body, times...), path...))
+
+	return err
+}
+
+func (p *Process) dirTruncate(d Object, path string, size int64) error {
+	body := make([]byte, 8, 8+len(path))
+
+	binary.LittleEndian.PutUint64(body, uint64(size))
+
+	_, err := p.vfs(d, vTruncate, 0, append(body, path...))
+
+	return err
+}
+
+func (p *Process) dirStatfs(d Object, path string, st *Statfs) error {
+	pk, err := p.vfs(d, vStatfs, 0, []byte(path))
+
+	if err != nil {
+		return err
+	}
+
+	return decodeStatfs(pk.data, st)
+}
+
+func (p *Process) dirRealpath(d Object, path string) (string, error) {
+	pk, err := p.vfs(d, vRealpath, 0, []byte(path))
+
+	if err != nil {
+		return "", err
+	}
+
+	return string(pk.data), nil
+}
+
+func (p *Process) dirPath(d Object) (string, error) {
+	pk, err := p.vfs(d, vPath, 0, nil)
+
+	if err != nil {
+		return "", err
+	}
+
+	return string(pk.data), nil
+}
+
+func (p *Process) dirMount(d Object, target, source string, conn Object) error {
+	body := append(append([]byte(target), 0), source...)
+
+	if conn != nil {
+		_, err := p.vfs(d, vMount, 0, body, conn)
+
+		return err
+	}
+
+	_, err := p.vfs(d, vMount, 0, body)
+
+	return err
+}
+
+func (p *Process) dirBind(d Object, path string, mode uint32, held Object) error {
+	_, err := p.vfs(d, vBind, mode, []byte(path), held)
+
+	return err
+}
+
+func (p *Process) dirConnect(d Object, path string) (Object, error) {
+	pk, err := p.vfs(d, vConnect, 0, []byte(path))
+
+	if err != nil {
+		return nil, err
+	}
+
+	if len(pk.files) == 0 {
+		return nil, ECONNREFUSED
+	}
+
+	return pk.files[0], nil
+}
+
+func (p *Process) dirUnmount(d Object, path string, flags uint32) error {
+	_, err := p.vfs(d, vUnmount, flags, []byte(path))
+
+	return err
+}
+
+func (p *Process) tty(t Object, op, arg uint32, body []byte) (Packet, error) {
+	pk, _, err := t.call(p, op, arg, p.group(), body, nil, false)
+
+	if err == errUnserved {
+		err = ENOTTY
+	}
+
+	return pk, err
+}
+
+func (p *Process) ttyChange(t Object, op, arg uint32, body []byte, waits bool) error {
+	_, err := p.job(func(group uint32) (int, error) {
+		for {
+			_, restart, err := t.call(p, op, arg, group, body, nil, waits)
+
+			switch {
+			case waits && err == EINTR && restart:
+				continue
+			case err == errUnserved:
+				err = ENOTTY
+			}
+
+			return 0, err
+		}
+	})
+
+	return err
+}
+
+func (p *Process) ttyGetattr(t Object) ([]byte, error) {
+	pk, err := p.tty(t, rTcgetattr, 0, nil)
+
+	if err == nil && len(pk.data) != sizeofTermios {
+		err = EIO
+	}
+
+	return bytes.Clone(pk.data), err
+}
+
+func (p *Process) ttySetattr(t Object, when uint32, termios []byte) error {
+	return p.ttyChange(t, rTcsetattr, when, termios, when != 0)
+}
+
+func (p *Process) ttyFlush(t Object, queue uint32) error {
+	return p.ttyChange(t, rTcflush, queue, nil, false)
+}
+
+func (p *Process) ttyFlow(t Object, action uint32) error {
+	return p.ttyChange(t, rTcflow, action, nil, false)
+}
+
+func (p *Process) ttyDrain(t Object) error {
+	return p.ttyChange(t, rTcdrain, 0, nil, true)
+}
+
+func (p *Process) ttyBreak(t Object) error {
+	return p.ttyChange(t, rTcsbrk, 0, nil, false)
+}
+
+func (p *Process) ttyWindow(t Object) ([]byte, error) {
+	pk, err := p.tty(t, rGetWinsize, 0, nil)
+
+	if err == nil && len(pk.data) != sizeofWinsize {
+		err = EIO
+	}
+
+	return bytes.Clone(pk.data), err
+}
+
+func (p *Process) ttySetWindow(t Object, size []byte) error {
+	_, err := p.tty(t, rSetWinsize, 0, size)
+
+	return err
+}
+
+func (p *Process) ttyPending(t Object) (uint32, error) {
+	return p.ttyCount(t, rInq)
+}
+
+func (p *Process) ttyUnsent(t Object) (uint32, error) {
+	return p.ttyCount(t, rOutq)
+}
+
+func (p *Process) ttyForeground(t Object) (uint32, uint32, error) {
+	pk, err := p.tty(t, rGetPgrp, 0, nil)
+
+	if err == nil && len(pk.data) != 8 {
+		err = EIO
+	}
+
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return binary.LittleEndian.Uint32(pk.data), binary.LittleEndian.Uint32(pk.data[4:]), nil
+}
+
+func (p *Process) ttySetForeground(t Object, pgrp uint32) error {
+	return p.ttyChange(t, rSetPgrp, pgrp, nil, false)
+}
+
+func (p *Process) ttyControl(t Object, how uint32) error {
+	_, err := p.tty(t, rSetCtty, how, nil)
+
+	return err
+}
+
+func (p *Process) ttyReopen(t Object, flags int) (Object, error) {
+	pk, err := p.tty(t, rOpen, uint32(flags), nil)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if len(pk.files) != 1 {
+		dropFiles(pk.files)
+
+		return nil, EIO
+	}
+
+	obj, _, err := p.opened(&pk)
+
+	return obj, err
+}
+
+func (p *Process) ttyName(t Object, peer bool) (string, error) {
+	arg := uint32(0)
+
+	if peer {
+		arg = 1
+	}
+
+	pk, err := p.tty(t, rName, arg, nil)
+
+	if err != nil {
+		return "", err
+	}
+
+	return string(pk.data), nil
+}
+
+func (p *Process) ttyCount(t Object, op uint32) (uint32, error) {
+	pk, err := p.tty(t, op, 0, nil)
+
+	if err == nil && len(pk.data) != 4 {
+		err = EIO
+	}
+
+	if err != nil {
+		return 0, err
+	}
+
+	return binary.LittleEndian.Uint32(pk.data), nil
 }

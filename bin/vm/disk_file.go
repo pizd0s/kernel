@@ -5,6 +5,8 @@ package main
 import (
 	"sync/atomic"
 	"syscall"
+	"time"
+	"unsafe"
 )
 
 type DiskFile struct {
@@ -30,66 +32,6 @@ func (f *DiskFile) unref() {
 	if f.refs.Add(-1) == 0 {
 		syscall.Close(f.fd)
 	}
-}
-
-func (f *DiskFile) asFile() File {
-	return f
-}
-
-func (f *DiskFile) asTransfer() Transfer {
-	return f
-}
-
-func (f *DiskFile) asSeeker() Seeker {
-	return f
-}
-
-func (f *DiskFile) asDir() Dir {
-	return nil
-}
-
-func (f *DiskFile) asTerminal() Terminal {
-	return nil
-}
-
-func (f *DiskFile) asLink() Link {
-	return nil
-}
-
-func (f *DiskFile) asAttrs() Attrs {
-	return f
-}
-
-func (f *DiskFile) asSocket() Socket {
-	return nil
-}
-
-func (f *DiskFile) asIoctl() Ioctl {
-	return nil
-}
-
-func (f *DiskFile) asLocker() Locker {
-	return nil
-}
-
-func (f *DiskFile) asEpoll() *Epoll {
-	return nil
-}
-
-func (f *DiskFile) asPair() *PairEnd {
-	return nil
-}
-
-func (f *DiskFile) asListener() *UnixListener {
-	return nil
-}
-
-func (f *DiskFile) asConsole() *ConsoleEnd {
-	return nil
-}
-
-func (f *DiskFile) asRemote() *RemoteFD {
-	return nil
 }
 
 func (f *DiskFile) size() (int64, error) {
@@ -160,27 +102,23 @@ func (f *DiskFile) at(b []byte, off int64, write bool) (int, error) {
 	}
 }
 
-func (f *DiskFile) pread(p *Process, into Transfer, n int, off int64) (int, error) {
+func (f *DiskFile) pread(p *Process, into Object, n int, off int64) (int, error) {
 	return into.with(0, n, true, func(b []byte) (int, error) {
 		return f.at(b, off, false)
 	})
 }
 
-func (f *DiskFile) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
+func (f *DiskFile) pwrite(p *Process, from Object, n int, off int64) (int, error) {
 	return from.with(0, n, false, func(b []byte) (int, error) {
 		return f.at(b, off, true)
 	})
-}
-
-func (f *DiskFile) splice(at int64, n int, mode int) Transfer {
-	return newSpliced(f, at, n, mode)
 }
 
 func (f *DiskFile) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
 	return 0, EINVAL
 }
 
-func (f *DiskFile) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
+func (f *DiskFile) read(p *Process, into Object, n int, mode IoMode) (int, error) {
 	count, err := f.pread(p, into, n, f.pos.Load())
 
 	f.pos.Add(int64(count))
@@ -188,7 +126,7 @@ func (f *DiskFile) read(p *Process, into Transfer, n int, mode IoMode) (int, err
 	return count, err
 }
 
-func (f *DiskFile) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
+func (f *DiskFile) write(p *Process, from Object, n int, mode IoMode) (int, error) {
 	count, err := f.pwrite(p, from, n, f.pos.Load())
 
 	f.pos.Add(int64(count))
@@ -260,10 +198,101 @@ func (f *DiskFile) statfs(p *Process, st *Statfs) error {
 	return nil
 }
 
-func (f *DiskFile) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+func (f *DiskFile) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
 	return out.copyFrom(p, f, from, to, n)
 }
 
-func (f *DiskFile) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
+func (f *DiskFile) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
 	return copyThrough(p, in, f, from, to, n)
+}
+
+func (f *DiskFile) readdir(p *Process, into Object, n int) (int, error) {
+	return 0, ENOTDIR
+}
+
+func (f *DiskFile) flock(p *Process, op int) error {
+	return EBADF
+}
+
+func (f *DiskFile) recordLock(p *Process, cmd int, lk *Flock) error {
+	return EBADF
+}
+
+func (f *DiskFile) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
+	return Packet{}, false, errUnserved
+}
+
+func (f *DiskFile) token() (uint64, error) {
+	return 0, EXDEV
+}
+
+func (f *DiskFile) device() FileKey {
+	return FileKey{}
+}
+
+func (f *DiskFile) bind(p *Process, a Address) error {
+	return ENOTSOCK
+}
+
+func (f *DiskFile) connect(p *Process, a Address) error {
+	return ENOTSOCK
+}
+
+func (f *DiskFile) listen(backlog int) error {
+	return ENOTSOCK
+}
+
+func (f *DiskFile) accept(p *Process, flags uint32) (Object, []byte, error) {
+	return nil, nil, ENOTSOCK
+}
+
+func (f *DiskFile) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
+	return nil, ECONNREFUSED
+}
+
+func (f *DiskFile) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
+	return 0, ENOTSOCK
+}
+
+func (f *DiskFile) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
+	return 0, Packet{}, 0, ENOTSOCK
+}
+
+func (f *DiskFile) sockname(p *Process) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (f *DiskFile) peername(p *Process) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (f *DiskFile) getsockopt(p *Process, level, name uint32) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (f *DiskFile) setsockopt(level, name uint32, value []byte) error {
+	return ENOTSOCK
+}
+
+func (f *DiskFile) shutdown(how int) error {
+	return ENOTSOCK
+}
+
+func (f *DiskFile) consume(sink func(pk *Packet)) {
+}
+
+func (f *DiskFile) socketKind() int {
+	return 0
+}
+
+func (f *DiskFile) ioctl(req uintptr, arg unsafe.Pointer) error {
+	return ENOTTY
+}
+
+func (f *DiskFile) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
+	return EINVAL
+}
+
+func (f *DiskFile) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
+	return 0, EINVAL
 }

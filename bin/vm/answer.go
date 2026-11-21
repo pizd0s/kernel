@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"sync"
 	"sync/atomic"
+	"time"
+	"unsafe"
 )
 
 const (
@@ -123,66 +125,6 @@ func (a *Answer) put(data []byte, files []Object) (int, error) {
 	return len(data), nil
 }
 
-func (a *Answer) asFile() File {
-	return nil
-}
-
-func (a *Answer) asTransfer() Transfer {
-	return a
-}
-
-func (a *Answer) asSeeker() Seeker {
-	return nil
-}
-
-func (a *Answer) asDir() Dir {
-	return nil
-}
-
-func (a *Answer) asTerminal() Terminal {
-	return nil
-}
-
-func (a *Answer) asLink() Link {
-	return nil
-}
-
-func (a *Answer) asAttrs() Attrs {
-	return nil
-}
-
-func (a *Answer) asSocket() Socket {
-	return a
-}
-
-func (a *Answer) asIoctl() Ioctl {
-	return nil
-}
-
-func (a *Answer) asLocker() Locker {
-	return nil
-}
-
-func (a *Answer) asEpoll() *Epoll {
-	return nil
-}
-
-func (a *Answer) asPair() *PairEnd {
-	return nil
-}
-
-func (a *Answer) asListener() *UnixListener {
-	return nil
-}
-
-func (a *Answer) asConsole() *ConsoleEnd {
-	return nil
-}
-
-func (a *Answer) asRemote() *RemoteFD {
-	return nil
-}
-
 func (a *Answer) poll(events int16, through []*Epoll) int16 {
 	a.mu.Lock()
 
@@ -215,11 +157,11 @@ func (a *Answer) unsubscribe(s *Subscription) {
 	a.mu.Unlock()
 }
 
-func (a *Answer) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
+func (a *Answer) read(p *Process, into Object, n int, mode IoMode) (int, error) {
 	return into.with(0, n, true, a.heard)
 }
 
-func (a *Answer) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
+func (a *Answer) write(p *Process, from Object, n int, mode IoMode) (int, error) {
 	data := make([]byte, n)
 
 	got, err := from.with(0, n, false, func(b []byte) (int, error) {
@@ -233,27 +175,23 @@ func (a *Answer) write(p *Process, from Transfer, n int, mode IoMode) (int, erro
 	return a.put(data[:got], nil)
 }
 
-func (a *Answer) pread(p *Process, into Transfer, n int, off int64) (int, error) {
+func (a *Answer) pread(p *Process, into Object, n int, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (a *Answer) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
+func (a *Answer) pwrite(p *Process, from Object, n int, off int64) (int, error) {
 	return 0, ESPIPE
-}
-
-func (a *Answer) splice(at int64, n int, mode int) Transfer {
-	return newSpliced(a, at, n, mode)
 }
 
 func (a *Answer) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
 	return 0, EINVAL
 }
 
-func (a *Answer) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+func (a *Answer) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 
-func (a *Answer) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
+func (a *Answer) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 
@@ -318,4 +256,84 @@ func (a *Answer) recv(p *Process, into Into, want int, flags uint32) (int, Packe
 }
 
 func (a *Answer) consume(sink func(pk *Packet)) {
+}
+
+func (a *Answer) stat(p *Process, st *Stat) error {
+	return EBADF
+}
+
+func (a *Answer) flags() (int, error) {
+	return 0, EBADF
+}
+
+func (a *Answer) setFlags(fl int) error {
+	return EBADF
+}
+
+func (a *Answer) seek(p *Process, off int64, whence int) (int64, error) {
+	return 0, ESPIPE
+}
+
+func (a *Answer) readdir(p *Process, into Object, n int) (int, error) {
+	return 0, ENOTDIR
+}
+
+func (a *Answer) truncate(p *Process, size int64) error {
+	return EINVAL
+}
+
+func (a *Answer) sync(p *Process, data bool) error {
+	return EINVAL
+}
+
+func (a *Answer) chmod(p *Process, mode uint32) error {
+	return EINVAL
+}
+
+func (a *Answer) chown(p *Process, uid, gid int) error {
+	return EINVAL
+}
+
+func (a *Answer) utimes(p *Process, ts []Timespec) error {
+	return EINVAL
+}
+
+func (a *Answer) statfs(p *Process, st *Statfs) error {
+	return EINVAL
+}
+
+func (a *Answer) flock(p *Process, op int) error {
+	return EBADF
+}
+
+func (a *Answer) recordLock(p *Process, cmd int, lk *Flock) error {
+	return EBADF
+}
+
+func (a *Answer) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
+	return Packet{}, false, errUnserved
+}
+
+func (a *Answer) token() (uint64, error) {
+	return 0, EXDEV
+}
+
+func (a *Answer) device() FileKey {
+	return FileKey{}
+}
+
+func (a *Answer) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
+	return nil, ECONNREFUSED
+}
+
+func (a *Answer) ioctl(req uintptr, arg unsafe.Pointer) error {
+	return ENOTTY
+}
+
+func (a *Answer) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
+	return EINVAL
+}
+
+func (a *Answer) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
+	return 0, EINVAL
 }

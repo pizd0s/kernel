@@ -89,12 +89,7 @@ func (g *Globber) names(dir string) ([]string, error) {
 
 	defer f.unref()
 
-	d := f.asDir()
-
-	if d == nil {
-		return nil, ENOTDIR
-	}
-
+	d := f
 	names := []string{".", ".."}
 	buf := make([]byte, 4096)
 	file := bytesFile(buf)

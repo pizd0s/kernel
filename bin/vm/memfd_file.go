@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 var memfdInodes atomic.Uint64
@@ -70,66 +71,6 @@ func (f *MemfdFile) unref() {
 	}
 }
 
-func (f *MemfdFile) asFile() File {
-	return f
-}
-
-func (f *MemfdFile) asTransfer() Transfer {
-	return f
-}
-
-func (f *MemfdFile) asSeeker() Seeker {
-	return f
-}
-
-func (f *MemfdFile) asDir() Dir {
-	return nil
-}
-
-func (f *MemfdFile) asTerminal() Terminal {
-	return nil
-}
-
-func (f *MemfdFile) asLink() Link {
-	return nil
-}
-
-func (f *MemfdFile) asAttrs() Attrs {
-	return nil
-}
-
-func (f *MemfdFile) asSocket() Socket {
-	return nil
-}
-
-func (f *MemfdFile) asIoctl() Ioctl {
-	return nil
-}
-
-func (f *MemfdFile) asLocker() Locker {
-	return nil
-}
-
-func (f *MemfdFile) asEpoll() *Epoll {
-	return nil
-}
-
-func (f *MemfdFile) asPair() *PairEnd {
-	return nil
-}
-
-func (f *MemfdFile) asListener() *UnixListener {
-	return nil
-}
-
-func (f *MemfdFile) asConsole() *ConsoleEnd {
-	return nil
-}
-
-func (f *MemfdFile) asRemote() *RemoteFD {
-	return nil
-}
-
 func (f *MemfdFile) bytes() []byte {
 	b := f.mem.bytes()
 	start := min(f.at, int64(len(b)))
@@ -178,7 +119,7 @@ func (f *MemfdFile) setFlags(fl int) error {
 	return nil
 }
 
-func (f *MemfdFile) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
+func (f *MemfdFile) read(p *Process, into Object, n int, mode IoMode) (int, error) {
 	f.mu.Lock()
 
 	defer f.mu.Unlock()
@@ -190,7 +131,7 @@ func (f *MemfdFile) read(p *Process, into Transfer, n int, mode IoMode) (int, er
 	return count, err
 }
 
-func (f *MemfdFile) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
+func (f *MemfdFile) write(p *Process, from Object, n int, mode IoMode) (int, error) {
 	f.mu.Lock()
 
 	defer f.mu.Unlock()
@@ -202,7 +143,7 @@ func (f *MemfdFile) write(p *Process, from Transfer, n int, mode IoMode) (int, e
 	return count, err
 }
 
-func (f *MemfdFile) pread(p *Process, into Transfer, n int, off int64) (int, error) {
+func (f *MemfdFile) pread(p *Process, into Object, n int, off int64) (int, error) {
 	f.mem.enter()
 
 	defer f.mem.leave()
@@ -228,7 +169,7 @@ func (f *MemfdFile) pread(p *Process, into Transfer, n int, off int64) (int, err
 	})
 }
 
-func (f *MemfdFile) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
+func (f *MemfdFile) pwrite(p *Process, from Object, n int, off int64) (int, error) {
 	f.mem.enter()
 
 	defer f.mem.leave()
@@ -280,7 +221,7 @@ func (f *MemfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 	return off, nil
 }
 
-func (f *MemfdFile) splice(at int64, n int, mode int) Transfer {
+func (f *MemfdFile) splice(at int64, n int, mode int) Object {
 	size := f.size()
 
 	at = min(max(at, 0), size)
@@ -308,11 +249,11 @@ func (f *MemfdFile) with(at int64, n int, writes bool, fn func(b []byte) (int, e
 	return fn(b[at : at+min(int64(n), size-at)])
 }
 
-func (f *MemfdFile) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+func (f *MemfdFile) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
 	size := f.size()
 
 	switch {
-	case out == Transfer(f):
+	case out == Object(f):
 		return 0, EINVAL
 	case n == 0 || from >= size:
 		return 0, nil
@@ -330,7 +271,7 @@ func (f *MemfdFile) copyTo(p *Process, out Transfer, from, to int64, n int) (int
 	return count, err
 }
 
-func (f *MemfdFile) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
+func (f *MemfdFile) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
 	size := f.size()
 
 	switch {
@@ -350,4 +291,119 @@ func (f *MemfdFile) copyFrom(p *Process, in Transfer, from, to int64, n int) (in
 	part.unref()
 
 	return count, err
+}
+
+func (f *MemfdFile) readdir(p *Process, into Object, n int) (int, error) {
+	return 0, ENOTDIR
+}
+
+func (f *MemfdFile) truncate(p *Process, size int64) error {
+	return EINVAL
+}
+
+func (f *MemfdFile) sync(p *Process, data bool) error {
+	return EINVAL
+}
+
+func (f *MemfdFile) chmod(p *Process, mode uint32) error {
+	return EINVAL
+}
+
+func (f *MemfdFile) chown(p *Process, uid, gid int) error {
+	return EINVAL
+}
+
+func (f *MemfdFile) utimes(p *Process, ts []Timespec) error {
+	return EINVAL
+}
+
+func (f *MemfdFile) statfs(p *Process, st *Statfs) error {
+	return EINVAL
+}
+
+func (f *MemfdFile) flock(p *Process, op int) error {
+	return EBADF
+}
+
+func (f *MemfdFile) recordLock(p *Process, cmd int, lk *Flock) error {
+	return EBADF
+}
+
+func (f *MemfdFile) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
+	return Packet{}, false, errUnserved
+}
+
+func (f *MemfdFile) token() (uint64, error) {
+	return 0, EXDEV
+}
+
+func (f *MemfdFile) device() FileKey {
+	return FileKey{}
+}
+
+func (f *MemfdFile) bind(p *Process, a Address) error {
+	return ENOTSOCK
+}
+
+func (f *MemfdFile) connect(p *Process, a Address) error {
+	return ENOTSOCK
+}
+
+func (f *MemfdFile) listen(backlog int) error {
+	return ENOTSOCK
+}
+
+func (f *MemfdFile) accept(p *Process, flags uint32) (Object, []byte, error) {
+	return nil, nil, ENOTSOCK
+}
+
+func (f *MemfdFile) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
+	return nil, ECONNREFUSED
+}
+
+func (f *MemfdFile) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
+	return 0, ENOTSOCK
+}
+
+func (f *MemfdFile) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
+	return 0, Packet{}, 0, ENOTSOCK
+}
+
+func (f *MemfdFile) sockname(p *Process) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (f *MemfdFile) peername(p *Process) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (f *MemfdFile) getsockopt(p *Process, level, name uint32) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (f *MemfdFile) setsockopt(level, name uint32, value []byte) error {
+	return ENOTSOCK
+}
+
+func (f *MemfdFile) shutdown(how int) error {
+	return ENOTSOCK
+}
+
+func (f *MemfdFile) consume(sink func(pk *Packet)) {
+}
+
+func (f *MemfdFile) socketKind() int {
+	return 0
+}
+
+func (f *MemfdFile) ioctl(req uintptr, arg unsafe.Pointer) error {
+	return ENOTTY
+}
+
+func (f *MemfdFile) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
+	return EINVAL
+}
+
+func (f *MemfdFile) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
+	return 0, EINVAL
 }

@@ -23,137 +23,39 @@ type Object interface {
 	subscribe(s *Subscription, events int16)
 	unsubscribe(s *Subscription)
 
-	asFile() File
-	asTransfer() Transfer
-	asSeeker() Seeker
-	asDir() Dir
-	asTerminal() Terminal
-	asLink() Link
-	asAttrs() Attrs
-	asSocket() Socket
-	asIoctl() Ioctl
-	asLocker() Locker
-	asEpoll() *Epoll
-	asPair() *PairEnd
-	asListener() *UnixListener
-	asConsole() *ConsoleEnd
-	asRemote() *RemoteFD
-}
-
-type File interface {
-	Object
-
 	stat(p *Process, st *Stat) error
-
 	flags() (int, error)
 	setFlags(fl int) error
-}
 
-type IoMode struct {
-	nonblock bool
-	quiet    bool
-	kernel   bool
-	timeout  *atomic.Int64
-}
-
-type Transfer interface {
-	Object
-	read(p *Process, into Transfer, n int, mode IoMode) (int, error)
-	write(p *Process, from Transfer, n int, mode IoMode) (int, error)
-	pread(p *Process, into Transfer, n int, off int64) (int, error)
-	pwrite(p *Process, from Transfer, n int, off int64) (int, error)
-	splice(at int64, n int, mode int) Transfer
-	with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error)
-	copyTo(p *Process, out Transfer, from, to int64, n int) (int, error)
-	copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error)
-}
-
-type Seeker interface {
-	Object
+	read(p *Process, into Object, n int, mode IoMode) (int, error)
+	write(p *Process, from Object, n int, mode IoMode) (int, error)
+	pread(p *Process, into Object, n int, off int64) (int, error)
+	pwrite(p *Process, from Object, n int, off int64) (int, error)
 	seek(p *Process, off int64, whence int) (int64, error)
-}
+	readdir(p *Process, into Object, n int) (int, error)
+	with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error)
+	copyTo(p *Process, out Object, from, to int64, n int) (int, error)
+	copyFrom(p *Process, in Object, from, to int64, n int) (int, error)
 
-type Dir interface {
-	Object
-
-	path(p *Process) (string, error)
-
-	readdir(p *Process, into Transfer, n int) (int, error)
-	openPath(p *Process, path string, flags int, mode uint32) (Object, error)
-	statPath(p *Process, path string, follow bool, st *Stat) error
-	readlinkPath(p *Process, path string) (string, error)
-	mkdirPath(p *Process, path string, mode uint32) error
-
-	mknodPath(p *Process, path string, mode uint32) error
-	symlinkPath(p *Process, target, path string) error
-	unlinkPath(p *Process, path string, dir bool) error
-
-	renamePath(p *Process, old string, to Dir, new string) error
-	linkPath(p *Process, old string, to Dir, new string, follow bool) error
-	chmodPath(p *Process, path string, mode uint32, follow bool) error
-	chownPath(p *Process, path string, uid, gid int, follow bool) error
-	utimesPath(p *Process, path string, ts []Timespec, follow bool) error
-	truncatePath(p *Process, path string, size int64) error
-	statfsPath(p *Process, path string, st *Statfs) error
-
-	realpathOf(p *Process, path string) (string, error)
-
-	mountPath(p *Process, target, source string, conn Object) error
-	unmountPath(p *Process, path string, flags uint32) error
-
-	bindPath(p *Process, path string, mode uint32, held Object) error
-	connectPath(p *Process, path string) (Object, error)
-}
-
-type Terminal interface {
-	Transfer
-
-	device() FileKey
-
-	getattr(p *Process) ([]byte, error)
-
-	setattr(p *Process, when uint32, termios []byte) error
-	flush(p *Process, queue uint32) error
-	flow(p *Process, action uint32) error
-	drain(p *Process) error
-	brk(p *Process) error
-	window(p *Process) ([]byte, error)
-	setWindow(p *Process, size []byte) error
-
-	pending(p *Process) (uint32, error)
-	unsent(p *Process) (uint32, error)
-
-	name(p *Process, peer bool) (string, error)
-	foreground(p *Process) (uint32, uint32, error)
-	setForeground(p *Process, pgrp uint32) error
-
-	control(p *Process, how uint32) error
-
-	reopen(p *Process, flags int) (Terminal, error)
-}
-
-type Link interface {
-	Object
-	readlink(p *Process) (string, error)
-}
-
-type Attrs interface {
-	Object
 	truncate(p *Process, size int64) error
 	sync(p *Process, data bool) error
 	chmod(p *Process, mode uint32) error
 	chown(p *Process, uid, gid int) error
 	utimes(p *Process, ts []Timespec) error
 	statfs(p *Process, st *Statfs) error
-}
 
-type Socket interface {
-	Object
+	flock(p *Process, op int) error
+	recordLock(p *Process, cmd int, lk *Flock) error
+
+	call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error)
+	token() (uint64, error)
+	device() FileKey
+
 	bind(p *Process, a Address) error
 	connect(p *Process, a Address) error
 	listen(backlog int) error
-
 	accept(p *Process, flags uint32) (Object, []byte, error)
+	knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error)
 	send(p *Process, pk *Packet, to Address, mode IoMode) (int, error)
 	recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error)
 	sockname(p *Process) ([]byte, error)
@@ -162,19 +64,19 @@ type Socket interface {
 	setsockopt(level, name uint32, value []byte) error
 	shutdown(how int) error
 	consume(sink func(pk *Packet))
-
 	socketKind() int
-}
 
-type Ioctl interface {
-	Object
 	ioctl(req uintptr, arg unsafe.Pointer) error
+
+	epollCtl(op uint32, key EpollKey, events uint32, data uint64) error
+	epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error)
 }
 
-type Locker interface {
-	Object
-	flock(p *Process, op int) error
-	recordLock(p *Process, cmd int, lk *Flock) error
+type IoMode struct {
+	nonblock bool
+	quiet    bool
+	kernel   bool
+	timeout  *atomic.Int64
 }
 
 func closed(ch <-chan struct{}) bool {

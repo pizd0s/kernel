@@ -5,6 +5,8 @@ package main
 import (
 	"sync"
 	"sync/atomic"
+	"time"
+	"unsafe"
 )
 
 type UnixDgram struct {
@@ -13,7 +15,7 @@ type UnixDgram struct {
 	inbox, mouth *PairEnd
 	mu           sync.Mutex
 	name, peer   string
-	target       Socket
+	target       Object
 
 	writers Subscribers
 	inner   Subscription
@@ -55,67 +57,7 @@ func (s *UnixDgram) unref() {
 	s.mouth.unref()
 }
 
-func (s *UnixDgram) asFile() File {
-	return s
-}
-
-func (s *UnixDgram) asTransfer() Transfer {
-	return s
-}
-
-func (s *UnixDgram) asSeeker() Seeker {
-	return nil
-}
-
-func (s *UnixDgram) asDir() Dir {
-	return nil
-}
-
-func (s *UnixDgram) asTerminal() Terminal {
-	return nil
-}
-
-func (s *UnixDgram) asLink() Link {
-	return nil
-}
-
-func (s *UnixDgram) asAttrs() Attrs {
-	return nil
-}
-
-func (s *UnixDgram) asSocket() Socket {
-	return s
-}
-
-func (s *UnixDgram) asIoctl() Ioctl {
-	return nil
-}
-
-func (s *UnixDgram) asLocker() Locker {
-	return nil
-}
-
-func (s *UnixDgram) asEpoll() *Epoll {
-	return nil
-}
-
-func (s *UnixDgram) asPair() *PairEnd {
-	return nil
-}
-
-func (s *UnixDgram) asListener() *UnixListener {
-	return nil
-}
-
-func (s *UnixDgram) asConsole() *ConsoleEnd {
-	return nil
-}
-
-func (s *UnixDgram) asRemote() *RemoteFD {
-	return nil
-}
-
-func (s *UnixDgram) targetEnd() Socket {
+func (s *UnixDgram) targetEnd() Object {
 	s.mu.Lock()
 
 	defer s.mu.Unlock()
@@ -204,8 +146,8 @@ func (s *UnixDgram) bind(p *Process, a Address) error {
 		return EINVAL
 	}
 
-	err = p.onPath(AT_FDCWD, path, func(v Dir) error {
-		return v.bindPath(p, path, 0o777&^p.umask, s.mouth)
+	err = p.onPath(AT_FDCWD, path, func(v Object) error {
+		return p.dirBind(v, path, 0o777&^p.umask, s.mouth)
 	})
 
 	if err == EEXIST {
@@ -311,7 +253,7 @@ func (s *UnixDgram) send(p *Process, pk *Packet, to Address, mode IoMode) (int, 
 		return 0, EMSGSIZE
 	}
 
-	var t Socket
+	var t Object
 
 	if to.given {
 		var err error
@@ -355,7 +297,7 @@ func (s *UnixDgram) dontwait() uint32 {
 	return 0
 }
 
-func (s *UnixDgram) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
+func (s *UnixDgram) read(p *Process, into Object, n int, mode IoMode) (int, error) {
 	got, from, _, err := s.inbox.recv(p, Into{p: p, to: into}, n, s.dontwait()|bit(mode.nonblock)*MSG_DONTWAIT)
 
 	dropFiles(from.files)
@@ -363,7 +305,7 @@ func (s *UnixDgram) read(p *Process, into Transfer, n int, mode IoMode) (int, er
 	return got, err
 }
 
-func (s *UnixDgram) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
+func (s *UnixDgram) write(p *Process, from Object, n int, mode IoMode) (int, error) {
 	if n > packetMax {
 		return 0, EMSGSIZE
 	}
@@ -373,26 +315,90 @@ func (s *UnixDgram) write(p *Process, from Transfer, n int, mode IoMode) (int, e
 	return s.send(p, &Packet{data: data[:takeFrom(from)(0, data)]}, Address{}, mode)
 }
 
-func (s *UnixDgram) pread(p *Process, into Transfer, n int, off int64) (int, error) {
+func (s *UnixDgram) pread(p *Process, into Object, n int, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (s *UnixDgram) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
+func (s *UnixDgram) pwrite(p *Process, from Object, n int, off int64) (int, error) {
 	return 0, ESPIPE
-}
-
-func (s *UnixDgram) splice(at int64, n int, mode int) Transfer {
-	return newSpliced(s, at, n, mode)
 }
 
 func (s *UnixDgram) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
 	return 0, EINVAL
 }
 
-func (s *UnixDgram) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+func (s *UnixDgram) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 
-func (s *UnixDgram) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
+func (s *UnixDgram) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
+	return 0, EINVAL
+}
+
+func (s *UnixDgram) seek(p *Process, off int64, whence int) (int64, error) {
+	return 0, ESPIPE
+}
+
+func (s *UnixDgram) readdir(p *Process, into Object, n int) (int, error) {
+	return 0, ENOTDIR
+}
+
+func (s *UnixDgram) truncate(p *Process, size int64) error {
+	return EINVAL
+}
+
+func (s *UnixDgram) sync(p *Process, data bool) error {
+	return EINVAL
+}
+
+func (s *UnixDgram) chmod(p *Process, mode uint32) error {
+	return EINVAL
+}
+
+func (s *UnixDgram) chown(p *Process, uid, gid int) error {
+	return EINVAL
+}
+
+func (s *UnixDgram) utimes(p *Process, ts []Timespec) error {
+	return EINVAL
+}
+
+func (s *UnixDgram) statfs(p *Process, st *Statfs) error {
+	return EINVAL
+}
+
+func (s *UnixDgram) flock(p *Process, op int) error {
+	return EBADF
+}
+
+func (s *UnixDgram) recordLock(p *Process, cmd int, lk *Flock) error {
+	return EBADF
+}
+
+func (s *UnixDgram) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
+	return Packet{}, false, errUnserved
+}
+
+func (s *UnixDgram) token() (uint64, error) {
+	return 0, EXDEV
+}
+
+func (s *UnixDgram) device() FileKey {
+	return FileKey{}
+}
+
+func (s *UnixDgram) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
+	return nil, ECONNREFUSED
+}
+
+func (s *UnixDgram) ioctl(req uintptr, arg unsafe.Pointer) error {
+	return ENOTTY
+}
+
+func (s *UnixDgram) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
+	return EINVAL
+}
+
+func (s *UnixDgram) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
 	return 0, EINVAL
 }

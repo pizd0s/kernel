@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 type UnixListener struct {
@@ -28,66 +29,6 @@ func (l *UnixListener) unref() {
 	if l.refs.Add(-1) == 0 {
 		l.shut()
 	}
-}
-
-func (l *UnixListener) asFile() File {
-	return l
-}
-
-func (l *UnixListener) asTransfer() Transfer {
-	return nil
-}
-
-func (l *UnixListener) asSeeker() Seeker {
-	return nil
-}
-
-func (l *UnixListener) asDir() Dir {
-	return nil
-}
-
-func (l *UnixListener) asTerminal() Terminal {
-	return nil
-}
-
-func (l *UnixListener) asLink() Link {
-	return nil
-}
-
-func (l *UnixListener) asAttrs() Attrs {
-	return nil
-}
-
-func (l *UnixListener) asSocket() Socket {
-	return nil
-}
-
-func (l *UnixListener) asIoctl() Ioctl {
-	return nil
-}
-
-func (l *UnixListener) asLocker() Locker {
-	return nil
-}
-
-func (l *UnixListener) asEpoll() *Epoll {
-	return nil
-}
-
-func (l *UnixListener) asPair() *PairEnd {
-	return nil
-}
-
-func (l *UnixListener) asListener() *UnixListener {
-	return l
-}
-
-func (l *UnixListener) asConsole() *ConsoleEnd {
-	return nil
-}
-
-func (l *UnixListener) asRemote() *RemoteFD {
-	return nil
 }
 
 func (l *UnixListener) shut() {
@@ -116,14 +57,14 @@ func (l *UnixListener) listens() bool {
 	return l.listening && !l.closed
 }
 
-func (l *UnixListener) listen(backlog int) {
+func (l *UnixListener) open(backlog int) {
 	l.mu.Lock()
 	l.listening, l.backlog = true, min(max(backlog, 1), SOMAXCONN)
 	l.watchers.tell()
 	l.mu.Unlock()
 }
 
-func (l *UnixListener) accept(p *Process, nonblock bool) (*PairEnd, error) {
+func (l *UnixListener) next(p *Process, nonblock bool) (*PairEnd, error) {
 	l.mu.Lock()
 
 	for {
@@ -260,4 +201,186 @@ func (l *UnixListener) flags() (int, error) {
 
 func (l *UnixListener) setFlags(fl int) error {
 	return nil
+}
+
+func (l *UnixListener) read(p *Process, into Object, n int, mode IoMode) (int, error) {
+	return 0, EBADF
+}
+
+func (l *UnixListener) write(p *Process, from Object, n int, mode IoMode) (int, error) {
+	return 0, EBADF
+}
+
+func (l *UnixListener) pread(p *Process, into Object, n int, off int64) (int, error) {
+	return 0, EBADF
+}
+
+func (l *UnixListener) pwrite(p *Process, from Object, n int, off int64) (int, error) {
+	return 0, EBADF
+}
+
+func (l *UnixListener) seek(p *Process, off int64, whence int) (int64, error) {
+	return 0, ESPIPE
+}
+
+func (l *UnixListener) readdir(p *Process, into Object, n int) (int, error) {
+	return 0, ENOTDIR
+}
+
+func (l *UnixListener) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
+	return 0, EINVAL
+}
+
+func (l *UnixListener) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
+	return 0, EBADF
+}
+
+func (l *UnixListener) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
+	return 0, EBADF
+}
+
+func (l *UnixListener) truncate(p *Process, size int64) error {
+	return EINVAL
+}
+
+func (l *UnixListener) sync(p *Process, data bool) error {
+	return EINVAL
+}
+
+func (l *UnixListener) chmod(p *Process, mode uint32) error {
+	return EINVAL
+}
+
+func (l *UnixListener) chown(p *Process, uid, gid int) error {
+	return EINVAL
+}
+
+func (l *UnixListener) utimes(p *Process, ts []Timespec) error {
+	return EINVAL
+}
+
+func (l *UnixListener) statfs(p *Process, st *Statfs) error {
+	return EINVAL
+}
+
+func (l *UnixListener) flock(p *Process, op int) error {
+	return EBADF
+}
+
+func (l *UnixListener) recordLock(p *Process, cmd int, lk *Flock) error {
+	return EBADF
+}
+
+func (l *UnixListener) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
+	return Packet{}, false, errUnserved
+}
+
+func (l *UnixListener) token() (uint64, error) {
+	return 0, EXDEV
+}
+
+func (l *UnixListener) device() FileKey {
+	return FileKey{}
+}
+
+func (l *UnixListener) bind(p *Process, a Address) error {
+	return ENOTSOCK
+}
+
+func (l *UnixListener) connect(p *Process, a Address) error {
+	return ENOTSOCK
+}
+
+func (l *UnixListener) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
+	if l.kind != kind {
+		return nil, EPROTOTYPE
+	}
+
+	mine, theirs := newPairOf(kind, nonblock)
+
+	for {
+		queued, refused := l.push(theirs)
+
+		if queued {
+			return mine, nil
+		}
+
+		var err error
+
+		if !refused && !nonblock {
+			end, how := until(timeout)
+
+			var timedOut bool
+
+			if timedOut, err = l.awaitRoom(p, end, how); err == nil && !timedOut {
+				continue
+			} else if err == nil {
+				err = EAGAIN
+			}
+		} else if refused {
+			err = ECONNREFUSED
+		} else {
+			err = EAGAIN
+		}
+
+		mine.unref()
+		theirs.unref()
+
+		return nil, err
+	}
+}
+
+func (l *UnixListener) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
+	return 0, ENOTSOCK
+}
+
+func (l *UnixListener) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
+	return 0, Packet{}, 0, ENOTSOCK
+}
+
+func (l *UnixListener) sockname(p *Process) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (l *UnixListener) peername(p *Process) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (l *UnixListener) getsockopt(p *Process, level, name uint32) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (l *UnixListener) setsockopt(level, name uint32, value []byte) error {
+	return ENOTSOCK
+}
+
+func (l *UnixListener) shutdown(how int) error {
+	return ENOTSOCK
+}
+
+func (l *UnixListener) consume(sink func(pk *Packet)) {
+}
+
+func (l *UnixListener) socketKind() int {
+	return 0
+}
+
+func (l *UnixListener) ioctl(req uintptr, arg unsafe.Pointer) error {
+	return ENOTTY
+}
+
+func (l *UnixListener) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
+	return EINVAL
+}
+
+func (l *UnixListener) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
+	return 0, EINVAL
+}
+
+func (l *UnixListener) listen(backlog int) error {
+	return ENOTSOCK
+}
+
+func (l *UnixListener) accept(p *Process, flags uint32) (Object, []byte, error) {
+	return nil, nil, ENOTSOCK
 }

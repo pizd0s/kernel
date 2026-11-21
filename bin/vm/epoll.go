@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 var (
@@ -75,66 +76,6 @@ func (ep *Epoll) unref() {
 		m.key.obj.unsubscribe(&m.sub)
 		m.key.obj.unref()
 	}
-}
-
-func (ep *Epoll) asFile() File {
-	return ep
-}
-
-func (ep *Epoll) asTransfer() Transfer {
-	return ep
-}
-
-func (ep *Epoll) asSeeker() Seeker {
-	return nil
-}
-
-func (ep *Epoll) asDir() Dir {
-	return nil
-}
-
-func (ep *Epoll) asTerminal() Terminal {
-	return nil
-}
-
-func (ep *Epoll) asLink() Link {
-	return nil
-}
-
-func (ep *Epoll) asAttrs() Attrs {
-	return nil
-}
-
-func (ep *Epoll) asSocket() Socket {
-	return nil
-}
-
-func (ep *Epoll) asIoctl() Ioctl {
-	return nil
-}
-
-func (ep *Epoll) asLocker() Locker {
-	return nil
-}
-
-func (ep *Epoll) asEpoll() *Epoll {
-	return ep
-}
-
-func (ep *Epoll) asPair() *PairEnd {
-	return nil
-}
-
-func (ep *Epoll) asListener() *UnixListener {
-	return nil
-}
-
-func (ep *Epoll) asConsole() *ConsoleEnd {
-	return nil
-}
-
-func (ep *Epoll) asRemote() *RemoteFD {
-	return nil
 }
 
 func (ep *Epoll) stat(p *Process, st *Stat) error {
@@ -245,39 +186,35 @@ func (ep *Epoll) setFlags(fl int) error {
 	return nil
 }
 
-func (ep *Epoll) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
+func (ep *Epoll) read(p *Process, into Object, n int, mode IoMode) (int, error) {
 	return 0, EINVAL
 }
 
-func (ep *Epoll) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
+func (ep *Epoll) write(p *Process, from Object, n int, mode IoMode) (int, error) {
 	return 0, EINVAL
 }
 
-func (ep *Epoll) pread(p *Process, into Transfer, n int, off int64) (int, error) {
+func (ep *Epoll) pread(p *Process, into Object, n int, off int64) (int, error) {
 	return 0, EINVAL
 }
 
-func (ep *Epoll) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
+func (ep *Epoll) pwrite(p *Process, from Object, n int, off int64) (int, error) {
 	return 0, EINVAL
-}
-
-func (ep *Epoll) splice(at int64, n int, mode int) Transfer {
-	return newSpliced(ep, at, n, mode)
 }
 
 func (ep *Epoll) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
 	return 0, EINVAL
 }
 
-func (ep *Epoll) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+func (ep *Epoll) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 
-func (ep *Epoll) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
+func (ep *Epoll) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 
-func (ep *Epoll) ctl(op uint32, key EpollKey, events uint32, data uint64) error {
+func (ep *Epoll) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
 	switch op {
 	case EPOLL_CTL_ADD:
 		return ep.add(key, events, data)
@@ -384,7 +321,7 @@ func (ep *Epoll) collect(buf []byte, max int) int {
 	return n
 }
 
-func (ep *Epoll) wait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
+func (ep *Epoll) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
 	for {
 		if n := ep.collect(buf(), max); n > 0 {
 			return n, nil
@@ -404,4 +341,115 @@ func (ep *Epoll) marked(p *Process, end time.Time) (timedOut bool, err error) {
 	_, _, timedOut, err = attend(p, &p.turns, &ep.mu, &ep.waiting, func() bool { return ep.ready.len() > 0 }, end, interrupts)
 
 	return timedOut, err
+}
+
+func (ep *Epoll) seek(p *Process, off int64, whence int) (int64, error) {
+	return 0, ESPIPE
+}
+
+func (ep *Epoll) readdir(p *Process, into Object, n int) (int, error) {
+	return 0, ENOTDIR
+}
+
+func (ep *Epoll) truncate(p *Process, size int64) error {
+	return EINVAL
+}
+
+func (ep *Epoll) sync(p *Process, data bool) error {
+	return EINVAL
+}
+
+func (ep *Epoll) chmod(p *Process, mode uint32) error {
+	return EINVAL
+}
+
+func (ep *Epoll) chown(p *Process, uid, gid int) error {
+	return EINVAL
+}
+
+func (ep *Epoll) utimes(p *Process, ts []Timespec) error {
+	return EINVAL
+}
+
+func (ep *Epoll) statfs(p *Process, st *Statfs) error {
+	return EINVAL
+}
+
+func (ep *Epoll) flock(p *Process, op int) error {
+	return EBADF
+}
+
+func (ep *Epoll) recordLock(p *Process, cmd int, lk *Flock) error {
+	return EBADF
+}
+
+func (ep *Epoll) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
+	return Packet{}, false, errUnserved
+}
+
+func (ep *Epoll) token() (uint64, error) {
+	return 0, EXDEV
+}
+
+func (ep *Epoll) device() FileKey {
+	return FileKey{}
+}
+
+func (ep *Epoll) bind(p *Process, a Address) error {
+	return ENOTSOCK
+}
+
+func (ep *Epoll) connect(p *Process, a Address) error {
+	return ENOTSOCK
+}
+
+func (ep *Epoll) listen(backlog int) error {
+	return ENOTSOCK
+}
+
+func (ep *Epoll) accept(p *Process, flags uint32) (Object, []byte, error) {
+	return nil, nil, ENOTSOCK
+}
+
+func (ep *Epoll) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
+	return nil, ECONNREFUSED
+}
+
+func (ep *Epoll) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
+	return 0, ENOTSOCK
+}
+
+func (ep *Epoll) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
+	return 0, Packet{}, 0, ENOTSOCK
+}
+
+func (ep *Epoll) sockname(p *Process) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (ep *Epoll) peername(p *Process) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (ep *Epoll) getsockopt(p *Process, level, name uint32) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (ep *Epoll) setsockopt(level, name uint32, value []byte) error {
+	return ENOTSOCK
+}
+
+func (ep *Epoll) shutdown(how int) error {
+	return ENOTSOCK
+}
+
+func (ep *Epoll) consume(sink func(pk *Packet)) {
+}
+
+func (ep *Epoll) socketKind() int {
+	return 0
+}
+
+func (ep *Epoll) ioctl(req uintptr, arg unsafe.Pointer) error {
+	return ENOTTY
 }

@@ -358,6 +358,10 @@ func libcFchdir(fd uint32) uint32 {
 	return proc().libcFchdir(fd)
 }
 
+func libcAttach(fd uint32) uint32 {
+	return proc().libcAttach(fd)
+}
+
 func libcChroot(path uint32) uint32 {
 	return proc().libcChroot(path)
 }

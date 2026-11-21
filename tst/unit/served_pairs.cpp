@@ -1,6 +1,6 @@
 //@ host: false
 //@ compile-flags: -D_GNU_SOURCE
-//@ stdout: "a kind the kernel does not know: EIO\nready as the OPEN said: POLLOUT, then as READY said: POLLIN POLLOUT\nserved: READ of 16 at 0\nread: 'hello'\nserved: READ of 8 at 0\npassed on, read: 'world'\nfchdir: a path's ENOTDIR, a file's ENOTDIR, a stream socket's ENOTDIR\nserved: STAT of ''\nserved: STAT of 'name'\na pair's end, the working directory: fchdir 0, a name there ENOENT\n"
+//@ stdout: "a kind the kernel does not know: EIO\nready as the OPEN said: POLLOUT, then as READY said: POLLIN POLLOUT\nserved: READ of 16 at 0\nread: 'hello'\nserved: READ of 8 at 0\npassed on, read: 'world'\nfchdir: a path's ENOTDIR, a file's ENOTDIR, a stream socket's ENOTDIR\nserved: STAT of ''\nserved: STAT of 'name'\na pair's end: fchdir ENOTDIR; a directory over it, the working directory: fchdir 0, a name there ENOENT\n"
 
 // An open file is the end of a pair its server made, which an OPEN's OK
 // brings with what it is (lib/protocol/protocol.h): the kernel makes it
@@ -11,8 +11,9 @@
 // closes it. The test is the
 // server: a device of its own, whose opens it answers. What is no
 // directory's handle, a path's, a file's or a stream socket, is no
-// directory to fchdir to; and an end of a seqpacket pair is one, the
-// root of the server behind it, as rootfs gives its processes theirs. An
+// directory to fchdir to, nor is an end of a seqpacket pair; attach makes
+// a directory over one, the root of the server behind it, as rootfs gives
+// its processes theirs. An
 // open file is ready as the OPEN's OK says, and then as each READY of its
 // server says.
 
@@ -446,19 +447,25 @@ int main() {
     waitFor(none);
     printf("fchdir: a path's %s, a file's %s, a stream socket's %s\n", errorName(a), errorName(b), errorName(d));
 
-    // An end of a seqpacket pair is a directory to fchdir to: the calls
-    // with a path from it go to who serves the other end.
+    // An end of a seqpacket pair is no directory, and attach makes one
+    // over it to fchdir to: the calls with a path from it go to who serves
+    // the other end.
     int root[2];
     const int back = open(".", O_RDONLY | O_DIRECTORY);
     assert(back >= 0 && socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, root) == 0);
     child = directoryServer(root[0], root[1]);
     close(root[0]);
-    const int entered = fchdir(root[1]) == -1 ? errno : 0;
+    const int bare = fchdir(root[1]) == -1 ? errno : 0;
+    const int over = attach(root[1]);
+    assert(over >= 0);
+    const int entered = fchdir(over) == -1 ? errno : 0;
     struct stat st;
     const int named = stat("name", &st) == -1 ? errno : 0;
     assert(fchdir(back) == 0);
+    close(over);
     close(root[1]);
     waitFor(child);
-    printf("a pair's end, the working directory: fchdir %s, a name there %s\n", errorName(entered), errorName(named));
+    printf("a pair's end: fchdir %s; a directory over it, the working directory: fchdir %s, a name there %s\n", errorName(bare),
+           errorName(entered), errorName(named));
     return 0;
 }

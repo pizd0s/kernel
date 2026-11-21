@@ -44,7 +44,7 @@ var callFormats = func() map[string]string {
 
 	for _, word := range strings.Fields(`
 		_Exit:vd __assert_fail:vssds _exit:vd _longjmp:vpdd _setjmp:dpd abort:v abs:dd accept:ddpp accept4:ddppd access:dsd acct:ds
-		adjtime:dpdpd alarm:dd aligned_alloc:pdd alphasort:dpdpd asctime:spd asctime_r:spdp basename:sp bcmp:dppd bcopy:vppd bind:ddpd
+		adjtime:dpdpd alarm:dd aligned_alloc:pdd alphasort:dpdpd asctime:spd asctime_r:spdp attach:dd basename:sp bcmp:dppd bcopy:vppd bind:ddpd
 		bsd_signal:ddd bzero:vpd calloc:pdd canonicalize_file_name:ss cfgetispeed:dpd cfgetospeed:dpd cfmakeraw:vpd cfsetispeed:dpdd
 		cfsetospeed:dpdd cfsetspeed:dpdd chdir:ds chmod:dso chown:dsdd chroot:ds clearenv:d clock:d clock_getres:ddpd clock_gettime:ddpd
 		clock_nanosleep:dddpdpd clock_settime:ddpd close:dd closedir:dp closelog:v confstr:ddpd connect:ddpd copy_file_range:ddpdpdd

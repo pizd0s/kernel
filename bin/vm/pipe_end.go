@@ -32,66 +32,6 @@ func (e *PipeEnd) unref() {
 	}
 }
 
-func (e *PipeEnd) asFile() File {
-	return e
-}
-
-func (e *PipeEnd) asTransfer() Transfer {
-	return e
-}
-
-func (e *PipeEnd) asSeeker() Seeker {
-	return nil
-}
-
-func (e *PipeEnd) asDir() Dir {
-	return nil
-}
-
-func (e *PipeEnd) asTerminal() Terminal {
-	return nil
-}
-
-func (e *PipeEnd) asLink() Link {
-	return nil
-}
-
-func (e *PipeEnd) asAttrs() Attrs {
-	return nil
-}
-
-func (e *PipeEnd) asSocket() Socket {
-	return nil
-}
-
-func (e *PipeEnd) asIoctl() Ioctl {
-	return e
-}
-
-func (e *PipeEnd) asLocker() Locker {
-	return nil
-}
-
-func (e *PipeEnd) asEpoll() *Epoll {
-	return nil
-}
-
-func (e *PipeEnd) asPair() *PairEnd {
-	return nil
-}
-
-func (e *PipeEnd) asListener() *UnixListener {
-	return nil
-}
-
-func (e *PipeEnd) asConsole() *ConsoleEnd {
-	return nil
-}
-
-func (e *PipeEnd) asRemote() *RemoteFD {
-	return nil
-}
-
 func (e *PipeEnd) sides(events int16) (in, out bool) {
 	in, out = e.reads, e.writes
 
@@ -209,7 +149,7 @@ func (e *PipeEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
 	return nil
 }
 
-func (e *PipeEnd) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
+func (e *PipeEnd) read(p *Process, into Object, n int, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
 		return 0, EIO
 	}
@@ -257,7 +197,7 @@ func (e *PipeEnd) read(p *Process, into Transfer, n int, mode IoMode) (int, erro
 	}
 }
 
-func (e *PipeEnd) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
+func (e *PipeEnd) write(p *Process, from Object, n int, mode IoMode) (int, error) {
 	if p.chaosFail("write") {
 		return 0, EIO
 	}
@@ -315,26 +255,137 @@ func (e *PipeEnd) write(p *Process, from Transfer, n int, mode IoMode) (int, err
 	return 0, err
 }
 
-func (e *PipeEnd) pread(p *Process, into Transfer, n int, off int64) (int, error) {
+func (e *PipeEnd) pread(p *Process, into Object, n int, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (e *PipeEnd) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
+func (e *PipeEnd) pwrite(p *Process, from Object, n int, off int64) (int, error) {
 	return 0, ESPIPE
-}
-
-func (e *PipeEnd) splice(at int64, n int, mode int) Transfer {
-	return newSpliced(e, at, n, mode)
 }
 
 func (e *PipeEnd) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
 	return 0, EINVAL
 }
 
-func (e *PipeEnd) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+func (e *PipeEnd) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 
-func (e *PipeEnd) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
+func (e *PipeEnd) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
+	return 0, EINVAL
+}
+
+func (e *PipeEnd) seek(p *Process, off int64, whence int) (int64, error) {
+	return 0, ESPIPE
+}
+
+func (e *PipeEnd) readdir(p *Process, into Object, n int) (int, error) {
+	return 0, ENOTDIR
+}
+
+func (e *PipeEnd) truncate(p *Process, size int64) error {
+	return EINVAL
+}
+
+func (e *PipeEnd) sync(p *Process, data bool) error {
+	return EINVAL
+}
+
+func (e *PipeEnd) chmod(p *Process, mode uint32) error {
+	return EINVAL
+}
+
+func (e *PipeEnd) chown(p *Process, uid, gid int) error {
+	return EINVAL
+}
+
+func (e *PipeEnd) utimes(p *Process, ts []Timespec) error {
+	return EINVAL
+}
+
+func (e *PipeEnd) statfs(p *Process, st *Statfs) error {
+	return EINVAL
+}
+
+func (e *PipeEnd) flock(p *Process, op int) error {
+	return EBADF
+}
+
+func (e *PipeEnd) recordLock(p *Process, cmd int, lk *Flock) error {
+	return EBADF
+}
+
+func (e *PipeEnd) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
+	return Packet{}, false, errUnserved
+}
+
+func (e *PipeEnd) token() (uint64, error) {
+	return 0, EXDEV
+}
+
+func (e *PipeEnd) device() FileKey {
+	return FileKey{}
+}
+
+func (e *PipeEnd) bind(p *Process, a Address) error {
+	return ENOTSOCK
+}
+
+func (e *PipeEnd) connect(p *Process, a Address) error {
+	return ENOTSOCK
+}
+
+func (e *PipeEnd) listen(backlog int) error {
+	return ENOTSOCK
+}
+
+func (e *PipeEnd) accept(p *Process, flags uint32) (Object, []byte, error) {
+	return nil, nil, ENOTSOCK
+}
+
+func (e *PipeEnd) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
+	return nil, ECONNREFUSED
+}
+
+func (e *PipeEnd) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
+	return 0, ENOTSOCK
+}
+
+func (e *PipeEnd) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
+	return 0, Packet{}, 0, ENOTSOCK
+}
+
+func (e *PipeEnd) sockname(p *Process) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (e *PipeEnd) peername(p *Process) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (e *PipeEnd) getsockopt(p *Process, level, name uint32) ([]byte, error) {
+	return nil, ENOTSOCK
+}
+
+func (e *PipeEnd) setsockopt(level, name uint32, value []byte) error {
+	return ENOTSOCK
+}
+
+func (e *PipeEnd) shutdown(how int) error {
+	return ENOTSOCK
+}
+
+func (e *PipeEnd) consume(sink func(pk *Packet)) {
+}
+
+func (e *PipeEnd) socketKind() int {
+	return 0
+}
+
+func (e *PipeEnd) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
+	return EINVAL
+}
+
+func (e *PipeEnd) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
 	return 0, EINVAL
 }

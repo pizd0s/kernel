@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"sync"
 	"sync/atomic"
+	"time"
+	"unsafe"
 )
 
 type UnixSocket struct {
@@ -60,66 +62,6 @@ func (s *UnixSocket) unref() {
 		c.unsubscribe(&s.inner)
 		c.unref()
 	}
-}
-
-func (s *UnixSocket) asFile() File {
-	return s
-}
-
-func (s *UnixSocket) asTransfer() Transfer {
-	return s
-}
-
-func (s *UnixSocket) asSeeker() Seeker {
-	return nil
-}
-
-func (s *UnixSocket) asDir() Dir {
-	return nil
-}
-
-func (s *UnixSocket) asTerminal() Terminal {
-	return nil
-}
-
-func (s *UnixSocket) asLink() Link {
-	return nil
-}
-
-func (s *UnixSocket) asAttrs() Attrs {
-	return nil
-}
-
-func (s *UnixSocket) asSocket() Socket {
-	return s
-}
-
-func (s *UnixSocket) asIoctl() Ioctl {
-	return nil
-}
-
-func (s *UnixSocket) asLocker() Locker {
-	return nil
-}
-
-func (s *UnixSocket) asEpoll() *Epoll {
-	return nil
-}
-
-func (s *UnixSocket) asPair() *PairEnd {
-	return nil
-}
-
-func (s *UnixSocket) asListener() *UnixListener {
-	return nil
-}
-
-func (s *UnixSocket) asConsole() *ConsoleEnd {
-	return nil
-}
-
-func (s *UnixSocket) asRemote() *RemoteFD {
-	return nil
 }
 
 func (s *UnixSocket) state() (*UnixListener, *PairEnd) {
@@ -230,8 +172,8 @@ func (s *UnixSocket) bind(p *Process, a Address) error {
 
 	l.refs.Store(1)
 
-	err = p.onPath(AT_FDCWD, path, func(v Dir) error {
-		return v.bindPath(p, path, 0o777&^p.umask, l)
+	err = p.onPath(AT_FDCWD, path, func(v Object) error {
+		return p.dirBind(v, path, 0o777&^p.umask, l)
 	})
 
 	if err == EEXIST {
@@ -259,7 +201,7 @@ func (s *UnixSocket) listen(backlog int) error {
 		return EINVAL
 	}
 
-	l.listen(backlog)
+	l.open(backlog)
 
 	return nil
 }
@@ -271,7 +213,7 @@ func (s *UnixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
 		return nil, nil, EINVAL
 	}
 
-	e, err := l.accept(p, s.nonblock.Load())
+	e, err := l.next(p, s.nonblock.Load())
 
 	if err != nil {
 		return nil, nil, err
@@ -298,7 +240,7 @@ func (s *UnixSocket) connect(p *Process, a Address) error {
 
 	var conn *PairEnd
 
-	err = p.onPath(AT_FDCWD, path, func(v Dir) error {
+	err = p.onPath(AT_FDCWD, path, func(v Object) error {
 		var err error
 		conn, err = p.connectUnix(v, path, s.kind, s.nonblock.Load(), &s.options.sndTimeout)
 
@@ -409,7 +351,7 @@ func (s *UnixSocket) consume(sink func(pk *Packet)) {
 	}
 }
 
-func (s *UnixSocket) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
+func (s *UnixSocket) read(p *Process, into Object, n int, mode IoMode) (int, error) {
 	c, err := s.connection()
 
 	if err != nil {
@@ -419,7 +361,7 @@ func (s *UnixSocket) read(p *Process, into Transfer, n int, mode IoMode) (int, e
 	return c.read(p, into, n, mode)
 }
 
-func (s *UnixSocket) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
+func (s *UnixSocket) write(p *Process, from Object, n int, mode IoMode) (int, error) {
 	c, err := s.connection()
 
 	if err != nil {
@@ -429,26 +371,90 @@ func (s *UnixSocket) write(p *Process, from Transfer, n int, mode IoMode) (int, 
 	return c.write(p, from, n, mode)
 }
 
-func (s *UnixSocket) pread(p *Process, into Transfer, n int, off int64) (int, error) {
+func (s *UnixSocket) pread(p *Process, into Object, n int, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (s *UnixSocket) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
+func (s *UnixSocket) pwrite(p *Process, from Object, n int, off int64) (int, error) {
 	return 0, ESPIPE
-}
-
-func (s *UnixSocket) splice(at int64, n int, mode int) Transfer {
-	return newSpliced(s, at, n, mode)
 }
 
 func (s *UnixSocket) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
 	return 0, EINVAL
 }
 
-func (s *UnixSocket) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+func (s *UnixSocket) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 
-func (s *UnixSocket) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
+func (s *UnixSocket) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
+	return 0, EINVAL
+}
+
+func (s *UnixSocket) seek(p *Process, off int64, whence int) (int64, error) {
+	return 0, ESPIPE
+}
+
+func (s *UnixSocket) readdir(p *Process, into Object, n int) (int, error) {
+	return 0, ENOTDIR
+}
+
+func (s *UnixSocket) truncate(p *Process, size int64) error {
+	return EINVAL
+}
+
+func (s *UnixSocket) sync(p *Process, data bool) error {
+	return EINVAL
+}
+
+func (s *UnixSocket) chmod(p *Process, mode uint32) error {
+	return EINVAL
+}
+
+func (s *UnixSocket) chown(p *Process, uid, gid int) error {
+	return EINVAL
+}
+
+func (s *UnixSocket) utimes(p *Process, ts []Timespec) error {
+	return EINVAL
+}
+
+func (s *UnixSocket) statfs(p *Process, st *Statfs) error {
+	return EINVAL
+}
+
+func (s *UnixSocket) flock(p *Process, op int) error {
+	return EBADF
+}
+
+func (s *UnixSocket) recordLock(p *Process, cmd int, lk *Flock) error {
+	return EBADF
+}
+
+func (s *UnixSocket) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
+	return Packet{}, false, errUnserved
+}
+
+func (s *UnixSocket) token() (uint64, error) {
+	return 0, EXDEV
+}
+
+func (s *UnixSocket) device() FileKey {
+	return FileKey{}
+}
+
+func (s *UnixSocket) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
+	return nil, ECONNREFUSED
+}
+
+func (s *UnixSocket) ioctl(req uintptr, arg unsafe.Pointer) error {
+	return ENOTTY
+}
+
+func (s *UnixSocket) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
+	return EINVAL
+}
+
+func (s *UnixSocket) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
 	return 0, EINVAL
 }

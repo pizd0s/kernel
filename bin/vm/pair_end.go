@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 type PairState struct {
@@ -32,9 +33,6 @@ type PairEnd struct {
 	sink     func(pk *Packet)
 
 	options SockOptions
-
-	making sync.Mutex
-	dir    *RemoteFD
 }
 
 func newPair(nonblock bool) (*PairEnd, *PairEnd) {
@@ -122,66 +120,6 @@ func (e *PairEnd) consume(sink func(pk *Packet)) {
 	for _, pk := range queued {
 		sink(pk)
 	}
-}
-
-func (e *PairEnd) asFile() File {
-	return e
-}
-
-func (e *PairEnd) asTransfer() Transfer {
-	return e
-}
-
-func (e *PairEnd) asSeeker() Seeker {
-	return nil
-}
-
-func (e *PairEnd) asDir() Dir {
-	return nil
-}
-
-func (e *PairEnd) asTerminal() Terminal {
-	return nil
-}
-
-func (e *PairEnd) asLink() Link {
-	return nil
-}
-
-func (e *PairEnd) asAttrs() Attrs {
-	return nil
-}
-
-func (e *PairEnd) asSocket() Socket {
-	return e
-}
-
-func (e *PairEnd) asIoctl() Ioctl {
-	return nil
-}
-
-func (e *PairEnd) asLocker() Locker {
-	return nil
-}
-
-func (e *PairEnd) asEpoll() *Epoll {
-	return nil
-}
-
-func (e *PairEnd) asPair() *PairEnd {
-	return e
-}
-
-func (e *PairEnd) asListener() *UnixListener {
-	return nil
-}
-
-func (e *PairEnd) asConsole() *ConsoleEnd {
-	return nil
-}
-
-func (e *PairEnd) asRemote() *RemoteFD {
-	return nil
 }
 
 func (e *PairEnd) subscribe(s *Subscription, events int16) {
@@ -634,7 +572,7 @@ func scatterInto(bufs [][]byte, data []byte) int {
 	return n
 }
 
-func (e *PairEnd) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
+func (e *PairEnd) read(p *Process, into Object, n int, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
 		return 0, EIO
 	}
@@ -646,7 +584,7 @@ func (e *PairEnd) read(p *Process, into Transfer, n int, mode IoMode) (int, erro
 	return got, err
 }
 
-func (e *PairEnd) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
+func (e *PairEnd) write(p *Process, from Object, n int, mode IoMode) (int, error) {
 	if p.chaosFail("write") {
 		return 0, EIO
 	}
@@ -660,7 +598,7 @@ func (e *PairEnd) write(p *Process, from Transfer, n int, mode IoMode) (int, err
 	return e.send(p, &Packet{data: data[:takeFrom(from)(0, data)]}, Address{}, mode)
 }
 
-func takeFrom(from Transfer) func(at int, b []byte) int {
+func takeFrom(from Object) func(at int, b []byte) int {
 	return func(at int, b []byte) int {
 		n, _ := from.with(int64(at), len(b), false, func(src []byte) (int, error) {
 			return copy(b, src), nil
@@ -670,27 +608,23 @@ func takeFrom(from Transfer) func(at int, b []byte) int {
 	}
 }
 
-func (e *PairEnd) pread(p *Process, into Transfer, n int, off int64) (int, error) {
+func (e *PairEnd) pread(p *Process, into Object, n int, off int64) (int, error) {
 	return 0, ESPIPE
 }
 
-func (e *PairEnd) pwrite(p *Process, from Transfer, n int, off int64) (int, error) {
+func (e *PairEnd) pwrite(p *Process, from Object, n int, off int64) (int, error) {
 	return 0, ESPIPE
-}
-
-func (e *PairEnd) splice(at int64, n int, mode int) Transfer {
-	return newSpliced(e, at, n, mode)
 }
 
 func (e *PairEnd) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
 	return 0, EINVAL
 }
 
-func (e *PairEnd) copyTo(p *Process, out Transfer, from, to int64, n int) (int, error) {
+func (e *PairEnd) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 
-func (e *PairEnd) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, error) {
+func (e *PairEnd) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
 	return 0, EINVAL
 }
 
@@ -758,18 +692,70 @@ func senderAddress(path []byte) []byte {
 	return unixAddress(path)
 }
 
-func (e *PairEnd) directory(p *Process) *RemoteFD {
-	e.making.Lock()
+func (e *PairEnd) seek(p *Process, off int64, whence int) (int64, error) {
+	return 0, ESPIPE
+}
 
-	defer e.making.Unlock()
+func (e *PairEnd) readdir(p *Process, into Object, n int) (int, error) {
+	return 0, ENOTDIR
+}
 
-	if d := e.dir; d != nil && d.revive() {
-		return d
-	}
+func (e *PairEnd) truncate(p *Process, size int64) error {
+	return EINVAL
+}
 
-	e.ref()
+func (e *PairEnd) sync(p *Process, data bool) error {
+	return EINVAL
+}
 
-	e.dir, _ = served(p, openedDir, O_RDONLY, 0, 0, 0, POLLIN|POLLOUT, e)
+func (e *PairEnd) chmod(p *Process, mode uint32) error {
+	return EINVAL
+}
 
-	return e.dir
+func (e *PairEnd) chown(p *Process, uid, gid int) error {
+	return EINVAL
+}
+
+func (e *PairEnd) utimes(p *Process, ts []Timespec) error {
+	return EINVAL
+}
+
+func (e *PairEnd) statfs(p *Process, st *Statfs) error {
+	return EINVAL
+}
+
+func (e *PairEnd) flock(p *Process, op int) error {
+	return EBADF
+}
+
+func (e *PairEnd) recordLock(p *Process, cmd int, lk *Flock) error {
+	return EBADF
+}
+
+func (e *PairEnd) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
+	return Packet{}, false, errUnserved
+}
+
+func (e *PairEnd) token() (uint64, error) {
+	return 0, EXDEV
+}
+
+func (e *PairEnd) device() FileKey {
+	return FileKey{}
+}
+
+func (e *PairEnd) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
+	return nil, EPROTOTYPE
+}
+
+func (e *PairEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
+	return ENOTTY
+}
+
+func (e *PairEnd) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
+	return EINVAL
+}
+
+func (e *PairEnd) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
+	return 0, EINVAL
 }

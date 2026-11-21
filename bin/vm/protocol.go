@@ -30,6 +30,7 @@ const (
 	cttyTake               = 1
 	cttyGone               = 2
 	cttyDropped            = 3
+	errUnserved     Errno  = 1 << 16
 )
 
 const (
@@ -87,7 +88,7 @@ const (
 	vConnect
 )
 
-func served(p *Process, kind uint32, flags int, dev, ino, id uint64, events uint32, end Socket) (*RemoteFD, error) {
+func served(p *Process, kind uint32, flags int, dev, ino, id uint64, events uint32, end Object) (*RemoteFD, error) {
 	if kind != openedFile && kind != openedTerminal && kind != openedDir && kind != openedPath {
 		return nil, EINVAL
 	}
@@ -144,6 +145,39 @@ func replyOf(pk *Packet, eof bool) error {
 	pk.data = pk.data[remoteHeader:]
 
 	return nil
+}
+
+func encodeStat(st *Stat) []byte {
+	b := make([]byte, remoteStat)
+	le := binary.LittleEndian
+
+	le.PutUint64(b, st.Ino)
+	le.PutUint64(b[8:], uint64(st.Size))
+	le.PutUint64(b[16:], uint64(st.Mtim.Sec)*1e9+uint64(st.Mtim.Nsec))
+	le.PutUint32(b[24:], st.Mode)
+	le.PutUint32(b[28:], uint32(st.Nlink))
+	le.PutUint32(b[32:], st.Uid)
+	le.PutUint32(b[36:], st.Gid)
+	le.PutUint64(b[40:], uint64(st.Atim.Sec)*1e9+uint64(st.Atim.Nsec))
+	le.PutUint64(b[48:], st.Dev)
+	le.PutUint64(b[56:], uint64(st.Ctim.Sec)*1e9+uint64(st.Ctim.Nsec))
+
+	return b
+}
+
+func encodeStatfs(st *Statfs) []byte {
+	b := make([]byte, remoteStatfs)
+	le := binary.LittleEndian
+
+	le.PutUint64(b, st.Blocks)
+	le.PutUint64(b[8:], st.Bfree)
+	le.PutUint64(b[16:], st.Files)
+	le.PutUint64(b[24:], st.Ffree)
+	le.PutUint32(b[40:], uint32(st.Bsize))
+	le.PutUint32(b[44:], uint32(st.Namelen))
+	le.PutUint32(b[48:], uint32(st.Flags))
+
+	return b
 }
 
 func decodeStat(b []byte, st *Stat) error {
