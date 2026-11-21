@@ -11,7 +11,10 @@ server's answer up to its close. In the system, devfs starts inet for
 the card, which is /dev/net/0: its ctl, stats and addr, and, once "stack"
 in its ctl has the stack's lease by DHCP, iface/status. sockmgr, which
 devfs starts too, writes it of each card it finds, and the stack, up,
-registers with sockmgr, whose ctl lists it. tst/inet_sockets.cpp, which
+registers with sockmgr, whose ctl lists it. "renew" in the card's ctl
+asks for the lease again, "release" gives it up, the stack's address
+gone and sockmgr told, and "renew" then asks for a new one: the sockets
+after are of the stack's new address. tst/inet_sockets.cpp, which
 the test hands the system, finds the host's server by name, host.internal
 of the gateway's name server, which dns asks for getaddrinfo, connects
 through sockmgr to it, listens on the card's address and accepts a
@@ -66,10 +69,12 @@ stats
 stack up
 mtu 1500
 02:70:7a:64:a8:af
+state bound
 inet 192.168.127.2/24
 gateway 192.168.127.1
 dns 192.168.127.1
 lease 3600
+leases 1
 auto *
 stack 0 inet 192.168.127.2/24 gateway 192.168.127.1
 2
@@ -83,6 +88,16 @@ base64 -d > /run/inet_sockets <<'PROGRAM'
 PROGRAM
 chmod +x /run/inet_sockets
 for i in $(seq 100); do grep -q '^stack 0 ' /dev/sockmgr/ctl && break; sleep 0.1; done
+echo renew > /dev/net/0/ctl
+for i in $(seq 100); do grep -q '^leases 2' /dev/net/0/iface/status && break; sleep 0.1; done
+grep -e state -e leases /dev/net/0/iface/status
+echo release > /dev/net/0/ctl
+cat /dev/net/0/iface/status
+grep '^stack' /dev/sockmgr/ctl
+echo renew > /dev/net/0/ctl
+for i in $(seq 100); do grep -q '^leases 3' /dev/net/0/iface/status && break; sleep 0.1; done
+grep -e state -e inet -e leases /dev/net/0/iface/status
+grep '^stack' /dev/sockmgr/ctl
 /run/inet_sockets {port}
 exec 3<>/dev/dns/query
 echo HOST.internal a >&3
@@ -92,6 +107,15 @@ exec 3>&-
 """
 
 SOCKETS_WANT = """\
+state bound
+leases 2
+state released
+leases 2
+stack 0 inet 0.0.0.0/0 gateway 0.0.0.0
+state bound
+inet 192.168.127.2/24
+leases 3
+stack 0 inet 192.168.127.2/24 gateway 192.168.127.1
 host.internal is 192.168.127.254, host.internal
 connected from 192.168.127.2
 read echo: hello

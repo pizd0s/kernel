@@ -663,7 +663,7 @@ fuse2fs_exe = executable("fuse2fs_exe", fuse2fs, "$(B)/bin/fuse2fs/fuse2fs")
 inet = command(
     name="inet",
     inputs=["$(S)/bin/inet/make.py", "$(S)/bin/inet/fstack-wasm32.patch", "$(S)/bin/inet/names.h", "$(S)/bin/inet/glue.c",
-            "$(S)/bin/inet/host.c", *build.glob("$(S)/bin/inet/*.h"), *build.glob("$(S)/bin/inet/*.cpp"),
+            "$(S)/bin/inet/address.c", "$(S)/bin/inet/host.c", *build.glob("$(S)/bin/inet/*.h"), *build.glob("$(S)/bin/inet/*.cpp"),
             *build.glob("$(S)/bin/inet/machine/*.h"), *PROTOCOL_SOURCES, *PROTOCOL_HEADERS, "$(S)/dev/wasm.py", *LIBC_HEADERS],
     outputs=["$(B)/bin/inet/inet.wasm"],
     deps=[libc, fstack_tarball],

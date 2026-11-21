@@ -30,6 +30,7 @@
 
 struct ff_config ff_global_cfg;
 struct InetCounts inetCounts;
+bool (*inetTaken)(const uint8_t* frame, size_t n);
 
 void panic(const char* format, ...) __attribute__((noreturn));
 
@@ -458,6 +459,10 @@ int inetReceive(void) {
         }
         ++inetCounts.inFrames;
         inetCounts.inBytes += (uint64_t)n;
+        if (inetTaken && inetTaken(b, (size_t)n)) {
+            free(b);
+            continue;
+        }
         void* m = ff_mbuf_gethdr(b, (uint16_t)n, b, (uint16_t)n, 0);
         if (!m) {
             ++inetCounts.dropped;

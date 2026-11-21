@@ -6,13 +6,21 @@
 // at /dev/init:
 //
 //     net/<name>/ctl     commands, a line each: "stack" starts the stack,
-//                        its address by DHCP; read, the card's state
+//                        its address by DHCP; "renew" asks for the lease
+//                        again now, or for one; "release" gives it up;
+//                        read, the card's state
 //     net/<name>/stats   its frames and bytes in and out, dropped
 //     net/<name>/addr    its hardware address
 //
 // and, once the stack has its lease, the stack's:
 //
-//     net/<name>/iface/status   its address, router, name server, lease
+//     net/<name>/iface/status   where DHCP is (state), the lease's address,
+//                               router, name server and length when there
+//                               is one, and how many leases there were
+//
+// The lease is asked for again at half its time and at seven eighths
+// (dhcp.cpp), and the stack has the address of each lease, none when it
+// ends.
 //
 // and the stack joins sockmgr (bin/tools/sockmgr), when there is one: of
 // sockmgr/stack, a STACK of its state, and the HANDs of sockets sockmgr
@@ -79,6 +87,10 @@ namespace {
     Entry entries[4];
     size_t entryCount;
     int sockmgrTag; // what sockmgr's end of ours is of
+    int sockmgr = -1;
+    Lease had; // the lease the stack's interface has
+
+    void leaseChanged();
 
     long long nowMs() {
         timespec ts;
@@ -112,12 +124,21 @@ namespace {
                                        (unsigned long long)inetCounts.dropped));
             case File::Addr:
                 return size_t(snprintf(out, room, "%02x:%02x:%02x:%02x:%02x:%02x\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]));
-            case File::Status:
-                inet_ntop(AF_INET, &l.address, a, sizeof a);
-                inet_ntop(AF_INET, &l.router, r, sizeof r);
-                inet_ntop(AF_INET, &l.dns, d, sizeof d);
-                return size_t(snprintf(out, room, "inet %s/%d\ngateway %s\ndns %s\nlease %u\n", a, __builtin_popcount(ntohl(l.mask)),
-                                       r, d, l.seconds));
+            case File::Status: {
+                static const char* const states[] = {"discovering", "requesting", "bound", "renewing", "rebinding", "released"};
+                size_t n = size_t(snprintf(out, room, "state %s\n", states[int(dhcpState())]));
+                if (l.address != 0 && n < room) {
+                    inet_ntop(AF_INET, &l.address, a, sizeof a);
+                    inet_ntop(AF_INET, &l.router, r, sizeof r);
+                    inet_ntop(AF_INET, &l.dns, d, sizeof d);
+                    n += size_t(snprintf(out + n, room - n, "inet %s/%d\ngateway %s\ndns %s\nlease %u\n", a,
+                                         __builtin_popcount(ntohl(l.mask)), r, d, l.seconds));
+                }
+                if (n < room) {
+                    n += size_t(snprintf(out + n, room - n, "leases %u\n", dhcpLeases()));
+                }
+                return n < room ? n : room;
+            }
         }
         return 0;
     }
@@ -161,7 +182,15 @@ namespace {
                 return EBUSY;
             }
             stack = Stack::Dhcp;
-            dhcpStart(card, mac);
+            dhcpStart(card, mac, leaseChanged);
+            return 0;
+        }
+        if (length == 5 && memcmp(line, "renew", 5) == 0 && stack != Stack::Off) {
+            dhcpRenew();
+            return 0;
+        }
+        if (length == 7 && memcmp(line, "release", 7) == 0 && stack != Stack::Off) {
+            dhcpRelease();
             return 0;
         }
         return EINVAL;
@@ -199,18 +228,53 @@ namespace {
         return size_t(snprintf(out, room, "card %s\ninet %s/%d\ngateway %s\ndns %s\n", name, a, __builtin_popcount(ntohl(l.mask)), r, d));
     }
 
-    // Joins sockmgr, when there is one, telling it the stack's state.
-    void join() {
-        const int fd = open("/dev/sockmgr/stack", O_RDWR | O_CLOEXEC);
-        if (fd < 0) {
+    // Tells sockmgr, when the stack joined it, the stack's state.
+    void told() {
+        if (sockmgr < 0) {
             return;
         }
         char state[256];
         const size_t size = stateOf(state, sizeof state);
         const Header h{opStack, 0, 0, 0, 0, 0};
         const iovec parts[] = {{const_cast<Header*>(&h), sizeof h}, {state, size}};
-        sendPacket(fd, parts, 2, nullptr, 0);
-        watch(epoll, {fd, false, true, true, &sockmgrTag});
+        sendPacket(sockmgr, parts, 2, nullptr, 0);
+    }
+
+    // Joins sockmgr, when there is one, telling it the stack's state.
+    void join() {
+        sockmgr = open("/dev/sockmgr/stack", O_RDWR | O_CLOEXEC);
+        if (sockmgr < 0) {
+            return;
+        }
+        told();
+        watch(epoll, {sockmgr, false, true, true, &sockmgrTag});
+    }
+
+    // A lease ACKed or gone: the stack starts with the first, its own
+    // frames from then on but DHCP's answers, and has each lease after
+    // it; sockmgr hears of the stack's state.
+    void leaseChanged() {
+        const Lease& l = dhcpLease();
+        if (stack == Stack::Dhcp && l.address != 0) {
+            stackStart(card, name, mac, l);
+            had = l;
+            stack = Stack::Up;
+            inetTaken = dhcpFrame;
+            if (epoll >= 0) {
+                socketsStart(epoll);
+                enrolled("iface/status", File::Status, S_IFCHR | 0444);
+                join();
+            }
+            return;
+        }
+        if (stack != Stack::Up) {
+            return;
+        }
+        if (const int e = stackLease(had, l)) {
+            fprintf(stderr, "inet: %s: the lease's address: errno %d\n", name, e);
+        }
+        had = l;
+        told();
     }
 
     void handle(Endpoint& e, Request& r) {
@@ -264,14 +328,7 @@ namespace {
             inetCounts.inBytes += uint64_t(n);
             if (stack != Stack::Dhcp) {
                 ++inetCounts.dropped;
-            } else if (dhcpFrame(frame, size_t(n))) {
-                stackStart(card, name, mac, dhcpLease());
-                stack = Stack::Up;
-                if (epoll >= 0) {
-                    socketsStart(epoll);
-                    enrolled("iface/status", File::Status, S_IFCHR | 0444);
-                    join();
-                }
+            } else if (dhcpFrame(frame, size_t(n)) && stack == Stack::Up) {
                 return;
             }
         }
@@ -284,9 +341,10 @@ namespace {
             case Stack::Dhcp:
                 return dhcpTimer();
             case Stack::Up: {
+                const int lease = dhcpTimer();
                 const int due = stackTicks();
                 socketsTurn();
-                return due;
+                return lease < 0 ? due : due < 0 || lease < due ? lease : due;
             }
             default:
                 return -1;
@@ -359,7 +417,7 @@ namespace {
     int probe(const char* host, int toPort, const char* text) {
         const long long deadline = nowMs() + 10000;
         stack = Stack::Dhcp;
-        dhcpStart(card, mac);
+        dhcpStart(card, mac, leaseChanged);
         while (stack != Stack::Up && nowMs() < deadline) {
             turn(10);
         }

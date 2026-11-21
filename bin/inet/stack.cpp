@@ -19,6 +19,7 @@ int ff_callout_next(void);
 void ff_update_current_ts(void);
 void ff_tcp_hpts_softclock(void);
 void ff_swi_net_excute(void);
+int inet_address(const char* ifname, uint32_t old, uint32_t oldRouter, uint32_t address, uint32_t mask, uint32_t router);
 }
 
 namespace {
@@ -72,6 +73,14 @@ void stackStart(int card, const char* named, const uint8_t* mac, const Lease& le
     }
     start = nowMs();
     started = true;
+}
+
+int stackLease(const Lease& had, const Lease& lease) {
+    if (had.address == lease.address && had.mask == lease.mask && had.router == lease.router) {
+        return 0;
+    }
+    stackClock();
+    return inet_address(name, had.address, had.router, lease.address, lease.mask, lease.router);
 }
 
 void stackClock() {

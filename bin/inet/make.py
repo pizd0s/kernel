@@ -10,12 +10,13 @@ machine is arm's 32-bit one (FreeBSD 15 keeps arm's headers, not i386's),
 but for the headers of bin/inet/machine (the atomics plain operations of
 one thread, no assembly, the basic types of a machine of 32-bit words)
 and arm64's endian.h and in_cksum.h, which are the compiler's builtins and
-C; the kernel's names lib/c has too are renamed (names.h). Its host's
-side is ours, host.c for DPDK's and Linux's (memory, clocks, randomness,
-the card on the device), inet.cpp, the card's files of /dev, dhcp.cpp
-and stack.cpp, with the protocol's sources, against lib/c's headers;
-wasm-ld links them with libc.a. fstack-wasm32.patch is what F-Stack's own files
-take for granted of amd64 and glibc.
+C; the kernel's names lib/c has too are renamed (names.h); address.c,
+of the kernel's side too, sets the card's address as its lease changes.
+Its host's side is ours, host.c for DPDK's and Linux's (memory, clocks,
+randomness, the card on the device), inet.cpp, the card's files of
+/dev, dhcp.cpp and stack.cpp, with the protocol's sources, against
+lib/c's headers; wasm-ld links them with libc.a. fstack-wasm32.patch is
+what F-Stack's own files take for granted of amd64 and glibc.
 
     make.py <clang> <wasm-ld> <libc-include> <libc.a> <f-stack.tar.gz> <inet.wasm>
 """
@@ -176,7 +177,7 @@ def main():
                   str(gen / "filtered_predefined_macros.h"), "-I", str(lib / "include"), "-I", str(lib), "-I", str(gen / "wasm"),
                   "-I", str(gen / "arm"), "-I", str(lib / "opt"), "-I", str(gen), "-I", str(tree / "freebsd"),
                   "-I", str(tree / "freebsd/contrib/ck/include")]
-        sources = [found(tree, n) for n in SOURCES] + [gen / "linker_if.c", HERE / "glue.c"]
+        sources = [found(tree, n) for n in SOURCES] + [gen / "linker_if.c", HERE / "glue.c", HERE / "address.c"]
         units = [(s, work / "o" / f"k{i}-{s.stem}.o", kernel) for i, s in enumerate(sources)]
 
         system = ["-isystem", str(Path(include).resolve())]
