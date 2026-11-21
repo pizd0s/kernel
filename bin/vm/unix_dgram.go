@@ -240,29 +240,29 @@ func (s *UnixDgram) setsockopt(level, name uint32, value []byte) error {
 	return s.inbox.setsockopt(level, name, value)
 }
 
-func (s *UnixDgram) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
-	if to.err != nil {
-		return 0, to.err
+func (s *UnixDgram) send(p *Process, r *SockSend) error {
+	if r.to.err != nil {
+		return r.to.err
 	}
 
 	if s.inbox.noWrite.Load() {
-		return 0, EPIPE
+		return EPIPE
 	}
 
-	if len(pk.data) > packetMax {
-		return 0, EMSGSIZE
+	if len(r.pk.data) > packetMax {
+		return EMSGSIZE
 	}
 
 	var t Object
 
-	if to.given {
+	if r.to.given {
 		var err error
 
-		if t, err = p.mouthOf(to.path); err != nil {
-			return 0, err
+		if t, err = p.mouthOf(r.to.path); err != nil {
+			return err
 		}
 	} else if t = s.targetEnd(); t == nil {
-		return 0, ENOTCONN
+		return ENOTCONN
 	}
 
 	defer t.unref()
@@ -270,19 +270,27 @@ func (s *UnixDgram) send(p *Process, pk *Packet, to Address, mode IoMode) (int, 
 	s.mu.Lock()
 
 	if s.name != "" {
-		pk.addr = []byte(s.name)
+		r.pk.addr = []byte(s.name)
 	}
 
 	s.mu.Unlock()
 
+	mode := r.mode
+
 	mode.nonblock = mode.nonblock || s.nonblock.Load()
 	mode.timeout = &s.inbox.options.sndTimeout
 
-	return t.send(p, pk, Address{}, mode)
+	var err error
+
+	r.n, err = p.sockSend(t, r.pk, Address{}, mode)
+
+	return err
 }
 
-func (s *UnixDgram) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
-	return s.inbox.recv(p, into, want, flags|s.dontwait())
+func (s *UnixDgram) recv(p *Process, r *SockRecv) error {
+	r.flags |= s.dontwait()
+
+	return s.inbox.recv(p, r)
 }
 
 func (s *UnixDgram) consume(sink func(pk *Packet)) {
@@ -298,11 +306,12 @@ func (s *UnixDgram) dontwait() uint32 {
 }
 
 func (s *UnixDgram) read(p *Process, into Object, n int, mode IoMode) (int, error) {
-	got, from, _, err := s.inbox.recv(p, Into{p: p, to: into}, n, s.dontwait()|bit(mode.nonblock)*MSG_DONTWAIT)
+	r := SockRecv{into: Into{p: p, to: into}, want: n, flags: s.dontwait() | bit(mode.nonblock)*MSG_DONTWAIT}
+	err := s.inbox.recv(p, &r)
 
-	dropFiles(from.files)
+	dropFiles(r.files)
 
-	return got, err
+	return r.n, err
 }
 
 func (s *UnixDgram) write(p *Process, from Object, n int, mode IoMode) (int, error) {
@@ -311,8 +320,10 @@ func (s *UnixDgram) write(p *Process, from Object, n int, mode IoMode) (int, err
 	}
 
 	data := make([]byte, n)
+	r := SockSend{pk: &Packet{data: data[:takeFrom(from)(0, data)]}, mode: mode}
+	err := s.send(p, &r)
 
-	return s.send(p, &Packet{data: data[:takeFrom(from)(0, data)]}, Address{}, mode)
+	return r.n, err
 }
 
 func (s *UnixDgram) pread(p *Process, into Object, n int, off int64) (int, error) {
@@ -376,6 +387,53 @@ func (s *UnixDgram) recordLock(p *Process, cmd int, lk *Flock) error {
 }
 
 func (s *UnixDgram) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	switch r := r.(type) {
+	case *SockBind:
+		return false, s.bind(p, r.addr)
+	case *SockConnect:
+		return false, s.connect(p, r.addr)
+	case *SockListen:
+		return false, s.listen(r.backlog)
+	case *SockAccept:
+		var err error
+
+		r.conn, r.peer, err = s.accept(p, r.flags)
+
+		return false, err
+	case *SockSend:
+		return false, s.send(p, r)
+	case *SockRecv:
+		return false, s.recv(p, r)
+	case *SockName:
+		var err error
+
+		if r.peer {
+			r.addr, err = s.peername(p)
+		} else {
+			r.addr, err = s.sockname(p)
+		}
+
+		return false, err
+	case *SockGetopt:
+		var err error
+
+		r.value, err = s.getsockopt(p, r.level, r.name)
+
+		return false, err
+	case *SockSetopt:
+		return false, s.setsockopt(r.level, r.name, r.value)
+	case *SockShutdown:
+		return false, s.shutdown(r.how)
+	case *SockType:
+		r.kind = s.socketKind()
+
+		return false, nil
+	case *SockConsume:
+		s.consume(r.sink)
+
+		return false, nil
+	}
+
 	return false, errUnserved
 }
 
@@ -385,10 +443,6 @@ func (s *UnixDgram) token() (uint64, error) {
 
 func (s *UnixDgram) device() FileKey {
 	return FileKey{}
-}
-
-func (s *UnixDgram) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
-	return nil, ECONNREFUSED
 }
 
 func (s *UnixDgram) ioctl(req uintptr, arg unsafe.Pointer) error {

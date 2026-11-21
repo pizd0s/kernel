@@ -66,6 +66,20 @@ const (
 )
 
 const (
+	sBind uint32 = iota + 144
+	sConnect
+	sListen
+	sAccept
+	sSend
+	sRecv
+	sName
+	sGetopt
+	sSetopt
+	sShutdown
+	sType
+)
+
+const (
 	vOpen uint32 = iota + 1
 	vStat
 	vReadlink
@@ -101,7 +115,7 @@ func served(p *Process, kind uint32, flags int, dev, ino, id uint64, events uint
 	}
 
 	f.refs.Store(1)
-	end.consume(f.deliver)
+	p.request(end, &SockConsume{sink: f.deliver})
 
 	return f, nil
 }

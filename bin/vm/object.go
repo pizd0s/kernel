@@ -51,21 +51,6 @@ type Object interface {
 	token() (uint64, error)
 	device() FileKey
 
-	bind(p *Process, a Address) error
-	connect(p *Process, a Address) error
-	listen(backlog int) error
-	accept(p *Process, flags uint32) (Object, []byte, error)
-	knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error)
-	send(p *Process, pk *Packet, to Address, mode IoMode) (int, error)
-	recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error)
-	sockname(p *Process) ([]byte, error)
-	peername(p *Process) ([]byte, error)
-	getsockopt(p *Process, level, name uint32) ([]byte, error)
-	setsockopt(level, name uint32, value []byte) error
-	shutdown(how int) error
-	consume(sink func(pk *Packet))
-	socketKind() int
-
 	ioctl(req uintptr, arg unsafe.Pointer) error
 
 	epollCtl(op uint32, key EpollKey, events uint32, data uint64) error

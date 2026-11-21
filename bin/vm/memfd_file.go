@@ -341,61 +341,6 @@ func (f *MemfdFile) device() FileKey {
 	return FileKey{}
 }
 
-func (f *MemfdFile) bind(p *Process, a Address) error {
-	return ENOTSOCK
-}
-
-func (f *MemfdFile) connect(p *Process, a Address) error {
-	return ENOTSOCK
-}
-
-func (f *MemfdFile) listen(backlog int) error {
-	return ENOTSOCK
-}
-
-func (f *MemfdFile) accept(p *Process, flags uint32) (Object, []byte, error) {
-	return nil, nil, ENOTSOCK
-}
-
-func (f *MemfdFile) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
-	return nil, ECONNREFUSED
-}
-
-func (f *MemfdFile) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
-	return 0, ENOTSOCK
-}
-
-func (f *MemfdFile) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
-	return 0, Packet{}, 0, ENOTSOCK
-}
-
-func (f *MemfdFile) sockname(p *Process) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (f *MemfdFile) peername(p *Process) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (f *MemfdFile) getsockopt(p *Process, level, name uint32) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (f *MemfdFile) setsockopt(level, name uint32, value []byte) error {
-	return ENOTSOCK
-}
-
-func (f *MemfdFile) shutdown(how int) error {
-	return ENOTSOCK
-}
-
-func (f *MemfdFile) consume(sink func(pk *Packet)) {
-}
-
-func (f *MemfdFile) socketKind() int {
-	return 0
-}
-
 func (f *MemfdFile) ioctl(req uintptr, arg unsafe.Pointer) error {
 	return ENOTTY
 }

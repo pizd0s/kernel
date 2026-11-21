@@ -239,61 +239,6 @@ func (s *Spliced) device() FileKey {
 	return FileKey{}
 }
 
-func (s *Spliced) bind(p *Process, a Address) error {
-	return ENOTSOCK
-}
-
-func (s *Spliced) connect(p *Process, a Address) error {
-	return ENOTSOCK
-}
-
-func (s *Spliced) listen(backlog int) error {
-	return ENOTSOCK
-}
-
-func (s *Spliced) accept(p *Process, flags uint32) (Object, []byte, error) {
-	return nil, nil, ENOTSOCK
-}
-
-func (s *Spliced) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
-	return nil, ECONNREFUSED
-}
-
-func (s *Spliced) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
-	return 0, ENOTSOCK
-}
-
-func (s *Spliced) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
-	return 0, Packet{}, 0, ENOTSOCK
-}
-
-func (s *Spliced) sockname(p *Process) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (s *Spliced) peername(p *Process) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (s *Spliced) getsockopt(p *Process, level, name uint32) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (s *Spliced) setsockopt(level, name uint32, value []byte) error {
-	return ENOTSOCK
-}
-
-func (s *Spliced) shutdown(how int) error {
-	return ENOTSOCK
-}
-
-func (s *Spliced) consume(sink func(pk *Packet)) {
-}
-
-func (s *Spliced) socketKind() int {
-	return 0
-}
-
 func (s *Spliced) ioctl(req uintptr, arg unsafe.Pointer) error {
 	return ENOTTY
 }

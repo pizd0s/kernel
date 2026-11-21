@@ -1,6 +1,6 @@
 //@ host: false
 //@ compile-flags: -D_GNU_SOURCE
-//@ stdout: "a kind the kernel does not know: EIO\nready as the OPEN said: POLLOUT, then as READY said: POLLIN POLLOUT\nserved: READ of 16 at 0\nread: 'hello'\nserved: READ of 8 at 0\npassed on, read: 'world'\nfchdir: a path's ENOTDIR, a file's ENOTDIR, a stream socket's ENOTDIR\nserved: STAT of ''\nserved: STAT of 'name'\na pair's end: fchdir ENOTDIR; a directory over it, the working directory: fchdir 0, a name there ENOENT\n"
+//@ stdout: "a kind the kernel does not know: EIO\nready as the OPEN said: POLLOUT, then as READY said: POLLIN POLLOUT\nserved: READ of 16 at 0\nread: 'hello'\nserved: READ of 8 at 0\npassed on, read: 'world'\nserved: SEND of 'ping'\nserved: RECV of 8\nsend and recv on it: 4 'pong'\nfchdir: a path's ENOTDIR, a file's ENOTDIR, a stream socket's ENOTDIR\nserved: STAT of ''\nserved: STAT of 'name'\na pair's end: fchdir ENOTDIR; a directory over it, the working directory: fchdir 0, a name there ENOENT\n"
 
 // An open file is the end of a pair its server made, which an OPEN's OK
 // brings with what it is (lib/protocol/protocol.h): the kernel makes it
@@ -15,7 +15,9 @@
 // a directory over one, the root of the server behind it, as rootfs gives
 // its processes theirs. An
 // open file is ready as the OPEN's OK says, and then as each READY of its
-// server says.
+// server says. A socket's call on an open file is the server's too: a
+// SEND brings the bytes, a RECV asks for them, as a service of sockets
+// would serve them.
 
 #include <assert.h>
 #include <errno.h>
@@ -204,6 +206,8 @@ struct [[gnu::packed]] Io {
 };
 
 constexpr uint32_t vfsStat = 2;
+constexpr uint32_t opSend = 148;
+constexpr uint32_t opRecv = 149;
 constexpr uint32_t opRead = 64;
 constexpr uint32_t opReady = 75;
 constexpr uint32_t opErr = 129;
@@ -288,6 +292,55 @@ static pid_t server(int end, const char* bytes) {
         _exit(0);
     }
     return child;
+}
+
+// A child that serves one SEND and one RECV of the open file whose
+// endpoint end is: SEND's len u32 of no address and its bytes, whose
+// count is the answer, then RECV's want u32, answered flags 0, len 0 and
+// "pong".
+static pid_t socketServer(int end) {
+    fflush(stdout);
+    const pid_t child = fork();
+    assert(child >= 0);
+    if (child != 0) {
+        return child;
+    }
+    unsigned char packet[256];
+    int reply;
+    Header h;
+    uint32_t len;
+    const ssize_t n = receiveWith(end, packet, sizeof packet, reply);
+    assert(n >= ssize_t(sizeof h + 4) && reply >= 0);
+    memcpy(&h, packet, sizeof h);
+    memcpy(&len, packet + sizeof h, sizeof len);
+    const int sent = int(n - ssize_t(sizeof h + 4 + len));
+    printf("served: %s of '%.*s'\n", h.op == opSend && len == 0 ? "SEND" : "another call", sent, reinterpret_cast<const char*>(packet) + sizeof h + 4 + len);
+    fflush(stdout);
+
+    struct {
+        Header h;
+        uint32_t count;
+    } counted{{opOk, 0, 0, 0, 0, 0}, uint32_t(sent)};
+
+    assert(send(reply, &counted, sizeof counted, 0) == ssize_t(sizeof counted));
+    close(reply);
+    uint32_t want;
+    assert(receiveWith(end, packet, sizeof packet, reply) == ssize_t(sizeof h + 4) && reply >= 0);
+    memcpy(&h, packet, sizeof h);
+    memcpy(&want, packet + sizeof h, sizeof want);
+    printf("served: %s of %u\n", h.op == opRecv ? "RECV" : "another call", want);
+    fflush(stdout);
+
+    struct [[gnu::packed]] {
+        Header h;
+        uint32_t flags;
+        uint32_t len;
+        char data[4];
+    } given{{opOk, 0, 0, 0, 0, 0}, 0, 0, {'p', 'o', 'n', 'g'}};
+
+    assert(send(reply, &given, sizeof given, 0) == ssize_t(sizeof given));
+    close(reply);
+    _exit(0);
 }
 
 // A child that serves end as a directory until it closes: the stat of
@@ -426,6 +479,18 @@ int main() {
     close(file);
     waitFor(reader);
     waitFor(child);
+
+    // A send and a recv on an open file go to its server.
+    file = opened(channel, {openedFile, O_RDWR, 0, 0, 0, POLLIN | POLLOUT}, end);
+    assert(file >= 0);
+    child = socketServer(end);
+    assert(send(file, "ping", 4, 0) == 4);
+    char pong[8] = {};
+    const ssize_t heard = recv(file, pong, sizeof pong, 0);
+    waitFor(child);
+    printf("send and recv on it: %zd '%.*s'\n", heard, int(heard), pong);
+    close(end);
+    close(file);
 
     // fchdir asks what it is given what it is: the servers of a path's
     // handle and of a file say ENOTDIR to a call by path, as what is no

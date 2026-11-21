@@ -158,61 +158,6 @@ func (c *Capture) device() FileKey {
 	return FileKey{}
 }
 
-func (c *Capture) bind(p *Process, a Address) error {
-	return ENOTSOCK
-}
-
-func (c *Capture) connect(p *Process, a Address) error {
-	return ENOTSOCK
-}
-
-func (c *Capture) listen(backlog int) error {
-	return ENOTSOCK
-}
-
-func (c *Capture) accept(p *Process, flags uint32) (Object, []byte, error) {
-	return nil, nil, ENOTSOCK
-}
-
-func (c *Capture) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
-	return nil, ECONNREFUSED
-}
-
-func (c *Capture) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
-	return 0, ENOTSOCK
-}
-
-func (c *Capture) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
-	return 0, Packet{}, 0, ENOTSOCK
-}
-
-func (c *Capture) sockname(p *Process) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (c *Capture) peername(p *Process) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (c *Capture) getsockopt(p *Process, level, name uint32) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (c *Capture) setsockopt(level, name uint32, value []byte) error {
-	return ENOTSOCK
-}
-
-func (c *Capture) shutdown(how int) error {
-	return ENOTSOCK
-}
-
-func (c *Capture) consume(sink func(pk *Packet)) {
-}
-
-func (c *Capture) socketKind() int {
-	return 0
-}
-
 func (c *Capture) ioctl(req uintptr, arg unsafe.Pointer) error {
 	return ENOTTY
 }

@@ -58,6 +58,9 @@ int unserved(uint32_t op) {
     if (op >= opTcgetattr && op <= opSetCtty) {
         return ENOTTY;
     }
+    if (op >= opBind && op <= opSocktype) {
+        return ENOTSOCK;
+    }
     switch (op) {
         case opReaddir:
             return ENOTDIR;

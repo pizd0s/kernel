@@ -2,7 +2,7 @@
 
 // The file protocol of the system: three interfaces on one wire.
 //
-//   The VFS's: the kernel's calls with a path (bin/vm/remote_dir.go),
+//   The VFS's: the kernel's calls with a path (bin/vm's Vfs* requests),
 //   on a handle of rootfs's (bin/rootfs). rootfs is the VFS: it alone
 //   walks a path, follows symbolic links, knows the mounts and where ".."
 //   goes, and makes the last step of a call as Linux makes it.
@@ -20,10 +20,10 @@
 // OPEN's OK brings the second to who asked, fds[0], with what it is, an
 // Opened: a file, a terminal's, a handle of a directory or of what O_PATH
 // opened. The kernel makes it that open file for its process. An OK with
-// no Opened brings the end as it is, a socket to its opener. And an end of
-// a pair a process makes its working directory (fchdir) is a directory to
-// the kernel, the handle of id 0: the root of the server behind it, which
-// rootfs makes the root of the processes it starts so.
+// no Opened brings the end as it is, a socket to its opener. And attach
+// (lib/c) makes a directory of an end of a pair, the handle of id 0: the
+// root of the server behind it, which rootfs makes the root of the
+// processes it starts so.
 //
 // A call on an open file is a request sent on the open file's endpoint:
 // a packet, its descriptors with it, the last of them where the request
@@ -221,6 +221,28 @@
 //     OPEN      arg flags                 on a slave's: another open file of
 //                                         the slave, as its device's OPEN
 //
+//   A socket's, on a socket's open file, as a service of sockets serves
+//   it; a sockaddr is lib/c's struct sockaddr, len bytes of it, and a
+//   socket's call on what is no socket is ENOTSOCK. No server of the
+//   system serves them yet.
+//     BIND                  len u32, sockaddr
+//     CONNECT               len u32, sockaddr
+//     LISTEN    arg backlog
+//     ACCEPT    arg flags                 OK the peer's sockaddr, fds[0] the
+//                                         connection
+//     SEND      arg flags   len u32, sockaddr, data   to the sockaddr, none
+//                                         for a connected socket; fds the
+//                                         rights. OK count u32
+//     RECV      arg flags   want u32      OK flags u32, len u32, sockaddr,
+//                                         data: the sender's and at most
+//                                         want bytes; fds the rights
+//     SOCKNAME  arg peer                  OK sockaddr: the socket's, with
+//                                         peer its peer's
+//     GETSOCKOPT            level u32, name u32   OK value
+//     SETSOCKOPT            level u32, name u32, value
+//     SHUTDOWN  arg how
+//     SOCKTYPE                            OK type u32
+//
 //   A device's service's, on the channel devfs has of it, and on
 //   /dev/init:
 //     OPEN      arg flags   mode u32      OK, fds[0] the open file
@@ -367,6 +389,18 @@ enum : uint32_t {
     opOk = 128,
     opErr,
     opBackground,
+    // A socket's.
+    opBind = 144,
+    opConnect,
+    opListen,
+    opAccept,
+    opSend,
+    opRecv,
+    opSockname,
+    opGetsockopt,
+    opSetsockopt,
+    opShutdown,
+    opSocktype,
 };
 
 // The most descriptors a packet brings: a READ's or WRITE's memfd and,
@@ -465,6 +499,7 @@ ssize_t receivePacket(int fd, void* buffer, size_t size, int* fds, size_t& fdCou
 // what is no such thing. Any call goes to any open file, and its server
 // says what it is: one by a path from what is no directory ENOTDIR, a
 // listing of what is no directory ENOTDIR, a terminal's call on what is
-// no terminal ENOTTY, a change of size or a sync of what has none EINVAL,
-// a read or a write of what has none EBADF; another ENOSYS.
+// no terminal ENOTTY, a socket's call on what is no socket ENOTSOCK, a
+// change of size or a sync of what has none EINVAL, a read or a write of
+// what has none EBADF; another ENOSYS.
 int unserved(uint32_t op);

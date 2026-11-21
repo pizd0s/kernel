@@ -327,61 +327,6 @@ func (e *PipeEnd) device() FileKey {
 	return FileKey{}
 }
 
-func (e *PipeEnd) bind(p *Process, a Address) error {
-	return ENOTSOCK
-}
-
-func (e *PipeEnd) connect(p *Process, a Address) error {
-	return ENOTSOCK
-}
-
-func (e *PipeEnd) listen(backlog int) error {
-	return ENOTSOCK
-}
-
-func (e *PipeEnd) accept(p *Process, flags uint32) (Object, []byte, error) {
-	return nil, nil, ENOTSOCK
-}
-
-func (e *PipeEnd) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
-	return nil, ECONNREFUSED
-}
-
-func (e *PipeEnd) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
-	return 0, ENOTSOCK
-}
-
-func (e *PipeEnd) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
-	return 0, Packet{}, 0, ENOTSOCK
-}
-
-func (e *PipeEnd) sockname(p *Process) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (e *PipeEnd) peername(p *Process) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (e *PipeEnd) getsockopt(p *Process, level, name uint32) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (e *PipeEnd) setsockopt(level, name uint32, value []byte) error {
-	return ENOTSOCK
-}
-
-func (e *PipeEnd) shutdown(how int) error {
-	return ENOTSOCK
-}
-
-func (e *PipeEnd) consume(sink func(pk *Packet)) {
-}
-
-func (e *PipeEnd) socketKind() int {
-	return 0
-}
-
 func (e *PipeEnd) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
 	return EINVAL
 }

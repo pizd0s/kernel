@@ -272,6 +272,14 @@ func (l *UnixListener) recordLock(p *Process, cmd int, lk *Flock) error {
 }
 
 func (l *UnixListener) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	if r, ok := r.(*SockKnock); ok {
+		var err error
+
+		r.conn, err = l.knock(p, r.kind, r.nonblock, r.timeout)
+
+		return false, err
+	}
+
 	return false, errUnserved
 }
 
@@ -281,14 +289,6 @@ func (l *UnixListener) token() (uint64, error) {
 
 func (l *UnixListener) device() FileKey {
 	return FileKey{}
-}
-
-func (l *UnixListener) bind(p *Process, a Address) error {
-	return ENOTSOCK
-}
-
-func (l *UnixListener) connect(p *Process, a Address) error {
-	return ENOTSOCK
 }
 
 func (l *UnixListener) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
@@ -330,41 +330,6 @@ func (l *UnixListener) knock(p *Process, kind int, nonblock bool, timeout *atomi
 	}
 }
 
-func (l *UnixListener) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
-	return 0, ENOTSOCK
-}
-
-func (l *UnixListener) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
-	return 0, Packet{}, 0, ENOTSOCK
-}
-
-func (l *UnixListener) sockname(p *Process) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (l *UnixListener) peername(p *Process) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (l *UnixListener) getsockopt(p *Process, level, name uint32) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (l *UnixListener) setsockopt(level, name uint32, value []byte) error {
-	return ENOTSOCK
-}
-
-func (l *UnixListener) shutdown(how int) error {
-	return ENOTSOCK
-}
-
-func (l *UnixListener) consume(sink func(pk *Packet)) {
-}
-
-func (l *UnixListener) socketKind() int {
-	return 0
-}
-
 func (l *UnixListener) ioctl(req uintptr, arg unsafe.Pointer) error {
 	return ENOTTY
 }
@@ -375,12 +340,4 @@ func (l *UnixListener) epollCtl(op uint32, key EpollKey, events uint32, data uin
 
 func (l *UnixListener) epollWait(p *Process, buf func() []byte, max int, end time.Time) (int, error) {
 	return 0, EINVAL
-}
-
-func (l *UnixListener) listen(backlog int) error {
-	return ENOTSOCK
-}
-
-func (l *UnixListener) accept(p *Process, flags uint32) (Object, []byte, error) {
-	return nil, nil, ENOTSOCK
 }

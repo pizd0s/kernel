@@ -138,7 +138,7 @@ func (f *RemoteFD) exchange(p *Process, data []byte, files []Object, interruptib
 
 	defer a.leave()
 
-	if _, err := f.end.send(p, &Packet{data: data, files: append(files, a)}, Address{}, IoMode{quiet: true, kernel: true}); err != nil {
+	if _, err := p.sockSend(f.end, &Packet{data: data, files: append(files, a)}, Address{}, IoMode{quiet: true, kernel: true}); err != nil {
 		return Packet{}, false, EIO
 	}
 
@@ -652,61 +652,6 @@ func (f *RemoteFD) device() FileKey {
 
 func (f *RemoteFD) token() (uint64, error) {
 	return f.id, nil
-}
-
-func (f *RemoteFD) bind(p *Process, a Address) error {
-	return ENOTSOCK
-}
-
-func (f *RemoteFD) connect(p *Process, a Address) error {
-	return ENOTSOCK
-}
-
-func (f *RemoteFD) listen(backlog int) error {
-	return ENOTSOCK
-}
-
-func (f *RemoteFD) accept(p *Process, flags uint32) (Object, []byte, error) {
-	return nil, nil, ENOTSOCK
-}
-
-func (f *RemoteFD) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
-	return nil, ECONNREFUSED
-}
-
-func (f *RemoteFD) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
-	return 0, ENOTSOCK
-}
-
-func (f *RemoteFD) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
-	return 0, Packet{}, 0, ENOTSOCK
-}
-
-func (f *RemoteFD) sockname(p *Process) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (f *RemoteFD) peername(p *Process) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (f *RemoteFD) getsockopt(p *Process, level, name uint32) ([]byte, error) {
-	return nil, ENOTSOCK
-}
-
-func (f *RemoteFD) setsockopt(level, name uint32, value []byte) error {
-	return ENOTSOCK
-}
-
-func (f *RemoteFD) shutdown(how int) error {
-	return ENOTSOCK
-}
-
-func (f *RemoteFD) consume(sink func(pk *Packet)) {
-}
-
-func (f *RemoteFD) socketKind() int {
-	return 0
 }
 
 func (f *RemoteFD) ioctl(req uintptr, arg unsafe.Pointer) error {

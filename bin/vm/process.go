@@ -189,11 +189,13 @@ const (
 )
 
 type Process struct {
-	k    *Kernel
-	pid  int32
-	ppid int32
-	pgid atomic.Int32
-	sid  atomic.Int32
+	sends Slots[SockSend]
+	recvs Slots[SockRecv]
+	k     *Kernel
+	pid   int32
+	ppid  int32
+	pgid  atomic.Int32
+	sid   atomic.Int32
 
 	nice      int32
 	policy    int32
@@ -7382,7 +7384,7 @@ func (p *Process) libcBind(fd, addr, n uint32) uint32 {
 	s, err := p.fd(fd)
 
 	if err == nil {
-		err = s.bind(p, p.socketAddress(addr, n))
+		err = p.request(s, &SockBind{addr: p.socketAddress(addr, n)})
 	}
 
 	return p.result(0, err)
@@ -7392,7 +7394,7 @@ func (p *Process) libcConnect(fd, addr, n uint32) uint32 {
 	s, err := p.fd(fd)
 
 	if err == nil {
-		err = s.connect(p, p.socketAddress(addr, n))
+		err = p.request(s, &SockConnect{addr: p.socketAddress(addr, n)})
 	}
 
 	return p.result(0, err)
@@ -7402,7 +7404,7 @@ func (p *Process) libcListen(fd, backlog uint32) uint32 {
 	s, err := p.fd(fd)
 
 	if err == nil {
-		err = s.listen(int(int32(backlog)))
+		err = p.request(s, &SockListen{backlog: int(int32(backlog))})
 	}
 
 	return p.result(0, err)
@@ -7423,7 +7425,7 @@ func (p *Process) libcGetsockname(fd, addr, lenAt uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	name, err := s.sockname(p)
+	name, err := p.sockName(s, false)
 
 	if err != nil {
 		return p.result(0, err)
@@ -7441,7 +7443,7 @@ func (p *Process) libcGetpeername(fd, addr, lenAt uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	name, err := s.peername(p)
+	name, err := p.sockName(s, true)
 
 	if err != nil {
 		return p.result(0, err)
@@ -7459,7 +7461,7 @@ func (p *Process) libcGetsockopt(fd, level, name, at, lenAt uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	value, err := s.getsockopt(p, level, name)
+	value, err := p.sockGetopt(s, level, name)
 
 	if err == nil {
 		length := min(p.u32(lenAt), uint32(len(value)))
@@ -7475,7 +7477,7 @@ func (p *Process) libcSetsockopt(fd, level, name, at, n uint32) uint32 {
 	s, err := p.fd(fd)
 
 	if err == nil {
-		err = s.setsockopt(level, name, slices.Clone(p.span(at, min(n, 16))))
+		err = p.request(s, &SockSetopt{level: level, name: name, value: slices.Clone(p.span(at, min(n, 16)))})
 	}
 
 	return p.result(0, err)
@@ -7514,7 +7516,7 @@ func (p *Process) libcSendmsg(fd, msg, flags uint32) uint32 {
 
 	most := packetMax
 
-	if s.socketKind() == SOCK_STREAM {
+	if p.sockKind(s) == SOCK_STREAM {
 		most = math.MaxInt
 	}
 
@@ -7524,7 +7526,7 @@ func (p *Process) libcSendmsg(fd, msg, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	return p.result(s.send(p, &Packet{data: data, files: files, cred: cred}, to, sendMode(flags)))
+	return p.result(p.sockSend(s, &Packet{data: data, files: files, cred: cred}, to, sendMode(flags)))
 }
 
 func sendMode(flags uint32) IoMode {
@@ -7547,32 +7549,36 @@ func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	n, from, out, err := s.recv(p, Into{p: p, at: iov, n: count, vector: true}, totalLength(spans), flags)
+	r := p.recvs.get()
 
-	if err != nil {
+	defer p.recvs.put(r)
+
+	r.into, r.want, r.flags = Into{p: p, at: iov, n: count, vector: true}, totalLength(spans), flags
+
+	if err := p.request(s, r); err != nil {
 		return p.result(0, err)
 	}
 
-	written, cut := p.putControl(from.files, from.cred, p.u32(msg+16), p.u32(msg+20), flags&MSG_CMSG_CLOEXEC != 0)
+	written, cut := p.putControl(r.files, r.cred, p.u32(msg+16), p.u32(msg+20), flags&MSG_CMSG_CLOEXEC != 0)
 
 	if name := p.u32(msg); name != 0 {
-		addr := senderAddress(from.addr)
+		addr := senderAddress(r.addr)
 
 		copy(p.span(name, min(p.u32(msg+4), uint32(len(addr)))), addr)
 		p.put32(msg+4, uint32(len(addr)))
 	}
 
 	p.put32(msg+20, written)
-	p.put32(msg+24, out|cut|flags&MSG_CMSG_CLOEXEC)
+	p.put32(msg+24, r.out|cut|flags&MSG_CMSG_CLOEXEC)
 
-	return p.result(n, nil)
+	return p.result(r.n, nil)
 }
 
 func (p *Process) libcShutdown(fd, how uint32) uint32 {
 	s, err := p.fd(fd)
 
 	if err == nil {
-		err = s.shutdown(int(how))
+		err = p.request(s, &SockShutdown{how: int(how)})
 	}
 
 	return p.result(0, err)
@@ -7585,7 +7591,7 @@ func (p *Process) libcSockatmark(fd uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	switch s.socketKind() {
+	switch p.sockKind(s) {
 	case 0:
 		return p.result(0, ENOTSOCK)
 	case SOCK_STREAM:
@@ -7610,7 +7616,7 @@ func (p *Process) socketAccept(fd, addr, lenAt, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	conn, peer, err := s.accept(p, flags)
+	conn, peer, err := p.sockAccept(s, flags)
 
 	if err != nil {
 		return p.result(0, err)
@@ -7636,7 +7642,7 @@ func (p *Process) socketSend(fd, buf, n, flags, addr, alen uint32) uint32 {
 
 	to := p.destination(addr, alen)
 
-	return p.result(s.send(p, &Packet{data: slices.Clone(p.span(buf, n))}, to, sendMode(flags)))
+	return p.result(p.sockSend(s, &Packet{data: slices.Clone(p.span(buf, n))}, to, sendMode(flags)))
 }
 
 func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
@@ -7646,15 +7652,20 @@ func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	got, from, _, err := s.recv(p, Into{p: p, at: buf, n: n}, int(n), flags)
+	r := p.recvs.get()
 
-	dropFiles(from.files)
+	defer p.recvs.put(r)
+
+	r.into, r.want, r.flags = Into{p: p, at: buf, n: n}, int(n), flags
+	err = p.request(s, r)
+
+	dropFiles(r.files)
 
 	if err == nil && addr != 0 {
-		p.putAddress(senderAddress(from.addr), addr, lenAt)
+		p.putAddress(senderAddress(r.addr), addr, lenAt)
 	}
 
-	return p.result(got, err)
+	return p.result(r.n, err)
 }
 
 func (p *Process) putControl(files []Object, cred *Ucred, control, room uint32, cloexec bool) (uint32, uint32) {
@@ -7802,7 +7813,11 @@ func (p *Process) connectUnix(v Object, path string, kind int, nonblock bool, to
 
 	defer f.unref()
 
-	return f.knock(p, kind, nonblock, to)
+	r := SockKnock{kind: kind, nonblock: nonblock, timeout: to}
+
+	err = p.request(f, &r)
+
+	return r.conn, err
 }
 
 func (p *Process) mouthOf(path string) (Object, error) {
@@ -7815,7 +7830,7 @@ func (p *Process) mouthOf(path string) (Object, error) {
 			return err
 		}
 
-		if f.socketKind() != SOCK_DGRAM {
+		if p.sockKind(f) != SOCK_DGRAM {
 			f.unref()
 
 			return EPROTOTYPE
@@ -7839,8 +7854,13 @@ func (p *Process) destination(addr, alen uint32) Address {
 
 func (p *Process) socketAddress(at, n uint32) Address {
 	path, err := p.unixSocketPath(at, n)
+	a := Address{given: true, path: path, err: err}
 
-	return Address{given: true, path: path, err: err}
+	if n <= sizeofSockaddrStorage {
+		a.raw = slices.Clone(p.span(at, n))
+	}
+
+	return a
 }
 
 func (p *Process) libcEpoll_create(size uint32) uint32 {
@@ -13267,4 +13287,48 @@ func (p *Process) ttyName(t Object, peer bool) (string, error) {
 	err := p.request(t, &r)
 
 	return r.name, err
+}
+
+func (p *Process) sockKind(s Object) int {
+	r := SockType{}
+
+	if p.request(s, &r) != nil {
+		return 0
+	}
+
+	return r.kind
+}
+
+func (p *Process) sockSend(s Object, pk *Packet, to Address, mode IoMode) (int, error) {
+	r := p.sends.get()
+
+	r.pk, r.to, r.mode = pk, to, mode
+
+	err := p.request(s, r)
+	n := r.n
+
+	p.sends.put(r)
+
+	return n, err
+}
+
+func (p *Process) sockAccept(s Object, flags uint32) (Object, []byte, error) {
+	r := SockAccept{flags: flags}
+	err := p.request(s, &r)
+
+	return r.conn, r.peer, err
+}
+
+func (p *Process) sockName(s Object, peer bool) ([]byte, error) {
+	r := SockName{peer: peer}
+	err := p.request(s, &r)
+
+	return r.addr, err
+}
+
+func (p *Process) sockGetopt(s Object, level, name uint32) ([]byte, error) {
+	r := SockGetopt{level: level, name: name}
+	err := p.request(s, &r)
+
+	return r.value, err
 }

@@ -17,6 +17,7 @@ const (
 
 type Address struct {
 	given bool
+	raw   []byte
 	path  string
 	err   error
 }

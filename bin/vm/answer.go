@@ -235,24 +235,30 @@ func (a *Answer) setsockopt(level, name uint32, value []byte) error {
 	return ENOPROTOOPT
 }
 
-func (a *Answer) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
-	if to.given {
-		return 0, EISCONN
+func (a *Answer) send(p *Process, r *SockSend) error {
+	if r.to.given {
+		return EISCONN
 	}
 
-	return a.put(pk.data, pk.files)
+	var err error
+
+	r.n, err = a.put(r.pk.data, r.pk.files)
+
+	return err
 }
 
-func (a *Answer) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
+func (a *Answer) recv(p *Process, r *SockRecv) error {
 	var h [remoteHeader]byte
 
 	n, err := a.heard(h[:])
 
 	if err != nil {
-		return 0, Packet{}, 0, err
+		return err
 	}
 
-	return into.put(0, h[:min(n, want)]), Packet{}, 0, nil
+	r.n = r.into.put(0, h[:min(n, r.want)])
+
+	return nil
 }
 
 func (a *Answer) consume(sink func(pk *Packet)) {
@@ -311,6 +317,53 @@ func (a *Answer) recordLock(p *Process, cmd int, lk *Flock) error {
 }
 
 func (a *Answer) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	switch r := r.(type) {
+	case *SockBind:
+		return false, a.bind(p, r.addr)
+	case *SockConnect:
+		return false, a.connect(p, r.addr)
+	case *SockListen:
+		return false, a.listen(r.backlog)
+	case *SockAccept:
+		var err error
+
+		r.conn, r.peer, err = a.accept(p, r.flags)
+
+		return false, err
+	case *SockSend:
+		return false, a.send(p, r)
+	case *SockRecv:
+		return false, a.recv(p, r)
+	case *SockName:
+		var err error
+
+		if r.peer {
+			r.addr, err = a.peername(p)
+		} else {
+			r.addr, err = a.sockname(p)
+		}
+
+		return false, err
+	case *SockGetopt:
+		var err error
+
+		r.value, err = a.getsockopt(p, r.level, r.name)
+
+		return false, err
+	case *SockSetopt:
+		return false, a.setsockopt(r.level, r.name, r.value)
+	case *SockShutdown:
+		return false, a.shutdown(r.how)
+	case *SockType:
+		r.kind = a.socketKind()
+
+		return false, nil
+	case *SockConsume:
+		a.consume(r.sink)
+
+		return false, nil
+	}
+
 	return false, errUnserved
 }
 
@@ -320,10 +373,6 @@ func (a *Answer) token() (uint64, error) {
 
 func (a *Answer) device() FileKey {
 	return FileKey{}
-}
-
-func (a *Answer) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
-	return nil, ECONNREFUSED
 }
 
 func (a *Answer) ioctl(req uintptr, arg unsafe.Pointer) error {

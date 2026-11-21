@@ -325,24 +325,24 @@ func (s *UnixSocket) setsockopt(level, name uint32, value []byte) error {
 	return s.options.set(level, name, value)
 }
 
-func (s *UnixSocket) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
+func (s *UnixSocket) send(p *Process, r *SockSend) error {
 	c, err := s.connection()
 
 	if err != nil {
-		return 0, err
+		return err
 	}
 
-	return c.send(p, pk, to, mode)
+	return c.send(p, r)
 }
 
-func (s *UnixSocket) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
+func (s *UnixSocket) recv(p *Process, r *SockRecv) error {
 	c, err := s.connection()
 
 	if err != nil {
-		return 0, Packet{}, 0, err
+		return err
 	}
 
-	return c.recv(p, into, want, flags)
+	return c.recv(p, r)
 }
 
 func (s *UnixSocket) consume(sink func(pk *Packet)) {
@@ -432,6 +432,53 @@ func (s *UnixSocket) recordLock(p *Process, cmd int, lk *Flock) error {
 }
 
 func (s *UnixSocket) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	switch r := r.(type) {
+	case *SockBind:
+		return false, s.bind(p, r.addr)
+	case *SockConnect:
+		return false, s.connect(p, r.addr)
+	case *SockListen:
+		return false, s.listen(r.backlog)
+	case *SockAccept:
+		var err error
+
+		r.conn, r.peer, err = s.accept(p, r.flags)
+
+		return false, err
+	case *SockSend:
+		return false, s.send(p, r)
+	case *SockRecv:
+		return false, s.recv(p, r)
+	case *SockName:
+		var err error
+
+		if r.peer {
+			r.addr, err = s.peername(p)
+		} else {
+			r.addr, err = s.sockname(p)
+		}
+
+		return false, err
+	case *SockGetopt:
+		var err error
+
+		r.value, err = s.getsockopt(p, r.level, r.name)
+
+		return false, err
+	case *SockSetopt:
+		return false, s.setsockopt(r.level, r.name, r.value)
+	case *SockShutdown:
+		return false, s.shutdown(r.how)
+	case *SockType:
+		r.kind = s.socketKind()
+
+		return false, nil
+	case *SockConsume:
+		s.consume(r.sink)
+
+		return false, nil
+	}
+
 	return false, errUnserved
 }
 
@@ -441,10 +488,6 @@ func (s *UnixSocket) token() (uint64, error) {
 
 func (s *UnixSocket) device() FileKey {
 	return FileKey{}
-}
-
-func (s *UnixSocket) knock(p *Process, kind int, nonblock bool, timeout *atomic.Int64) (*PairEnd, error) {
-	return nil, ECONNREFUSED
 }
 
 func (s *UnixSocket) ioctl(req uintptr, arg unsafe.Pointer) error {
