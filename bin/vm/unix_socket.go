@@ -215,8 +215,8 @@ func (s *UnixSocket) setFlags(fl int) error {
 	return nil
 }
 
-func (s *UnixSocket) bind(p *Process, at, n uint32) error {
-	path, err := p.unixSocketPath(at, n)
+func (s *UnixSocket) bind(p *Process, a Address) error {
+	path, err := a.path, a.err
 
 	if err != nil {
 		return err
@@ -283,8 +283,8 @@ func (s *UnixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
 	return e, unixAddress(nil), nil
 }
 
-func (s *UnixSocket) connect(p *Process, at, n uint32) error {
-	path, err := p.unixSocketPath(at, n)
+func (s *UnixSocket) connect(p *Process, a Address) error {
+	path, err := a.path, a.err
 
 	if err != nil {
 		return err
@@ -365,75 +365,48 @@ func (s *UnixSocket) shutdown(how int) error {
 	return c.shutdown(how)
 }
 
-func (s *UnixSocket) getsockopt(p *Process, level, name, at, lenAt uint32) error {
+func (s *UnixSocket) getsockopt(p *Process, level, name uint32) ([]byte, error) {
 	if l, c := s.state(); c != nil {
-		return c.getsockopt(p, level, name, at, lenAt)
+		return c.getsockopt(p, level, name)
 	} else if level == SOL_SOCKET && name == SO_ACCEPTCONN {
-		value := uint32(0)
-
-		if l != nil && l.listens() {
-			value = 1
-		}
-
-		length := min(p.u32(lenAt), 4)
-
-		var b [4]byte
-		binary.LittleEndian.PutUint32(b[:], value)
-		copy(p.span(at, length), b[:])
-		p.put32(lenAt, length)
-
-		return nil
+		return binary.LittleEndian.AppendUint32(nil, bit(l != nil && l.listens())), nil
 	}
 
-	return s.options.get(p, s.kind, level, name, at, lenAt)
+	return s.options.get(p, s.kind, level, name)
 }
 
-func (s *UnixSocket) setsockopt(p *Process, level, name, at, n uint32) error {
+func (s *UnixSocket) setsockopt(level, name uint32, value []byte) error {
 	if _, c := s.state(); c != nil {
-		return c.setsockopt(p, level, name, at, n)
+		return c.setsockopt(level, name, value)
 	}
 
-	return s.options.set(p, level, name, at, n)
+	return s.options.set(level, name, value)
 }
 
-func (s *UnixSocket) sendmsg(p *Process, at, flags uint32) (int, error) {
+func (s *UnixSocket) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
 	c, err := s.connection()
 
 	if err != nil {
 		return 0, err
 	}
 
-	return c.sendmsg(p, at, flags)
+	return c.send(p, pk, to, mode)
 }
 
-func (s *UnixSocket) recvmsg(p *Process, at, flags uint32) (int, error) {
+func (s *UnixSocket) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
 	c, err := s.connection()
 
 	if err != nil {
-		return 0, err
+		return 0, Packet{}, 0, err
 	}
 
-	return c.recvmsg(p, at, flags)
+	return c.recv(p, into, want, flags)
 }
 
-func (s *UnixSocket) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, error) {
-	c, err := s.connection()
-
-	if err != nil {
-		return 0, err
+func (s *UnixSocket) consume(sink func(pk *Packet)) {
+	if c, err := s.connection(); err == nil {
+		c.consume(sink)
 	}
-
-	return c.sendto(p, buf, n, flags, addr, alen)
-}
-
-func (s *UnixSocket) recvfrom(p *Process, buf, n, flags uint32) (int, []byte, error) {
-	c, err := s.connection()
-
-	if err != nil {
-		return 0, nil, err
-	}
-
-	return c.recvfrom(p, buf, n, flags)
 }
 
 func (s *UnixSocket) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {

@@ -45,9 +45,9 @@ func (o *SockOptions) intOption(name uint32) uint32 {
 	return bit(name == SO_RCVLOWAT)
 }
 
-func (o *SockOptions) get(p *Process, kind int, level, name, at, lenAt uint32) error {
+func (o *SockOptions) get(p *Process, kind int, level, name uint32) ([]byte, error) {
 	if level != SOL_SOCKET {
-		return ENOPROTOOPT
+		return nil, ENOPROTOOPT
 	}
 
 	var value uint32
@@ -66,63 +66,44 @@ func (o *SockOptions) get(p *Process, kind int, level, name, at, lenAt uint32) e
 			to = &o.sndTimeout
 		}
 
-		var b [16]byte
-
+		b := make([]byte, 16)
 		d := time.Duration(to.Load())
 
-		binary.LittleEndian.PutUint64(b[:], uint64(d/time.Second))
+		binary.LittleEndian.PutUint64(b, uint64(d/time.Second))
 		binary.LittleEndian.PutUint64(b[8:], uint64(d%time.Second/time.Microsecond))
 
-		length := min(p.u32(lenAt), 16)
-
-		copy(p.span(at, length), b[:])
-		p.put32(lenAt, length)
-
-		return nil
+		return b, nil
 	case SO_SNDBUF, SO_RCVBUF:
 		value = queueMax * packetMax
 	case 1, 2, 5, 6, 9, 10, 12, 15, SO_RCVLOWAT:
 		value = o.intOption(name)
 	case SO_PEERCRED:
-
 		b := make([]byte, 12)
 
 		binary.LittleEndian.PutUint32(b, uint32(p.pid))
 		binary.LittleEndian.PutUint32(b[4:], p.cred.uid())
 		binary.LittleEndian.PutUint32(b[8:], p.cred.gid())
 
-		length := min(p.u32(lenAt), 12)
-
-		copy(p.span(at, length), b)
-		p.put32(lenAt, length)
-
-		return nil
+		return b, nil
 	default:
-		return ENOPROTOOPT
+		return nil, ENOPROTOOPT
 	}
 
-	length := min(p.u32(lenAt), 4)
-
-	var b [4]byte
-	binary.LittleEndian.PutUint32(b[:], value)
-	copy(p.span(at, length), b[:])
-	p.put32(lenAt, length)
-
-	return nil
+	return binary.LittleEndian.AppendUint32(nil, value), nil
 }
 
-func (o *SockOptions) set(p *Process, level, name, at, n uint32) error {
+func (o *SockOptions) set(level, name uint32, value []byte) error {
 	if level != SOL_SOCKET {
 		return ENOPROTOOPT
 	}
 
 	switch name {
 	case SO_RCVTIMEO, SO_SNDTIMEO:
-		if n < 16 {
+		if len(value) < 16 {
 			return EINVAL
 		}
 
-		sec, usec := int64(p.u64(at)), int64(p.u64(at+8))
+		sec, usec := int64(binary.LittleEndian.Uint64(value)), int64(binary.LittleEndian.Uint64(value[8:]))
 
 		if usec < 0 || usec >= 1e6 {
 			return EDOM
@@ -140,17 +121,17 @@ func (o *SockOptions) set(p *Process, level, name, at, n uint32) error {
 			o.sndTimeout.Store(int64(d))
 		}
 	case SO_PASSCRED:
-		if n < 4 {
+		if len(value) < 4 {
 			return EINVAL
 		}
 
-		o.passcred.Store(p.u32(at) != 0)
+		o.passcred.Store(binary.LittleEndian.Uint32(value) != 0)
 	case 1, 2, 5, 6, 9, 10, 12, 15, SO_RCVLOWAT:
-		if n < 4 {
+		if len(value) < 4 {
 			return EINVAL
 		}
 
-		v := p.u32(at)
+		v := binary.LittleEndian.Uint32(value)
 
 		switch {
 		case soInts[name]:

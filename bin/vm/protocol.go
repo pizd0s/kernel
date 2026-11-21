@@ -87,7 +87,7 @@ const (
 	vConnect
 )
 
-func served(p *Process, kind uint32, flags int, dev, ino, id uint64, events uint32, end *PairEnd) (*RemoteFD, error) {
+func served(p *Process, kind uint32, flags int, dev, ino, id uint64, events uint32, end Socket) (*RemoteFD, error) {
 	if kind != openedFile && kind != openedTerminal && kind != openedDir && kind != openedPath {
 		return nil, EINVAL
 	}

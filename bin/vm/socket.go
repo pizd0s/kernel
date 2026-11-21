@@ -15,6 +15,12 @@ const (
 	queueMax     = 64
 )
 
+type Address struct {
+	given bool
+	path  string
+	err   error
+}
+
 func unixAddress(path []byte) []byte {
 	if len(path) == 0 {
 		return []byte{AF_UNIX, 0}

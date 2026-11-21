@@ -3,6 +3,7 @@
 package main
 
 import (
+	"sync/atomic"
 	"time"
 	"unsafe"
 )
@@ -51,6 +52,8 @@ type File interface {
 type IoMode struct {
 	nonblock bool
 	quiet    bool
+	kernel   bool
+	timeout  *atomic.Int64
 }
 
 type Transfer interface {
@@ -146,20 +149,19 @@ type Attrs interface {
 
 type Socket interface {
 	Object
-	bind(p *Process, at, n uint32) error
-	connect(p *Process, at, n uint32) error
+	bind(p *Process, a Address) error
+	connect(p *Process, a Address) error
 	listen(backlog int) error
 
 	accept(p *Process, flags uint32) (Object, []byte, error)
-	sendmsg(p *Process, at, flags uint32) (int, error)
-	recvmsg(p *Process, at, flags uint32) (int, error)
-	sendto(p *Process, buf, n, flags, addr, alen uint32) (int, error)
-	recvfrom(p *Process, buf, n, flags uint32) (int, []byte, error)
+	send(p *Process, pk *Packet, to Address, mode IoMode) (int, error)
+	recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error)
 	sockname(p *Process) ([]byte, error)
 	peername(p *Process) ([]byte, error)
-	getsockopt(p *Process, level, name, at, lenAt uint32) error
-	setsockopt(p *Process, level, name, at, n uint32) error
+	getsockopt(p *Process, level, name uint32) ([]byte, error)
+	setsockopt(level, name uint32, value []byte) error
 	shutdown(how int) error
+	consume(sink func(pk *Packet))
 
 	socketKind() int
 }

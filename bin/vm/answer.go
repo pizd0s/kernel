@@ -8,8 +8,6 @@ import (
 	"sync/atomic"
 )
 
-const answerSmall = 96
-
 const (
 	answerCancel = 1 << iota
 	answerLeft
@@ -22,7 +20,6 @@ type Answer struct {
 
 	mu       sync.Mutex
 	data     []byte
-	small    [answerSmall]byte
 	files    []Object
 	said     uint32
 	uid, gid uint32
@@ -98,25 +95,13 @@ func (a *Answer) heard(b []byte) (int, error) {
 	return 0, EAGAIN
 }
 
-func (a *Answer) put(more func(small []byte) ([]byte, error), files []Object) (int, error) {
+func (a *Answer) put(data []byte, files []Object) (int, error) {
 	a.mu.Lock()
 
 	defer a.mu.Unlock()
 
 	if a.said&answerLeft != 0 {
 		return 0, EPIPE
-	}
-
-	small := a.small[:]
-
-	if len(a.data) > 0 {
-		small = nil
-	}
-
-	data, err := more(small)
-
-	if err != nil {
-		return 0, err
 	}
 
 	if len(a.data)+len(data) > packetMax {
@@ -235,19 +220,17 @@ func (a *Answer) read(p *Process, into Transfer, n int, mode IoMode) (int, error
 }
 
 func (a *Answer) write(p *Process, from Transfer, n int, mode IoMode) (int, error) {
-	return a.put(func(small []byte) ([]byte, error) {
-		data := small[:0]
+	data := make([]byte, n)
 
-		if n > len(small) {
-			data = make([]byte, n)
-		}
+	got, err := from.with(0, n, false, func(b []byte) (int, error) {
+		return copy(data, b), nil
+	})
 
-		got, err := from.with(0, n, false, func(b []byte) (int, error) {
-			return copy(data[:len(b)], b), nil
-		})
+	if err != nil {
+		return 0, err
+	}
 
-		return data[:got], err
-	}, nil)
+	return a.put(data[:got], nil)
 }
 
 func (a *Answer) pread(p *Process, into Transfer, n int, off int64) (int, error) {
@@ -274,11 +257,11 @@ func (a *Answer) copyFrom(p *Process, in Transfer, from, to int64, n int) (int, 
 	return 0, EINVAL
 }
 
-func (a *Answer) bind(p *Process, at, n uint32) error {
+func (a *Answer) bind(p *Process, addr Address) error {
 	return EINVAL
 }
 
-func (a *Answer) connect(p *Process, at, n uint32) error {
+func (a *Answer) connect(p *Process, addr Address) error {
 	return EISCONN
 }
 
@@ -306,76 +289,33 @@ func (a *Answer) shutdown(how int) error {
 	return nil
 }
 
-func (a *Answer) getsockopt(p *Process, level, name, at, lenAt uint32) error {
+func (a *Answer) getsockopt(p *Process, level, name uint32) ([]byte, error) {
+	return nil, ENOPROTOOPT
+}
+
+func (a *Answer) setsockopt(level, name uint32, value []byte) error {
 	return ENOPROTOOPT
 }
 
-func (a *Answer) setsockopt(p *Process, level, name, at, n uint32) error {
-	return ENOPROTOOPT
-}
-
-func (a *Answer) sendmsg(p *Process, at, flags uint32) (int, error) {
-	h := p.span(at, sizeofMsghdr)
-
-	if binary.LittleEndian.Uint32(h) != 0 {
+func (a *Answer) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
+	if to.given {
 		return 0, EISCONN
 	}
 
-	files, _, err := p.rights(binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
-
-	if err != nil {
-		return 0, err
-	}
-
-	return a.put(func(small []byte) ([]byte, error) {
-		return p.gatherIn(small, binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]), packetMax)
-	}, files)
+	return a.put(pk.data, pk.files)
 }
 
-func (a *Answer) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, error) {
-	if addr != 0 {
-		return 0, EISCONN
-	}
-
-	return a.put(func(small []byte) ([]byte, error) {
-		b := p.span(buf, n)
-
-		if len(b) <= len(small) {
-			return small[:copy(small, b)], nil
-		}
-
-		return append([]byte(nil), b...), nil
-	}, nil)
-}
-
-func (a *Answer) recvmsg(p *Process, at, flags uint32) (int, error) {
+func (a *Answer) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
 	var h [remoteHeader]byte
-	var few [4][]byte
 
 	n, err := a.heard(h[:])
 
 	if err != nil {
-		return 0, err
+		return 0, Packet{}, 0, err
 	}
 
-	spans, err := p.ioSpansIn(few[:0], p.u32(at+8), p.u32(at+12))
-
-	if err != nil {
-		return 0, err
-	}
-
-	if p.u32(at) != 0 {
-		p.put32(at+4, 0)
-	}
-
-	p.put32(at+20, 0)
-	p.put32(at+24, flags&MSG_CMSG_CLOEXEC)
-
-	return scatterInto(spans, h[:n]), nil
+	return into.put(0, h[:min(n, want)]), Packet{}, 0, nil
 }
 
-func (a *Answer) recvfrom(p *Process, buf, n, flags uint32) (int, []byte, error) {
-	got, err := a.heard(p.span(buf, n))
-
-	return got, nil, err
+func (a *Answer) consume(sink func(pk *Packet)) {
 }

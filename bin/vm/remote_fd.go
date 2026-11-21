@@ -11,7 +11,7 @@ import (
 )
 
 type RemoteFD struct {
-	end  *PairEnd
+	end  Socket
 	refs atomic.Int32
 
 	mu       sync.Mutex
@@ -224,7 +224,7 @@ func (f *RemoteFD) exchange(p *Process, data []byte, files []Object, interruptib
 
 	defer a.leave()
 
-	if f.end.kernelSend(p, &Packet{data: data, files: append(files, a)}) != nil {
+	if _, err := f.end.send(p, &Packet{data: data, files: append(files, a)}, Address{}, IoMode{quiet: true, kernel: true}); err != nil {
 		return Packet{}, false, EIO
 	}
 

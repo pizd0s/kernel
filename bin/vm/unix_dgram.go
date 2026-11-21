@@ -3,8 +3,6 @@
 package main
 
 import (
-	"encoding/binary"
-	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -15,7 +13,7 @@ type UnixDgram struct {
 	inbox, mouth *PairEnd
 	mu           sync.Mutex
 	name, peer   string
-	target       *PairEnd
+	target       Socket
 
 	writers Subscribers
 	inner   Subscription
@@ -117,7 +115,7 @@ func (s *UnixDgram) asRemote() *RemoteFD {
 	return nil
 }
 
-func (s *UnixDgram) targetEnd() *PairEnd {
+func (s *UnixDgram) targetEnd() Socket {
 	s.mu.Lock()
 
 	defer s.mu.Unlock()
@@ -189,8 +187,8 @@ func (s *UnixDgram) setFlags(fl int) error {
 	return nil
 }
 
-func (s *UnixDgram) bind(p *Process, at, n uint32) error {
-	path, err := p.unixSocketPath(at, n)
+func (s *UnixDgram) bind(p *Process, a Address) error {
+	path, err := a.path, a.err
 
 	if err != nil {
 		return err
@@ -223,8 +221,8 @@ func (s *UnixDgram) bind(p *Process, at, n uint32) error {
 	return err
 }
 
-func (s *UnixDgram) connect(p *Process, at, n uint32) error {
-	path, err := p.unixSocketPath(at, n)
+func (s *UnixDgram) connect(p *Process, a Address) error {
+	path, err := a.path, a.err
 
 	if err != nil {
 		return err
@@ -292,105 +290,61 @@ func (s *UnixDgram) shutdown(how int) error {
 	return s.inbox.shutdown(how)
 }
 
-func (s *UnixDgram) getsockopt(p *Process, level, name, at, lenAt uint32) error {
-	return s.inbox.getsockopt(p, level, name, at, lenAt)
+func (s *UnixDgram) getsockopt(p *Process, level, name uint32) ([]byte, error) {
+	return s.inbox.getsockopt(p, level, name)
 }
 
-func (s *UnixDgram) setsockopt(p *Process, level, name, at, n uint32) error {
-	return s.inbox.setsockopt(p, level, name, at, n)
+func (s *UnixDgram) setsockopt(level, name uint32, value []byte) error {
+	return s.inbox.setsockopt(level, name, value)
 }
 
-func (s *UnixDgram) send(p *Process, data []byte, files []Object, cred *Ucred, nonblock bool, path string) (int, error) {
+func (s *UnixDgram) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
+	if to.err != nil {
+		return 0, to.err
+	}
+
 	if s.inbox.noWrite.Load() {
 		return 0, EPIPE
 	}
 
-	if len(data) > packetMax {
+	if len(pk.data) > packetMax {
 		return 0, EMSGSIZE
 	}
 
-	var to *PairEnd
+	var t Socket
 
-	if path != "" {
+	if to.given {
 		var err error
 
-		if to, err = p.mouthOf(path); err != nil {
+		if t, err = p.mouthOf(to.path); err != nil {
 			return 0, err
 		}
-	} else if to = s.targetEnd(); to == nil {
+	} else if t = s.targetEnd(); t == nil {
 		return 0, ENOTCONN
 	}
 
-	defer to.unref()
-
-	if cred == nil && to.peer.options.passcred.Load() {
-		cred = p.ucred()
-	}
+	defer t.unref()
 
 	s.mu.Lock()
 
-	name := s.name
+	if s.name != "" {
+		pk.addr = []byte(s.name)
+	}
 
 	s.mu.Unlock()
 
-	for _, f := range files {
-		f.ref()
-	}
+	mode.nonblock = mode.nonblock || s.nonblock.Load()
+	mode.timeout = &s.inbox.options.sndTimeout
 
-	pk := &Packet{data: data, files: files, cred: cred}
-
-	if name != "" {
-		pk.addr = []byte(name)
-	}
-
-	if err := to.queueAs(p, pk, nonblock || s.nonblock.Load(), &s.inbox.options.sndTimeout); err != nil {
-		dropFiles(files)
-
-		return 0, err
-	}
-
-	return len(data), nil
+	return t.send(p, pk, Address{}, mode)
 }
 
-func (s *UnixDgram) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, error) {
-	path, err := p.destination(addr, alen)
-
-	if err != nil {
-		return 0, err
-	}
-
-	return s.send(p, slices.Clone(p.span(buf, n)), nil, nil, flags&MSG_DONTWAIT != 0, path)
+func (s *UnixDgram) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
+	return s.inbox.recv(p, into, want, flags|s.dontwait())
 }
 
-func (s *UnixDgram) sendmsg(p *Process, at, flags uint32) (int, error) {
-	h := p.span(at, sizeofMsghdr)
-	path, err := p.destination(binary.LittleEndian.Uint32(h), binary.LittleEndian.Uint32(h[4:]))
-
-	if err != nil {
-		return 0, err
-	}
-
-	files, cred, err := p.rights(binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
-
-	if err != nil {
-		return 0, err
-	}
-
-	data, err := p.gather(binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]), packetMax)
-
-	if err != nil {
-		return 0, err
-	}
-
-	return s.send(p, data, files, cred, flags&MSG_DONTWAIT != 0, path)
-}
-
-func (s *UnixDgram) recvmsg(p *Process, at, flags uint32) (int, error) {
-	return s.inbox.recvmsg(p, at, flags|s.dontwait())
-}
-
-func (s *UnixDgram) recvfrom(p *Process, buf, n, flags uint32) (int, []byte, error) {
-	return s.inbox.recvfrom(p, buf, n, flags|s.dontwait())
+func (s *UnixDgram) consume(sink func(pk *Packet)) {
+	s.inbox.consume(sink)
 }
 
 func (s *UnixDgram) dontwait() uint32 {
@@ -402,7 +356,9 @@ func (s *UnixDgram) dontwait() uint32 {
 }
 
 func (s *UnixDgram) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
-	got, _, _, _, err := s.inbox.receive(p, putInto(into), n, s.dontwait()|bit(mode.nonblock)*MSG_DONTWAIT, 0, 0)
+	got, from, _, err := s.inbox.recv(p, Into{p: p, to: into}, n, s.dontwait()|bit(mode.nonblock)*MSG_DONTWAIT)
+
+	dropFiles(from.files)
 
 	return got, err
 }
@@ -414,7 +370,7 @@ func (s *UnixDgram) write(p *Process, from Transfer, n int, mode IoMode) (int, e
 
 	data := make([]byte, n)
 
-	return s.send(p, data[:takeFrom(from)(0, data)], nil, nil, mode.nonblock, "")
+	return s.send(p, &Packet{data: data[:takeFrom(from)(0, data)]}, Address{}, mode)
 }
 
 func (s *UnixDgram) pread(p *Process, into Transfer, n int, off int64) (int, error) {

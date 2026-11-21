@@ -3,7 +3,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -279,48 +278,63 @@ func (e *PairEnd) setFlags(fl int) error {
 	return nil
 }
 
-func (e *PairEnd) send(p *Process, data []byte, files []Object, mode IoMode) error {
-	if len(data) > packetMax {
-		return EMSGSIZE
+func (e *PairEnd) send(p *Process, pk *Packet, to Address, mode IoMode) (int, error) {
+	if to.given {
+		return 0, EISCONN
 	}
 
-	return e.sendCred(p, append([]byte(nil), data...), files, nil, mode)
+	if e.shared.kind == SOCK_STREAM {
+		return e.sendStream(p, pk, mode)
+	}
+
+	if len(pk.data) > packetMax {
+		return 0, EMSGSIZE
+	}
+
+	if err := e.deliver(p, pk, mode); err != nil {
+		return 0, err
+	}
+
+	return len(pk.data), nil
 }
 
-func (e *PairEnd) sendCred(p *Process, data []byte, files []Object, cred *Ucred, mode IoMode) error {
-	if len(data) > packetMax {
-		return EMSGSIZE
+func (e *PairEnd) deliver(p *Process, pk *Packet, mode IoMode) error {
+	if pk.cred == nil && !mode.kernel && p != nil && e.peer.options.passcred.Load() {
+		pk.cred = p.ucred()
 	}
 
-	if cred == nil && p != nil && e.peer.options.passcred.Load() {
-		cred = p.ucred()
-	}
-
-	for _, f := range files {
+	for _, f := range pk.files {
 		f.ref()
 	}
 
-	err := e.queueAs(p, &Packet{data: data, files: files, cred: cred}, mode.nonblock || e.nonblock.Load(), &e.options.sndTimeout)
+	end, how := time.Time{}, waitsOn
+
+	if !mode.kernel {
+		timeout := mode.timeout
+
+		if timeout == nil {
+			timeout = &e.options.sndTimeout
+		}
+
+		end, how = until(timeout)
+	}
+
+	err := e.queueAs(p, pk, !mode.kernel && (mode.nonblock || e.nonblock.Load()), end, how)
 
 	if err != nil {
-		dropFiles(files)
+		dropFiles(pk.files)
 	}
 
 	return err
 }
 
-func (e *PairEnd) sendStream(p *Process, take func(at int, b []byte) int, total int, files []Object, cred *Ucred, mode IoMode) (int, error) {
-	sent := 0
+func (e *PairEnd) sendStream(p *Process, pk *Packet, mode IoMode) (int, error) {
+	data, files, cred, sent := pk.data, pk.files, pk.cred, 0
 
-	for sent < total {
-		chunk := make([]byte, min(total-sent, packetMax))
-		c := take(sent, chunk)
+	for sent < len(data) {
+		c := min(len(data)-sent, packetMax)
 
-		if c == 0 {
-			break
-		}
-
-		if err := e.sendCred(p, chunk[:c], files, cred, mode); err != nil {
+		if err := e.deliver(p, &Packet{data: data[sent : sent+c : sent+c], files: files, cred: cred}, mode); err != nil {
 			if err == EPIPE && !mode.quiet {
 				p.sendSelf(SIGPIPE)
 			}
@@ -349,22 +363,6 @@ func totalLength(spans [][]byte) int {
 	return n
 }
 
-func (e *PairEnd) offer(pk *Packet) (full bool, err error) {
-	r := e.peer
-
-	r.mu.Lock()
-
-	full, sink, err := e.offerTo(r, pk)
-
-	r.mu.Unlock()
-
-	if sink != nil {
-		sink(pk)
-	}
-
-	return full, err
-}
-
 func (e *PairEnd) offerTo(r *PairEnd, pk *Packet) (full bool, sink func(pk *Packet), err error) {
 	switch {
 	case e.noWrite.Load():
@@ -385,41 +383,7 @@ func (e *PairEnd) offerTo(r *PairEnd, pk *Packet) (full bool, sink func(pk *Pack
 	return false, nil, nil
 }
 
-func (e *PairEnd) awaitRoom(p *Process) {
-	r := e.peer
-
-	r.mu.Lock()
-
-	if r.in.len() >= queueMax && r.sink == nil && !r.dead.Load() {
-		p.watch(&r.mu, &r.watchers, true, time.Time{}, waitsOn)
-	}
-
-	r.mu.Unlock()
-}
-
-func (e *PairEnd) kernelSend(p *Process, pk *Packet) error {
-	for _, f := range pk.files {
-		f.ref()
-	}
-
-	for {
-		full, err := e.offer(pk)
-
-		if err != nil {
-			dropFiles(pk.files)
-
-			return err
-		}
-
-		if !full {
-			return nil
-		}
-
-		e.awaitRoom(p)
-	}
-}
-
-func (e *PairEnd) queueAs(p *Process, pk *Packet, nonblock bool, timeout *atomic.Int64) error {
+func (e *PairEnd) queueAs(p *Process, pk *Packet, nonblock bool, end time.Time, how Signalled) error {
 	r := e.peer
 
 	r.mu.Lock()
@@ -428,8 +392,6 @@ func (e *PairEnd) queueAs(p *Process, pk *Packet, nonblock bool, timeout *atomic
 		full, sink, err := e.offerTo(r, pk)
 
 		if err == nil && full && !nonblock {
-			end, how := until(timeout)
-
 			if timedOut, failed := p.watch(&r.mu, &r.watchers, true, end, how); failed == nil && !timedOut {
 				continue
 			} else if err = failed; timedOut {
@@ -449,8 +411,8 @@ func (e *PairEnd) queueAs(p *Process, pk *Packet, nonblock bool, timeout *atomic
 	}
 }
 
-func (e *PairEnd) recv(p *Process, mode IoMode, peek bool) (*Packet, error) {
-	nonblock := mode.nonblock || e.nonblock.Load()
+func (e *PairEnd) take(p *Process, nonblock, peek bool) (*Packet, error) {
+	nonblock = nonblock || e.nonblock.Load()
 
 	e.mu.Lock()
 
@@ -509,22 +471,29 @@ func (e *PairEnd) awaitInput(p *Process) (timedOut bool, err error) {
 	return timedOut, err
 }
 
-func (e *PairEnd) receive(p *Process, put func(at int, data []byte) int, want int, flags uint32, control, room uint32) (int, uint32, uint32, []byte, error) {
-	if e.shared.kind == SOCK_STREAM {
-		n, written, out, err := e.receiveStream(p, put, want, flags, control, room)
+func (e *PairEnd) received(files []Object, cred *Ucred, addr []byte) Packet {
+	got := Packet{files: files, addr: addr}
 
-		return n, written, out, nil, err
+	if e.options.passcred.Load() {
+		got.cred = cred
 	}
 
-	mode := IoMode{nonblock: flags&MSG_DONTWAIT != 0}
-	pk, err := e.recv(p, mode, flags&MSG_PEEK != 0)
+	return got
+}
+
+func (e *PairEnd) recv(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
+	if e.shared.kind == SOCK_STREAM {
+		return e.receiveStream(p, into, want, flags)
+	}
+
+	pk, err := e.take(p, flags&MSG_DONTWAIT != 0, flags&MSG_PEEK != 0)
 
 	if err != nil || pk == nil {
-		return 0, 0, 0, nil, err
+		return 0, Packet{}, 0, err
 	}
 
 	out := uint32(0)
-	n := put(0, pk.data[:min(len(pk.data), want)])
+	n := into.put(0, pk.data[:min(len(pk.data), want)])
 
 	if n < len(pk.data) {
 		out |= MSG_TRUNC
@@ -535,29 +504,27 @@ func (e *PairEnd) receive(p *Process, put func(at int, data []byte) int, want in
 	}
 
 	if flags&MSG_PEEK != 0 {
-		return n, 0, out, pk.addr, nil
+		return n, Packet{addr: pk.addr}, out, nil
 	}
 
-	written, cut := e.putControl(p, pk.files, pk.cred, control, room, flags&MSG_CMSG_CLOEXEC != 0)
-
-	return n, written, out | cut, pk.addr, nil
+	return n, e.received(pk.files, pk.cred, pk.addr), out, nil
 }
 
-func (e *PairEnd) receiveStream(p *Process, put func(at int, data []byte) int, want int, flags uint32, control, room uint32) (int, uint32, uint32, error) {
+func (e *PairEnd) receiveStream(p *Process, into Into, want int, flags uint32) (int, Packet, uint32, error) {
 	nonblock := flags&MSG_DONTWAIT != 0 || e.nonblock.Load()
 	got := 0
 
-	var written, cut uint32
+	var first Packet
 
 	if want == 0 {
-		return 0, 0, 0, nil
+		return 0, Packet{}, 0, nil
 	}
 
 	for {
-		n, files, cred, eof, ended := e.streamTake(put, got, want-got, flags&MSG_PEEK != 0)
+		n, files, cred, eof, ended := e.streamTake(into, got, want-got, flags&MSG_PEEK != 0)
 
 		if got == 0 && n > 0 && flags&MSG_PEEK == 0 {
-			written, cut = e.putControl(p, files, cred, control, room, flags&MSG_CMSG_CLOEXEC != 0)
+			first = e.received(files, cred, nil)
 		} else {
 			dropFiles(files)
 		}
@@ -565,34 +532,34 @@ func (e *PairEnd) receiveStream(p *Process, put func(at int, data []byte) int, w
 		got += n
 
 		if eof || ended || got >= want || got > 0 && flags&MSG_WAITALL == 0 || flags&MSG_PEEK != 0 && got > 0 {
-			return got, written, cut, nil
+			return got, first, 0, nil
 		}
 
 		if nonblock {
 			if got > 0 {
-				return got, written, cut, nil
+				return got, first, 0, nil
 			}
 
-			return 0, 0, 0, EAGAIN
+			return 0, Packet{}, 0, EAGAIN
 		}
 
 		timedOut, err := e.awaitInput(p)
 
 		if err != nil || timedOut {
 			if got > 0 {
-				return got, written, cut, nil
+				return got, first, 0, nil
 			}
 
 			if err == nil {
 				err = EAGAIN
 			}
 
-			return 0, 0, 0, err
+			return 0, Packet{}, 0, err
 		}
 	}
 }
 
-func (e *PairEnd) streamTake(put func(at int, data []byte) int, at, room int, peek bool) (n int, files []Object, cred *Ucred, eof, ended bool) {
+func (e *PairEnd) streamTake(into Into, at, room int, peek bool) (n int, files []Object, cred *Ucred, eof, ended bool) {
 	e.mu.Lock()
 
 	defer e.mu.Unlock()
@@ -609,7 +576,7 @@ func (e *PairEnd) streamTake(put func(at int, data []byte) int, at, room int, pe
 			return n, files, cred, false, true
 		}
 
-		c := put(at+n, pk.data[:min(len(pk.data), room-n)])
+		c := into.put(at+n, pk.data[:min(len(pk.data), room-n)])
 
 		if peek {
 			return n + c, nil, nil, false, true
@@ -650,20 +617,6 @@ func advance(bufs [][]byte, n int) [][]byte {
 	return append([][]byte{bufs[0][n:]}, bufs[1:]...)
 }
 
-func gatherFrom(spans [][]byte, b []byte) int {
-	n := 0
-
-	for _, s := range spans {
-		if n == len(b) {
-			break
-		}
-
-		n += copy(b[n:], s)
-	}
-
-	return n
-}
-
 func scatterInto(bufs [][]byte, data []byte) int {
 	n := 0
 
@@ -681,37 +634,14 @@ func scatterInto(bufs [][]byte, data []byte) int {
 	return n
 }
 
-func (e *PairEnd) putControl(p *Process, files []Object, cred *Ucred, control, room uint32, cloexec bool) (uint32, uint32) {
-	written, cut := p.putRights(files, control, room, cloexec)
-
-	if cred == nil || !e.options.passcred.Load() {
-		return written, cut
-	}
-
-	size := sizeofCmsghdr + uint32(sizeofUcred)
-
-	if room-written < size {
-		return written, cut | MSG_CTRUNC
-	}
-
-	at := control + written
-
-	p.put32(at, size)
-	p.put32(at+4, SOL_SOCKET)
-	p.put32(at+8, SCM_CREDENTIALS)
-	p.put32(at+12, cred.pid)
-	p.put32(at+16, cred.uid)
-	p.put32(at+20, cred.gid)
-
-	return written + min(guestAlign(size), room-written), cut
-}
-
 func (e *PairEnd) read(p *Process, into Transfer, n int, mode IoMode) (int, error) {
 	if p.chaosFail("read") {
 		return 0, EIO
 	}
 
-	got, _, _, _, err := e.receive(p, putInto(into), n, 0, 0, 0)
+	got, from, _, err := e.recv(p, Into{p: p, to: into}, n, 0)
+
+	dropFiles(from.files)
 
 	return got, err
 }
@@ -721,32 +651,13 @@ func (e *PairEnd) write(p *Process, from Transfer, n int, mode IoMode) (int, err
 		return 0, EIO
 	}
 
-	if e.shared.kind == SOCK_STREAM {
-		return e.sendStream(p, takeFrom(from), n, nil, nil, mode)
-	}
-
-	if n > packetMax {
+	if e.shared.kind != SOCK_STREAM && n > packetMax {
 		return 0, EMSGSIZE
 	}
 
 	data := make([]byte, n)
-	got := takeFrom(from)(0, data)
 
-	if err := e.sendCred(p, data[:got], nil, nil, mode); err != nil {
-		return 0, err
-	}
-
-	return got, nil
-}
-
-func putInto(into Transfer) func(at int, data []byte) int {
-	return func(at int, data []byte) int {
-		n, _ := into.with(int64(at), len(data), true, func(b []byte) (int, error) {
-			return copy(b, data), nil
-		})
-
-		return n
-	}
+	return e.send(p, &Packet{data: data[:takeFrom(from)(0, data)]}, Address{}, mode)
 }
 
 func takeFrom(from Transfer) func(at int, b []byte) int {
@@ -783,11 +694,11 @@ func (e *PairEnd) copyFrom(p *Process, in Transfer, from, to int64, n int) (int,
 	return 0, EINVAL
 }
 
-func (e *PairEnd) bind(p *Process, at, n uint32) error {
+func (e *PairEnd) bind(p *Process, a Address) error {
 	return EINVAL
 }
 
-func (e *PairEnd) connect(p *Process, at, n uint32) error {
+func (e *PairEnd) connect(p *Process, a Address) error {
 	return EISCONN
 }
 
@@ -831,40 +742,12 @@ func (e *PairEnd) shutdown(how int) error {
 	return nil
 }
 
-func (e *PairEnd) getsockopt(p *Process, level, name, at, lenAt uint32) error {
-	return e.options.get(p, e.shared.kind, level, name, at, lenAt)
+func (e *PairEnd) getsockopt(p *Process, level, name uint32) ([]byte, error) {
+	return e.options.get(p, e.shared.kind, level, name)
 }
 
-func (e *PairEnd) setsockopt(p *Process, level, name, at, n uint32) error {
-	return e.options.set(p, level, name, at, n)
-}
-
-func (e *PairEnd) sendto(p *Process, buf, n, flags, addr, alen uint32) (int, error) {
-	if addr != 0 {
-		return 0, EISCONN
-	}
-
-	mode := IoMode{nonblock: flags&MSG_DONTWAIT != 0, quiet: flags&MSG_NOSIGNAL != 0}
-
-	if e.shared.kind == SOCK_STREAM {
-		return e.sendStream(p, func(at int, b []byte) int {
-			return copy(b, p.span(buf+uint32(at), n-uint32(at)))
-		}, int(n), nil, nil, mode)
-	}
-
-	if err := e.send(p, p.span(buf, n), nil, mode); err != nil {
-		return 0, err
-	}
-
-	return int(n), nil
-}
-
-func (e *PairEnd) recvfrom(p *Process, buf, n, flags uint32) (int, []byte, error) {
-	got, _, _, from, err := e.receive(p, func(at int, data []byte) int {
-		return copy(p.span(buf+uint32(at), n-uint32(at)), data)
-	}, int(n), flags, 0, 0)
-
-	return got, senderAddress(from), err
+func (e *PairEnd) setsockopt(level, name uint32, value []byte) error {
+	return e.options.set(level, name, value)
 }
 
 func senderAddress(path []byte) []byte {
@@ -873,82 +756,6 @@ func senderAddress(path []byte) []byte {
 	}
 
 	return unixAddress(path)
-}
-
-func (e *PairEnd) sendmsg(p *Process, at, flags uint32) (int, error) {
-	h := p.span(at, sizeofMsghdr)
-
-	if binary.LittleEndian.Uint32(h) != 0 {
-		return 0, EISCONN
-	}
-
-	files, cred, err := p.rights(binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
-
-	if err != nil {
-		return 0, err
-	}
-
-	mode := IoMode{nonblock: flags&MSG_DONTWAIT != 0, quiet: flags&MSG_NOSIGNAL != 0}
-
-	if e.shared.kind == SOCK_STREAM {
-		iov, count := binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:])
-		spans, err := p.ioSpans(iov, count)
-
-		if err != nil {
-			return 0, err
-		}
-
-		return e.sendStream(p, func(at int, b []byte) int {
-			spans, _ := p.ioSpans(iov, count)
-
-			return gatherFrom(advance(spans, at), b)
-		}, totalLength(spans), files, cred, mode)
-	}
-
-	data, err := p.gather(binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]), packetMax)
-
-	if err != nil {
-		return 0, err
-	}
-
-	if err := e.sendCred(p, data, files, cred, mode); err != nil {
-		return 0, err
-	}
-
-	return len(data), nil
-}
-
-func (e *PairEnd) recvmsg(p *Process, at, flags uint32) (int, error) {
-	var few [4][]byte
-
-	iov, count := p.u32(at+8), p.u32(at+12)
-	spans, err := p.ioSpansIn(few[:0], iov, count)
-
-	if err != nil {
-		return 0, err
-	}
-
-	n, written, out, from, err := e.receive(p, func(at int, data []byte) int {
-		spans, _ := p.ioSpansIn(few[:0], iov, count)
-
-		return scatterInto(advance(spans, at), data)
-	}, totalLength(spans), flags, p.u32(at+16), p.u32(at+20))
-
-	if err != nil {
-		return 0, err
-	}
-
-	if name := p.u32(at); name != 0 {
-		addr := senderAddress(from)
-
-		copy(p.span(name, min(p.u32(at+4), uint32(len(addr)))), addr)
-		p.put32(at+4, uint32(len(addr)))
-	}
-
-	p.put32(at+20, written)
-	p.put32(at+24, out|flags&MSG_CMSG_CLOEXEC)
-
-	return n, nil
 }
 
 func (e *PairEnd) directory(p *Process) *RemoteFD {

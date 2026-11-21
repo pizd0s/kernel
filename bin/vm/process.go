@@ -7524,7 +7524,7 @@ func (p *Process) libcBind(fd, addr, n uint32) uint32 {
 	s, err := p.socketAt(fd)
 
 	if err == nil {
-		err = s.bind(p, addr, n)
+		err = s.bind(p, p.socketAddress(addr, n))
 	}
 
 	return p.result(0, err)
@@ -7534,7 +7534,7 @@ func (p *Process) libcConnect(fd, addr, n uint32) uint32 {
 	s, err := p.socketAt(fd)
 
 	if err == nil {
-		err = s.connect(p, addr, n)
+		err = s.connect(p, p.socketAddress(addr, n))
 	}
 
 	return p.result(0, err)
@@ -7597,8 +7597,17 @@ func (p *Process) libcGetpeername(fd, addr, lenAt uint32) uint32 {
 func (p *Process) libcGetsockopt(fd, level, name, at, lenAt uint32) uint32 {
 	s, err := p.socketAt(fd)
 
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	value, err := s.getsockopt(p, level, name)
+
 	if err == nil {
-		err = s.getsockopt(p, level, name, at, lenAt)
+		length := min(p.u32(lenAt), uint32(len(value)))
+
+		copy(p.span(at, length), value)
+		p.put32(lenAt, length)
 	}
 
 	return p.result(0, err)
@@ -7608,7 +7617,7 @@ func (p *Process) libcSetsockopt(fd, level, name, at, n uint32) uint32 {
 	s, err := p.socketAt(fd)
 
 	if err == nil {
-		err = s.setsockopt(p, level, name, at, n)
+		err = s.setsockopt(level, name, slices.Clone(p.span(at, min(n, 16))))
 	}
 
 	return p.result(0, err)
@@ -7637,17 +7646,68 @@ func (p *Process) libcSendmsg(fd, msg, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	return p.result(s.sendmsg(p, msg, flags))
+	h := p.span(msg, sizeofMsghdr)
+	to := p.destination(binary.LittleEndian.Uint32(h), binary.LittleEndian.Uint32(h[4:]))
+	files, cred, err := p.rights(binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	most := packetMax
+
+	if s.socketKind() == SOCK_STREAM {
+		most = math.MaxInt
+	}
+
+	data, err := p.gather(binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:]), most)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	return p.result(s.send(p, &Packet{data: data, files: files, cred: cred}, to, sendMode(flags)))
+}
+
+func sendMode(flags uint32) IoMode {
+	return IoMode{nonblock: flags&MSG_DONTWAIT != 0, quiet: flags&MSG_NOSIGNAL != 0}
 }
 
 func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
+	var few [4][]byte
+
 	s, err := p.socketAt(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	return p.result(s.recvmsg(p, msg, flags))
+	iov, count := p.u32(msg+8), p.u32(msg+12)
+	spans, err := p.ioSpansIn(few[:0], iov, count)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	n, from, out, err := s.recv(p, Into{p: p, at: iov, n: count, vector: true}, totalLength(spans), flags)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	written, cut := p.putControl(from.files, from.cred, p.u32(msg+16), p.u32(msg+20), flags&MSG_CMSG_CLOEXEC != 0)
+
+	if name := p.u32(msg); name != 0 {
+		addr := senderAddress(from.addr)
+
+		copy(p.span(name, min(p.u32(msg+4), uint32(len(addr)))), addr)
+		p.put32(msg+4, uint32(len(addr)))
+	}
+
+	p.put32(msg+20, written)
+	p.put32(msg+24, out|cut|flags&MSG_CMSG_CLOEXEC)
+
+	return p.result(n, nil)
 }
 
 func (p *Process) libcShutdown(fd, how uint32) uint32 {
@@ -7713,7 +7773,9 @@ func (p *Process) socketSend(fd, buf, n, flags, addr, alen uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	return p.result(s.sendto(p, buf, n, flags, addr, alen))
+	to := p.destination(addr, alen)
+
+	return p.result(s.send(p, &Packet{data: slices.Clone(p.span(buf, n))}, to, sendMode(flags)))
 }
 
 func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
@@ -7723,13 +7785,40 @@ func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	got, from, err := s.recvfrom(p, buf, n, flags)
+	got, from, _, err := s.recv(p, Into{p: p, at: buf, n: n}, int(n), flags)
+
+	dropFiles(from.files)
 
 	if err == nil && addr != 0 {
-		p.putAddress(from, addr, lenAt)
+		p.putAddress(senderAddress(from.addr), addr, lenAt)
 	}
 
 	return p.result(got, err)
+}
+
+func (p *Process) putControl(files []Object, cred *Ucred, control, room uint32, cloexec bool) (uint32, uint32) {
+	written, cut := p.putRights(files, control, room, cloexec)
+
+	if cred == nil {
+		return written, cut
+	}
+
+	size := sizeofCmsghdr + uint32(sizeofUcred)
+
+	if room-written < size {
+		return written, cut | MSG_CTRUNC
+	}
+
+	at := control + written
+
+	p.put32(at, size)
+	p.put32(at+4, SOL_SOCKET)
+	p.put32(at+8, SCM_CREDENTIALS)
+	p.put32(at+12, cred.pid)
+	p.put32(at+16, cred.uid)
+	p.put32(at+20, cred.gid)
+
+	return written + min(guestAlign(size), room-written), cut
 }
 
 func (p *Process) ucred() *Ucred {
@@ -7896,8 +7985,8 @@ func (p *Process) connectUnix(v Dir, path string, kind int, nonblock bool, to *a
 	}
 }
 
-func (p *Process) mouthOf(path string) (*PairEnd, error) {
-	var mouth *PairEnd
+func (p *Process) mouthOf(path string) (Socket, error) {
+	var mouth Socket
 
 	err := p.onPath(AT_FDCWD, path, func(v Dir) error {
 		f, err := v.connectPath(p, path)
@@ -7906,26 +7995,30 @@ func (p *Process) mouthOf(path string) (*PairEnd, error) {
 			return err
 		}
 
-		if e := f.asPair(); e != nil && e.shared.kind == SOCK_DGRAM {
-			mouth = e
+		if mouth = f.asSocket(); mouth == nil {
+			f.unref()
 
-			return nil
+			return EPROTOTYPE
 		}
 
-		f.unref()
-
-		return EPROTOTYPE
+		return nil
 	})
 
 	return mouth, err
 }
 
-func (p *Process) destination(addr, alen uint32) (string, error) {
+func (p *Process) destination(addr, alen uint32) Address {
 	if addr == 0 {
-		return "", nil
+		return Address{}
 	}
 
-	return p.unixSocketPath(addr, alen)
+	return p.socketAddress(addr, alen)
+}
+
+func (p *Process) socketAddress(at, n uint32) Address {
+	path, err := p.unixSocketPath(at, n)
+
+	return Address{given: true, path: path, err: err}
 }
 
 func (p *Process) epollAt(fd uint32) (*Epoll, error) {
@@ -8024,9 +8117,9 @@ func (p *Process) opened(pk *Packet) (Object, bool, error) {
 		return f, false, nil
 	}
 
-	end := f.asPair()
+	end := f.asSocket()
 
-	if len(pk.data) != sizeofOpened || end == nil || end.shared.kind != SOCK_SEQPACKET {
+	if len(pk.data) != sizeofOpened || end == nil {
 		f.unref()
 
 		return nil, false, EIO
