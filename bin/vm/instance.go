@@ -40,8 +40,9 @@ type Instance struct {
 	memory     *LinearMemory
 	tables     [][]uintptr
 
-	mem   []byte
-	memfd *MemfdFile
+	mem     []byte
+	memfd   *MemfdFile
+	windows []*MemfdFile
 
 	host any
 	proc *Process
@@ -341,7 +342,36 @@ func (i *Instance) release() {
 		was.events.drop(&i.relocation)
 	}
 
-	i.block, i.memory, i.tables = nil, nil, nil
+	i.block, i.memory, i.tables, i.windows = nil, nil, nil, nil
+	i.unhold()
+}
+
+func (i *Instance) window(at, n int64, mode int) *MemfdFile {
+	var f *MemfdFile
+
+	if k := len(i.windows); k > 0 {
+		f, i.windows = i.windows[k-1], i.windows[:k-1]
+	} else {
+		f = &MemfdFile{ino: memfdInodes.Add(1)}
+	}
+
+	f.mem, f.at, f.n, f.mode, f.off, f.held = i.memory, at, n, mode, 0, true
+	f.refs.Store(1)
+	i.holds.Add(1)
+
+	return f
+}
+
+func (i *Instance) windowDone(f *MemfdFile) {
+	if f.mem != i.memory || f.refs.Load() != 1 || len(i.windows) >= windowsKept {
+		f.unref()
+
+		return
+	}
+
+	f.refs.Store(0)
+	f.mem = nil
+	i.windows = append(i.windows, f)
 	i.unhold()
 }
 

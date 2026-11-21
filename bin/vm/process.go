@@ -168,6 +168,7 @@ const (
 	utsVersion       = "#1"
 	utsMachine       = "wasm32"
 	databaseMax      = 16 << 20
+	windowsKept      = 8
 	localeNameMax    = 23
 	traceStringMax   = 64
 )
@@ -812,7 +813,11 @@ func oob() {
 func (p *Process) memory(at, n uint32, mode int) *MemfdFile {
 	p.span(at, n)
 
-	return p.inst.memfd.splice(int64(at), int(n), mode)
+	return p.inst.window(int64(at), int64(n), narrowed(O_RDWR, mode))
+}
+
+func (p *Process) memoryDone(w *MemfdFile) {
+	p.inst.windowDone(w)
 }
 
 func (p *Process) span(at, n uint32) []byte {
@@ -4306,7 +4311,7 @@ func (p *Process) writeBack(at uint32, m Mapping, from, n uint32) error {
 		w := p.memory(at+from+uint32(i), uint32(j-i), O_RDONLY)
 		_, err := p.filePwrite(m.file, w, j-i, m.offset+int64(from)+int64(i))
 
-		w.unref()
+		p.memoryDone(w)
 
 		if err != nil {
 			return err
@@ -4450,7 +4455,7 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 
 				_, err = p.filePread(f, w, int(n), int64(off))
 
-				w.unref()
+				p.memoryDone(w)
 
 				if err == ESPIPE {
 					err = ENODEV
@@ -4532,7 +4537,7 @@ func (p *Process) libcMadvise(addr, n, advice uint32) uint32 {
 		w := p.memory(addr, uint32(len(in)), O_WRONLY)
 
 		p.filePread(m.file, w, len(in), m.offset+int64(addr-at))
-		w.unref()
+		p.memoryDone(w)
 	}
 
 	return p.result(0, nil)
@@ -5214,7 +5219,7 @@ func (p *Process) libcRead(fd, buf, n uint32) uint32 {
 	w := p.memory(buf, n, O_WRONLY)
 	count, err := p.fileRead(t, w, int(n), IoMode{})
 
-	w.unref()
+	p.memoryDone(w)
 
 	return p.result(count, err)
 }
@@ -5229,7 +5234,7 @@ func (p *Process) libcWrite(fd, buf, n uint32) uint32 {
 	w := p.memory(buf, n, O_RDONLY)
 	count, err := p.fileWrite(t, w, int(n), IoMode{})
 
-	w.unref()
+	p.memoryDone(w)
 
 	return p.result(count, err)
 }
@@ -5244,7 +5249,7 @@ func (p *Process) libcPread(fd, buf, n uint32, off uint64) uint32 {
 	w := p.memory(buf, n, O_WRONLY)
 	count, err := p.filePread(t, w, int(n), int64(off))
 
-	w.unref()
+	p.memoryDone(w)
 
 	return p.result(count, err)
 }
@@ -5259,7 +5264,7 @@ func (p *Process) libcPwrite(fd, buf, n uint32, off uint64) uint32 {
 	w := p.memory(buf, n, O_RDONLY)
 	count, err := p.filePwrite(t, w, int(n), int64(off))
 
-	w.unref()
+	p.memoryDone(w)
 
 	return p.result(count, err)
 }
@@ -7070,7 +7075,7 @@ func (p *Process) readdir(dir uint32) (uint32, error) {
 		w := p.memory(dir+dirBuf, dirBufLen, O_WRONLY)
 		n, err := p.fileReaddir(d, w, dirBufLen)
 
-		w.unref()
+		p.memoryDone(w)
 
 		if err != nil || n == 0 {
 			return 0, err
@@ -8658,12 +8663,12 @@ func (p *Process) libcGetpass(prompt uint32) uint32 {
 	shown := p.memory(prompt, asked, O_RDONLY)
 
 	p.fileWrite(t, shown, int(asked), IoMode{})
-	shown.unref()
+	p.memoryDone(shown)
 
 	typed := p.memory(at, passwordSize, O_WRONLY)
 	n, err := p.fileRead(t, typed, passwordSize, IoMode{})
 
-	typed.unref()
+	p.memoryDone(typed)
 
 	if err == nil {
 		if n > 0 && p.span(at, passwordSize)[n-1] == '\n' || n == passwordSize {
