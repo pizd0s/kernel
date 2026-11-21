@@ -16,6 +16,7 @@ static const Tool tools[] = {
     {"console", consoleMain},
     {"devfs", devfsMain},
     {"devices", devicesMain},
+    {"dns", dnsMain},
     {"erofs", erofsMain},
     {"mount", mountMain},
     {"pty", ptyMain},

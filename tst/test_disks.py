@@ -66,6 +66,7 @@ os.fsync(p)
 """
 
 WANT = """\
+dns
 full
 init
 null

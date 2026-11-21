@@ -104,6 +104,7 @@ print(p.poll(1000) == [(f, select.POLLIN)], os.read(f, 16))
 """
 
 WANT = """\
+dns
 full
 init
 null

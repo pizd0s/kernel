@@ -11,10 +11,14 @@ server's answer up to its close. In the system, devfs starts inet for
 the card, which is /dev/net/0: its ctl, stats and addr, and, once "stack"
 in its ctl has the stack's lease by DHCP, iface/status. sockmgr, which
 devfs starts too, writes it of each card it finds, and the stack, up,
-registers with sockmgr, whose ctl lists it: tst/inet_sockets.cpp, which the test hands the system, connects through
-it to the host's server, listens on the card's address and accepts a
+registers with sockmgr, whose ctl lists it. tst/inet_sockets.cpp, which
+the test hands the system, finds the host's server by name, host.internal
+of the gateway's name server, which dns asks for getaddrinfo, connects
+through sockmgr to it, listens on the card's address and accepts a
 connection of its own, whose epoll's watch, made of sockmgr's socket
-before connect, follows it to the stack's, and finds the errors of a socket on no stack.
+before connect, follows it to the stack's, and finds the errors of a
+socket on no stack and of a name the gateway has not; the shell asks
+/dev/dns/query itself.
 
     test_net.py <vm> <net_probe> <inet> <rootfs> <inet_sockets>
 """
@@ -80,9 +84,15 @@ PROGRAM
 chmod +x /run/inet_sockets
 for i in $(seq 100); do grep -q '^stack 0 ' /dev/sockmgr/ctl && break; sleep 0.1; done
 /run/inet_sockets {port}
+exec 3<>/dev/dns/query
+echo HOST.internal a >&3
+cat <&3
+echo nope.internal a >&3
+exec 3>&-
 """
 
 SOCKETS_WANT = """\
+host.internal is 192.168.127.254, host.internal
 connected from 192.168.127.2
 read echo: hello
 read at the end 0
@@ -96,7 +106,12 @@ read pong
 read of a socket on no stack: -1 Transport endpoint is not connected
 bind to no card's address: -1 Cannot assign requested address
 socket of AF_INET6: -1 Address family not supported by protocol
+nope.internal: Name does not resolve
+gateway.internal: 192.168.127.1
+host.internal a 192.168.127.254
 """
+
+SOCKETS_ERRORS = "sh: write error: No such file or directory\n"
 
 
 def main():
@@ -141,7 +156,7 @@ def main():
     script = SOCKETS.format(program=program, port=server.getsockname()[1])
     r = subprocess.run([vm, "run", "--net", "--", rootfs, "-c", script], capture_output=True, text=True, timeout=120)
 
-    if r.returncode != 0 or r.stdout != SOCKETS_WANT:
+    if r.returncode != 0 or r.stdout != SOCKETS_WANT or r.stderr != SOCKETS_ERRORS:
         print(f"FAIL net: sockets: exit {r.returncode}\n{r.stdout}\nwant\n{SOCKETS_WANT}\n{r.stderr[-2000:]}")
         sys.exit(1)
 

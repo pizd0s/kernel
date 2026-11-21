@@ -368,7 +368,7 @@ B17 chdir ld ; getcwd: ok /run/p040/d
 B18 chdir up3 ; getcwd: ok /
 B19 chdir abs ; getcwd: ok /pzd/store/<uid>-rlm-system/etc
 B20 readlink f: EINVAL
-B21 listdir up3/usr/usr/etc: ok ['group', 'mc', 'motd', 'passwd']
+B21 listdir up3/usr/usr/etc: ok ['group', 'hosts', 'mc', 'motd', 'passwd']
 B22 open(O_CREAT) through dangling into missing dir: ENOENT
 B23 open(O_CREAT) through abs link into /etc: EROFS
 B24 rmdir ld: ENOTDIR
@@ -422,7 +422,7 @@ G01 open(O_DIRECTORY) /etc/motd: ENOTDIR
 G02 open(O_DIRECTORY|O_NOFOLLOW) /usr: ENOTDIR
 G03 open(O_WRONLY) d: EISDIR
 G04 listdir ld: ok ['x']
-G05 listdir /usr/usr/etc: ok ['group', 'mc', 'motd', 'passwd']
+G05 listdir /usr/usr/etc: ok ['group', 'hosts', 'mc', 'motd', 'passwd']
 H01 access dl F_OK: ok False
 H02 access dl F_OK, not following: ok True
 H03 chmod lf 600, not following ; f's mode: n/a
@@ -446,7 +446,8 @@ I15 stat d ; mkdir d: EEXIST
 I16 stat f ; append to f ; stat f: ok (1, 3)
 """
 
-FILES = {"etc/motd": "pizdos\n", "etc/passwd": "root:x:0:0:root:/:/bin/sh\n", "etc/group": "root:x:0:\n"}
+FILES = {"etc/motd": "pizdos\n", "etc/passwd": "root:x:0:0:root:/:/bin/sh\n", "etc/group": "root:x:0:\n",
+         "etc/hosts": "127.0.0.1 localhost\n::1 localhost\n"}
 REALM = "pzd/store/" + "r" * 22 + "-rlm-system"
 BASE = "pzd/store/" + "b" * 22 + "-etc-base"
 

@@ -22,6 +22,7 @@ const (
 	netGateway   = "192.168.127.1"
 	netGatewayHw = "5a:94:ef:e4:0c:dd"
 	netHost      = "192.168.127.254"
+	netZone      = "internal."
 )
 
 type NetLink struct {
@@ -40,7 +41,11 @@ func startNet(end *PairEnd) {
 		GatewayMacAddress: netGatewayHw,
 		NAT:               map[string]string{netHost: "127.0.0.1"},
 		GatewayVirtualIPs: []string{netHost},
-		Protocol:          types.BessProtocol,
+		DNS: []types.Zone{{Name: netZone, Records: []types.Record{
+			{Name: "host", IP: net.ParseIP(netHost)},
+			{Name: "gateway", IP: net.ParseIP(netGateway)},
+		}}},
+		Protocol: types.BessProtocol,
 	}))
 
 	ours, theirs := net.Pipe()

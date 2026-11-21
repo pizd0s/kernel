@@ -430,7 +430,7 @@ func (e *PairEnd) recv(p *Process, r *SockRecv) error {
 	}
 
 	r.n = r.into.put(0, pk.data[:min(len(pk.data), r.want)])
-	r.addr = pk.addr
+	r.addr = senderAddress(pk.addr)
 
 	if r.n < len(pk.data) {
 		r.out |= MSG_TRUNC

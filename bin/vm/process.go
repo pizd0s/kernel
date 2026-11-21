@@ -4,7 +4,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -13,7 +12,6 @@ import (
 	"math"
 	"math/bits"
 	mathrand "math/rand/v2"
-	"net"
 	"net/netip"
 	"os"
 	"path"
@@ -170,7 +168,6 @@ const (
 	utsVersion       = "#1"
 	utsMachine       = "wasm32"
 	databaseMax      = 16 << 20
-	resolveWait      = 10 * time.Second
 	localeNameMax    = 23
 	traceStringMax   = 64
 )
@@ -7614,10 +7611,8 @@ func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
 	written, cut := p.putControl(r.files, r.cred, p.u32(msg+16), p.u32(msg+20), flags&MSG_CMSG_CLOEXEC != 0)
 
 	if name := p.u32(msg); name != 0 {
-		addr := senderAddress(r.addr)
-
-		copy(p.span(name, min(p.u32(msg+4), uint32(len(addr)))), addr)
-		p.put32(msg+4, uint32(len(addr)))
+		copy(p.span(name, min(p.u32(msg+4), uint32(len(r.addr)))), r.addr)
+		p.put32(msg+4, uint32(len(r.addr)))
 	}
 
 	p.put32(msg+20, written)
@@ -7714,7 +7709,7 @@ func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 	dropFiles(r.files)
 
 	if err == nil && addr != 0 {
-		p.putAddress(senderAddress(r.addr), addr, lenAt)
+		p.putAddress(r.addr, addr, lenAt)
 	}
 
 	return p.result(r.n, err)
@@ -10603,34 +10598,75 @@ func (p *Process) resolve(name string) ([]netip.Addr, string, int) {
 		return out, canonical, 0
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), resolveWait)
+	return p.lookup(name)
+}
 
-	defer cancel()
+func (p *Process) lookup(name string) ([]netip.Addr, string, int) {
+	if name == "" || len(strings.TrimSuffix(name, ".")) > dnsNameMax || strings.ContainsFunc(name, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
+		return nil, "", EAI_NONAME
+	}
 
-	found, err := net.DefaultResolver.LookupNetIP(ctx, "ip", name)
+	f, err := p.openPath(dnsQuery, O_RDWR, 0)
 
 	if err != nil {
-		var dns *net.DNSError
+		return nil, "", EAI_FAIL
+	}
 
-		if errors.As(err, &dns) && (dns.IsTemporary || dns.IsTimeout) {
-			return nil, "", EAI_AGAIN
-		}
+	defer f.unref()
 
-		if errors.As(err, &dns) && dns.IsNotFound {
+	query := []byte(name + " a\n")
+
+	if _, err := p.fileWrite(f, bytesFile(query), len(query), IoMode{}); err != nil {
+		switch err {
+		case ENOENT:
 			return nil, "", EAI_NONAME
+		case ETIMEDOUT, ENETUNREACH, EINTR:
+			return nil, "", EAI_AGAIN
 		}
 
 		return nil, "", EAI_FAIL
 	}
 
-	canonical = name
+	var data []byte
 
-	if cname, err := net.DefaultResolver.LookupCNAME(ctx, name); err == nil && cname != "" {
-		canonical = strings.TrimSuffix(cname, ".")
+	buf := make([]byte, 4096)
+
+	for len(data) < databaseMax {
+		n, err := p.fileRead(f, bytesFile(buf), len(buf), IoMode{})
+
+		if err != nil {
+			return nil, "", EAI_FAIL
+		}
+
+		if n == 0 {
+			break
+		}
+
+		data = append(data, buf[:n]...)
 	}
 
-	for _, a := range found {
-		out = append(out, a.Unmap())
+	var out []netip.Addr
+
+	canonical := ""
+
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+
+		if len(fields) != 3 || fields[1] != "a" {
+			continue
+		}
+
+		if a, err := netip.ParseAddr(fields[2]); err == nil {
+			out = append(out, a.Unmap())
+
+			if canonical == "" {
+				canonical = fields[0]
+			}
+		}
+	}
+
+	if len(out) == 0 {
+		return nil, "", EAI_NONAME
 	}
 
 	return out, canonical, 0
@@ -10641,14 +10677,6 @@ func (p *Process) reverse(addr netip.Addr) (string, bool) {
 		if e.addr == addr {
 			return e.names[0], true
 		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), resolveWait)
-
-	defer cancel()
-
-	if names, err := net.DefaultResolver.LookupAddr(ctx, addr.String()); err == nil && len(names) > 0 {
-		return strings.TrimSuffix(names[0], "."), true
 	}
 
 	return "", false

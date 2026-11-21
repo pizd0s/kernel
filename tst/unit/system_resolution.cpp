@@ -8,8 +8,8 @@
 #include <string.h>
 
 int main() {
-    // With no guest hosts file, localhost falls back to the host's resolver.
-    // The standard loopback name and an invalid long label need no DNS server.
+    // localhost is the system's /etc/hosts's, and a name too long to be
+    // one is none: neither needs a name server.
     addrinfo hints{}, *list = nullptr;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;

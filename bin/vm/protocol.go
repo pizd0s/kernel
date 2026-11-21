@@ -13,6 +13,8 @@ const (
 	openedPath             = 4
 	sizeofOpened           = 40
 	sockmgrSocket          = "/dev/sockmgr/socket"
+	dnsQuery               = "/dev/dns/query"
+	dnsNameMax             = 253
 	rOk             uint32 = 128
 	rErr            uint32 = 129
 	rBackground     uint32 = 130

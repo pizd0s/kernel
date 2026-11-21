@@ -33,6 +33,12 @@ long and pointers are 32 bits and register_t is int, as on FreeBSD's
   And its m_rcvif_restore, a stub of NULL, has netisr free every packet
   it queued: m_rcvif_serialize, a stub that does nothing, keeps the
   mbuf's interface, which stays, and m_rcvif_restore gives it back.
+- its in_pcbbind_setup (in_pcb.c) leaves a socket's port 0 when none is
+  asked, for its connect to choose one whose flow RSS gives this
+  process's queue: the stack has one queue, and without the port a UDP
+  sendto of a socket never bound goes from port 0, which no answer
+  reaches, and listen of a socket never bound listens on port 0. The
+  port is chosen when the socket is bound, as FreeBSD does.
 
 And of FreeBSD's sys/kernel.h: a SYSINIT's function is called through
 sysinit_cfunc_t, with its argument, whatever its own type, and many are
@@ -383,3 +389,19 @@ net/vnet.h, called through its vnet_sysinit.
  		(arg)							\
  	};								\
  	SYSINIT(vnet_uninit_ ## ident, subsystem, order,		\
+--- a/freebsd/netinet/in_pcb.c
++++ b/freebsd/netinet/in_pcb.c
+@@ -1399,13 +1399,11 @@
+ 	}
+ 	if (*lportp != 0)
+ 		lport = *lportp;
+-#ifndef FSTACK
+ 	if (lport == 0) {
+ 		error = in_pcb_lport(inp, &laddr, &lport, cred, lookupflags);
+ 		if (error != 0)
+ 			return (error);
+ 	}
+-#endif
+ 	*laddrp = laddr.s_addr;
+ 	*lportp = lport;
+ 	if ((flags & INPBIND_FIB) != 0)

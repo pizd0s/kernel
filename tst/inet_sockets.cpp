@@ -1,16 +1,19 @@
 // The sockets of the network's family in the system, through sockmgr and
 // the card's stack: a TCP connection to a server of the host's, at
-// 192.168.127.254, a text sent and its answer read; a socket that listens
+// host.internal, 192.168.127.254, which getaddrinfo finds through dns and
+// the gateway's name server, a text sent and its answer read; a socket that listens
 // on the card's address and a connection to it, the card's own, accepted;
 // a connect that does not wait, and poll of it; epoll's watch of the socket,
 // made before connect, of sockmgr's, which sees its text, the stack's; the
-// errors of a socket on no stack.
+// errors of a socket on no stack; a name the gateway has not, and
+// gethostbyname's of one it has.
 //
 //     inet_sockets <port>
 
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdio.h>
@@ -44,14 +47,27 @@ int main(int argc, char** argv) {
     const int port = atoi(argv[1]);
     setvbuf(stdout, nullptr, _IONBF, 0);
 
-    const int s = socket(AF_INET, SOCK_STREAM, 0);
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_CANONNAME;
+    char service[16];
+    snprintf(service, sizeof service, "%d", port);
+    addrinfo* found = nullptr;
+    if (const int e = getaddrinfo("host.internal", service, &hints, &found); e != 0) {
+        printf("getaddrinfo: %s\n", gai_strerror(e));
+        return 1;
+    }
+    char text[INET_ADDRSTRLEN];
+    const auto* host = reinterpret_cast<const sockaddr_in*>(found->ai_addr);
+    printf("host.internal is %s, %s\n", inet_ntop(AF_INET, &host->sin_addr, text, sizeof text), found->ai_canonname);
+    const int s = socket(found->ai_family, found->ai_socktype, found->ai_protocol);
     check("socket", s);
-    const sockaddr_in host = at("192.168.127.254", port);
-    check("connect", connect(s, reinterpret_cast<const sockaddr*>(&host), sizeof host));
+    check("connect", connect(s, found->ai_addr, found->ai_addrlen));
+    freeaddrinfo(found);
     sockaddr_in self{};
     socklen_t length = sizeof self;
     check("getsockname", getsockname(s, reinterpret_cast<sockaddr*>(&self), &length));
-    char text[INET_ADDRSTRLEN];
     printf("connected from %s\n", inet_ntop(AF_INET, &self.sin_addr, text, sizeof text));
     check("write", int(write(s, "hello", 5)));
     char got[64] = {};
@@ -106,5 +122,10 @@ int main(int argc, char** argv) {
     close(u);
     errno = 0;
     printf("socket of AF_INET6: %d %s\n", socket(AF_INET6, SOCK_STREAM, 0) < 0 ? -1 : 0, strerror(errno));
+
+    addrinfo* none = nullptr;
+    printf("nope.internal: %s\n", gai_strerror(getaddrinfo("nope.internal", nullptr, &hints, &none)));
+    const hostent* gateway = gethostbyname("Gateway.Internal");
+    printf("gateway.internal: %s\n", gateway ? inet_ntoa(*reinterpret_cast<const in_addr*>(gateway->h_addr_list[0])) : "-");
     return 0;
 }
