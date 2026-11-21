@@ -248,10 +248,16 @@ void stopServing() {
 
 // Serves one event of the loop's: a connection to accept, a request to
 // handle, or the end of an endpoint.
-static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepted accepted) {
+static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepted accepted, Raw raw) {
     alignas(Header) static unsigned char packet[65536];
     if (e->fd < 0) {
         return; // let go of during this batch
+    }
+    if (e->raw) {
+        if (raw) {
+            raw(*e);
+        }
+        return;
     }
     if (e->listens) {
         const int connection = accept4(e->fd, nullptr, nullptr, SOCK_CLOEXEC);
@@ -302,7 +308,7 @@ static void serveEvent(int epoll, Endpoint* e, Handle handle, Gone gone, Accepte
     }
 }
 
-void serve(int epoll, Handle handle, Gone gone, Accepted accepted, Expire expire) {
+void serve(int epoll, Handle handle, Gone gone, Accepted accepted, Expire expire, Raw raw) {
     while (!stopping && watched > 0) {
         epoll_event events[16];
         const int timeout = expire ? expire() : -1;
@@ -317,7 +323,7 @@ void serve(int epoll, Handle handle, Gone gone, Accepted accepted, Expire expire
             for (int i = 0; i < n; ++i) {
                 const bool hangup = (events[i].events & (EPOLLHUP | EPOLLERR)) != 0;
                 if (hangup == (pass == 0)) {
-                    serveEvent(epoll, static_cast<Endpoint*>(events[i].data.ptr), handle, gone, accepted);
+                    serveEvent(epoll, static_cast<Endpoint*>(events[i].data.ptr), handle, gone, accepted, raw);
                 }
             }
         }

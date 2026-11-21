@@ -263,7 +263,7 @@ namespace {
 
 int main() {
     const char* nets = getenv("NETS");
-    if (!nets || strcmp(nets, "net0") != 0) {
+    if (!nets || strcmp(nets, "0") != 0) {
         printf("NETS: %s\n", nets ? nets : "none");
         return 1;
     }

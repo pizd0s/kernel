@@ -12,8 +12,9 @@ one thread, no assembly, the basic types of a machine of 32-bit words)
 and arm64's endian.h and in_cksum.h, which are the compiler's builtins and
 C; the kernel's names lib/c has too are renamed (names.h). Its host's
 side is ours, host.c for DPDK's and Linux's (memory, clocks, randomness,
-the card on the device) and inet.cpp, against lib/c's headers; wasm-ld
-links them with libc.a. fstack-wasm32.patch is what F-Stack's own files
+the card on the device), inet.cpp, the card's files of /dev, dhcp.cpp
+and stack.cpp, with the protocol's sources, against lib/c's headers;
+wasm-ld links them with libc.a. fstack-wasm32.patch is what F-Stack's own files
 take for granted of amd64 and glibc.
 
     make.py <clang> <wasm-ld> <libc-include> <libc.a> <f-stack.tar.gz> <inet.wasm>
@@ -181,7 +182,8 @@ def main():
         system = ["-isystem", str(Path(include).resolve())]
         host = [*HOST_FLAGS, "-I", str(lib), "-I", str(ROOT), *system]
         units += [(HERE / "host.c", work / "o/host.o", [*CFLAGS, *host])]
-        units += [(HERE / "inet.cpp", work / "o/inet.o", [*CXXFLAGS, *host])]
+        ours = [HERE / "inet.cpp", HERE / "dhcp.cpp", HERE / "stack.cpp", *sorted((ROOT / "lib/protocol").glob("*.cpp"))]
+        units += [(s, work / "o" / f"h{i}-{s.stem}.o", [*CXXFLAGS, *host]) for i, s in enumerate(ours)]
         wasm.compile_all(cc, units)
         subprocess.run([ld, *LINK, "-o", str(output), *(str(o) for _, o, _ in units), libc], check=True)
 

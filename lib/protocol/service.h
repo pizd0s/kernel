@@ -45,7 +45,8 @@ int readyDescriptor(int argc, char** argv, int& first);
 // or a socket that listens, whose connections the loop accepts; or one
 // whose requests are answered on it, answers, as a socket a program
 // speaks the protocol on is; or where a request that is kept is answered
-// (keep).
+// (keep); or a descriptor of no protocol, raw, whose events go to the
+// loop's raw handler, which reads it itself.
 struct Endpoint {
     int fd;
     bool channel;
@@ -54,6 +55,7 @@ struct Endpoint {
     void* of;
     bool listens = false;
     bool answers = false;
+    bool raw = false;
     Endpoint* next = nullptr; // among those let go of, the loop's
     uint64_t pos = 0;         // an open file's position: READ's and WRITE's without ioAt
     bool append = false;      // an open file's O_APPEND and O_NONBLOCK, the OPEN's, then SETFL's
@@ -125,8 +127,10 @@ using Handle = void (*)(Endpoint& e, Request& r);
 using Gone = void (*)(Endpoint& e);
 using Accepted = void (*)(Endpoint& e, int connection);
 // expire runs the service's timers that are due and is how long serve may
-// wait for the next, in milliseconds, -1 for none.
+// wait for the next, in milliseconds, -1 for none. raw hears of a raw
+// endpoint's events.
 using Expire = int (*)();
+using Raw = void (*)(Endpoint& e);
 
 // Serves the endpoints of epoll while a device's channel or any endpoint
 // is open, or until stopServing: when rootfs lets go of the devices, as
@@ -137,7 +141,8 @@ using Expire = int (*)();
 // is a question, answered on the endpoint it came on. An endpoint whose
 // other end closed goes to gone, then is closed.
 // A socket that listens has its connections accepted, each to accepted.
-// Before each wait, expire runs what is due and bounds the wait.
+// Before each wait, expire runs what is due and bounds the wait. A raw
+// endpoint's events go to raw, which reads it, the loop nothing of it.
 //
 // A request of an open file's comes on the file's endpoint and goes to
 // handle with it; where it is answered is the last of its descriptors,
@@ -145,7 +150,7 @@ using Expire = int (*)();
 // what the open lets the file do and the flags its endpoint keeps.
 //
 // A READ or a WRITE that waits is kept until handle answers it (keep).
-void serve(int epoll, Handle handle, Gone gone = nullptr, Accepted accepted = nullptr, Expire expire = nullptr);
+void serve(int epoll, Handle handle, Gone gone = nullptr, Accepted accepted = nullptr, Expire expire = nullptr, Raw raw = nullptr);
 
 // Ends serve once the events it has are handled.
 void stopServing();

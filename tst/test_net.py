@@ -7,9 +7,11 @@ answers an echo. tst/net_probe.cpp asks it, by frames alone; without
 --net there is no device. On the device runs FreeBSD's stack, inet's:
 its probe connects to a TCP server of the host's, at 192.168.127.254,
 the host's 127.0.0.1 behind vm's network, sends a text and reads the
-server's answer up to its close.
+server's answer up to its close. In the system, devfs starts inet for
+the card, which is /dev/net/0: its ctl, stats and addr, and, once "stack"
+in its ctl has the stack's lease by DHCP, iface/status.
 
-    test_net.py <vm> <net_probe> <inet>
+    test_net.py <vm> <net_probe> <inet> <rootfs>
 """
 import socket
 import subprocess
@@ -32,8 +34,43 @@ def echo(server):
         connection.sendall(b"echo: " + connection.recv(100))
 
 
+SYSTEM = """\
+ls /dev/net /dev/net/0
+cat /dev/net/0/ctl /dev/net/0/addr
+echo stack > /dev/net/0/ctl
+for i in $(seq 50); do [ -e /dev/net/0/iface/status ] && break; sleep 0.1; done
+cat /dev/net/0/ctl /dev/net/0/iface/status
+grep -c frames /dev/net/0/stats
+echo nothing > /dev/net/0/ctl
+echo stack > /dev/net/0/ctl
+:
+"""
+
+SYSTEM_WANT = """\
+/dev/net:
+0
+
+/dev/net/0:
+addr
+ctl
+stats
+stack off
+mtu 1500
+02:70:7a:64:a8:af
+stack up
+mtu 1500
+inet 192.168.127.2/24
+gateway 192.168.127.1
+dns 192.168.127.1
+lease 3600
+2
+"""
+
+SYSTEM_ERRORS = "sh: write error: Invalid argument\nsh: write error: Device or resource busy\n"
+
+
 def main():
-    vm, probe, inet = sys.argv[1:4]
+    vm, probe, inet, rootfs = sys.argv[1:5]
     r = subprocess.run([vm, "run", "--net", "--", probe], capture_output=True, text=True, timeout=120)
 
     if r.returncode != 0 or r.stdout != WANT:
@@ -58,8 +95,14 @@ def main():
         print(f"FAIL net: inet probe: exit {r.returncode}, stdout {r.stdout!r}, want {want!r}\n{r.stderr[-2000:]}")
         sys.exit(1)
 
+    r = subprocess.run([vm, "run", "--net", "--", rootfs, "-c", SYSTEM], capture_output=True, text=True, timeout=120)
+
+    if r.returncode != 0 or r.stdout != SYSTEM_WANT or r.stderr != SYSTEM_ERRORS:
+        print(f"FAIL net: the card in the system: exit {r.returncode}\n{r.stdout}\nwant\n{SYSTEM_WANT}\n{r.stderr[-2000:]}")
+        sys.exit(1)
+
     print("net: vm's network device carries Ethernet frames to gvisor-tap-vsock's gateway, which answers ARP, DHCP and ICMP; "
-          "inet's FreeBSD stack talks TCP on it to a server of the host's")
+          "inet's FreeBSD stack talks TCP on it to a server of the host's; the card is /dev/net/0, its stack up by its ctl")
 
 
 if __name__ == "__main__":

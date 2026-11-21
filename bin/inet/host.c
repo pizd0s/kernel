@@ -29,6 +29,7 @@
 #include "host.h"
 
 struct ff_config ff_global_cfg;
+struct InetCounts inetCounts;
 
 void panic(const char* format, ...) __attribute__((noreturn));
 
@@ -428,7 +429,12 @@ int ff_dpdk_if_send(struct ff_dpdk_if_context* ctx, void* m, int total) {
         return -1;
     }
     ff_mbuf_free(m);
-    send(card, frame, (size_t)total, MSG_DONTWAIT);
+    if (send(card, frame, (size_t)total, MSG_DONTWAIT) == total) {
+        ++inetCounts.outFrames;
+        inetCounts.outBytes += (uint64_t)total;
+    } else {
+        ++inetCounts.dropped;
+    }
     return 0;
 }
 
@@ -450,8 +456,11 @@ int inetReceive(void) {
             free(b);
             return n == 0 ? -1 : frames;
         }
+        ++inetCounts.inFrames;
+        inetCounts.inBytes += (uint64_t)n;
         void* m = ff_mbuf_gethdr(b, (uint16_t)n, b, (uint16_t)n, 0);
         if (!m) {
+            ++inetCounts.dropped;
             free(b);
             continue;
         }

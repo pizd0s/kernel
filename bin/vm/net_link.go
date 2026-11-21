@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	netName      = "net0"
+	netName      = "0"
 	netMTU       = 1500
 	netBuffer    = 1 << 17
 	netSubnet    = "192.168.127.0/24"

@@ -651,8 +651,8 @@ fuse2fs_exe = executable("fuse2fs_exe", fuse2fs, "$(B)/bin/fuse2fs/fuse2fs")
 inet = command(
     name="inet",
     inputs=["$(S)/bin/inet/make.py", "$(S)/bin/inet/fstack-wasm32.patch", "$(S)/bin/inet/names.h", "$(S)/bin/inet/glue.c",
-            "$(S)/bin/inet/host.c", "$(S)/bin/inet/host.h", "$(S)/bin/inet/inet.cpp", *build.glob("$(S)/bin/inet/machine/*.h"),
-            "$(S)/dev/wasm.py", *LIBC_HEADERS],
+            "$(S)/bin/inet/host.c", *build.glob("$(S)/bin/inet/*.h"), *build.glob("$(S)/bin/inet/*.cpp"),
+            *build.glob("$(S)/bin/inet/machine/*.h"), *PROTOCOL_SOURCES, *PROTOCOL_HEADERS, "$(S)/dev/wasm.py", *LIBC_HEADERS],
     outputs=["$(B)/bin/inet/inet.wasm"],
     deps=[libc, fstack_tarball],
     cmd=["python3", "$(S)/bin/inet/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], fstack_tarball.outputs[0],
@@ -661,6 +661,7 @@ inet = command(
     color="cyan",
 )
 inet_exe = executable("inet_exe", inet, "$(B)/bin/inet/inet")
+inet_pkg = package("bin/inet", ["--file", "bin/inet", inet_exe.outputs[0]], deps=[inet_exe])
 fuse2fs_pkg = package("bin/fuse2fs", ["--file", "bin/fuse2fs", fuse2fs_exe.outputs[0]], deps=[fuse2fs_exe])
 
 # The system's own /etc: its message of the day and its users, root alone.
@@ -673,7 +674,7 @@ base_etc = package("etc/base", ["--tree", "etc", "$(S)/bin/rootfs/etc"], inputs=
 # each module as it is executed. An image is packages and their realm
 # (bin/rootfs/image.py). The base system has busybox, the tools and
 # fuse2fs: its rootfs runs python's freezer as python builds.
-BASE = [busybox_pkg, tools_pkg, fuse2fs_pkg, base_etc]
+BASE = [busybox_pkg, tools_pkg, fuse2fs_pkg, inet_pkg, base_etc]
 rootfs_module = command(
     name="rootfs_module",
     inputs=["$(S)/bin/rootfs/rootfs.cpp", "$(S)/lib/protocol/protocol.cpp", "$(S)/lib/protocol/protocol.h", "$(S)/bin/rootfs/make.py",
@@ -1178,7 +1179,7 @@ APPLICATION_TESTED = {
     "devices": [vm, rootfs, devices_service],
     "disks": [vm, rootfs],
     "mounts": [vm, rootfs],
-    "net": [vm, net_probe, inet_exe],
+    "net": [vm, net_probe, inet_exe, rootfs],
     "watchdir": [vm, rootfs, watch_dir],
     "unix_sockets": [vm, rootfs, unix_sockets],
     "vfs": [vm, rootfs],

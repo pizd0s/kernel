@@ -12,10 +12,11 @@
 // unlinked. A device's name may be in a directory of /dev, pts/0: the
 // directory comes with the first device in it and goes with the last.
 // devfs starts the services of the system's devices, /bin/devices,
-// /bin/pty and /bin/blk for each disk vm gave the system, and ends when
-// rootfs lets go of its channel.
+// /bin/pty, /bin/blk for each disk vm gave the system and /bin/inet for
+// each card of its network, named net/<name>, and ends when rootfs lets
+// go of its channel.
 //
-//     devfs [-r fd] <channel> [<disk> <fd>]...
+//     devfs [-r fd] <channel> [<disk> <fd>]... [net/<name> <fd>]...
 //
 // -r: a descriptor to close once the devices are there, which the
 // services get too: rootfs starts the shell when the last holder has.
@@ -829,7 +830,7 @@ int devfsMain(int argc, char** argv) {
     int at;
     const int ready = readyDescriptor(argc, argv, at);
     if (argc - at < 1 || (argc - at - 1) % 2 != 0) {
-        dprintf(STDERR_FILENO, "usage: devfs [-r fd] <channel> [<disk> <fd>]...\n");
+        dprintf(STDERR_FILENO, "usage: devfs [-r fd] <channel> [<disk> <fd>]... [net/<name> <fd>]...\n");
         return 2;
     }
     const int channel = atoi(argv[at]);
@@ -864,10 +865,17 @@ int devfsMain(int argc, char** argv) {
     char* const ptyArgv[] = {ptyName, option, readyText, nullptr};
     char* const barePty[] = {ptyName, nullptr};
     start("/bin/pty", ready >= 0 ? ptyArgv : barePty, -1);
+    char inetName[] = "inet";
     for (int i = at + 1; i < argc; i += 2) {
-        char* const blkArgv[] = {blkName, option, readyText, argv[i], argv[i + 1], nullptr};
-        char* const bareBlk[] = {blkName, argv[i], argv[i + 1], nullptr};
-        start("/bin/blk", ready >= 0 ? blkArgv : bareBlk, atoi(argv[i + 1]));
+        if (strncmp(argv[i], "net/", 4) == 0) {
+            char* const inetArgv[] = {inetName, option, readyText, argv[i] + 4, argv[i + 1], nullptr};
+            char* const bareInet[] = {inetName, argv[i] + 4, argv[i + 1], nullptr};
+            start("/bin/inet", ready >= 0 ? inetArgv : bareInet, atoi(argv[i + 1]));
+        } else {
+            char* const blkArgv[] = {blkName, option, readyText, argv[i], argv[i + 1], nullptr};
+            char* const bareBlk[] = {blkName, argv[i], argv[i + 1], nullptr};
+            start("/bin/blk", ready >= 0 ? blkArgv : bareBlk, atoi(argv[i + 1]));
+        }
         close(atoi(argv[i + 1]));
     }
     if (ready >= 0) {

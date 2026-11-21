@@ -3336,8 +3336,9 @@ static int serverIn(int disk) {
 // have it, and when the last one has, the shell starts (booted).
 // /bin/tmpfs is /run, its channel its descriptor 3. /bin/devfs is /dev,
 // its channel its descriptor 4, and it gets the disks vm gave us but the
-// image, our descriptors after 2, in order, named by DISKS: its 5 and on,
-// and it starts their services and every system's devices. Each is
+// image, our descriptors after 2, in order, named by DISKS, and the cards
+// of the network after them, named by NETS: its 5 and on, and it starts
+// their services and every system's devices. Each is
 // mounted before it starts: what it starts finds it there.
 static Task boot() {
     int ends[2];
@@ -3350,11 +3351,17 @@ static Task boot() {
             fatal("rootfs: socketpair: errno %d", errno);
         }
     }
-    // The disks are no one's but devfs's.
+    // The disks are no one's but devfs's, and so are the network's cards,
+    // after them, which it names net/<name>.
     char disks[256] = {};
     if (const char* given = getenv("DISKS")) {
         strncpy(disks, given, sizeof disks - 1);
     }
+    char nets[256] = {};
+    if (const char* given = getenv("NETS")) {
+        strncpy(nets, given, sizeof nets - 1);
+    }
+    char cards[maxKept][NAME_MAX + 5];
     int kept[maxKept] = {ends[1], dev[1]};
     char numbers[maxKept][12];
     char* argv[3 + 2 * maxKept];
@@ -3379,6 +3386,15 @@ static Task boot() {
         kept[count] = disk;
         snprintf(numbers[count], sizeof numbers[count], "%d", 3 + count);
         argv[args++] = name;
+        argv[args++] = numbers[count];
+        ++count;
+    }
+    for (char* name = strtok(nets, " "); name && count < maxKept; name = strtok(nullptr, " "), ++disk) {
+        fcntl(disk, F_SETFD, FD_CLOEXEC);
+        kept[count] = disk;
+        snprintf(numbers[count], sizeof numbers[count], "%d", 3 + count);
+        snprintf(cards[count], sizeof cards[count], "net/%s", name);
+        argv[args++] = cards[count];
         argv[args++] = numbers[count];
         ++count;
     }
