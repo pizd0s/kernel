@@ -39,6 +39,11 @@ long and pointers are 32 bits and register_t is int, as on FreeBSD's
   sendto of a socket never bound goes from port 0, which no answer
   reaches, and listen of a socket never bound listens on port 0. The
   port is chosen when the socket is bound, as FreeBSD does.
+- its clock ticks hz times a second, ff_hardclock, whether or not a
+  callout is due. ff_hardclock_ticks runs the ticks that went by at once,
+  and ff_callout_next is how many ticks until the first callout, -1 for
+  none, of the earliest time callout_cc_add gave, the wheel looked over
+  only once that is past: the loop sleeps until then.
 
 And of FreeBSD's sys/kernel.h: a SYSINIT's function is called through
 sysinit_cfunc_t, with its argument, whatever its own type, and many are
@@ -310,6 +315,83 @@ net/vnet.h, called through its vnet_sysinit.
  int
  intr_event_bind(struct intr_event *ie, int cpu)
  {
+--- a/lib/ff_kern_timeout.c
++++ b/lib/ff_kern_timeout.c
+@@ -197,6 +197,14 @@
+ 
+ static __thread int timeout_cpu;
+ 
++/*
++ * The earliest time a callout of the wheel's may have, as callout_cc_add
++ * sets them: no later than the first of them, sooner when that one went;
++ * ff_callout_next looks the wheel over once the time is past.
++ */
++static __thread int cc_earliest;
++static __thread int cc_earliest_known;
++
+ void ff_callout_thread_init(void);
+ static void callout_cpu_init(struct callout_cpu *cc, int cpu);
+ static void softclock_call_cc(struct callout *c, struct callout_cpu *cc,
+@@ -397,6 +405,10 @@
+         c->c_iflags |= CALLOUT_DIRECT;
+     c->c_func = func;
+     c->c_time = ticks + to_ticks;
++    if (!cc_earliest_known || c->c_time - cc_earliest < 0) {
++        cc_earliest = c->c_time;
++        cc_earliest_known = 1;
++    }
+     bucket = callout_get_bucket(c->c_time);
+     LIST_INSERT_HEAD(&cc->cc_callwheel[bucket], c, c_links.le);
+     if (cc->cc_bucket == bucket)
+@@ -1246,6 +1258,48 @@
+ #ifdef FSTACK
+ void ff_hardclock(void);
+ void ff_hardclock_worker(void);
++void ff_hardclock_ticks(int n);
++int ff_callout_next(void);
++
++/*
++ * The clock of a loop that does not tick when nothing is due: n ticks at
++ * once, the callouts of them run, and how many ticks until the first
++ * callout runs, or -1 for none. A callout of time t runs at the tick after
++ * it, as softclock runs those of the ticks before ticks.
++ */
++void
++ff_hardclock_ticks(int n)
++{
++    if (n <= 0)
++        return;
++    atomic_add_int(&ticks, n);
++    callout_tick();
++    tc_ticktock(n * ((hz + 999)/1000));
++    cpu_tick_calibration();
++}
++
++int
++ff_callout_next(void)
++{
++    struct callout_cpu *cc = CC_SELF();
++    struct callout *c;
++    int i;
++
++    if (!cc_earliest_known || cc_earliest - ticks < 0) {
++        cc_earliest_known = 0;
++        for (i = 0; i < callwheelsize; i++) {
++            LIST_FOREACH(c, &cc->cc_callwheel[i], c_links.le) {
++                if (!cc_earliest_known || c->c_time - cc_earliest < 0) {
++                    cc_earliest = c->c_time;
++                    cc_earliest_known = 1;
++                }
++            }
++        }
++    }
++    if (!cc_earliest_known)
++        return (-1);
++    return (cc_earliest - ticks >= 0 ? cc_earliest - ticks + 1 : 1);
++}
+ 
+ void
+ ff_hardclock(void)
 --- a/freebsd/sys/kernel.h
 +++ b/freebsd/sys/kernel.h
 @@ -278,8 +278,17 @@

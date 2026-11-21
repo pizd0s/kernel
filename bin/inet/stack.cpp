@@ -14,7 +14,8 @@ extern "C" {
 #include "ff_veth.h"
 
 int ff_freebsd_init(void);
-void ff_hardclock(void);
+void ff_hardclock_ticks(int n);
+int ff_callout_next(void);
 void ff_update_current_ts(void);
 void ff_tcp_hpts_softclock(void);
 void ff_swi_net_excute(void);
@@ -29,7 +30,9 @@ namespace {
     char netmask[INET_ADDRSTRLEN];
     char broadcast[INET_ADDRSTRLEN];
     char gateway[INET_ADDRSTRLEN];
-    long long nextTick;
+    bool started;
+    long long start; // ms the ticks are counted from
+    long long ticked;
 
     long long nowMs() {
         timespec ts;
@@ -67,10 +70,24 @@ void stackStart(int card, const char* named, const uint8_t* mac, const Lease& le
         fprintf(stderr, "inet: the card does not attach\n");
         exit(1);
     }
-    nextTick = nowMs() + 1000 / hz;
+    start = nowMs();
+    started = true;
+}
+
+void stackClock() {
+    if (!started) {
+        return;
+    }
+    const long long due = (nowMs() - start) / (1000 / hz);
+    if (due > ticked) {
+        ff_hardclock_ticks(int(due - ticked));
+        ticked = due;
+        ff_update_current_ts();
+    }
 }
 
 void stackFrames() {
+    stackClock();
     if (inetReceive() < 0) {
         fprintf(stderr, "inet: the card is gone\n");
         exit(1);
@@ -80,12 +97,13 @@ void stackFrames() {
 }
 
 int stackTicks() {
-    for (const long long now = nowMs(); now >= nextTick; nextTick += 1000 / hz) {
-        ff_hardclock();
-        ff_update_current_ts();
-    }
+    stackClock();
     ff_tcp_hpts_softclock();
     ff_swi_net_excute();
-    const long long left = nextTick - nowMs();
+    const int next = ff_callout_next();
+    if (next < 0) {
+        return -1;
+    }
+    const long long left = start + (ticked + next) * (1000 / hz) - nowMs();
     return int(left > 0 ? left : 0);
 }

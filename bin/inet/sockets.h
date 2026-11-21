@@ -13,7 +13,8 @@
 //
 // socketsStart makes the kqueue, of the loop's epoll; socketsHand answers
 // a HAND; socketsHandle and socketsGone are serve's handle and gone of the
-// sockets' endpoints and of the calls they keep, false of another's;
+// sockets' endpoints and of the calls they keep, false of another's; each
+// runs the stack's clock first (stackClock);
 // socketsTurn, after each turn of the stack, answers what is ready and
 // tells the kernel the sockets' readiness.
 void socketsStart(int epoll);

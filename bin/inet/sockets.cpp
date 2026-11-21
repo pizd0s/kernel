@@ -1,4 +1,5 @@
 #include <bin/inet/sockets.h>
+#include <bin/inet/stack.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -374,6 +375,7 @@ void socketsStart(int loop) {
 }
 
 void socketsHand(Request& r) {
+    stackClock();
     const unsigned char* at = r.body;
     const unsigned char* stop = r.body + r.size;
     uint32_t domain, type, protocol, nonblock, arg, options;
@@ -442,6 +444,7 @@ void socketsHand(Request& r) {
 }
 
 bool socketsHandle(Endpoint& e, Request& r) {
+    stackClock();
     int side;
     if (Socket* s = keeperOf(e.of, side)) {
         if (r.h.op == opCancel) {
@@ -471,6 +474,7 @@ bool socketsHandle(Endpoint& e, Request& r) {
 }
 
 bool socketsGone(Endpoint& e) {
+    stackClock();
     int side;
     if (Socket* s = keeperOf(e.of, side)) {
         // Who asked went: serve closes the endpoint itself.

@@ -17,7 +17,7 @@
 // and the stack joins sockmgr (bin/tools/sockmgr), when there is one: of
 // sockmgr/stack, a STACK of its state, and the HANDs of sockets sockmgr
 // gives it (sockets.cpp). The stack keeps its time by ticks of hz a
-// second, between the frames.
+// second, run as they are due: none while nothing is.
 //
 //     inet [-r fd] <name> <fd>
 //     inet probe <address> <port> <text>
