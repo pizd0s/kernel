@@ -20,6 +20,8 @@ type Pipe struct {
 	mu          sync.Mutex
 	ch          MsgChannel[*Packet]
 	tail        *Packet
+	reading     *Packet
+	spare       *Packet
 	front       []byte
 	bytes       int
 	readers     int
@@ -83,7 +85,7 @@ func (pp *Pipe) leave(reads, writes bool) (gone bool) {
 			for _, ok := pp.ch.take(); ok; _, ok = pp.ch.take() {
 			}
 
-			pp.front, pp.tail, pp.bytes = nil, nil, 0
+			pp.front, pp.tail, pp.reading, pp.spare, pp.bytes = nil, nil, nil, nil, 0
 		}
 	}
 
@@ -124,6 +126,11 @@ func (pp *Pipe) put(chunk []byte) (full, gone bool) {
 
 	if t := pp.tail; t != nil && len(t.data)+len(chunk) <= pipeChunk {
 		t.data = append(t.data, chunk...)
+	} else if t = pp.spare; t != nil {
+		pp.spare = nil
+		*t = Packet{data: append(t.data[:0], chunk...)}
+		pp.ch.put(t)
+		pp.tail = t
 	} else {
 		t = &Packet{data: bytes.Clone(chunk)}
 		pp.ch.put(t)
@@ -157,13 +164,17 @@ func (pp *Pipe) take(b []byte) (n int, eof bool) {
 				pp.tail = nil
 			}
 
-			pp.front = pk.data
+			pp.front, pp.reading = pk.data, pk
 		}
 
 		c := copy(b[n:], pp.front)
 
 		pp.front = pp.front[c:]
 		n += c
+
+		if len(pp.front) == 0 && pp.reading != nil {
+			pp.spare, pp.reading = pp.reading, nil
+		}
 	}
 
 	if n > 0 {
