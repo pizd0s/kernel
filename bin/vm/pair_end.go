@@ -732,8 +732,8 @@ func (e *PairEnd) recordLock(p *Process, cmd int, lk *Flock) error {
 	return EBADF
 }
 
-func (e *PairEnd) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
-	return Packet{}, false, errUnserved
+func (e *PairEnd) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	return false, errUnserved
 }
 
 func (e *PairEnd) token() (uint64, error) {

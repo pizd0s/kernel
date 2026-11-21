@@ -13004,20 +13004,24 @@ func (p *Process) job(fn func(group uint32) (int, error)) (int, error) {
 	}
 }
 
-func (p *Process) vfs(d Object, op, arg uint32, body []byte, files ...Object) (Packet, error) {
+func (p *Process) request(o Object, r Request) error {
+	_, err := o.call(p, r, p.group(), false)
+
+	if err == errUnserved {
+		err = r.unserved()
+	}
+
+	return err
+}
+
+func (p *Process) vfsRoot(d Object) uint64 {
 	id, _ := d.token()
 
 	if root, err := p.root.token(); err == nil {
 		id = root
 	}
 
-	pk, _, err := d.call(p, op, arg, p.group(), append(binary.LittleEndian.AppendUint64(make([]byte, 0, 8+len(body)), id), body...), files, false)
-
-	if err == errUnserved {
-		err = ENOTDIR
-	}
-
-	return pk, err
+	return id
 }
 
 func flagOf(follow bool) uint32 {
@@ -13028,62 +13032,27 @@ func flagOf(follow bool) uint32 {
 	return AT_SYMLINK_NOFOLLOW
 }
 
-func twoPaths(to Object, old, new string) ([]byte, error) {
-	id, err := to.token()
-
-	if err != nil {
-		return nil, err
-	}
-
-	body := make([]byte, 8, 8+len(old)+1+len(new))
-
-	binary.LittleEndian.PutUint64(body, id)
-
-	return append(append(append(body, old...), 0), new...), nil
-}
-
 func (p *Process) dirOpen(d Object, path string, flags int, mode uint32) (Object, error) {
 	if p.chaosFail("openat") {
 		return nil, EIO
 	}
 
-	body := make([]byte, 4, 4+len(path))
+	r := VfsOpen{root: p.vfsRoot(d), path: path, flags: flags, mode: mode}
 
-	binary.LittleEndian.PutUint32(body, mode)
-
-	pk, err := p.vfs(d, vOpen, uint32(flags), append(body, path...))
-
-	if err != nil {
+	if err := p.request(d, &r); err != nil {
 		return nil, err
 	}
 
-	if pk.arg&openControlling != 0 {
-		dropFiles(pk.files)
-
+	switch {
+	case r.controlling:
 		return p.openControlling(flags)
+	case r.fifo:
+		return p.openFifo(&r.st, flags)
+	case r.terminal && flags&O_NOCTTY == 0:
+		p.acquire(r.file)
 	}
 
-	if len(pk.files) == 0 {
-		var st Stat
-
-		if err := decodeStat(pk.data, &st); err != nil || st.Mode&S_IFMT != S_IFIFO {
-			return nil, EIO
-		}
-
-		return p.openFifo(&st, flags)
-	}
-
-	obj, terminal, err := p.opened(&pk)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if terminal && flags&O_NOCTTY == 0 {
-		p.acquire(obj)
-	}
-
-	return obj, nil
+	return r.file, nil
 }
 
 func (p *Process) dirStat(d Object, path string, follow bool, st *Stat) error {
@@ -13091,219 +13060,125 @@ func (p *Process) dirStat(d Object, path string, follow bool, st *Stat) error {
 		return EIO
 	}
 
-	arg := uint32(0)
+	r := VfsStat{root: p.vfsRoot(d), path: path, follow: follow}
+	err := p.request(d, &r)
 
-	if follow {
-		arg = 1
-	}
+	*st = r.st
 
-	pk, err := p.vfs(d, vStat, arg, []byte(path))
-
-	if err != nil {
-		return err
-	}
-
-	return decodeStat(pk.data, st)
+	return err
 }
 
 func (p *Process) dirReadlink(d Object, path string) (string, error) {
-	pk, err := p.vfs(d, vReadlink, 0, []byte(path))
+	r := VfsReadlink{root: p.vfsRoot(d), path: path}
+	err := p.request(d, &r)
 
-	if err != nil {
-		return "", err
-	}
-
-	return string(pk.data), nil
+	return r.target, err
 }
 
 func (p *Process) dirMkdir(d Object, path string, mode uint32) error {
-	_, err := p.vfs(d, vMkdir, mode, []byte(path))
-
-	return err
+	return p.request(d, &VfsMkdir{root: p.vfsRoot(d), path: path, mode: mode})
 }
 
 func (p *Process) dirMknod(d Object, path string, mode uint32) error {
-	_, err := p.vfs(d, vMknod, mode, []byte(path))
-
-	return err
+	return p.request(d, &VfsMknod{root: p.vfsRoot(d), path: path, mode: mode})
 }
 
 func (p *Process) dirSymlink(d Object, target, path string) error {
-	_, err := p.vfs(d, vSymlink, 0, append(append([]byte(target), 0), path...))
-
-	return err
+	return p.request(d, &VfsSymlink{root: p.vfsRoot(d), target: target, path: path})
 }
 
 func (p *Process) dirUnlink(d Object, path string, dir bool) error {
-	flags := uint32(0)
-
-	if dir {
-		flags = AT_REMOVEDIR
-	}
-
-	_, err := p.vfs(d, vUnlink, flags, []byte(path))
-
-	return err
+	return p.request(d, &VfsUnlink{root: p.vfsRoot(d), path: path, dir: dir})
 }
 
 func (p *Process) dirRename(d Object, old string, to Object, new string) error {
-	body, err := twoPaths(to, old, new)
+	id, err := to.token()
 
-	if err == nil {
-		_, err = p.vfs(d, vRename, 0, body)
+	if err != nil {
+		return err
 	}
 
-	return err
+	return p.request(d, &VfsRename{root: p.vfsRoot(d), old: old, to: id, new: new})
 }
 
 func (p *Process) dirLink(d Object, old string, to Object, new string, follow bool) error {
-	body, err := twoPaths(to, old, new)
-	arg := uint32(0)
+	id, err := to.token()
 
-	if follow {
-		arg = 1
+	if err != nil {
+		return err
 	}
 
-	if err == nil {
-		_, err = p.vfs(d, vLink, arg, body)
-	}
-
-	return err
+	return p.request(d, &VfsLink{root: p.vfsRoot(d), old: old, to: id, new: new, follow: follow})
 }
 
 func (p *Process) dirChmod(d Object, path string, mode uint32, follow bool) error {
-	body := make([]byte, 4, 4+len(path))
-
-	binary.LittleEndian.PutUint32(body, flagOf(follow))
-
-	_, err := p.vfs(d, vChmod, mode, append(body, path...))
-
-	return err
+	return p.request(d, &VfsChmod{root: p.vfsRoot(d), path: path, mode: mode, follow: follow})
 }
 
 func (p *Process) dirChown(d Object, path string, uid, gid int, follow bool) error {
-	body := make([]byte, 12, 12+len(path))
-
-	binary.LittleEndian.PutUint32(body, flagOf(follow))
-	binary.LittleEndian.PutUint32(body[4:], uint32(uid))
-	binary.LittleEndian.PutUint32(body[8:], uint32(gid))
-
-	_, err := p.vfs(d, vChown, 0, append(body, path...))
-
-	return err
+	return p.request(d, &VfsChown{root: p.vfsRoot(d), path: path, uid: uid, gid: gid, follow: follow})
 }
 
 func (p *Process) dirUtimes(d Object, path string, ts []Timespec, follow bool) error {
-	when, times := whens(ts)
-	body := make([]byte, 4, 4+len(times)+len(path))
-
-	binary.LittleEndian.PutUint32(body, flagOf(follow))
-
-	_, err := p.vfs(d, vUtimes, when, append(append(body, times...), path...))
-
-	return err
+	return p.request(d, &VfsUtimes{root: p.vfsRoot(d), path: path, ts: ts, follow: follow})
 }
 
 func (p *Process) dirTruncate(d Object, path string, size int64) error {
-	body := make([]byte, 8, 8+len(path))
-
-	binary.LittleEndian.PutUint64(body, uint64(size))
-
-	_, err := p.vfs(d, vTruncate, 0, append(body, path...))
-
-	return err
+	return p.request(d, &VfsTruncate{root: p.vfsRoot(d), path: path, size: size})
 }
 
 func (p *Process) dirStatfs(d Object, path string, st *Statfs) error {
-	pk, err := p.vfs(d, vStatfs, 0, []byte(path))
+	r := VfsStatfs{root: p.vfsRoot(d), path: path}
+	err := p.request(d, &r)
 
-	if err != nil {
-		return err
-	}
+	*st = r.st
 
-	return decodeStatfs(pk.data, st)
+	return err
 }
 
 func (p *Process) dirRealpath(d Object, path string) (string, error) {
-	pk, err := p.vfs(d, vRealpath, 0, []byte(path))
+	r := VfsRealpath{root: p.vfsRoot(d), path: path}
+	err := p.request(d, &r)
 
-	if err != nil {
-		return "", err
-	}
-
-	return string(pk.data), nil
+	return r.out, err
 }
 
 func (p *Process) dirPath(d Object) (string, error) {
-	pk, err := p.vfs(d, vPath, 0, nil)
+	r := VfsPath{root: p.vfsRoot(d)}
+	err := p.request(d, &r)
 
-	if err != nil {
-		return "", err
-	}
-
-	return string(pk.data), nil
+	return r.out, err
 }
 
 func (p *Process) dirMount(d Object, target, source string, conn Object) error {
-	body := append(append([]byte(target), 0), source...)
-
-	if conn != nil {
-		_, err := p.vfs(d, vMount, 0, body, conn)
-
-		return err
-	}
-
-	_, err := p.vfs(d, vMount, 0, body)
-
-	return err
+	return p.request(d, &VfsMount{root: p.vfsRoot(d), target: target, source: source, conn: conn})
 }
 
 func (p *Process) dirBind(d Object, path string, mode uint32, held Object) error {
-	_, err := p.vfs(d, vBind, mode, []byte(path), held)
-
-	return err
+	return p.request(d, &VfsBind{root: p.vfsRoot(d), path: path, mode: mode, held: held})
 }
 
 func (p *Process) dirConnect(d Object, path string) (Object, error) {
-	pk, err := p.vfs(d, vConnect, 0, []byte(path))
+	r := VfsConnect{root: p.vfsRoot(d), path: path}
+	err := p.request(d, &r)
 
-	if err != nil {
-		return nil, err
-	}
-
-	if len(pk.files) == 0 {
-		return nil, ECONNREFUSED
-	}
-
-	return pk.files[0], nil
+	return r.file, err
 }
 
 func (p *Process) dirUnmount(d Object, path string, flags uint32) error {
-	_, err := p.vfs(d, vUnmount, flags, []byte(path))
-
-	return err
+	return p.request(d, &VfsUnmount{root: p.vfsRoot(d), path: path, flags: flags})
 }
 
-func (p *Process) tty(t Object, op, arg uint32, body []byte) (Packet, error) {
-	pk, _, err := t.call(p, op, arg, p.group(), body, nil, false)
-
-	if err == errUnserved {
-		err = ENOTTY
-	}
-
-	return pk, err
-}
-
-func (p *Process) ttyChange(t Object, op, arg uint32, body []byte, waits bool) error {
+func (p *Process) ttyChange(t Object, r Request, waits bool) error {
 	_, err := p.job(func(group uint32) (int, error) {
 		for {
-			_, restart, err := t.call(p, op, arg, group, body, nil, waits)
+			cancelled, err := t.call(p, r, group, waits)
 
 			switch {
-			case waits && err == EINTR && restart:
+			case waits && err == EINTR && cancelled && !p.interrupts(true):
 				continue
 			case err == errUnserved:
-				err = ENOTTY
+				err = r.unserved()
 			}
 
 			return 0, err
@@ -13314,127 +13189,82 @@ func (p *Process) ttyChange(t Object, op, arg uint32, body []byte, waits bool) e
 }
 
 func (p *Process) ttyGetattr(t Object) ([]byte, error) {
-	pk, err := p.tty(t, rTcgetattr, 0, nil)
+	r := TtyGetattr{}
+	err := p.request(t, &r)
 
-	if err == nil && len(pk.data) != sizeofTermios {
-		err = EIO
-	}
-
-	return bytes.Clone(pk.data), err
+	return r.termios, err
 }
 
 func (p *Process) ttySetattr(t Object, when uint32, termios []byte) error {
-	return p.ttyChange(t, rTcsetattr, when, termios, when != 0)
+	return p.ttyChange(t, &TtySetattr{when: when, termios: termios}, when != 0)
 }
 
 func (p *Process) ttyFlush(t Object, queue uint32) error {
-	return p.ttyChange(t, rTcflush, queue, nil, false)
+	return p.ttyChange(t, &TtyFlush{queue: queue}, false)
 }
 
 func (p *Process) ttyFlow(t Object, action uint32) error {
-	return p.ttyChange(t, rTcflow, action, nil, false)
+	return p.ttyChange(t, &TtyFlow{action: action}, false)
 }
 
 func (p *Process) ttyDrain(t Object) error {
-	return p.ttyChange(t, rTcdrain, 0, nil, true)
+	return p.ttyChange(t, &TtyDrain{}, true)
 }
 
 func (p *Process) ttyBreak(t Object) error {
-	return p.ttyChange(t, rTcsbrk, 0, nil, false)
+	return p.ttyChange(t, &TtyBreak{}, false)
 }
 
 func (p *Process) ttyWindow(t Object) ([]byte, error) {
-	pk, err := p.tty(t, rGetWinsize, 0, nil)
+	r := TtyWindow{}
+	err := p.request(t, &r)
 
-	if err == nil && len(pk.data) != sizeofWinsize {
-		err = EIO
-	}
-
-	return bytes.Clone(pk.data), err
+	return r.size, err
 }
 
 func (p *Process) ttySetWindow(t Object, size []byte) error {
-	_, err := p.tty(t, rSetWinsize, 0, size)
-
-	return err
+	return p.request(t, &TtySetWindow{size: size})
 }
 
 func (p *Process) ttyPending(t Object) (uint32, error) {
-	return p.ttyCount(t, rInq)
+	r := TtyQueue{}
+	err := p.request(t, &r)
+
+	return r.n, err
 }
 
 func (p *Process) ttyUnsent(t Object) (uint32, error) {
-	return p.ttyCount(t, rOutq)
+	r := TtyQueue{out: true}
+	err := p.request(t, &r)
+
+	return r.n, err
 }
 
 func (p *Process) ttyForeground(t Object) (uint32, uint32, error) {
-	pk, err := p.tty(t, rGetPgrp, 0, nil)
+	r := TtyForeground{}
+	err := p.request(t, &r)
 
-	if err == nil && len(pk.data) != 8 {
-		err = EIO
-	}
-
-	if err != nil {
-		return 0, 0, err
-	}
-
-	return binary.LittleEndian.Uint32(pk.data), binary.LittleEndian.Uint32(pk.data[4:]), nil
+	return r.group, r.sid, err
 }
 
 func (p *Process) ttySetForeground(t Object, pgrp uint32) error {
-	return p.ttyChange(t, rSetPgrp, pgrp, nil, false)
+	return p.ttyChange(t, &TtySetForeground{group: pgrp}, false)
 }
 
 func (p *Process) ttyControl(t Object, how uint32) error {
-	_, err := p.tty(t, rSetCtty, how, nil)
-
-	return err
+	return p.request(t, &TtyControl{how: how})
 }
 
 func (p *Process) ttyReopen(t Object, flags int) (Object, error) {
-	pk, err := p.tty(t, rOpen, uint32(flags), nil)
+	r := TtyReopen{flags: flags}
+	err := p.request(t, &r)
 
-	if err != nil {
-		return nil, err
-	}
-
-	if len(pk.files) != 1 {
-		dropFiles(pk.files)
-
-		return nil, EIO
-	}
-
-	obj, _, err := p.opened(&pk)
-
-	return obj, err
+	return r.file, err
 }
 
 func (p *Process) ttyName(t Object, peer bool) (string, error) {
-	arg := uint32(0)
+	r := TtyName{peer: peer}
+	err := p.request(t, &r)
 
-	if peer {
-		arg = 1
-	}
-
-	pk, err := p.tty(t, rName, arg, nil)
-
-	if err != nil {
-		return "", err
-	}
-
-	return string(pk.data), nil
-}
-
-func (p *Process) ttyCount(t Object, op uint32) (uint32, error) {
-	pk, err := p.tty(t, op, 0, nil)
-
-	if err == nil && len(pk.data) != 4 {
-		err = EIO
-	}
-
-	if err != nil {
-		return 0, err
-	}
-
-	return binary.LittleEndian.Uint32(pk.data), nil
+	return r.name, err
 }

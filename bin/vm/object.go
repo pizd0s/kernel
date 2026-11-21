@@ -47,7 +47,7 @@ type Object interface {
 	flock(p *Process, op int) error
 	recordLock(p *Process, cmd int, lk *Flock) error
 
-	call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error)
+	call(p *Process, r Request, group uint32, waits bool) (bool, error)
 	token() (uint64, error)
 	device() FileKey
 

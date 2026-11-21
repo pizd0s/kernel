@@ -3,7 +3,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -192,23 +191,27 @@ func (c *ConsoleEnd) recordLock(p *Process, cmd int, lk *Flock) error {
 	return EBADF
 }
 
-func (c *ConsoleEnd) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
-	switch op {
-	case rGetWinsize:
+func (c *ConsoleEnd) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	switch r := r.(type) {
+	case *TtyWindow:
 		w, err := hostWindow()
 
-		return Packet{data: w[:]}, false, err
-	case rGetPgrp:
-		return Packet{data: binary.LittleEndian.AppendUint64(nil, uint64(uint32(p.k.foreground())))}, false, nil
-	case rSetPgrp:
+		r.size = w[:]
+
+		return false, err
+	case *TtyForeground:
+		r.group = uint32(p.k.foreground())
+
+		return false, nil
+	case *TtySetForeground:
 		p.k.mu.Lock()
-		p.k.fg = int32(arg)
+		p.k.fg = int32(r.group)
 		p.k.mu.Unlock()
 
-		return Packet{}, false, nil
+		return false, nil
 	}
 
-	return Packet{}, false, errUnserved
+	return false, errUnserved
 }
 
 func (c *ConsoleEnd) token() (uint64, error) {

@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -87,97 +86,77 @@ func (r *NoRoot) makes(path string) error {
 	return EROFS
 }
 
-func named(b []byte) string {
-	if i := bytes.IndexByte(b, 0); i >= 0 {
-		b = b[:i]
-	}
-
-	return string(b)
-}
-
-func after(b []byte, n int) []byte {
-	return b[min(n, len(b)):]
-}
-
-func (r *NoRoot) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
-	if op < vOpen || op > vConnect {
-		return Packet{}, false, errUnserved
-	}
-
-	b := after(body, 8)
-
-	switch op {
-	case vOpen:
-		path := string(after(b, 4))
-
-		switch flags := int(arg); {
-		case !r.itself(path) && flags&O_CREAT != 0:
-			return Packet{}, false, EROFS
-		case !r.itself(path):
-			return Packet{}, false, ENOENT
-		case flags&O_CREAT != 0 || flags&3 != O_RDONLY:
-			return Packet{}, false, EISDIR
+func (r *NoRoot) call(p *Process, q Request, group uint32, waits bool) (bool, error) {
+	switch q := q.(type) {
+	case *VfsOpen:
+		switch {
+		case !r.itself(q.path) && q.flags&O_CREAT != 0:
+			return false, EROFS
+		case !r.itself(q.path):
+			return false, ENOENT
+		case q.flags&O_CREAT != 0 || q.flags&3 != O_RDONLY:
+			return false, EISDIR
 		}
 
 		r.ref()
+		q.file = r
 
-		return Packet{files: []Object{r}}, false, nil
-	case vStat:
-		var st Stat
-
-		if !r.itself(string(b)) {
-			return Packet{}, false, ENOENT
+		return false, nil
+	case *VfsStat:
+		if !r.itself(q.path) {
+			return false, ENOENT
 		}
 
-		r.stat(p, &st)
-
-		return Packet{data: encodeStat(&st)}, false, nil
-	case vStatfs:
-		if !r.itself(string(b)) {
-			return Packet{}, false, ENOENT
+		return false, r.stat(p, &q.st)
+	case *VfsStatfs:
+		if !r.itself(q.path) {
+			return false, ENOENT
 		}
 
-		return Packet{data: encodeStatfs(&Statfs{Bsize: 4096, Frsize: 4096, Namelen: 255})}, false, nil
-	case vRealpath:
-		return Packet{data: []byte("/")}, false, r.gone(string(b), nil)
-	case vPath:
-		return Packet{data: []byte("/")}, false, nil
+		q.st = Statfs{Bsize: 4096, Frsize: 4096, Namelen: 255}
+
+		return false, nil
+	case *VfsRealpath:
+		q.out = "/"
+
+		return false, r.gone(q.path, nil)
+	case *VfsPath:
+		q.out = "/"
+
+		return false, nil
+	case *VfsReadlink:
+		return false, r.gone(q.path, EINVAL)
+	case *VfsMkdir:
+		return false, r.makes(q.path)
+	case *VfsMknod:
+		return false, r.makes(q.path)
+	case *VfsSymlink:
+		return false, r.makes(q.path)
+	case *VfsUnlink:
+		if q.dir {
+			return false, r.gone(q.path, EBUSY)
+		}
+
+		return false, r.gone(q.path, EISDIR)
+	case *VfsRename:
+		return false, r.gone(q.old, EBUSY)
+	case *VfsLink:
+		return false, r.gone(q.old, EPERM)
+	case *VfsChmod:
+		return false, r.gone(q.path, EROFS)
+	case *VfsChown:
+		return false, r.gone(q.path, EROFS)
+	case *VfsUtimes:
+		return false, r.gone(q.path, EROFS)
+	case *VfsTruncate:
+		return false, r.gone(q.path, EISDIR)
+	case *VfsMount, *VfsUnmount:
+		return false, EINVAL
+	case *VfsBind, *VfsConnect:
+		return false, EOPNOTSUPP
 	}
 
-	return Packet{}, false, r.refuses(op, arg, b)
-}
-
-func (r *NoRoot) refuses(op, arg uint32, b []byte) error {
-	switch op {
-	case vReadlink:
-		return r.gone(string(b), EINVAL)
-	case vMkdir, vMknod:
-		return r.makes(string(b))
-	case vSymlink:
-		return r.makes(string(after(b, len(named(b))+1)))
-	case vUnlink:
-		if arg&AT_REMOVEDIR != 0 {
-			return r.gone(string(b), EBUSY)
-		}
-
-		return r.gone(string(b), EISDIR)
-	case vRename:
-		return r.gone(named(after(b, 8)), EBUSY)
-	case vLink:
-		return r.gone(named(after(b, 8)), EPERM)
-	case vChmod:
-		return r.gone(string(after(b, 4)), EROFS)
-	case vChown:
-		return r.gone(string(after(b, 12)), EROFS)
-	case vUtimes:
-		return r.gone(string(after(b, 20)), EROFS)
-	case vTruncate:
-		return r.gone(string(after(b, 8)), EISDIR)
-	case vMount, vUnmount:
-		return EINVAL
-	}
-
-	return EOPNOTSUPP
+	return false, errUnserved
 }
 
 func (r *NoRoot) read(p *Process, into Object, n int, mode IoMode) (int, error) {

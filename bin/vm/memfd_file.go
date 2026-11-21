@@ -329,8 +329,8 @@ func (f *MemfdFile) recordLock(p *Process, cmd int, lk *Flock) error {
 	return EBADF
 }
 
-func (f *MemfdFile) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
-	return Packet{}, false, errUnserved
+func (f *MemfdFile) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	return false, errUnserved
 }
 
 func (f *MemfdFile) token() (uint64, error) {

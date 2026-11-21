@@ -151,7 +151,35 @@ func (f *RemoteFD) exchange(p *Process, data []byte, files []Object, interruptib
 	return a.taken(), cancelled, nil
 }
 
-func (f *RemoteFD) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
+func (f *RemoteFD) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	op := r.op()
+
+	if op == 0 {
+		return false, errUnserved
+	}
+
+	if waits && p.interrupts(true) {
+		return false, EINTR
+	}
+
+	arg, data, files := r.ser(p, make([]byte, remoteHeader, remoteHeader+64))
+
+	p.head(data, op, arg, group)
+
+	pk, cancelled, err := f.exchange(p, data, files, waits)
+
+	if err != nil {
+		return false, err
+	}
+
+	if err := replyOf(&pk, false); err != nil {
+		return cancelled, err
+	}
+
+	return cancelled, r.des(p, &pk)
+}
+
+func (f *RemoteFD) raw(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
 	if interruptible && p.interrupts(true) {
 		return Packet{}, false, EINTR
 	}
@@ -173,19 +201,14 @@ func (f *RemoteFD) call(p *Process, op, arg, group uint32, body []byte, files []
 		return Packet{}, restart, err
 	}
 
-	if (op == vOpen || op == vConnect || op == rOpen) && len(pk.files) > 0 {
-		dropFiles(pk.files[1:])
-		pk.files = pk.files[:1]
-	} else {
-		dropFiles(pk.files)
-		pk.files = nil
-	}
+	dropFiles(pk.files)
+	pk.files = nil
 
 	return pk, restart, nil
 }
 
 func (f *RemoteFD) on(p *Process, op, arg uint32, body []byte) (Packet, error) {
-	pk, _, err := f.call(p, op, arg, p.group(), body, nil, false)
+	pk, _, err := f.raw(p, op, arg, p.group(), body, nil, false)
 
 	return pk, err
 }
@@ -388,7 +411,7 @@ func (f *RemoteFD) readAt(p *Process, into Object, size int, off int64, at bool,
 	body := ioBody(off, f.ioFlags(at))
 
 	for {
-		pk, cancelled, err := f.call(p, rRead, uint32(size), group, body[:], []Object{into}, true)
+		pk, cancelled, err := f.raw(p, rRead, uint32(size), group, body[:], []Object{into}, true)
 
 		if err == EINTR && cancelled && p.interrupted() {
 			continue
@@ -424,7 +447,7 @@ func (f *RemoteFD) put(p *Process, from Object, size int, off int64, atEnd, at b
 	body := ioBody(off, flags)
 
 	for {
-		pk, cancelled, err := f.call(p, rWrite, uint32(size), group, body[:], []Object{from}, true)
+		pk, cancelled, err := f.raw(p, rWrite, uint32(size), group, body[:], []Object{from}, true)
 
 		if err == EINTR && cancelled && p.interrupted() {
 			continue

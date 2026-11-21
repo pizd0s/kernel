@@ -310,8 +310,8 @@ func (a *Answer) recordLock(p *Process, cmd int, lk *Flock) error {
 	return EBADF
 }
 
-func (a *Answer) call(p *Process, op, arg, group uint32, body []byte, files []Object, interruptible bool) (Packet, bool, error) {
-	return Packet{}, false, errUnserved
+func (a *Answer) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+	return false, errUnserved
 }
 
 func (a *Answer) token() (uint64, error) {
