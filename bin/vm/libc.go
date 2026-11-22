@@ -1534,6 +1534,206 @@ func libcFexecve(fd, argv, envp uint32) uint32 {
 	return proc().libcFexecve(fd, argv, envp)
 }
 
+func libcPosix_spawn(pid, path, actions, actionsSize, attr, attrSize, argv, envp uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawn", actionsSize, sizeofPosixSpawnFileActions, attrSize, sizeofPosixSpawnattr)
+
+	return p.libcPosix_spawn(pid, path, actions, attr, argv, envp)
+}
+
+func libcPosix_spawnp(pid, file, actions, actionsSize, attr, attrSize, argv, envp uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnp", actionsSize, sizeofPosixSpawnFileActions, attrSize, sizeofPosixSpawnattr)
+
+	return p.libcPosix_spawnp(pid, file, actions, attr, argv, envp)
+}
+
+func libcPosix_spawn_file_actions_init(actions, actionsSize uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawn_file_actions_init", actionsSize, sizeofPosixSpawnFileActions)
+
+	return p.libcPosix_spawn_file_actions_init(actions)
+}
+
+func libcPosix_spawn_file_actions_destroy(actions, actionsSize uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawn_file_actions_destroy", actionsSize, sizeofPosixSpawnFileActions)
+
+	return p.libcPosix_spawn_file_actions_destroy(actions)
+}
+
+func libcPosix_spawn_file_actions_addopen(actions, actionsSize, fd, path, flags, mode uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawn_file_actions_addopen", actionsSize, sizeofPosixSpawnFileActions)
+
+	return p.libcPosix_spawn_file_actions_addopen(actions, fd, path, flags, mode)
+}
+
+func libcPosix_spawn_file_actions_addclose(actions, actionsSize, fd uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawn_file_actions_addclose", actionsSize, sizeofPosixSpawnFileActions)
+
+	return p.libcPosix_spawn_file_actions_addclose(actions, fd)
+}
+
+func libcPosix_spawn_file_actions_adddup2(actions, actionsSize, fd, to uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawn_file_actions_adddup2", actionsSize, sizeofPosixSpawnFileActions)
+
+	return p.libcPosix_spawn_file_actions_adddup2(actions, fd, to)
+}
+
+func libcPosix_spawn_file_actions_addchdir(actions, actionsSize, path uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawn_file_actions_addchdir", actionsSize, sizeofPosixSpawnFileActions)
+
+	return p.libcPosix_spawn_file_actions_addchdir(actions, path)
+}
+
+func libcPosix_spawn_file_actions_addfchdir(actions, actionsSize, fd uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawn_file_actions_addfchdir", actionsSize, sizeofPosixSpawnFileActions)
+
+	return p.libcPosix_spawn_file_actions_addfchdir(actions, fd)
+}
+
+func libcPosix_spawn_file_actions_addchdir_np(actions, actionsSize, path uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawn_file_actions_addchdir_np", actionsSize, sizeofPosixSpawnFileActions)
+
+	return p.libcPosix_spawn_file_actions_addchdir_np(actions, path)
+}
+
+func libcPosix_spawn_file_actions_addfchdir_np(actions, actionsSize, fd uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawn_file_actions_addfchdir_np", actionsSize, sizeofPosixSpawnFileActions)
+
+	return p.libcPosix_spawn_file_actions_addfchdir_np(actions, fd)
+}
+
+func libcPosix_spawnattr_init(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_init", attrSize, sizeofPosixSpawnattr)
+
+	return p.libcPosix_spawnattr_init(attr)
+}
+
+func libcPosix_spawnattr_destroy(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_destroy", attrSize, sizeofPosixSpawnattr)
+
+	return p.libcPosix_spawnattr_destroy(attr)
+}
+
+func libcPosix_spawnattr_getflags(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_getflags", attrSize, sizeofPosixSpawnattr)
+
+	return p.libcPosix_spawnattr_getflags(attr, out)
+}
+
+func libcPosix_spawnattr_setflags(attr, attrSize, flags uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_setflags", attrSize, sizeofPosixSpawnattr)
+
+	return p.libcPosix_spawnattr_setflags(attr, flags)
+}
+
+func libcPosix_spawnattr_getpgroup(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_getpgroup", attrSize, sizeofPosixSpawnattr)
+
+	return p.libcPosix_spawnattr_getpgroup(attr, out)
+}
+
+func libcPosix_spawnattr_setpgroup(attr, attrSize, pgroup uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_setpgroup", attrSize, sizeofPosixSpawnattr)
+
+	return p.libcPosix_spawnattr_setpgroup(attr, pgroup)
+}
+
+func libcPosix_spawnattr_getsigdefault(attr, attrSize, out, outSize uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_getsigdefault", attrSize, sizeofPosixSpawnattr, outSize, sizeofSigset)
+
+	return p.libcPosix_spawnattr_getsigdefault(attr, out)
+}
+
+func libcPosix_spawnattr_setsigdefault(attr, attrSize, set, setSize uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_setsigdefault", attrSize, sizeofPosixSpawnattr, setSize, sizeofSigset)
+
+	return p.libcPosix_spawnattr_setsigdefault(attr, set)
+}
+
+func libcPosix_spawnattr_getsigmask(attr, attrSize, out, outSize uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_getsigmask", attrSize, sizeofPosixSpawnattr, outSize, sizeofSigset)
+
+	return p.libcPosix_spawnattr_getsigmask(attr, out)
+}
+
+func libcPosix_spawnattr_setsigmask(attr, attrSize, set, setSize uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_setsigmask", attrSize, sizeofPosixSpawnattr, setSize, sizeofSigset)
+
+	return p.libcPosix_spawnattr_setsigmask(attr, set)
+}
+
+func libcPosix_spawnattr_getschedpolicy(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_getschedpolicy", attrSize, sizeofPosixSpawnattr)
+
+	return p.libcPosix_spawnattr_getschedpolicy(attr, out)
+}
+
+func libcPosix_spawnattr_setschedpolicy(attr, attrSize, policy uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_setschedpolicy", attrSize, sizeofPosixSpawnattr)
+
+	return p.libcPosix_spawnattr_setschedpolicy(attr, policy)
+}
+
+func libcPosix_spawnattr_getschedparam(attr, attrSize, out, outSize uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_getschedparam", attrSize, sizeofPosixSpawnattr, outSize, sizeofSchedParam)
+
+	return p.libcPosix_spawnattr_getschedparam(attr, out)
+}
+
+func libcPosix_spawnattr_setschedparam(attr, attrSize, param, paramSize uint32) uint32 {
+	p := proc()
+
+	p.sized("posix_spawnattr_setschedparam", attrSize, sizeofPosixSpawnattr, paramSize, sizeofSchedParam)
+
+	return p.libcPosix_spawnattr_setschedparam(attr, param)
+}
+
 func libcExecl(path, arg0, va uint32) uint32 {
 	return proc().libcExecl(path, arg0, va)
 }

@@ -42,6 +42,7 @@
 #include <semaphore.h>
 #include <setjmp.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -791,6 +792,31 @@ KERNEL(int, execv, (const char* a, char* const b[]), (a, b))
 KERNEL(int, execvp, (const char* a, char* const b[]), (a, b))
 KERNEL(int, execvpe, (const char* a, char* const b[], char* const c[]), (a, b, c))
 KERNEL(int, fexecve, (int a, char* const b[], char* const c[]), (a, b, c))
+KERNEL_SIZED(int, posix_spawn, (pid_t* __restrict a, const char* __restrict b, const posix_spawn_file_actions_t* c, const posix_spawnattr_t* __restrict d, char* const e[], char* const f[]), (pid_t* __restrict a, const char* __restrict b, const posix_spawn_file_actions_t* c, size_t c_size, const posix_spawnattr_t* __restrict d, size_t d_size, char* const e[], char* const f[]), (a, b, c, sizeof(posix_spawn_file_actions_t), d, sizeof(posix_spawnattr_t), e, f))
+KERNEL_SIZED(int, posix_spawnp, (pid_t* __restrict a, const char* __restrict b, const posix_spawn_file_actions_t* c, const posix_spawnattr_t* __restrict d, char* const e[], char* const f[]), (pid_t* __restrict a, const char* __restrict b, const posix_spawn_file_actions_t* c, size_t c_size, const posix_spawnattr_t* __restrict d, size_t d_size, char* const e[], char* const f[]), (a, b, c, sizeof(posix_spawn_file_actions_t), d, sizeof(posix_spawnattr_t), e, f))
+KERNEL_SIZED(int, posix_spawn_file_actions_init, (posix_spawn_file_actions_t* a), (posix_spawn_file_actions_t* a, size_t a_size), (a, sizeof(posix_spawn_file_actions_t)))
+KERNEL_SIZED(int, posix_spawn_file_actions_destroy, (posix_spawn_file_actions_t* a), (posix_spawn_file_actions_t* a, size_t a_size), (a, sizeof(posix_spawn_file_actions_t)))
+KERNEL_SIZED(int, posix_spawn_file_actions_addopen, (posix_spawn_file_actions_t* __restrict a, int b, const char* __restrict c, int d, mode_t e), (posix_spawn_file_actions_t* __restrict a, size_t a_size, int b, const char* __restrict c, int d, mode_t e), (a, sizeof(posix_spawn_file_actions_t), b, c, d, e))
+KERNEL_SIZED(int, posix_spawn_file_actions_addclose, (posix_spawn_file_actions_t* a, int b), (posix_spawn_file_actions_t* a, size_t a_size, int b), (a, sizeof(posix_spawn_file_actions_t), b))
+KERNEL_SIZED(int, posix_spawn_file_actions_adddup2, (posix_spawn_file_actions_t* a, int b, int c), (posix_spawn_file_actions_t* a, size_t a_size, int b, int c), (a, sizeof(posix_spawn_file_actions_t), b, c))
+KERNEL_SIZED(int, posix_spawn_file_actions_addchdir, (posix_spawn_file_actions_t* __restrict a, const char* __restrict b), (posix_spawn_file_actions_t* __restrict a, size_t a_size, const char* __restrict b), (a, sizeof(posix_spawn_file_actions_t), b))
+KERNEL_SIZED(int, posix_spawn_file_actions_addfchdir, (posix_spawn_file_actions_t* a, int b), (posix_spawn_file_actions_t* a, size_t a_size, int b), (a, sizeof(posix_spawn_file_actions_t), b))
+KERNEL_SIZED(int, posix_spawn_file_actions_addchdir_np, (posix_spawn_file_actions_t* __restrict a, const char* __restrict b), (posix_spawn_file_actions_t* __restrict a, size_t a_size, const char* __restrict b), (a, sizeof(posix_spawn_file_actions_t), b))
+KERNEL_SIZED(int, posix_spawn_file_actions_addfchdir_np, (posix_spawn_file_actions_t* a, int b), (posix_spawn_file_actions_t* a, size_t a_size, int b), (a, sizeof(posix_spawn_file_actions_t), b))
+KERNEL_SIZED(int, posix_spawnattr_init, (posix_spawnattr_t* a), (posix_spawnattr_t* a, size_t a_size), (a, sizeof(posix_spawnattr_t)))
+KERNEL_SIZED(int, posix_spawnattr_destroy, (posix_spawnattr_t* a), (posix_spawnattr_t* a, size_t a_size), (a, sizeof(posix_spawnattr_t)))
+KERNEL_SIZED(int, posix_spawnattr_getflags, (const posix_spawnattr_t* __restrict a, short* __restrict b), (const posix_spawnattr_t* __restrict a, size_t a_size, short* __restrict b), (a, sizeof(posix_spawnattr_t), b))
+KERNEL_SIZED(int, posix_spawnattr_setflags, (posix_spawnattr_t* a, short b), (posix_spawnattr_t* a, size_t a_size, short b), (a, sizeof(posix_spawnattr_t), b))
+KERNEL_SIZED(int, posix_spawnattr_getpgroup, (const posix_spawnattr_t* __restrict a, pid_t* __restrict b), (const posix_spawnattr_t* __restrict a, size_t a_size, pid_t* __restrict b), (a, sizeof(posix_spawnattr_t), b))
+KERNEL_SIZED(int, posix_spawnattr_setpgroup, (posix_spawnattr_t* a, pid_t b), (posix_spawnattr_t* a, size_t a_size, pid_t b), (a, sizeof(posix_spawnattr_t), b))
+KERNEL_SIZED(int, posix_spawnattr_getsigdefault, (const posix_spawnattr_t* __restrict a, sigset_t* __restrict b), (const posix_spawnattr_t* __restrict a, size_t a_size, sigset_t* __restrict b, size_t b_size), (a, sizeof(posix_spawnattr_t), b, sizeof(sigset_t)))
+KERNEL_SIZED(int, posix_spawnattr_setsigdefault, (posix_spawnattr_t* __restrict a, const sigset_t* __restrict b), (posix_spawnattr_t* __restrict a, size_t a_size, const sigset_t* __restrict b, size_t b_size), (a, sizeof(posix_spawnattr_t), b, sizeof(sigset_t)))
+KERNEL_SIZED(int, posix_spawnattr_getsigmask, (const posix_spawnattr_t* __restrict a, sigset_t* __restrict b), (const posix_spawnattr_t* __restrict a, size_t a_size, sigset_t* __restrict b, size_t b_size), (a, sizeof(posix_spawnattr_t), b, sizeof(sigset_t)))
+KERNEL_SIZED(int, posix_spawnattr_setsigmask, (posix_spawnattr_t* __restrict a, const sigset_t* __restrict b), (posix_spawnattr_t* __restrict a, size_t a_size, const sigset_t* __restrict b, size_t b_size), (a, sizeof(posix_spawnattr_t), b, sizeof(sigset_t)))
+KERNEL_SIZED(int, posix_spawnattr_getschedpolicy, (const posix_spawnattr_t* __restrict a, int* __restrict b), (const posix_spawnattr_t* __restrict a, size_t a_size, int* __restrict b), (a, sizeof(posix_spawnattr_t), b))
+KERNEL_SIZED(int, posix_spawnattr_setschedpolicy, (posix_spawnattr_t* a, int b), (posix_spawnattr_t* a, size_t a_size, int b), (a, sizeof(posix_spawnattr_t), b))
+KERNEL_SIZED(int, posix_spawnattr_getschedparam, (const posix_spawnattr_t* __restrict a, struct sched_param* __restrict b), (const posix_spawnattr_t* __restrict a, size_t a_size, struct sched_param* __restrict b, size_t b_size), (a, sizeof(posix_spawnattr_t), b, sizeof(struct sched_param)))
+KERNEL_SIZED(int, posix_spawnattr_setschedparam, (posix_spawnattr_t* __restrict a, const struct sched_param* __restrict b), (posix_spawnattr_t* __restrict a, size_t a_size, const struct sched_param* __restrict b, size_t b_size), (a, sizeof(posix_spawnattr_t), b, sizeof(struct sched_param)))
 KERNEL_NORETURN(_exit, (int a), (a))
 KERNEL(pid_t, getpid, (void), ())
 KERNEL(pid_t, getppid, (void), ())

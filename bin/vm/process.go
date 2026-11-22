@@ -246,6 +246,9 @@ type Process struct {
 	iconvs    map[uint32]*Iconv
 	nextIconv uint32
 
+	spawnFiles     map[uint32][]SpawnAction
+	nextSpawnFiles uint32
+
 	desKey       [8]byte
 	posixTimers  map[int32]*PosixTimer
 	syncs        map[int32]Object
@@ -550,7 +553,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
 		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0
 		p.regexes, p.constants, p.locale = map[uint32]*PosixRegex{}, map[string]uint32{}, [LC_ALL]string{}
-		p.iconvs = map[uint32]*Iconv{}
+		p.iconvs, p.spawnFiles = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
 		p.defaultStack, p.defaultGuard, p.desKey = 0, 0, [8]byte{}
 
@@ -1156,12 +1159,18 @@ func (p *Process) openProgram(path string) (Object, string, error) {
 }
 
 func (p *Process) execPath(file string, argv, envp []string) error {
+	return p.onSearchPath(file, func(path string) error {
+		return p.exec(path, argv, envp)
+	})
+}
+
+func (p *Process) onSearchPath(file string, try func(path string) error) error {
 	if file == "" {
 		return ENOENT
 	}
 
 	if strings.Contains(file, "/") {
-		return p.exec(file, argv, envp)
+		return try(file)
 	}
 
 	path, ok := p.getenv("PATH")
@@ -1177,7 +1186,7 @@ func (p *Process) execPath(file string, argv, envp []string) error {
 			dir = "."
 		}
 
-		switch e := p.exec(dir+"/"+file, argv, envp); e {
+		switch e := try(dir + "/" + file); e {
 		case ENOENT, ENOTDIR:
 		case EACCES:
 			err = e
@@ -1544,6 +1553,410 @@ func (p *Process) libcFexecve(fd, argv, envp uint32) uint32 {
 	path := fmt.Sprintf("/dev/fd/%d", fd)
 
 	return p.result(0, p.execFrom(path, obj, p.strings(argv), p.strings(envp)))
+}
+
+func (p *Process) libcPosix_spawn(pid, path, actions, attr, argv, envp uint32) uint32 {
+	child, err := p.spawn(p.str(path), false, actions, attr, p.strings(argv), p.strings(envp))
+
+	return p.spawned(pid, child, err)
+}
+
+func (p *Process) libcPosix_spawnp(pid, file, actions, attr, argv, envp uint32) uint32 {
+	child, err := p.spawn(p.str(file), true, actions, attr, p.strings(argv), p.strings(envp))
+
+	return p.spawned(pid, child, err)
+}
+
+func (p *Process) spawned(pid uint32, child int32, err error) uint32 {
+	if err != nil {
+		return uint32(errnoOf(err))
+	}
+
+	if pid != 0 {
+		p.put32(pid, uint32(child))
+	}
+
+	return 0
+}
+
+func (p *Process) spawn(file string, search bool, actions, attr uint32, argv, envp []string) (int32, error) {
+	var list []SpawnAction
+
+	if actions != 0 {
+		l, ok := p.spawnFiles[p.u32(actions)]
+
+		if !ok {
+			return 0, EINVAL
+		}
+
+		list = l
+	}
+
+	if p.chaosFail("fork") {
+		return 0, EAGAIN
+	}
+
+	c, err := p.k.newProcess(p)
+
+	if err != nil {
+		return 0, err
+	}
+
+	c.inherit(p)
+
+	img, path, err := c.spawnSetup(p, file, search, list, attr, argv)
+
+	if err != nil {
+		c.unmade()
+
+		return 0, err
+	}
+
+	img.envp = envp
+	c.execReset()
+
+	parent := p.pid
+
+	go func() {
+		c.trace(TRACE_PROCESS, fmt.Sprintf("child of %d", parent))
+		c.trace(TRACE_PROCESS, "exec "+strconv.Quote(path))
+		c.run(img)
+	}()
+
+	return c.pid, nil
+}
+
+func (c *Process) spawnSetup(p *Process, file string, search bool, list []SpawnAction, attr uint32, argv []string) (*ExecImage, string, error) {
+	if attr != 0 {
+		if err := c.spawnAttributes(p, attr); err != nil {
+			return nil, "", err
+		}
+	}
+
+	for _, a := range list {
+		if err := c.spawnAction(a); err != nil {
+			return nil, "", err
+		}
+	}
+
+	if !search {
+		img, err := c.loadFrom(file, nil, argv)
+
+		return img, file, err
+	}
+
+	var img *ExecImage
+
+	path := file
+
+	err := p.onSearchPath(file, func(name string) error {
+		var err error
+
+		img, err = c.loadFrom(name, nil, argv)
+		path = name
+
+		return err
+	})
+
+	return img, path, err
+}
+
+func (c *Process) spawnAttributes(p *Process, attr uint32) error {
+	flags := p.u32(attr)
+
+	switch {
+	case flags&POSIX_SPAWN_SETSID != 0:
+		c.k.mu.Lock()
+		c.sid.Store(c.pid)
+		c.pgid.Store(c.pid)
+		c.k.mu.Unlock()
+	case flags&POSIX_SPAWN_SETPGROUP != 0:
+		group := int32(p.u32(attr + 4))
+
+		if group == 0 {
+			group = c.pid
+		}
+
+		if group < 0 || group != c.pid && !c.groupExists(group) {
+			return EPERM
+		}
+
+		c.k.mu.Lock()
+		c.pgid.Store(group)
+		c.k.mu.Unlock()
+	}
+
+	if flags&POSIX_SPAWN_RESETIDS != 0 {
+		c.k.mu.Lock()
+		c.cred.uids[1], c.cred.gids[1] = c.cred.uids[0], c.cred.gids[0]
+		c.k.mu.Unlock()
+	}
+
+	c.sig.mu.Lock()
+
+	if flags&POSIX_SPAWN_SETSIGMASK != 0 {
+		c.sig.blocked = p.u64(attr+16) &^ unblockable
+	}
+
+	if flags&POSIX_SPAWN_SETSIGDEF != 0 {
+		set := p.u64(attr + 8)
+
+		for sig := 1; sig < NSIG; sig++ {
+			if set&sigBit(sig) != 0 {
+				c.sig.actions[sig] = SigAction{}
+			}
+		}
+	}
+
+	c.sig.mu.Unlock()
+
+	switch {
+	case flags&POSIX_SPAWN_SETSCHEDULER != 0:
+		return p.scheduler(c, p.u32(attr+24), attr+28)
+	case flags&POSIX_SPAWN_SETSCHEDPARAM != 0 && p.u32(attr+28) != 0:
+		return EINVAL
+	}
+
+	return nil
+}
+
+func (c *Process) spawnAction(a SpawnAction) error {
+	switch a.kind {
+	case spawnOpen:
+		if int(a.fd) >= c.fdLimit() {
+			return EBADF
+		}
+
+		mode := uint32(0)
+
+		if a.flags&(O_CREAT|0o20000000) != 0 {
+			mode = a.mode & 0o7777 &^ c.umask
+		}
+
+		c.closeFd(int(a.fd))
+
+		f, err := c.openAt(AT_FDCWD, a.path, int(a.flags&^O_CLOEXEC), mode)
+
+		if err != nil {
+			return err
+		}
+
+		c.files.put(int(a.fd), f, a.flags&O_CLOEXEC != 0)
+	case spawnClose:
+		if !c.closeFd(int(a.fd)) && int(a.fd) >= c.fdLimit() {
+			return EBADF
+		}
+	case spawnDup2:
+		if a.fd != a.to {
+			_, err := c.dupTo(a.fd, a.to, false)
+
+			return err
+		}
+
+		if _, ok := c.files.at(int(a.fd)); !ok {
+			return EBADF
+		}
+
+		c.files.slots[a.fd].cloexec = false
+	case spawnChdir:
+		return c.chdir(a.path)
+	case spawnFchdir:
+		return c.fchdir(a.fd)
+	}
+
+	return nil
+}
+
+func (p *Process) unmade() {
+	for fd := range p.files.size() {
+		p.closeFd(fd)
+	}
+
+	p.root.unref()
+	p.cwd.unref()
+	p.setSink(nil)
+	p.sig.mu.Lock()
+	p.sig.dead = true
+	p.sig.mu.Unlock()
+	p.k.mu.Lock()
+	delete(p.k.procs, p.pid)
+	p.k.mu.Unlock()
+}
+
+func (p *Process) libcPosix_spawn_file_actions_init(actions uint32) uint32 {
+	p.nextSpawnFiles++
+	p.spawnFiles[p.nextSpawnFiles] = nil
+	p.put32(actions, p.nextSpawnFiles)
+
+	return 0
+}
+
+func (p *Process) libcPosix_spawn_file_actions_destroy(actions uint32) uint32 {
+	id := p.u32(actions)
+
+	if _, ok := p.spawnFiles[id]; !ok {
+		return uint32(EINVAL)
+	}
+
+	delete(p.spawnFiles, id)
+	p.put32(actions, 0)
+
+	return 0
+}
+
+func (p *Process) addSpawnAction(actions uint32, a SpawnAction) uint32 {
+	id := p.u32(actions)
+	list, ok := p.spawnFiles[id]
+
+	if !ok {
+		return uint32(EINVAL)
+	}
+
+	p.spawnFiles[id] = append(list, a)
+
+	return 0
+}
+
+func (p *Process) spawnDescriptor(fd uint32) bool {
+	return int32(fd) >= 0 && int(fd) < p.fdLimit()
+}
+
+func (p *Process) libcPosix_spawn_file_actions_addopen(actions, fd, path, flags, mode uint32) uint32 {
+	if !p.spawnDescriptor(fd) {
+		return uint32(EBADF)
+	}
+
+	return p.addSpawnAction(actions, SpawnAction{kind: spawnOpen, fd: fd, path: p.str(path), flags: flags, mode: mode})
+}
+
+func (p *Process) libcPosix_spawn_file_actions_addclose(actions, fd uint32) uint32 {
+	if int32(fd) < 0 {
+		return uint32(EBADF)
+	}
+
+	return p.addSpawnAction(actions, SpawnAction{kind: spawnClose, fd: fd})
+}
+
+func (p *Process) libcPosix_spawn_file_actions_adddup2(actions, fd, to uint32) uint32 {
+	if !p.spawnDescriptor(fd) || !p.spawnDescriptor(to) {
+		return uint32(EBADF)
+	}
+
+	return p.addSpawnAction(actions, SpawnAction{kind: spawnDup2, fd: fd, to: to})
+}
+
+func (p *Process) libcPosix_spawn_file_actions_addchdir(actions, path uint32) uint32 {
+	return p.addSpawnAction(actions, SpawnAction{kind: spawnChdir, path: p.str(path)})
+}
+
+func (p *Process) libcPosix_spawn_file_actions_addfchdir(actions, fd uint32) uint32 {
+	if int32(fd) < 0 {
+		return uint32(EBADF)
+	}
+
+	return p.addSpawnAction(actions, SpawnAction{kind: spawnFchdir, fd: fd})
+}
+
+func (p *Process) libcPosix_spawn_file_actions_addchdir_np(actions, path uint32) uint32 {
+	return p.libcPosix_spawn_file_actions_addchdir(actions, path)
+}
+
+func (p *Process) libcPosix_spawn_file_actions_addfchdir_np(actions, fd uint32) uint32 {
+	return p.libcPosix_spawn_file_actions_addfchdir(actions, fd)
+}
+
+func (p *Process) libcPosix_spawnattr_init(attr uint32) uint32 {
+	p.put32(attr, 0)
+	p.put32(attr+4, 0)
+	p.put64(attr+8, 0)
+	p.put64(attr+16, 0)
+	p.put32(attr+24, SCHED_OTHER)
+	p.put32(attr+28, 0)
+
+	return 0
+}
+
+func (p *Process) libcPosix_spawnattr_destroy(attr uint32) uint32 {
+	return 0
+}
+
+func (p *Process) libcPosix_spawnattr_getflags(attr, out uint32) uint32 {
+	p.put16(out, uint16(p.u32(attr)))
+
+	return 0
+}
+
+func (p *Process) libcPosix_spawnattr_setflags(attr, flags uint32) uint32 {
+	all := uint32(POSIX_SPAWN_RESETIDS | POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSCHEDPARAM |
+		POSIX_SPAWN_SETSCHEDULER | POSIX_SPAWN_SETSID)
+
+	if flags&^all != 0 {
+		return uint32(EINVAL)
+	}
+
+	p.put32(attr, flags)
+
+	return 0
+}
+
+func (p *Process) libcPosix_spawnattr_getpgroup(attr, out uint32) uint32 {
+	p.put32(out, p.u32(attr+4))
+
+	return 0
+}
+
+func (p *Process) libcPosix_spawnattr_setpgroup(attr, pgroup uint32) uint32 {
+	p.put32(attr+4, pgroup)
+
+	return 0
+}
+
+func (p *Process) libcPosix_spawnattr_getsigdefault(attr, out uint32) uint32 {
+	p.put64(out, p.u64(attr+8))
+
+	return 0
+}
+
+func (p *Process) libcPosix_spawnattr_setsigdefault(attr, set uint32) uint32 {
+	p.put64(attr+8, p.u64(set))
+
+	return 0
+}
+
+func (p *Process) libcPosix_spawnattr_getsigmask(attr, out uint32) uint32 {
+	p.put64(out, p.u64(attr+16))
+
+	return 0
+}
+
+func (p *Process) libcPosix_spawnattr_setsigmask(attr, set uint32) uint32 {
+	p.put64(attr+16, p.u64(set))
+
+	return 0
+}
+
+func (p *Process) libcPosix_spawnattr_getschedpolicy(attr, out uint32) uint32 {
+	p.put32(out, p.u32(attr+24))
+
+	return 0
+}
+
+func (p *Process) libcPosix_spawnattr_setschedpolicy(attr, policy uint32) uint32 {
+	p.put32(attr+24, policy)
+
+	return 0
+}
+
+func (p *Process) libcPosix_spawnattr_getschedparam(attr, out uint32) uint32 {
+	p.put32(out, p.u32(attr+28))
+
+	return 0
+}
+
+func (p *Process) libcPosix_spawnattr_setschedparam(attr, param uint32) uint32 {
+	p.put32(attr+28, p.u32(param))
+
+	return 0
 }
 
 func (p *Process) libcExecl(path, arg0, va uint32) uint32 {
@@ -2125,6 +2538,7 @@ func (p *Process) startVfork() uint32 {
 	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo
 	c.regexes, c.nextRegex, c.constants, c.jumps, c.stackAt = p.regexes, p.nextRegex, p.constants, p.jumps, p.stackAt
 	c.iconvs, c.nextIconv = p.iconvs, p.nextIconv
+	c.spawnFiles, c.nextSpawnFiles = p.spawnFiles, p.nextSpawnFiles
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
 	c.defaultStack, c.defaultGuard, c.desKey = p.defaultStack, p.defaultGuard, p.desKey
 	c.locale, c.envStrings, c.mappings, c.tzAt, c.herrnoAt, c.passwordAt = p.locale, p.envStrings, p.mappings, p.tzAt, p.herrnoAt, p.passwordAt
@@ -2180,6 +2594,7 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 	c.nextRegex, c.stackAt, c.locale, c.tzAt, c.herrnoAt, c.passwordAt = p.nextRegex, p.stackAt, p.locale, p.tzAt, p.herrnoAt, p.passwordAt
 	c.regexes, c.constants, c.jumps = map[uint32]*PosixRegex{}, map[string]uint32{}, map[uint32]*JmpBuf{}
 	c.iconvs, c.nextIconv = map[uint32]*Iconv{}, p.nextIconv
+	c.spawnFiles, c.nextSpawnFiles = map[uint32][]SpawnAction{}, p.nextSpawnFiles
 
 	for id, r := range p.regexes {
 		copied := *r
@@ -2189,6 +2604,10 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 
 	for id, cd := range p.iconvs {
 		c.iconvs[id] = cd.copy()
+	}
+
+	for id, list := range p.spawnFiles {
+		c.spawnFiles[id] = slices.Clone(list)
 	}
 
 	for s, at := range p.constants {
@@ -6670,10 +7089,14 @@ func (p *Process) libcWatchdir(fd, flags uint32) uint32 {
 }
 
 func (p *Process) libcFchdir(fd uint32) uint32 {
+	return p.result(0, p.fchdir(fd))
+}
+
+func (p *Process) fchdir(fd uint32) error {
 	obj, err := p.fd(fd)
 
 	if err != nil {
-		return p.result(0, err)
+		return err
 	}
 
 	d := obj
@@ -6693,12 +7116,12 @@ func (p *Process) libcFchdir(fd uint32) uint32 {
 			err = EACCES
 		}
 
-		return p.result(0, err)
+		return err
 	}
 
 	p.setCwd(d)
 
-	return p.result(0, nil)
+	return nil
 }
 
 func (p *Process) libcChroot(path uint32) uint32 {

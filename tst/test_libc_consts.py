@@ -51,6 +51,8 @@ TYPES = {
     "sizeofRlimit": "struct rlimit",
     "sizeofRusage": "struct rusage",
     "sizeofSchedParam": "struct sched_param",
+    "sizeofPosixSpawnattr": "posix_spawnattr_t",
+    "sizeofPosixSpawnFileActions": "posix_spawn_file_actions_t",
     "sizeofPthreadAttr": "pthread_attr_t",
     "sizeofPthreadMutex": "pthread_mutex_t",
     "sizeofPthreadMutexattr": "pthread_mutexattr_t",

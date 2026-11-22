@@ -125,6 +125,13 @@ const (
 	MADV_DONTNEED                     = 4
 	FD_SETSIZE                        = 1024
 	POSIX_FADV_NOREUSE                = 5
+	POSIX_SPAWN_RESETIDS              = 1
+	POSIX_SPAWN_SETPGROUP             = 2
+	POSIX_SPAWN_SETSIGDEF             = 4
+	POSIX_SPAWN_SETSIGMASK            = 8
+	POSIX_SPAWN_SETSCHEDPARAM         = 16
+	POSIX_SPAWN_SETSCHEDULER          = 32
+	POSIX_SPAWN_SETSID                = 128
 	F_DUPFD                           = 0
 	F_GETFD                           = 1
 	F_SETFD                           = 2
@@ -282,6 +289,8 @@ const (
 	sizeofRlimit                      = 16
 	sizeofRusage                      = 88
 	sizeofSchedParam                  = 4
+	sizeofPosixSpawnattr              = 32
+	sizeofPosixSpawnFileActions       = 4
 	sizeofPthreadAttr                 = 32
 	sizeofPthreadMutex                = 4
 	sizeofPthreadMutexattr            = 20
