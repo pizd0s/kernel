@@ -4162,3 +4162,127 @@ func ioctlSize(req uint32) uint32 {
 
 	return 0
 }
+
+func libcPthread_mutex_clocklock(mutex, mutexSize, clock, at, atSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutex_clocklock", mutexSize, sizeofPthreadMutex, atSize, sizeofTimespec)
+
+	return p.libcPthread_mutex_clocklock(mutex, clock, at)
+}
+
+func libcPthread_cond_clockwait(cond, condSize, mutex, mutexSize, clock, at, atSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_cond_clockwait", condSize, sizeofPthreadCond, mutexSize, sizeofPthreadMutex, atSize, sizeofTimespec)
+
+	return p.libcPthread_cond_clockwait(cond, mutex, clock, at)
+}
+
+func libcPthread_rwlock_clockrdlock(lock, lockSize, clock, at, atSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlock_clockrdlock", lockSize, sizeofPthreadRwlock, atSize, sizeofTimespec)
+
+	return p.libcPthread_rwlock_clockrdlock(lock, clock, at)
+}
+
+func libcPthread_rwlock_clockwrlock(lock, lockSize, clock, at, atSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlock_clockwrlock", lockSize, sizeofPthreadRwlock, atSize, sizeofTimespec)
+
+	return p.libcPthread_rwlock_clockwrlock(lock, clock, at)
+}
+
+func libcSem_clockwait(sem, semSize, clock, at, atSize uint32) uint32 {
+	p := proc()
+
+	p.sized("sem_clockwait", semSize, sizeofSem, atSize, sizeofTimespec)
+
+	return p.libcSem_clockwait(sem, clock, at)
+}
+
+func libcSig2str(sig, out uint32) uint32 {
+	return proc().libcSig2str(sig, out)
+}
+
+func libcStr2sig(name, out uint32) uint32 {
+	return proc().libcStr2sig(name, out)
+}
+
+func libcTcgetwinsize(fd, size, sizeSize uint32) uint32 {
+	p := proc()
+
+	p.sized("tcgetwinsize", sizeSize, sizeofWinsize)
+
+	return p.libcTcgetwinsize(fd, size)
+}
+
+func libcTcsetwinsize(fd, size, sizeSize uint32) uint32 {
+	p := proc()
+
+	p.sized("tcsetwinsize", sizeSize, sizeofWinsize)
+
+	return p.libcTcsetwinsize(fd, size)
+}
+
+func libcWcslcpy(d, s, n uint32) uint32 {
+	return proc().libcWcslcpy(d, s, n)
+}
+
+func libcWcslcat(d, s, n uint32) uint32 {
+	return proc().libcWcslcat(d, s, n)
+}
+
+func libcNewlocale(mask, name, base uint32) uint32 {
+	return proc().libcNewlocale(mask, name, base)
+}
+
+func libcDuplocale(locale uint32) uint32 {
+	return proc().libcDuplocale(locale)
+}
+
+func libcFreelocale(locale uint32) {
+	proc().libcFreelocale(locale)
+}
+
+func libcUselocale(locale uint32) uint32 {
+	return proc().libcUselocale(locale)
+}
+
+func libcGetlocalename_l(category, locale uint32) uint32 {
+	return proc().libcGetlocalename_l(category, locale)
+}
+
+func libcGettext_l(message, locale uint32) uint32 {
+	return proc().libcGettext_l(message, locale)
+}
+
+func libcDgettext_l(domain, message, locale uint32) uint32 {
+	return proc().libcDgettext_l(domain, message, locale)
+}
+
+func libcDcgettext_l(domain, message, category, locale uint32) uint32 {
+	return proc().libcDcgettext_l(domain, message, category, locale)
+}
+
+func libcNgettext_l(one, many, n, locale uint32) uint32 {
+	return proc().libcNgettext_l(one, many, n, locale)
+}
+
+func libcDngettext_l(domain, one, many, n, locale uint32) uint32 {
+	return proc().libcDngettext_l(domain, one, many, n, locale)
+}
+
+func libcDcngettext_l(domain, one, many, n, category, locale uint32) uint32 {
+	return proc().libcDcngettext_l(domain, one, many, n, category, locale)
+}
+
+func libcPosix_getdents(fd, buf, n, flags uint32) uint32 {
+	return proc().libcPosix_getdents(fd, buf, n, flags)
+}
+
+func libcPosix_devctl(fd, cmd, data, n, info uint32) uint32 {
+	return proc().libcPosix_devctl(fd, cmd, data, n, info)
+}

@@ -39,6 +39,7 @@ var (
 	hostMessages   = []string{"Host not found", "Try again", "Non-recoverable error", "Address not available"}
 	localeVars     = [LC_ALL]string{"LC_CTYPE", "LC_NUMERIC", "LC_TIME", "LC_COLLATE", "LC_MONETARY", "LC_MESSAGES"}
 	wcClassNames   = []string{"alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"}
+	devctlValues   = map[uint32]bool{TCFLSH: true, TCXONC: true, TCSBRK: true}
 )
 
 var randomInit = [32]uint32{
@@ -109,6 +110,12 @@ var hostRlimits = [RLIM_NLIMITS]int{
 	RLIMIT_NICE:       hostRlimitNice,
 	RLIMIT_RTPRIO:     hostRlimitRtprio,
 	RLIMIT_RTTIME:     hostRlimitRttime,
+}
+
+var devctlData = map[uint32]uint32{
+	FIONBIO: 4, TIOCGPGRP: 4, TIOCSPGRP: 4, FIONREAD: 4, TIOCOUTQ: 4, TIOCGPTN: 4, TIOCGSID: 4,
+	TIOCGWINSZ: sizeofWinsize, TIOCSWINSZ: sizeofWinsize,
+	TCGETS: sizeofTermios, TCSETS: sizeofTermios, TCSETS + 1: sizeofTermios, TCSETS + 2: sizeofTermios,
 }
 
 const (
@@ -248,6 +255,8 @@ type Process struct {
 
 	spawnFiles     map[uint32][]SpawnAction
 	nextSpawnFiles uint32
+	locales        map[uint32][LC_ALL]string
+	nextLocale     uint32
 
 	desKey       [8]byte
 	posixTimers  map[int32]*PosixTimer
@@ -553,7 +562,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
 		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0
 		p.regexes, p.constants, p.locale = map[uint32]*PosixRegex{}, map[string]uint32{}, [LC_ALL]string{}
-		p.iconvs, p.spawnFiles = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}
+		p.iconvs, p.spawnFiles, p.locales = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}, map[uint32][LC_ALL]string{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
 		p.defaultStack, p.defaultGuard, p.desKey = 0, 0, [8]byte{}
 
@@ -1959,6 +1968,368 @@ func (p *Process) libcPosix_spawnattr_setschedparam(attr, param uint32) uint32 {
 	return 0
 }
 
+func waitClock(clock uint32) bool {
+	return clock == CLOCK_REALTIME || clock == CLOCK_MONOTONIC
+}
+
+func (p *Process) libcPthread_mutex_clocklock(mutex, clock, at uint32) uint32 {
+	if !waitClock(clock) {
+		return uint32(EINVAL)
+	}
+
+	return codeOf(p.timedLock(mutex, defaultMutex, false, at, clock))
+}
+
+func (p *Process) libcPthread_cond_clockwait(cond, mutex, clock, at uint32) uint32 {
+	if !waitClock(clock) {
+		return uint32(EINVAL)
+	}
+
+	return codeOf(p.condTimedwait(cond, mutex, at, &clock))
+}
+
+func (p *Process) libcPthread_rwlock_clockrdlock(lock, clock, at uint32) uint32 {
+	if !waitClock(clock) {
+		return uint32(EINVAL)
+	}
+
+	return codeOf(p.timedLock(lock, defaultRWLock, true, at, clock))
+}
+
+func (p *Process) libcPthread_rwlock_clockwrlock(lock, clock, at uint32) uint32 {
+	if !waitClock(clock) {
+		return uint32(EINVAL)
+	}
+
+	return codeOf(p.timedLock(lock, defaultRWLock, false, at, clock))
+}
+
+func (p *Process) libcSem_clockwait(sem, clock, at uint32) uint32 {
+	if !waitClock(clock) {
+		return p.result(0, EINVAL)
+	}
+
+	err := p.syncCall(sem, nil, &SyncLock{thread: p.pid, try: true})
+
+	if err != EAGAIN {
+		return p.result(0, err)
+	}
+
+	end, err := p.deadlineOf(at, clock)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	return p.result(0, p.syncCall(sem, nil, &SyncLock{thread: p.pid, end: end}))
+}
+
+func (p *Process) libcSig2str(sig, out uint32) uint32 {
+	name, ok := signalAbbrev(int(int32(sig)))
+
+	if !ok {
+		return ^uint32(0)
+	}
+
+	b := p.span(out, uint32(len(name))+1)
+
+	copy(b, name)
+	b[len(name)] = 0
+
+	return 0
+}
+
+func (p *Process) libcStr2sig(name, out uint32) uint32 {
+	sig, ok := signalNumbered(p.str(name))
+
+	if !ok {
+		return ^uint32(0)
+	}
+
+	p.put32(out, uint32(sig))
+
+	return 0
+}
+
+func (p *Process) libcTcgetwinsize(fd, at uint32) uint32 {
+	t, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	size, err := p.ttyWindow(t)
+
+	if err == nil {
+		copy(p.span(at, sizeofWinsize), size)
+	}
+
+	return p.result(0, err)
+}
+
+func (p *Process) libcTcsetwinsize(fd, at uint32) uint32 {
+	t, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	return p.result(0, p.ttySetWindow(t, append([]byte(nil), p.span(at, sizeofWinsize)...)))
+}
+
+func (p *Process) libcWcslcpy(d, s, n uint32) uint32 {
+	l := p.wcslen(s)
+
+	if n == 0 {
+		return l
+	}
+
+	k := min(l, n-1)
+
+	copy(p.span(d, 4*k), p.span(s, 4*k))
+	p.put32(d+4*k, 0)
+
+	return l
+}
+
+func (p *Process) libcWcslcat(d, s, n uint32) uint32 {
+	l := p.wcsnlen(d, n)
+	src := p.wcslen(s)
+
+	if l == n {
+		return l + src
+	}
+
+	k := min(src, n-l-1)
+
+	copy(p.span(d+4*l, 4*k), p.span(s, 4*k))
+	p.put32(d+4*(l+k), 0)
+
+	return l + src
+}
+
+func (p *Process) libcNewlocale(mask, name, base uint32) uint32 {
+	if name == 0 || int32(mask) < 0 {
+		return p.pointer(0, EINVAL)
+	}
+
+	var names [LC_ALL]string
+
+	if base != 0 {
+		b, ok := p.locales[base]
+
+		if !ok {
+			return p.pointer(0, EINVAL)
+		}
+
+		names = b
+	}
+
+	s := p.str(name)
+	parts := []string{s}
+
+	if mask&(1<<LC_ALL-1) == 1<<LC_ALL-1 {
+		parts = strings.Split(s, ";")
+	}
+
+	for i := range LC_ALL {
+		if mask&(1<<i) == 0 {
+			continue
+		}
+
+		n := p.localeName(i, parts[min(i, len(parts)-1)])
+
+		if !utf8Codeset(n) {
+			return p.pointer(0, ENOENT)
+		}
+
+		names[i] = n
+	}
+
+	if base != 0 {
+		p.locales[base] = names
+
+		return base
+	}
+
+	return p.addLocale(names)
+}
+
+func (p *Process) addLocale(names [LC_ALL]string) uint32 {
+	p.nextLocale++
+	p.locales[p.nextLocale] = names
+
+	return p.nextLocale
+}
+
+func (p *Process) localeOf(locale uint32) ([LC_ALL]string, bool) {
+	if locale == uint32(LC_GLOBAL_LOCALE) {
+		return p.locale, true
+	}
+
+	names, ok := p.locales[locale]
+
+	return names, ok
+}
+
+func (p *Process) libcDuplocale(locale uint32) uint32 {
+	names, ok := p.localeOf(locale)
+
+	if !ok {
+		return p.pointer(0, EINVAL)
+	}
+
+	return p.addLocale(names)
+}
+
+func (p *Process) libcFreelocale(locale uint32) {
+	delete(p.locales, locale)
+}
+
+func (p *Process) libcUselocale(locale uint32) uint32 {
+	previous := p.thread.locale
+
+	if previous == 0 {
+		previous = uint32(LC_GLOBAL_LOCALE)
+	}
+
+	switch _, ok := p.locales[locale]; {
+	case locale == 0:
+	case locale == uint32(LC_GLOBAL_LOCALE):
+		p.thread.locale = 0
+	case !ok:
+		return p.pointer(0, EINVAL)
+	default:
+		p.thread.locale = locale
+	}
+
+	return previous
+}
+
+func (p *Process) libcGetlocalename_l(cat, locale uint32) uint32 {
+	names, ok := p.localeOf(locale)
+
+	if !ok || cat > LC_ALL {
+		return 0
+	}
+
+	return p.localeString(names, cat)
+}
+
+func plural(one, many, n uint32) uint32 {
+	if n == 1 {
+		return one
+	}
+
+	return many
+}
+
+func (p *Process) libcGettext_l(message, locale uint32) uint32 {
+	return message
+}
+
+func (p *Process) libcDgettext_l(domain, message, locale uint32) uint32 {
+	return message
+}
+
+func (p *Process) libcDcgettext_l(domain, message, category, locale uint32) uint32 {
+	return message
+}
+
+func (p *Process) libcNgettext_l(one, many, n, locale uint32) uint32 {
+	return plural(one, many, n)
+}
+
+func (p *Process) libcDngettext_l(domain, one, many, n, locale uint32) uint32 {
+	return plural(one, many, n)
+}
+
+func (p *Process) libcDcngettext_l(domain, one, many, n, category, locale uint32) uint32 {
+	return plural(one, many, n)
+}
+
+func (p *Process) libcPosix_getdents(fd, buf, n, flags uint32) uint32 {
+	if flags != 0 {
+		return p.result(0, EINVAL)
+	}
+
+	o, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	if fl, err := p.fileFlags(o); err == nil && (fl&O_PATH != 0 || fl&O_ACCMODE == O_WRONLY) {
+		return p.result(0, EBADF)
+	}
+
+	w := p.memory(buf, n, O_WRONLY)
+	count, err := p.fileReaddir(o, w, int(n))
+
+	p.memoryDone(w)
+
+	if err != nil || count != 0 || n >= direntRoom(NAME_MAX) {
+		return p.result(count, err)
+	}
+
+	at, err := p.fileSeek(o, 0, SEEK_CUR)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	if next, err := p.fileReaddir(o, bytesFile(make([]byte, direntRoom(NAME_MAX))), int(direntRoom(NAME_MAX))); err != nil || next == 0 {
+		return p.result(0, err)
+	}
+
+	if _, err := p.fileSeek(o, at, SEEK_SET); err != nil {
+		return p.result(0, err)
+	}
+
+	return p.result(0, EINVAL)
+}
+
+func direntRoom(length uint32) uint32 {
+	return (19 + length + 1 + 7) &^ 7
+}
+
+func (p *Process) libcPosix_devctl(fd, cmd, data, n, info uint32) uint32 {
+	arg := data
+
+	if need, ok := devctlData[cmd]; ok && (data == 0 || n != 0 && n < need) {
+		return uint32(EINVAL)
+	}
+
+	if devctlValues[cmd] {
+		arg = 0
+
+		if data != 0 {
+			if n != 0 && n < 4 {
+				return uint32(EINVAL)
+			}
+
+			arg = p.u32(data)
+		}
+	}
+
+	saved := p.errno()
+	r := p.ioctl(fd, cmd, arg)
+
+	if int32(r) == -1 {
+		failed := p.failure
+
+		p.setErrno(saved)
+
+		return uint32(failed)
+	}
+
+	if info != 0 {
+		p.put32(info, r)
+	}
+
+	return 0
+}
+
 func (p *Process) libcExecl(path, arg0, va uint32) uint32 {
 	return p.result(0, p.exec(p.str(path), p.argList(arg0, va), p.environment()))
 }
@@ -2539,6 +2910,7 @@ func (p *Process) startVfork() uint32 {
 	c.regexes, c.nextRegex, c.constants, c.jumps, c.stackAt = p.regexes, p.nextRegex, p.constants, p.jumps, p.stackAt
 	c.iconvs, c.nextIconv = p.iconvs, p.nextIconv
 	c.spawnFiles, c.nextSpawnFiles = p.spawnFiles, p.nextSpawnFiles
+	c.locales, c.nextLocale = p.locales, p.nextLocale
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
 	c.defaultStack, c.defaultGuard, c.desKey = p.defaultStack, p.defaultGuard, p.desKey
 	c.locale, c.envStrings, c.mappings, c.tzAt, c.herrnoAt, c.passwordAt = p.locale, p.envStrings, p.mappings, p.tzAt, p.herrnoAt, p.passwordAt
@@ -2595,6 +2967,7 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 	c.regexes, c.constants, c.jumps = map[uint32]*PosixRegex{}, map[string]uint32{}, map[uint32]*JmpBuf{}
 	c.iconvs, c.nextIconv = map[uint32]*Iconv{}, p.nextIconv
 	c.spawnFiles, c.nextSpawnFiles = map[uint32][]SpawnAction{}, p.nextSpawnFiles
+	c.locales, c.nextLocale = maps.Clone(p.locales), p.nextLocale
 
 	for id, r := range p.regexes {
 		copied := *r
@@ -6581,6 +6954,10 @@ func (p *Process) libcCfsetspeed(at, speed uint32) uint32 {
 }
 
 func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
+	return p.ioctl(fd, req, p.varArg(va, 0))
+}
+
+func (p *Process) ioctl(fd, req, arg uint32) uint32 {
 	obj, err := p.fd(fd)
 
 	if err != nil {
@@ -6588,7 +6965,7 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 	}
 
 	if p.device(obj) != (FileKey{}) {
-		if r, done := p.terminalIoctl(obj, fd, req, va); done {
+		if r, done := p.terminalIoctl(obj, fd, req, arg); done {
 			return r
 		}
 	}
@@ -6603,7 +6980,7 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 
 		fl &^= O_NONBLOCK
 
-		if p.u32(p.varArg(va, 0)) != 0 {
+		if p.u32(arg) != 0 {
 			fl |= O_NONBLOCK
 		}
 
@@ -6616,13 +6993,13 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 		r := p.libcTcgetpgrp(fd)
 
 		if int32(r) >= 0 {
-			p.put32(p.varArg(va, 0), r)
+			p.put32(arg, r)
 			r = 0
 		}
 
 		return r
 	case TIOCSPGRP:
-		return p.libcTcsetpgrp(fd, p.u32(p.varArg(va, 0)))
+		return p.libcTcsetpgrp(fd, p.u32(arg))
 	case TIOCGWINSZ:
 		w, err := p.ttyWindow(obj)
 
@@ -6631,7 +7008,7 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 		}
 
 		if err == nil {
-			copy(p.span(p.varArg(va, 0), sizeofWinsize), w)
+			copy(p.span(arg, sizeofWinsize), w)
 		}
 
 		return p.result(0, err)
@@ -6644,7 +7021,7 @@ func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
 			return p.result(0, err)
 		}
 
-		p.put32(p.varArg(va, 0), uint32(n))
+		p.put32(arg, uint32(n))
 
 		return p.result(0, nil)
 	}
@@ -9113,9 +9490,7 @@ func (p *Process) notty(t Object) error {
 	return nil
 }
 
-func (p *Process) terminalIoctl(t Object, fd, req, va uint32) (uint32, bool) {
-	arg := p.varArg(va, 0)
-
+func (p *Process) terminalIoctl(t Object, fd, req, arg uint32) (uint32, bool) {
 	switch req {
 	case TCGETS:
 		return p.result(0, p.tcgetattr(fd, arg)), true
@@ -12372,13 +12747,17 @@ func (p *Process) setlocale(cat uint32, name uint32) uint32 {
 		}
 	}
 
+	return p.localeString(p.locale, cat)
+}
+
+func (p *Process) localeString(locale [LC_ALL]string, cat uint32) uint32 {
 	if cat < LC_ALL {
-		return p.constant(localeShown(p.locale[cat]))
+		return p.constant(localeShown(locale[cat]))
 	}
 
 	names := make([]string, LC_ALL)
 
-	for i, n := range p.locale {
+	for i, n := range locale {
 		names[i] = localeShown(n)
 	}
 
@@ -15721,7 +16100,7 @@ func (p *Process) libcPthread_cond_wait(cond, mutex uint32) uint32 {
 	return 0
 }
 
-func (p *Process) condTimedwait(cond, mutex, at uint32) error {
+func (p *Process) condTimedwait(cond, mutex, at uint32, clock *uint32) error {
 	c, err := p.syncAt(cond, defaultCond)
 
 	if err != nil {
@@ -15734,11 +16113,11 @@ func (p *Process) condTimedwait(cond, mutex, at uint32) error {
 		return err
 	}
 
-	return p.request(c, &SyncWait{thread: p.pid, lock: m, at: at})
+	return p.request(c, &SyncWait{thread: p.pid, lock: m, at: at, clock: clock})
 }
 
 func (p *Process) libcPthread_cond_timedwait(cond, mutex, at uint32) uint32 {
-	return codeOf(p.condTimedwait(cond, mutex, at))
+	return codeOf(p.condTimedwait(cond, mutex, at, nil))
 }
 
 func (p *Process) libcPthread_rwlockattr_init(attr uint32) uint32 {
@@ -16158,7 +16537,7 @@ func (p *Process) libcCnd_wait(cond, mutex uint32) uint32 {
 }
 
 func (p *Process) libcCnd_timedwait(cond, mutex, at uint32) uint32 {
-	return threadsCode(p.condTimedwait(cond, mutex, at))
+	return threadsCode(p.condTimedwait(cond, mutex, at, nil))
 }
 
 func (p *Process) libcTss_create(key, fn uint32) uint32 {

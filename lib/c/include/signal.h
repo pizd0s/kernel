@@ -126,6 +126,7 @@ typedef struct {
 #define SIGUNUSED SIGSYS
 #define SIGRTMIN 34
 #define SIGRTMAX 64
+#define SIG2STR_MAX 32
 #define NSIG 65
 #define _NSIG NSIG
 
@@ -172,6 +173,8 @@ int sigwait(const sigset_t* __restrict, int* __restrict);
 int sigwaitinfo(const sigset_t* __restrict, siginfo_t* __restrict);
 int sigtimedwait(const sigset_t* __restrict, siginfo_t* __restrict, const struct timespec* __restrict);
 int sigqueue(pid_t, int, union sigval);
+int sig2str(int, char*);
+int str2sig(const char* __restrict, int* __restrict);
 int siginterrupt(int, int);
 int sighold(int);
 int sigrelse(int);

@@ -137,6 +137,8 @@ const (
 	F_SETFD                           = 2
 	F_GETFL                           = 3
 	F_SETFL                           = 4
+	SEEK_SET                          = 0
+	SEEK_CUR                          = 1
 	F_DUPFD_CLOEXEC                   = 1030
 	IGNBRK                            = 0o000001
 	BRKINT                            = 0o000002
@@ -321,6 +323,7 @@ const (
 	PTHREAD_STACK_MIN                 = 2048
 	SEM_VALUE_MAX                     = 0x7fffffff
 	NAME_MAX                          = 255
+	LC_GLOBAL_LOCALE                  = 0xffffffff
 	TIME_UTC                          = 1
 	EFD_SEMAPHORE                     = 1
 	TFD_TIMER_ABSTIME                 = 1

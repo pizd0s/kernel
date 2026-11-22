@@ -97,7 +97,7 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 
 func (k *Kernel) process(pid int32, parent *Process) *Process {
 	p := &Process{k: k, pid: pid, umask: 0o022, regexes: map[uint32]*PosixRegex{}, iconvs: map[uint32]*Iconv{}, seed: 0, syncs: map[int32]Object{},
-		semOpens: map[string]*SemOpen{}, spawnFiles: map[uint32][]SpawnAction{}}
+		semOpens: map[string]*SemOpen{}, spawnFiles: map[uint32][]SpawnAction{}, locales: map[uint32][LC_ALL]string{}}
 
 	p.own.signal.kind, p.own.continued.kind = eventSignal, eventContinued
 	p.own.child.kind, p.own.compiled.kind, p.own.pool.kind = eventChild, eventCompiled, eventPool
@@ -896,6 +896,30 @@ func (k *Kernel) functionTable() map[string]any {
 		"execvpe":                               libcExecvpe,
 		"execle":                                libcExecle,
 		"fexecve":                               libcFexecve,
+		"pthread_mutex_clocklock":               libcPthread_mutex_clocklock,
+		"pthread_cond_clockwait":                libcPthread_cond_clockwait,
+		"pthread_rwlock_clockrdlock":            libcPthread_rwlock_clockrdlock,
+		"pthread_rwlock_clockwrlock":            libcPthread_rwlock_clockwrlock,
+		"sem_clockwait":                         libcSem_clockwait,
+		"sig2str":                               libcSig2str,
+		"str2sig":                               libcStr2sig,
+		"tcgetwinsize":                          libcTcgetwinsize,
+		"tcsetwinsize":                          libcTcsetwinsize,
+		"wcslcpy":                               libcWcslcpy,
+		"wcslcat":                               libcWcslcat,
+		"newlocale":                             libcNewlocale,
+		"duplocale":                             libcDuplocale,
+		"freelocale":                            libcFreelocale,
+		"uselocale":                             libcUselocale,
+		"getlocalename_l":                       libcGetlocalename_l,
+		"gettext_l":                             libcGettext_l,
+		"dgettext_l":                            libcDgettext_l,
+		"dcgettext_l":                           libcDcgettext_l,
+		"ngettext_l":                            libcNgettext_l,
+		"dngettext_l":                           libcDngettext_l,
+		"dcngettext_l":                          libcDcngettext_l,
+		"posix_getdents":                        libcPosix_getdents,
+		"posix_devctl":                          libcPosix_devctl,
 		"posix_spawn":                           libcPosix_spawn,
 		"posix_spawnp":                          libcPosix_spawnp,
 		"posix_spawn_file_actions_init":         libcPosix_spawn_file_actions_init,

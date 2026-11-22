@@ -41,6 +41,8 @@ long double wcstold(const wchar_t* __restrict, wchar_t** __restrict);
 
 size_t wcslen(const wchar_t*);
 size_t wcsnlen(const wchar_t*, size_t);
+size_t wcslcpy(wchar_t* __restrict, const wchar_t* __restrict, size_t);
+size_t wcslcat(wchar_t* __restrict, const wchar_t* __restrict, size_t);
 wchar_t* wcscpy(wchar_t* __restrict, const wchar_t* __restrict);
 wchar_t* wcsncpy(wchar_t* __restrict, const wchar_t* __restrict, size_t);
 wchar_t* wcscat(wchar_t* __restrict, const wchar_t* __restrict);

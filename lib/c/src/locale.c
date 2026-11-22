@@ -9,66 +9,10 @@
 #include <wctype.h>
 
 /*
- * The locale_t interface over the one locale lib/c has, C with UTF-8
- * multibyte strings: newlocale takes the names setlocale takes and gives
- * that locale, and every _l function is the function without the locale.
+ * The _l functions over the one locale lib/c has, C with UTF-8 multibyte
+ * strings: each is the function without the locale. The locale objects,
+ * newlocale's, with their categories' names, are the kernel's.
  */
-struct __locale_struct {
-    int unused;
-};
-
-static struct __locale_struct cLocale;
-static locale_t current = LC_GLOBAL_LOCALE;
-
-// utf8 is whether a locale name's codeset is UTF-8, as in en_US.UTF-8.
-static int utf8(const char* name) {
-    const char* dot = strchr(name, '.');
-
-    if (!dot) {
-        return 0;
-    }
-
-    char codeset[8];
-    size_t n = 0;
-
-    for (const char* p = dot + 1; *p && *p != '@' && n < sizeof codeset - 1; p++) {
-        if (*p != '-') {
-            codeset[n++] = (char)tolower((unsigned char)*p);
-        }
-    }
-
-    codeset[n] = 0;
-
-    return strcmp(codeset, "utf8") == 0;
-}
-
-locale_t newlocale(int mask, const char* name, locale_t base) {
-    if (!name || (*name && strcmp(name, "C") && strcmp(name, "POSIX") && !utf8(name))) {
-        errno = ENOENT;
-
-        return 0;
-    }
-
-    return &cLocale;
-}
-
-locale_t duplocale(locale_t locale) {
-    return &cLocale;
-}
-
-void freelocale(locale_t locale) {
-}
-
-locale_t uselocale(locale_t locale) {
-    locale_t previous = current;
-
-    if (locale) {
-        current = locale;
-    }
-
-    return previous;
-}
-
 int isalnum_l(int c, locale_t locale) {
     return isalnum(c);
 }

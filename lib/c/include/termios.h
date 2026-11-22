@@ -173,6 +173,8 @@ int tcdrain(int);
 int tcflush(int, int);
 int tcflow(int, int);
 pid_t tcgetsid(int);
+int tcgetwinsize(int, struct winsize*);
+int tcsetwinsize(int, const struct winsize*);
 speed_t cfgetospeed(const struct termios*);
 speed_t cfgetispeed(const struct termios*);
 int cfsetospeed(struct termios*, speed_t);

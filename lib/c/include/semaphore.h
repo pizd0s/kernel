@@ -23,6 +23,7 @@ int sem_destroy(sem_t*);
 int sem_wait(sem_t*);
 int sem_trywait(sem_t*);
 int sem_timedwait(sem_t* __restrict, const struct timespec* __restrict);
+int sem_clockwait(sem_t* __restrict, clockid_t, const struct timespec* __restrict);
 int sem_post(sem_t*);
 int sem_getvalue(sem_t* __restrict, int* __restrict);
 sem_t* sem_open(const char*, int, ...);

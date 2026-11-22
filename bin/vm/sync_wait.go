@@ -6,6 +6,7 @@ type SyncWait struct {
 	thread int32
 	lock   Object
 	at     uint32
+	clock  *uint32
 }
 
 func (r *SyncWait) op() uint32 {

@@ -53,7 +53,13 @@ func (c *Cond) call(p *Process, r Request, group uint32, waits bool) (bool, erro
 }
 
 func (c *Cond) wait(p *Process, r *SyncWait) error {
-	end, err := p.deadlineOf(r.at, c.clock)
+	clock := c.clock
+
+	if r.clock != nil {
+		clock = *r.clock
+	}
+
+	end, err := p.deadlineOf(r.at, clock)
 
 	if err != nil {
 		return err

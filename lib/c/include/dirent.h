@@ -28,6 +28,25 @@ struct dirent {
 #define DT_LNK 10
 #define DT_SOCK 12
 #define DT_WHT 14
+#define DT_MQ 16
+#define DT_SEM 17
+#define DT_SHM 18
+#define DT_TMO 19
+
+/*
+ * What posix_getdents gives of a directory's entries: struct dirent's
+ * layout, each entry's length rounded to 8. lib/c makes no file of the
+ * types DT_MQ, DT_SEM, DT_SHM and DT_TMO name.
+ */
+struct posix_dent {
+    ino_t d_ino;
+    off_t d_off;
+    reclen_t d_reclen;
+    unsigned char d_type;
+    char d_name[];
+};
+
+ssize_t posix_getdents(int, void*, size_t, int);
 
 DIR* opendir(const char*);
 DIR* fdopendir(int);

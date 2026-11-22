@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"fmt"
 	"math/bits"
+	"strconv"
+	"strings"
 )
 
 var signalMessages = map[int]string{
@@ -76,6 +78,8 @@ var signalNames = map[int]string{
 	SIGSYS:    "SIGSYS",
 }
 
+var signalAliases = map[string]int{"IOT": SIGABRT, "CLD": SIGCHLD, "POLL": SIGIO, "UNUSED": SIGSYS}
+
 func lower(c byte) byte {
 	if c >= 'A' && c <= 'Z' {
 		return c + 'a' - 'A'
@@ -144,6 +148,61 @@ func signalName(sig int) string {
 	}
 
 	return fmt.Sprintf("signal %d", sig)
+}
+
+func signalAbbrev(sig int) (string, bool) {
+	switch {
+	case sig == SIGRTMIN:
+		return "RTMIN", true
+	case sig == SIGRTMAX:
+		return "RTMAX", true
+	case sig > SIGRTMIN && sig <= (SIGRTMIN+SIGRTMAX)/2:
+		return fmt.Sprintf("RTMIN+%d", sig-SIGRTMIN), true
+	case sig > SIGRTMIN && sig < SIGRTMAX:
+		return fmt.Sprintf("RTMAX-%d", SIGRTMAX-sig), true
+	case sig < 1 || sig >= NSIG:
+		return "", false
+	}
+
+	if s, ok := signalNames[sig]; ok {
+		return s[3:], true
+	}
+
+	return strconv.Itoa(sig), true
+}
+
+func signalNumbered(name string) (int, bool) {
+	for sig := 1; sig < NSIG; sig++ {
+		if s, _ := signalAbbrev(sig); s == name {
+			return sig, true
+		}
+	}
+
+	if sig, ok := signalAliases[name]; ok {
+		return sig, true
+	}
+
+	for _, form := range []struct {
+		prefix string
+		base   int
+		sign   int
+	}{{"RTMIN+", SIGRTMIN, 1}, {"RTMAX-", SIGRTMAX, -1}} {
+		if digits, ok := strings.CutPrefix(name, form.prefix); ok {
+			n, err := strconv.Atoi(digits)
+
+			if err == nil && digits[0] != '+' && digits[0] != '-' && n >= 1 && n < SIGRTMAX-SIGRTMIN {
+				return form.base + form.sign*n, true
+			}
+
+			return 0, false
+		}
+	}
+
+	if n, err := strconv.Atoi(name); err == nil && name[0] != '+' && name[0] != '-' && n >= 1 && n < NSIG {
+		return n, true
+	}
+
+	return 0, false
 }
 
 func signalMessage(sig int) string {

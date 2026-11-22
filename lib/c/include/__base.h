@@ -82,6 +82,7 @@ typedef unsigned short sa_family_t;
 typedef int key_t;
 typedef unsigned long long rlim_t;
 typedef struct __locale_struct* locale_t;
+typedef unsigned short reclen_t;
 
 typedef struct {
     unsigned long long __bits;
@@ -90,6 +91,14 @@ typedef struct {
 struct timespec {
     time_t tv_sec;
     long tv_nsec;
+};
+
+/* A terminal's window size: termios.h's, as POSIX.1-2024 has it, and sys/ioctl.h's. */
+struct winsize {
+    unsigned short ws_row;
+    unsigned short ws_col;
+    unsigned short ws_xpixel;
+    unsigned short ws_ypixel;
 };
 
 struct timeval {

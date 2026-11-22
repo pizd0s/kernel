@@ -20,6 +20,7 @@
 #include <arpa/inet.h>
 #include <assert.h>
 #include <ctype.h>
+#include <devctl.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <fnmatch.h>
@@ -28,6 +29,7 @@
 #include <iconv.h>
 #include <inttypes.h>
 #include <langinfo.h>
+#include <libintl.h>
 #include <libgen.h>
 #include <locale.h>
 #include <malloc.h>
@@ -206,6 +208,17 @@ KERNEL(char*, dirname, (char* a), (a))
 
 /* locale.h */
 KERNEL(char*, setlocale, (int a, const char* b), (a, b))
+KERNEL(locale_t, newlocale, (int a, const char* b, locale_t c), (a, b, c))
+KERNEL(locale_t, duplocale, (locale_t a), (a))
+KERNEL_VOID(freelocale, (locale_t a), (a))
+KERNEL(locale_t, uselocale, (locale_t a), (a))
+KERNEL(const char*, getlocalename_l, (int a, locale_t b), (a, b))
+KERNEL(char*, gettext_l, (const char* a, locale_t b), (a, b))
+KERNEL(char*, dgettext_l, (const char* a, const char* b, locale_t c), (a, b, c))
+KERNEL(char*, dcgettext_l, (const char* a, const char* b, int c, locale_t d), (a, b, c, d))
+KERNEL(char*, ngettext_l, (const char* a, const char* b, unsigned long c, locale_t d), (a, b, c, d))
+KERNEL(char*, dngettext_l, (const char* a, const char* b, const char* c, unsigned long d, locale_t e), (a, b, c, d, e))
+KERNEL(char*, dcngettext_l, (const char* a, const char* b, const char* c, unsigned long d, int e, locale_t f), (a, b, c, d, e, f))
 KERNEL_SIZED(struct lconv*, localeconv, (void), (size_t size), (sizeof(struct lconv)))
 /* malloc.h */
 KERNEL(void*, memalign, (size_t a, size_t b), (a, b))
@@ -314,6 +327,7 @@ KERNEL_SIZED(int, pthread_mutex_trylock, (pthread_mutex_t* a), (pthread_mutex_t*
 KERNEL_SIZED(int, pthread_mutex_unlock, (pthread_mutex_t* a), (pthread_mutex_t* a, size_t a_size), (a, sizeof(pthread_mutex_t)))
 KERNEL_SIZED(int, pthread_mutex_consistent, (pthread_mutex_t* a), (pthread_mutex_t* a, size_t a_size), (a, sizeof(pthread_mutex_t)))
 KERNEL_SIZED(int, pthread_mutex_timedlock, (pthread_mutex_t* __restrict a, const struct timespec* __restrict b), (pthread_mutex_t* __restrict a, size_t a_size, const struct timespec* __restrict b, size_t b_size), (a, sizeof(pthread_mutex_t), b, sizeof(struct timespec)))
+KERNEL_SIZED(int, pthread_mutex_clocklock, (pthread_mutex_t* __restrict a, clockid_t b, const struct timespec* __restrict c), (pthread_mutex_t* __restrict a, size_t a_size, clockid_t b, const struct timespec* __restrict c, size_t c_size), (a, sizeof(pthread_mutex_t), b, c, sizeof(struct timespec)))
 KERNEL_SIZED(int, pthread_mutex_getprioceiling, (const pthread_mutex_t* __restrict a, int* __restrict b), (const pthread_mutex_t* __restrict a, size_t a_size, int* __restrict b), (a, sizeof(pthread_mutex_t), b))
 KERNEL_SIZED(int, pthread_mutex_setprioceiling, (pthread_mutex_t* __restrict a, int b, int* __restrict c), (pthread_mutex_t* __restrict a, size_t a_size, int b, int* __restrict c), (a, sizeof(pthread_mutex_t), b, c))
 KERNEL_SIZED(int, pthread_condattr_init, (pthread_condattr_t* a), (pthread_condattr_t* a, size_t a_size), (a, sizeof(pthread_condattr_t)))
@@ -328,6 +342,7 @@ KERNEL_SIZED(int, pthread_cond_signal, (pthread_cond_t* a), (pthread_cond_t* a, 
 KERNEL_SIZED(int, pthread_cond_broadcast, (pthread_cond_t* a), (pthread_cond_t* a, size_t a_size), (a, sizeof(pthread_cond_t)))
 KERNEL_SIZED(int, pthread_cond_wait, (pthread_cond_t* __restrict a, pthread_mutex_t* __restrict b), (pthread_cond_t* __restrict a, size_t a_size, pthread_mutex_t* __restrict b, size_t b_size), (a, sizeof(pthread_cond_t), b, sizeof(pthread_mutex_t)))
 KERNEL_SIZED(int, pthread_cond_timedwait, (pthread_cond_t* __restrict a, pthread_mutex_t* __restrict b, const struct timespec* __restrict c), (pthread_cond_t* __restrict a, size_t a_size, pthread_mutex_t* __restrict b, size_t b_size, const struct timespec* __restrict c, size_t c_size), (a, sizeof(pthread_cond_t), b, sizeof(pthread_mutex_t), c, sizeof(struct timespec)))
+KERNEL_SIZED(int, pthread_cond_clockwait, (pthread_cond_t* __restrict a, pthread_mutex_t* __restrict b, clockid_t c, const struct timespec* __restrict d), (pthread_cond_t* __restrict a, size_t a_size, pthread_mutex_t* __restrict b, size_t b_size, clockid_t c, const struct timespec* __restrict d, size_t d_size), (a, sizeof(pthread_cond_t), b, sizeof(pthread_mutex_t), c, d, sizeof(struct timespec)))
 KERNEL_SIZED(int, pthread_rwlockattr_init, (pthread_rwlockattr_t* a), (pthread_rwlockattr_t* a, size_t a_size), (a, sizeof(pthread_rwlockattr_t)))
 KERNEL_SIZED(int, pthread_rwlockattr_destroy, (pthread_rwlockattr_t* a), (pthread_rwlockattr_t* a, size_t a_size), (a, sizeof(pthread_rwlockattr_t)))
 KERNEL_SIZED(int, pthread_rwlockattr_setpshared, (pthread_rwlockattr_t* a, int b), (pthread_rwlockattr_t* a, size_t a_size, int b), (a, sizeof(pthread_rwlockattr_t), b))
@@ -341,6 +356,8 @@ KERNEL_SIZED(int, pthread_rwlock_trywrlock, (pthread_rwlock_t* a), (pthread_rwlo
 KERNEL_SIZED(int, pthread_rwlock_unlock, (pthread_rwlock_t* a), (pthread_rwlock_t* a, size_t a_size), (a, sizeof(pthread_rwlock_t)))
 KERNEL_SIZED(int, pthread_rwlock_timedrdlock, (pthread_rwlock_t* __restrict a, const struct timespec* __restrict b), (pthread_rwlock_t* __restrict a, size_t a_size, const struct timespec* __restrict b, size_t b_size), (a, sizeof(pthread_rwlock_t), b, sizeof(struct timespec)))
 KERNEL_SIZED(int, pthread_rwlock_timedwrlock, (pthread_rwlock_t* __restrict a, const struct timespec* __restrict b), (pthread_rwlock_t* __restrict a, size_t a_size, const struct timespec* __restrict b, size_t b_size), (a, sizeof(pthread_rwlock_t), b, sizeof(struct timespec)))
+KERNEL_SIZED(int, pthread_rwlock_clockrdlock, (pthread_rwlock_t* __restrict a, clockid_t b, const struct timespec* __restrict c), (pthread_rwlock_t* __restrict a, size_t a_size, clockid_t b, const struct timespec* __restrict c, size_t c_size), (a, sizeof(pthread_rwlock_t), b, c, sizeof(struct timespec)))
+KERNEL_SIZED(int, pthread_rwlock_clockwrlock, (pthread_rwlock_t* __restrict a, clockid_t b, const struct timespec* __restrict c), (pthread_rwlock_t* __restrict a, size_t a_size, clockid_t b, const struct timespec* __restrict c, size_t c_size), (a, sizeof(pthread_rwlock_t), b, c, sizeof(struct timespec)))
 KERNEL_SIZED(int, pthread_barrierattr_init, (pthread_barrierattr_t* a), (pthread_barrierattr_t* a, size_t a_size), (a, sizeof(pthread_barrierattr_t)))
 KERNEL_SIZED(int, pthread_barrierattr_destroy, (pthread_barrierattr_t* a), (pthread_barrierattr_t* a, size_t a_size), (a, sizeof(pthread_barrierattr_t)))
 KERNEL_SIZED(int, pthread_barrierattr_setpshared, (pthread_barrierattr_t* a, int b), (pthread_barrierattr_t* a, size_t a_size, int b), (a, sizeof(pthread_barrierattr_t), b))
@@ -404,6 +421,7 @@ KERNEL_SIZED(int, sem_trywait, (sem_t* a), (sem_t* a, size_t a_size), (a, sizeof
 KERNEL_SIZED(int, sem_post, (sem_t* a), (sem_t* a, size_t a_size), (a, sizeof(sem_t)))
 KERNEL_SIZED(int, sem_close, (sem_t* a), (sem_t* a, size_t a_size), (a, sizeof(sem_t)))
 KERNEL_SIZED(int, sem_timedwait, (sem_t* __restrict a, const struct timespec* __restrict b), (sem_t* __restrict a, size_t a_size, const struct timespec* __restrict b, size_t b_size), (a, sizeof(sem_t), b, sizeof(struct timespec)))
+KERNEL_SIZED(int, sem_clockwait, (sem_t* __restrict a, clockid_t b, const struct timespec* __restrict c), (sem_t* __restrict a, size_t a_size, clockid_t b, const struct timespec* __restrict c, size_t c_size), (a, sizeof(sem_t), b, c, sizeof(struct timespec)))
 KERNEL_SIZED(int, sem_getvalue, (sem_t* __restrict a, int* __restrict b), (sem_t* __restrict a, size_t a_size, int* __restrict b), (a, sizeof(sem_t), b))
 KERNEL(int, sem_unlink, (const char* a), (a))
 
@@ -423,6 +441,8 @@ KERNEL_SIZED(int, sigwait, (const sigset_t* __restrict a, int* __restrict b), (c
 KERNEL_SIZED(int, sigwaitinfo, (const sigset_t* __restrict a, siginfo_t* __restrict b), (const sigset_t* __restrict a, size_t a_size, siginfo_t* __restrict b, size_t b_size), (a, sizeof(sigset_t), b, sizeof(siginfo_t)))
 KERNEL_SIZED(int, sigtimedwait, (const sigset_t* __restrict a, siginfo_t* __restrict b, const struct timespec* __restrict c), (const sigset_t* __restrict a, size_t a_size, siginfo_t* __restrict b, size_t b_size, const struct timespec* __restrict c, size_t c_size), (a, sizeof(sigset_t), b, sizeof(siginfo_t), c, sizeof(struct timespec)))
 KERNEL(int, sigqueue, (pid_t a, int b, union sigval c), (a, b, c))
+KERNEL(int, sig2str, (int a, char* b), (a, b))
+KERNEL(int, str2sig, (const char* __restrict a, int* __restrict b), (a, b))
 KERNEL(int, siginterrupt, (int a, int b), (a, b))
 KERNEL(int, sighold, (int a), (a))
 KERNEL(int, sigrelse, (int a), (a))
@@ -701,6 +721,8 @@ KERNEL(int, tcdrain, (int a), (a))
 KERNEL(int, tcflush, (int a, int b), (a, b))
 KERNEL(int, tcflow, (int a, int b), (a, b))
 KERNEL(pid_t, tcgetsid, (int a), (a))
+KERNEL_SIZED(int, tcgetwinsize, (int a, struct winsize* b), (int a, struct winsize* b, size_t b_size), (a, b, sizeof(struct winsize)))
+KERNEL_SIZED(int, tcsetwinsize, (int a, const struct winsize* b), (int a, const struct winsize* b, size_t b_size), (a, b, sizeof(struct winsize)))
 KERNEL_SIZED(speed_t, cfgetospeed, (const struct termios* a), (const struct termios* a, size_t a_size), (a, sizeof(struct termios)))
 KERNEL_SIZED(speed_t, cfgetispeed, (const struct termios* a), (const struct termios* a, size_t a_size), (a, sizeof(struct termios)))
 KERNEL_SIZED(int, cfsetospeed, (struct termios* a, speed_t b), (struct termios* a, size_t a_size, speed_t b), (a, sizeof(struct termios), b))
@@ -792,6 +814,8 @@ KERNEL(int, execv, (const char* a, char* const b[]), (a, b))
 KERNEL(int, execvp, (const char* a, char* const b[]), (a, b))
 KERNEL(int, execvpe, (const char* a, char* const b[], char* const c[]), (a, b, c))
 KERNEL(int, fexecve, (int a, char* const b[], char* const c[]), (a, b, c))
+KERNEL(ssize_t, posix_getdents, (int a, void* b, size_t c, int d), (a, b, c, d))
+KERNEL(int, posix_devctl, (int a, int b, void* __restrict c, size_t d, int* __restrict e), (a, b, c, d, e))
 KERNEL_SIZED(int, posix_spawn, (pid_t* __restrict a, const char* __restrict b, const posix_spawn_file_actions_t* c, const posix_spawnattr_t* __restrict d, char* const e[], char* const f[]), (pid_t* __restrict a, const char* __restrict b, const posix_spawn_file_actions_t* c, size_t c_size, const posix_spawnattr_t* __restrict d, size_t d_size, char* const e[], char* const f[]), (a, b, c, sizeof(posix_spawn_file_actions_t), d, sizeof(posix_spawnattr_t), e, f))
 KERNEL_SIZED(int, posix_spawnp, (pid_t* __restrict a, const char* __restrict b, const posix_spawn_file_actions_t* c, const posix_spawnattr_t* __restrict d, char* const e[], char* const f[]), (pid_t* __restrict a, const char* __restrict b, const posix_spawn_file_actions_t* c, size_t c_size, const posix_spawnattr_t* __restrict d, size_t d_size, char* const e[], char* const f[]), (a, b, c, sizeof(posix_spawn_file_actions_t), d, sizeof(posix_spawnattr_t), e, f))
 KERNEL_SIZED(int, posix_spawn_file_actions_init, (posix_spawn_file_actions_t* a), (posix_spawn_file_actions_t* a, size_t a_size), (a, sizeof(posix_spawn_file_actions_t)))
@@ -912,6 +936,8 @@ KERNEL_SIZED(int, utime, (const char* a, const struct utimbuf* b), (const char* 
 /* wchar.h */
 KERNEL(size_t, wcslen, (const wchar_t* a), (a))
 KERNEL(size_t, wcsnlen, (const wchar_t* a, size_t b), (a, b))
+KERNEL(size_t, wcslcpy, (wchar_t* __restrict a, const wchar_t* __restrict b, size_t c), (a, b, c))
+KERNEL(size_t, wcslcat, (wchar_t* __restrict a, const wchar_t* __restrict b, size_t c), (a, b, c))
 KERNEL(wchar_t*, wcscpy, (wchar_t* __restrict a, const wchar_t* __restrict b), (a, b))
 KERNEL(wchar_t*, wcsncpy, (wchar_t* __restrict a, const wchar_t* __restrict b, size_t c), (a, b, c))
 KERNEL(wchar_t*, wcscat, (wchar_t* __restrict a, const wchar_t* __restrict b), (a, b))

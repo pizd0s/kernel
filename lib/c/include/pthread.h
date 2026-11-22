@@ -171,6 +171,7 @@ int pthread_mutex_destroy(pthread_mutex_t*);
 int pthread_mutex_lock(pthread_mutex_t*);
 int pthread_mutex_trylock(pthread_mutex_t*);
 int pthread_mutex_timedlock(pthread_mutex_t* __restrict, const struct timespec* __restrict);
+int pthread_mutex_clocklock(pthread_mutex_t* __restrict, clockid_t, const struct timespec* __restrict);
 int pthread_mutex_unlock(pthread_mutex_t*);
 int pthread_mutex_consistent(pthread_mutex_t*);
 int pthread_mutex_getprioceiling(const pthread_mutex_t* __restrict, int* __restrict);
@@ -188,6 +189,7 @@ int pthread_cond_signal(pthread_cond_t*);
 int pthread_cond_broadcast(pthread_cond_t*);
 int pthread_cond_wait(pthread_cond_t* __restrict, pthread_mutex_t* __restrict);
 int pthread_cond_timedwait(pthread_cond_t* __restrict, pthread_mutex_t* __restrict, const struct timespec* __restrict);
+int pthread_cond_clockwait(pthread_cond_t* __restrict, pthread_mutex_t* __restrict, clockid_t, const struct timespec* __restrict);
 
 int pthread_rwlockattr_init(pthread_rwlockattr_t*);
 int pthread_rwlockattr_destroy(pthread_rwlockattr_t*);
@@ -198,9 +200,11 @@ int pthread_rwlock_destroy(pthread_rwlock_t*);
 int pthread_rwlock_rdlock(pthread_rwlock_t*);
 int pthread_rwlock_tryrdlock(pthread_rwlock_t*);
 int pthread_rwlock_timedrdlock(pthread_rwlock_t* __restrict, const struct timespec* __restrict);
+int pthread_rwlock_clockrdlock(pthread_rwlock_t* __restrict, clockid_t, const struct timespec* __restrict);
 int pthread_rwlock_wrlock(pthread_rwlock_t*);
 int pthread_rwlock_trywrlock(pthread_rwlock_t*);
 int pthread_rwlock_timedwrlock(pthread_rwlock_t* __restrict, const struct timespec* __restrict);
+int pthread_rwlock_clockwrlock(pthread_rwlock_t* __restrict, clockid_t, const struct timespec* __restrict);
 int pthread_rwlock_unlock(pthread_rwlock_t*);
 
 int pthread_barrierattr_init(pthread_barrierattr_t*);

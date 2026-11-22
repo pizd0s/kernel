@@ -15,4 +15,5 @@ type Thread struct {
 	cancelType  uint32
 	cancelled   bool
 	detached    bool
+	locale      uint32
 }

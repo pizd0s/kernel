@@ -4,13 +4,6 @@
 
 __BEGIN_DECLS
 
-struct winsize {
-    unsigned short ws_row;
-    unsigned short ws_col;
-    unsigned short ws_xpixel;
-    unsigned short ws_ypixel;
-};
-
 #define _IOC_NONE 0U
 #define _IOC_WRITE 1U
 #define _IOC_READ 2U
