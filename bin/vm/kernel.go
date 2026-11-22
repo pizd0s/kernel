@@ -93,8 +93,7 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 }
 
 func (k *Kernel) process(pid int32, parent *Process) *Process {
-	p := &Process{k: k, pid: pid, umask: 0o022, regexes: map[uint32]*PosixRegex{}, seed: 0,
-		events: EventQueue{bell: make(chan struct{}, 1)}}
+	p := &Process{k: k, pid: pid, umask: 0o022, regexes: map[uint32]*PosixRegex{}, seed: 0}
 
 	p.own.signal.kind, p.own.continued.kind = eventSignal, eventContinued
 	p.own.child.kind, p.own.compiled.kind, p.own.pool.kind = eventChild, eventCompiled, eventPool

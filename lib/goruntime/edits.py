@@ -11,4 +11,10 @@ EDITS = [
     ("signal_unix.go",
      "\t// Check if this G wants to be preempted and is safe to\n\t// preempt.\n\tif wantAsyncPreempt(gp) {\n",
      "\t// Check if this G wants to be preempted and is safe to\n\t// preempt; an interruption goes first.\n\tif interruptG(gp, ctxt) {\n\t} else if wantAsyncPreempt(gp) {\n"),
+    ("runtime2.go",
+     "\twaitReasonCleanupWait                             // \"cleanup wait\"\n)\n",
+     "\twaitReasonCleanupWait                             // \"cleanup wait\"\n\twaitReasonSeat                                    // \"seat\" (seat.go)\n)\n"),
+    ("runtime2.go",
+     "\twaitReasonCleanupWait:           \"cleanup wait\",\n}\n",
+     "\twaitReasonCleanupWait:           \"cleanup wait\",\n\twaitReasonSeat:                  \"seat\",\n}\n"),
 ]

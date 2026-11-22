@@ -3519,10 +3519,7 @@ func (p *Process) post(e *Event) {
 }
 
 func (p *Process) ring() {
-	select {
-	case p.events.bell <- struct{}{}:
-	default:
-	}
+	p.events.seat.Ring()
 }
 
 func (p *Process) wake(l *Hook) {
@@ -3627,7 +3624,7 @@ func (p *Process) wait(end time.Time, done func(e *Event) (bool, error)) (timedO
 				return true, nil
 			}
 
-			<-p.events.bell
+			p.events.seat.Sit()
 			rung = true
 
 			continue

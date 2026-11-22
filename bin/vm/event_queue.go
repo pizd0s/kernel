@@ -3,6 +3,7 @@
 package main
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 )
@@ -32,7 +33,7 @@ type Event struct {
 type EventQueue struct {
 	mu          sync.Mutex
 	first, last *Event
-	bell        chan struct{}
+	seat        runtime.Seat
 
 	count atomic.Int32
 }
