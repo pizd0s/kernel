@@ -1,24 +1,38 @@
 #!/usr/bin/env python3
-"""Build lib/c's in-process archive: our own sources, the musl subset in musl/files.txt
-and the FreeBSD msun sources in freebsd/.
+"""Build lib/c's in-process archive: our own sources, the musl subset in
+musl/files.txt, FreeBSD's sources in freebsd/files.txt, LLVM libc's
+functions in llvm/files.txt and Arm's optimized-routines' in arm/files.txt.
 
-    make.py <cc> <ar> <musl-tarball> <libc.a>
+    make.py <cc> <ar> <musl-tarball> <freebsd-slice> <llvm-slice> <arm-tarball> <libc.a>
     make.py headers <include.tar>
 
 The second packs include/, the headers as a program built inside the system
 finds them.
 
-A .h line of files.txt names a musl internal header to keep; every other
-header of src/internal is deleted, so a quoted include of it falls through to
-our replacement in musl/. musl's public headers are never on the path.
+A .h line of musl/files.txt names a musl internal header to keep; every
+other header of src/internal is deleted, so a quoted include of it falls
+through to our replacement in musl/. musl's public headers are never on the
+path.
 
-freebsd/ holds copies of FreeBSD 14.3's lib/msun/src/catrig.c, catrigf.c,
-s_clog.c and s_clogf.c, unchanged: complex.h's inverse functions and clog,
-which musl's follow neither Annex G at its special values nor accuracy near
-|z| = 1. Its math_private.h and fpmath.h are ours, what those take of
-FreeBSD's.
+The FreeBSD and LLVM slices are what freebsd/slice.txt and llvm/slice.txt
+cut out of their release tarballs (dev/slice.py). FreeBSD's sources build
+over our headers with freebsd/'s for what they take of FreeBSD's own,
+sys/cdefs.h included first in each; FreeBSD's math.h is deleted, so their
+quoted include of it falls through to ours. A line of freebsd/files.txt is
+a path from the tree's root and the file's own flags.
+
+A line of llvm/files.txt is a C prototype, then the names of the same
+function: each becomes a C++ source of its own, the function calling LLVM
+libc's of its name in libc/shared/math, header-only, and weak aliases of
+it. A line of arm/files.txt is a source of optimized-routines' math/ and
+such a prototype and names, which a C source of ours includes it with and
+makes the aliases of; or a source alone. They build for the one rounding
+mode wasm has, to nearest, and set no errno, as math_errhandling says,
+with none of the names glibc's ABI adds.
 """
 import os
+import re
+import shlex
 import shutil
 import sys
 import tarfile
@@ -30,6 +44,96 @@ sys.path.insert(0, str(ROOT.parent.parent / "dev"))
 import wasm  # noqa: E402
 
 FLAGS = ["-O2", "-std=c99", "-D_XOPEN_SOURCE=700", "-w"]
+FREEBSD_FLAGS = ["-O2", "-std=c11", "-w", "-include", str(ROOT / "freebsd" / "sys" / "cdefs.h"), "-I", str(ROOT / "freebsd")]
+LLVM_FLAGS = ["-O2", "-std=c++17", "-fno-exceptions", "-fno-rtti", "-nostdinc++", "-w", "-DLIBC_NAMESPACE=__llvm_libc"]
+ARM_FLAGS = ["-O2", "-std=c11", "-w", "-DWANT_ROUNDING=0", "-DWANT_ERRNO=0", "-DUSE_GLIBC_ABI=0"]
+
+
+def listed(path):
+    for line in path.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+
+        if line:
+            yield line
+
+
+def unpack(tarball, work):
+    work.mkdir(parents=True)
+
+    with tarfile.open(tarball) as archive:
+        archive.extractall(work, filter="data")
+
+    return work
+
+
+def function(line, listing):
+    """A prototype and the names of the same function: its result, name,
+    parameter types and those names."""
+    prototype, _, names = line.partition(";")
+    match = re.fullmatch(r"(.+?)\s*\b(\w+)\((.*)\)", prototype.strip())
+
+    if not match:
+        raise SystemExit(f"{listing}: {line}")
+
+    result, name, parameters = match.groups()
+
+    return result, name, [part.strip() for part in parameters.split(",")], names.split()
+
+
+def aliases(result, name, types, names, linkage):
+    """Weak aliases of a function, each declared as its name says: one
+    ending in l is long double's, the prototype with long double for
+    double."""
+    lines = []
+
+    for alias in names:
+        def to(t, wide=alias.endswith("l")):
+            return re.sub(r"(?<!long )\bdouble\b", "long double", t) if wide else t
+
+        lines.append(f'{linkage}{to(result)} {alias}({", ".join(to(t) for t in types)}) '
+                     f'__attribute__((__weak__, __alias__("{name}")));')
+
+    return lines
+
+
+def wrappers(work):
+    """llvm/files.txt's functions, a C++ source each."""
+    sources = []
+
+    for line in listed(ROOT / "llvm" / "files.txt"):
+        result, name, types, names = function(line, "llvm/files.txt")
+        arguments = [f"a{i}" for i in range(len(types))]
+        call = f"LIBC_NAMESPACE::shared::{name}({', '.join(arguments)})"
+        text = [f'#include "shared/math/{name}.h"',
+                f'extern "C" {result} {name}({", ".join(f"{t} {a}" for t, a in zip(types, arguments))}) {{',
+                f"    {'' if result == 'void' else 'return '}{call};",
+                "}"]
+        text += aliases(result, name, types, names, 'extern "C" ')
+        source = work / f"{name}.cpp"
+        source.write_text("\n".join(text) + "\n")
+        sources.append(source)
+
+    return sources
+
+
+def arm(tree, work):
+    """arm/files.txt's sources: of a function, ours including it and making
+    its aliases; the others as they are."""
+    sources = []
+
+    for line in listed(ROOT / "arm" / "files.txt"):
+        path, _, rest = line.partition(":")
+        source = tree / path.strip()
+
+        if rest.strip():
+            result, name, types, names = function(rest, "arm/files.txt")
+            text = [f'#include "{source}"', *aliases(result, name, types, names, "")]
+            source = work / f"{name}.c"
+            source.write_text("\n".join(text) + "\n")
+
+        sources.append(source)
+
+    return sources
 
 
 def main():
@@ -38,7 +142,7 @@ def main():
 
         return
 
-    cc, ar, tarball, output = sys.argv[1:5]
+    cc, ar, tarball, freebsd_slice, llvm_slice, arm_tarball, output = sys.argv[1:8]
     work = Path(os.environ.get("TMPDIR") or "/tmp") / "libc"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -48,12 +152,17 @@ def main():
 
     tree = next(work.glob("musl-*"))
     musl = tree / "src"
-    lines = (ROOT / "musl" / "files.txt").read_text().split()
+    lines = list(listed(ROOT / "musl" / "files.txt"))
     kept = {musl / line for line in lines if line.endswith(".h")}
 
     for header in (musl / "internal").glob("*.h"):
         if header not in kept:
             header.unlink()
+
+    freebsd = unpack(freebsd_slice, work / "freebsd")
+    (freebsd / "lib" / "msun" / "src" / "math.h").unlink()
+    llvm = unpack(llvm_slice, work / "llvm")
+    optimized = next(unpack(arm_tarball, work / "arm").glob("optimized-routines-*"))
 
     includes = [
         "-include", str(ROOT / "musl" / "features.h"),
@@ -72,9 +181,43 @@ def main():
     for source in sorted((ROOT / "src").glob("*.c")):
         units.append((source, work / "obj" / "pizdos" / source.with_suffix(".o").name, FLAGS + includes))
 
-    for source in sorted((ROOT / "freebsd").glob("*.c")):
-        units.append((source, work / "obj" / "freebsd" / source.with_suffix(".o").name,
-                      FLAGS + ["-I", str(ROOT / "freebsd")] + includes))
+    msun = ["-I", str(freebsd / "lib" / "msun" / "src"), "-isystem", str(ROOT / "include")]
+
+    for line in listed(ROOT / "freebsd" / "files.txt"):
+        path, *flags = shlex.split(line)
+        units.append((freebsd / path, work / "obj" / "freebsd" / Path(path).with_suffix(".o").name,
+                      FREEBSD_FLAGS + msun + flags))
+
+    (work / "llvm-wrappers").mkdir()
+
+    for source in wrappers(work / "llvm-wrappers"):
+        units.append((source, work / "obj" / "llvm" / source.with_suffix(".o").name,
+                      LLVM_FLAGS + ["-I", str(llvm / "libc"), "-isystem", str(ROOT / "include")]))
+
+    (work / "arm-wrappers").mkdir()
+    math = optimized / "math"
+    # Its internal names, which its headers map from reserved ones to
+    # arm_math_, a program's to name: reserved again.
+    internal = set()
+
+    for header in math.glob("*.h"):
+        internal.update(re.findall(r"#\s*define\s+__\w+\s+(arm_math_\w+)", header.read_text()))
+
+    renames = [f"-D{name}=__{name}" for name in sorted(internal)]
+
+    for source in arm(optimized, work / "arm-wrappers"):
+        units.append((source, work / "obj" / "arm" / source.with_suffix(".o").name,
+                      ARM_FLAGS + renames + ["-I", str(math / "include"), "-I", str(math), "-isystem", str(ROOT / "include")]))
+
+    # An archive's members are named by their files' names: one name twice
+    # would be one member.
+    seen = {}
+
+    for source, obj, flags in units:
+        if obj.name in seen:
+            raise SystemExit(f"{source} and {seen[obj.name]} make objects of one name")
+
+        seen[obj.name] = source
 
     wasm.compile_all(cc, units)
     wasm.archive(ar, output, [obj for source, obj, flags in units])

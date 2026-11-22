@@ -1,0 +1,9 @@
+# What lib/c takes of LLVM's source tree, cut out of the release tarball
+# once (dev/slice.py): LLVM libc's header-only math and what it includes,
+# and the license.
+libc/LICENSE.TXT
+libc/shared
+libc/src/__support
+libc/hdr
+libc/include/llvm-libc-macros
+libc/include/llvm-libc-types

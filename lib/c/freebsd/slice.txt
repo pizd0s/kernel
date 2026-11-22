@@ -1,0 +1,6 @@
+# What lib/c takes of FreeBSD 14.3's source tree, cut out of its src.txz
+# once after the download (dev/slice.py): msun, its math and complex
+# functions, and the copyright.
+COPYRIGHT
+lib/msun/src
+lib/msun/bsdsrc

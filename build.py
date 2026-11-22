@@ -39,6 +39,8 @@ DOOMGENERIC = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
 PYTHON = "3.14.10"
 STR = "e96fca3f07464a01a4a0f52deb0f6e69be293bd3"
 LLVM = "23.1.5"
+FREEBSD = "14.3"
+OPTIMIZED_ROUTINES = "26.07"
 MC = "4.8.33"
 GLIB = "2.90.1"
 SLANG = "2.3.3"
@@ -115,6 +117,46 @@ llvm_tarball = fetch(
     f"$(B)/ext/llvm-project-{LLVM}.src.tar.xz",
 )
 
+# FreeBSD's sources, of which lib/c builds msun (lib/c/freebsd): its
+# release's src.txz.
+freebsd_tarball = fetch(
+    "freebsd_tarball",
+    f"http://ftp-archive.freebsd.org/pub/FreeBSD-Archive/old-releases/amd64/{FREEBSD}-RELEASE/src.txz",
+    "a93adfc20d8f783ceb2c09c5d37e8591ce973944b01362146f99242223904ab6",
+    f"$(B)/ext/freebsd-{FREEBSD}-src.txz",
+)
+
+
+# Arm's optimized-routines, of which lib/c builds math (lib/c/arm): 1 MB,
+# unpacked whole.
+arm_tarball = fetch(
+    "arm_tarball",
+    f"https://github.com/ARM-software/optimized-routines/archive/refs/tags/v{OPTIMIZED_ROUTINES}.tar.gz",
+    "0db974d39531e1e922cd1b31da2c3118881c4ce86b3323daf2c13830ef2b229c",
+    f"$(B)/ext/optimized-routines-{OPTIMIZED_ROUTINES}.tar.gz",
+)
+
+
+# What a build takes of a big source tarball, the paths a list names under
+# the tree's root, cut out of it once after its download, so the build
+# unpacks only that (dev/slice.py).
+def cut(name, tarball, root, prefixes, output):
+    return command(
+        name=name,
+        inputs=["$(S)/dev/slice.py", prefixes],
+        outputs=[output],
+        deps=[tarball],
+        cmd=["python3", "$(S)/dev/slice.py", tarball.outputs[0], root, prefixes, output],
+        descr="SL",
+        color="blue",
+    )
+
+
+freebsd_slice = cut("freebsd_slice", freebsd_tarball, "usr/src", "$(S)/lib/c/freebsd/slice.txt",
+                    f"$(B)/ext/freebsd-{FREEBSD}-libc.tar.gz")
+llvm_libc_slice = cut("llvm_libc_slice", llvm_tarball, f"llvm-project-{LLVM}.src", "$(S)/lib/c/llvm/slice.txt",
+                      f"$(B)/ext/llvm-project-{LLVM}-libc.tar.gz")
+
 # Midnight Commander and what it stands on (bin/mc); ncurses for its
 # source of the terminals' descriptions (dev/terminfo.py).
 mc_tarball = fetch(
@@ -163,22 +205,27 @@ doom_wad = fetch(
 LIBC_HEADERS = build.glob("$(S)/lib/c/include/**/*.h")
 
 # lib/c: the in-process part of the C library, our sources plus the musl
-# subset named in lib/c/musl/files.txt and FreeBSD's complex functions in
-# lib/c/freebsd; every other libc function is a kernel import declared by its
-# header.
+# subset named in lib/c/musl/files.txt, FreeBSD's msun sources in
+# lib/c/freebsd/files.txt, LLVM libc's math in lib/c/llvm/files.txt and Arm's
+# optimized-routines' in lib/c/arm/files.txt; every other libc function is a
+# kernel import declared by its header.
 libc = command(
     name="libc",
     inputs=[
         *LIBC_HEADERS,
         *build.glob("$(S)/lib/c/musl/*"),
         *build.glob("$(S)/lib/c/src/*"),
-        *build.glob("$(S)/lib/c/freebsd/*"),
+        *build.glob("$(S)/lib/c/freebsd/**/*.h"),
+        *build.glob("$(S)/lib/c/freebsd/*.txt"),
+        *build.glob("$(S)/lib/c/llvm/*"),
+        *build.glob("$(S)/lib/c/arm/*"),
         "$(S)/lib/c/make.py",
         "$(S)/dev/wasm.py",
     ],
     outputs=["$(B)/lib/c/libc.a"],
-    deps=[musl_tarball],
-    cmd=["python3", "$(S)/lib/c/make.py", CLANG, LLVM_AR, musl_tarball.outputs[0], "$(B)/lib/c/libc.a"],
+    deps=[musl_tarball, freebsd_slice, llvm_libc_slice, arm_tarball],
+    cmd=["python3", "$(S)/lib/c/make.py", CLANG, LLVM_AR, musl_tarball.outputs[0], freebsd_slice.outputs[0],
+         llvm_libc_slice.outputs[0], arm_tarball.outputs[0], "$(B)/lib/c/libc.a"],
     descr="CC",
     color="green",
 )

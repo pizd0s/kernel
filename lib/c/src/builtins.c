@@ -50,6 +50,67 @@ __int128 __multi3(__int128 a, __int128 b) {
 }
 
 /*
+ * 128-bit shifts, which LLVM libc's math uses, of a count below 128: of
+ * the halves, one moving into the other.
+ */
+__int128 __ashlti3(__int128 a, int b) {
+    Words x;
+    Words r;
+
+    x.all = a;
+    if (b == 0) {
+        return a;
+    }
+    if (b >= 64) {
+        r.parts.low = 0;
+        r.parts.high = x.parts.low << (b - 64);
+    } else {
+        r.parts.low = x.parts.low << b;
+        r.parts.high = x.parts.high << b | x.parts.low >> (64 - b);
+    }
+
+    return r.all;
+}
+
+__int128 __lshrti3(__int128 a, int b) {
+    Words x;
+    Words r;
+
+    x.all = a;
+    if (b == 0) {
+        return a;
+    }
+    if (b >= 64) {
+        r.parts.high = 0;
+        r.parts.low = x.parts.high >> (b - 64);
+    } else {
+        r.parts.high = x.parts.high >> b;
+        r.parts.low = x.parts.low >> b | x.parts.high << (64 - b);
+    }
+
+    return r.all;
+}
+
+__int128 __ashrti3(__int128 a, int b) {
+    Words x;
+    Words r;
+
+    x.all = a;
+    if (b == 0) {
+        return a;
+    }
+    if (b >= 64) {
+        r.parts.high = (uint64_t)((int64_t)x.parts.high >> 63);
+        r.parts.low = (uint64_t)((int64_t)x.parts.high >> (b - 64));
+    } else {
+        r.parts.high = (uint64_t)((int64_t)x.parts.high >> b);
+        r.parts.low = x.parts.low >> b | x.parts.high << (64 - b);
+    }
+
+    return r.all;
+}
+
+/*
  * 128-bit division, which libc++'s conversions use: a quotient and remainder
  * of 64-bit halves, by native division when both fit in 64 bits and by
  * shift and subtract from the divisor's highest bit otherwise.

@@ -1,0 +1,57 @@
+# The functions lib/c takes of LLVM libc's header-only math
+# (libc/shared/math), each a C function of the prototype here calling
+# LLVM's of its name, then the names that are the same function: long
+# double's, which is a double here, and GNU's. Chosen by speed in the
+# system against FreeBSD's: LLVM's, correctly rounded, unless it is twice
+# as slow or more; of the exact functions the faster; and Arm's
+# optimized-routines' where they are faster still (arm/files.txt).
+double atan2(double, double); atan2l
+float atan2f(float, float);
+float atanf(float);
+float atanhf(float);
+float cbrtf(float);
+double cos(double); cosl
+float cosf(float);
+float coshf(float);
+float erff(float);
+double exp(double); expl
+float exp10f(float); pow10f
+double expm1(double); expm1l
+float expm1f(float);
+double fdim(double, double); fdiml
+float fdimf(float, float);
+float fmaf(float, float, float);
+double fmax(double, double); fmaxl
+float fmaxf(float, float);
+double fmin(double, double); fminl
+float fminf(float, float);
+double fmod(double, double); fmodl
+float fmodf(float, float);
+double frexp(double, int*); frexpl
+float frexpf(float, int*);
+int ilogb(double); ilogbl
+int ilogbf(float);
+double ldexp(double, int);
+long long llround(double); llroundl
+long long llroundf(float);
+double log10(double); log10l
+double log1p(double); log1pl
+float log1pf(float);
+double logb(double); logbl
+float logbf(float);
+long lroundf(float);
+double modf(double, double*); modfl
+float modff(float, float*);
+double nan(const char*); nanl
+float nanf(const char*);
+double nextafter(double, double); nextafterl
+double nexttoward(double, long double); nexttowardl
+double round(double); roundl
+float roundf(float);
+double sin(double); sinl
+void sincos(double, double*, double*); sincosl
+float sinf(float);
+float sinhf(float);
+double tan(double); tanl
+float tanf(float);
+float tanhf(float);
