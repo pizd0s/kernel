@@ -697,7 +697,7 @@ int dnsMain(int argc, char** argv) {
     if (epoll < 0) {
         fatal("dns: epoll_create1: errno %d", errno);
     }
-    device = enroll("dns", "dns/query", S_IFCHR | 0666);
+    device = enroll("dns", "dns/query", S_IFREG | 0666);
     watch(epoll, {device.end, true, false, false, nullptr});
     if (ready >= 0) {
         close(ready);

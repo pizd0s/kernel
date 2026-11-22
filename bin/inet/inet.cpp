@@ -284,7 +284,7 @@ namespace {
         listener.listens = true;
         watch(epoll, listener);
         watch(epoll, {e.device.end, true, false, false, &e});
-        enrolled("iface/status", File::Status, S_IFCHR | 0444);
+        enrolled("iface/status", File::Status, S_IFREG | 0444);
     }
 
     // A lease ACKed or gone: the stack starts with the first, its own
@@ -392,7 +392,7 @@ namespace {
 
     // The loopback: its stack up from the start, and its files.
     int serveLoopback(int ready) {
-        enrolled("ctl", File::Ctl, S_IFCHR | 0644);
+        enrolled("ctl", File::Ctl, S_IFREG | 0644);
         stackLoopback();
         had = {htonl(INADDR_LOOPBACK), htonl(0xff000000), 0, 0, 0};
         stack = Stack::Up;
@@ -423,9 +423,9 @@ namespace {
         card = atoi(argv[at + 1]);
         fcntl(card, F_SETFD, FD_CLOEXEC);
         macOf(name);
-        enrolled("ctl", File::Ctl, S_IFCHR | 0644);
-        enrolled("stats", File::Stats, S_IFCHR | 0444);
-        enrolled("addr", File::Addr, S_IFCHR | 0444);
+        enrolled("ctl", File::Ctl, S_IFREG | 0644);
+        enrolled("stats", File::Stats, S_IFREG | 0444);
+        enrolled("addr", File::Addr, S_IFREG | 0444);
         Endpoint raw{card, false, true, false, nullptr};
         raw.raw = true;
         watch(epoll, raw);

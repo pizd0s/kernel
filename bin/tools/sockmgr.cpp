@@ -973,7 +973,7 @@ int sockmgrMain(int argc, char** argv) {
         const char* name;
         File file;
         uint32_t mode;
-    } files[] = {{"sockmgr/socket", File::Socket, S_IFCHR | 0666}, {"sockmgr/ctl", File::Ctl, S_IFCHR | 0644}};
+    } files[] = {{"sockmgr/socket", File::Socket, S_IFCHR | 0666}, {"sockmgr/ctl", File::Ctl, S_IFREG | 0644}};
 
     for (size_t i = 0; i < 2; ++i) {
         entries[i] = {files[i].file, enroll("sockmgr", files[i].name, files[i].mode)};
