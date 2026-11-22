@@ -44,7 +44,7 @@ w: removed b
 short: -1 Invalid argument
 w: removed d
 a device: -1 Not a directory
-/run: -1 Function not implemented
+/: -1 Function not implemented
 no descriptor: -1 Bad file descriptor
 flags: -1 Invalid argument
 ls: /dev/w: No such file or directory

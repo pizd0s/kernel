@@ -303,11 +303,8 @@ Endpoint* tools::openFile(int fd, u32 flags, void* node, u64 dev, u64 ino, bool 
     return ep;
 }
 
-// An endpoint that closes: what is the file system's of it goes first,
-// an open file's.
-static void forget(Endpoint* ep, Closing closing) {
+static void leave(Endpoint* ep) {
     ep->dead = true;
-    closing(ep);
     if (ep->before) {
         ep->before->after = ep->after;
     } else {
@@ -319,6 +316,30 @@ static void forget(Endpoint* ep, Closing closing) {
     ep->next = buried;
     buried = ep;
     --endpointCount;
+}
+
+// An endpoint that closes: what is the file system's of it goes first,
+// an open file's.
+static void forget(Endpoint* ep, Closing closing) {
+    ep->dead = true;
+    closing(ep);
+    leave(ep);
+}
+
+Endpoint* tools::keep(void* node, int& memfd) {
+    const int fd = packetFds[packetFdCount - 1];
+    memfd = packetFdCount >= 2 ? packetFds[0] : -1;
+    packetFds[packetFdCount - 1] = -1;
+    if (packetFdCount >= 2) {
+        packetFds[0] = -1;
+    }
+    return listen(fd, Role::Kept, node, false, false);
+}
+
+void tools::unkeep(Endpoint* ep) {
+    epoll_ctl(watcher, EPOLL_CTL_DEL, ep->fd, nullptr);
+    close(ep->fd);
+    leave(ep);
 }
 
 static void closed(Endpoint* ep, Closing closing) {
@@ -399,6 +420,14 @@ static void handle(Endpoint* ep, FsCall fsCall, FileCall fileCall, Closing closi
         return;
     }
     const Body body{packet + sizeof(Header), packet + sizeof(Header) + n};
+    if (ep->role == Role::Kept) {
+        // The CANCEL of a kept request, answered where it is kept.
+        fileCall(ep, h, body, ep->fd);
+        for (usize i = 0; i < packetFdCount; ++i) {
+            close(packetFds[i]);
+        }
+        return;
+    }
     if (packetFdCount == 0) {
         // A question of rootfs's, answered on its channel, in order; an
         // open's file goes on an endpoint, which a question has none of.

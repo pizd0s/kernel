@@ -24,6 +24,13 @@
 // makes its root, which no other pair in the kernel has. A node no name
 // and no open file has is gone, and a call by its node ENOENT.
 //
+// A directory is watched as <sys/watchdir.h> says (WATCH): a watcher
+// tells the names there as it starts, watchIdle, then what was added and
+// removed since its last READ, a name that came and went between two
+// READs not at all; a READ with nothing to tell waits, kept, until there
+// is, or until its CANCEL. A watcher keeps a log of its changes, so a
+// change costs as much in a big directory as in a small one.
+//
 // A WRITE with append writes at the end the file has when the tree takes
 // it, which no other write comes between. The locks of flock and fcntl
 // are the kernel's, kept by the dev and ino an open file is made with. A
@@ -324,6 +331,165 @@ static void drop(Node* n) {
     }
 }
 
+// ---- watchers -----------------------------------------------------------------
+
+namespace {
+    // A record a watcher has yet to tell: watchExisting, watchAdded or
+    // watchRemoved, of a name and its node's inode, which with the name
+    // is its identity, as a name gone and back is another.
+    struct Change {
+        u8 kind;
+        u64 ino;
+        char name[NAME_MAX + 1];
+    };
+
+    // A watcher of a directory (WATCH): its open file's endpoint, what it
+    // has yet to tell, in order, whether it told watchIdle, and a READ it
+    // keeps, where that is answered, its memfd and length.
+    struct Watcher {
+        Node* dir = nullptr; // none once the directory is gone
+        Endpoint* end = nullptr;
+        SmallVec<Change> changes;
+        bool idle = false;
+        Endpoint* kept = nullptr;
+        int memfd = -1;
+        u32 length = 0;
+        Watcher* next = nullptr;
+    };
+}
+
+static Watcher* watchers;
+
+static void note(Watcher& w, u8 kind, const Node* n, Name name) {
+    Change c{kind, n->ino, {}};
+    memcpy(c.name, name.at, name.length);
+    c.name[name.length] = 0;
+    w.changes.pushBack(c);
+}
+
+// Whether a watcher has something to tell: watchIdle, a change, or that
+// its directory is gone.
+static bool pending(const Watcher& w) {
+    return !w.idle || w.changes.size() > 0 || !w.dir;
+}
+
+static bool record(u8* to, usize room, usize& size, u8 kind, const char* name) {
+    const usize length = strlen(name);
+    if (room - size < length + 2) {
+        return false;
+    }
+    to[size] = kind;
+    memcpy(to + size + 1, name, length + 1);
+    size += length + 2;
+    return true;
+}
+
+// The records a watcher tells now, as many as room holds, which it then
+// has told: its changes in order, watchIdle after the names there as it
+// started.
+static usize records(Watcher& w, u8* to, usize room) {
+    usize size = 0;
+    usize told = 0;
+    const usize count = w.changes.size();
+    for (; told < count; ++told) {
+        const Change& c = w.changes[told];
+        if (!w.idle && c.kind != watchExisting) {
+            if (!record(to, room, size, watchIdle, "")) {
+                break;
+            }
+            w.idle = true;
+        }
+        if (!record(to, room, size, c.kind, c.name)) {
+            break;
+        }
+    }
+    if (told == count && !w.idle && record(to, room, size, watchIdle, "")) {
+        w.idle = true;
+    }
+    if (told > 0) {
+        Change* changes = w.changes.data();
+        memmove(changes, changes + told, (count - told) * sizeof(Change));
+        w.changes.resize(count - told);
+    }
+    return size;
+}
+
+// The records of a READ into its memfd, its count answered on fd: 0 of a
+// directory gone, once all is told; none of a READ too short for the
+// next record, EINVAL.
+static void answerRecords(Watcher& w, int memfd, u32 length, int fd) {
+    const usize size = records(w, out, length < sizeof out ? usize(length) : sizeof out);
+    if (size == 0 && (w.changes.size() > 0 || !w.idle)) {
+        return error(fd, EINVAL);
+    }
+    if (size > 0 && pwrite(memfd, out, size, 0) != ssize_t(size)) {
+        return error(fd, EIO);
+    }
+    readCount(fd, size);
+}
+
+// Tells the kernel whether a watcher is readable (READY).
+static void ready(const Watcher& w) {
+    reply(w.end->fd, opReady, pending(w) ? POLLIN | (w.dir ? 0 : POLLHUP) : 0, nullptr, 0);
+}
+
+static void letKeptGo(Watcher& w) {
+    close(w.memfd);
+    unkeep(w.kept);
+    w.kept = nullptr;
+    w.memfd = -1;
+}
+
+// What a watcher has to tell changed: a READ it keeps is answered.
+static void told(Watcher& w) {
+    if (w.kept && pending(w)) {
+        answerRecords(w, w.memfd, w.length, w.kept->fd);
+        letKeptGo(w);
+    }
+    ready(w);
+}
+
+// A name put in a directory or taken out, for its watchers: one taken
+// out before it was told is not told at all.
+static void added(const Node* dir, const Entry* e) {
+    for (Watcher* w = watchers; w; w = w->next) {
+        if (w->dir == dir) {
+            note(*w, watchAdded, e->node, e->name);
+            told(*w);
+        }
+    }
+}
+
+static void removed(const Node* dir, const Entry* e) {
+    for (Watcher* w = watchers; w; w = w->next) {
+        if (w->dir != dir) {
+            continue;
+        }
+        const usize before = w->changes.size();
+        const u64 ino = e->node->ino;
+        const Name name = e->name;
+        w->changes.keepIf([ino, name](const Change& c) {
+            return c.kind == watchRemoved || c.ino != ino || strlen(c.name) != name.length ||
+                   memcmp(c.name, name.at, name.length) != 0;
+        });
+        if (w->changes.size() == before) {
+            note(*w, watchRemoved, e->node, e->name);
+        }
+        told(*w);
+    }
+}
+
+// A directory gone: its watchers tell what is left, then their end.
+static void dirGone(Node* n) {
+    for (Watcher* w = watchers; w; w = w->next) {
+        if (w->dir == n) {
+            w->dir = nullptr;
+            --n->holds;
+            told(*w);
+        }
+    }
+}
+
 // Puts a name for a node in a directory, after every entry there: at
 // the next position. copy: the name's bytes go with the entry, else
 // they are the image's.
@@ -351,11 +517,13 @@ static void place(Node* dir, Name name, Node* n, u64 t, bool copy = true) {
         }
     }
     dir->mtime = dir->ctime = n->ctime = t;
+    added(dir, e);
 }
 
 // Takes a name out of a directory: the node it named, one link fewer.
 static Node* unplace(Node* dir, Entry* e, u64 t) {
     Node* n = e->node;
+    removed(dir, e);
     names.erase(e->hash, e);
     Slot* slots = dir->order.data();
     const usize count = dir->order.size();
@@ -439,6 +607,9 @@ static void release(Server& s, Node* n) {
         s.byIno.erase(hashIno(n->ino), n);
         --s.nodes;
         n->released = true;
+        if (n->kind == Kind::Dir) {
+            dirGone(n);
+        }
     }
     if (n->holds == 0) {
         destroy(n);
@@ -1043,6 +1214,85 @@ static void openNode(Node* n, u32 flags, bool made, const Header& h, int fd) {
     }
 }
 
+// WATCH of a directory: a watcher, an open file of the flags asked,
+// O_NONBLOCK of them, whose READs give its records: the names there,
+// watchIdle, then what changes.
+static void watchNode(Node* n, const Header& h, int fd) {
+    if (n->kind != Kind::Dir) {
+        return error(fd, ENOTDIR);
+    }
+    if (!may(n, h, 4)) {
+        return error(fd, EACCES);
+    }
+    auto* w = new (allocate(sizeof(Watcher))) Watcher();
+    w->dir = n;
+    const Slot* slots = n->order.data();
+    for (usize i = 0; i < n->order.size(); ++i) {
+        if (const Entry* e = slots[i].entry) {
+            note(*w, watchExisting, e->node, e->name);
+        }
+    }
+    w->end = openFile(fd, O_RDONLY | (h.arg & O_NONBLOCK), w, tree.dev, 0, true, false);
+    if (!w->end) {
+        w->~Watcher();
+        free(w);
+        return;
+    }
+    ++n->holds;
+    w->next = watchers;
+    watchers = w;
+}
+
+static Watcher* watcherAt(const Endpoint* ep) {
+    for (Watcher* w = watchers; w; w = w->next) {
+        if (w->end == ep) {
+            return w;
+        }
+    }
+    return nullptr;
+}
+
+// A READ of a watcher's: its records, or, with none, the READ kept until
+// there are, but of O_NONBLOCK; one at a time.
+static void readWatcher(Watcher& w, const Endpoint* ep, const Header& h, Body body, int fd) {
+    Io io;
+    if (memfd() < 0 || !ioOf(body, io)) {
+        return error(fd, EINVAL);
+    }
+    if ((io.flags & ioAt) != 0) {
+        return error(fd, ESPIPE);
+    }
+    if (pending(w)) {
+        answerRecords(w, memfd(), h.arg, fd);
+        return ready(w);
+    }
+    if (ep->nonblock) {
+        return error(fd, EAGAIN);
+    }
+    if (w.kept) {
+        return error(fd, EBUSY);
+    }
+    w.kept = keep(&w, w.memfd);
+    w.length = h.arg;
+}
+
+static void forgetWatcher(Watcher* w) {
+    if (w->kept) {
+        letKeptGo(*w);
+    }
+    for (Watcher** at = &watchers; *at; at = &(*at)->next) {
+        if (*at == w) {
+            *at = w->next;
+            break;
+        }
+    }
+    if (w->dir) {
+        drop(w->dir);
+    }
+    w->~Watcher();
+    free(w);
+}
+
 // A call of rootfs's on its channel, by node, answered on fd.
 static void fsCall(const Header& h, Body body, int fd) {
     if (h.op == fsRoot) {
@@ -1145,6 +1395,8 @@ static void fsCall(const Header& h, Body body, int fd) {
         }
         case fsPath:
             return pathOf(n, fd);
+        case fsWatch:
+            return watchNode(n, h, fd);
         default:
             return error(fd, ENOSYS);
     }
@@ -1152,6 +1404,20 @@ static void fsCall(const Header& h, Body body, int fd) {
 
 // A call on an open file, answered on fd.
 static void fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
+    if (ep->role == Role::Kept) {
+        auto* w = static_cast<Watcher*>(ep->node);
+        if (h.op == opCancel && w->kept == ep) {
+            error(ep->fd, EINTR);
+            letKeptGo(*w);
+        }
+        return;
+    }
+    if (Watcher* w = watcherAt(ep)) {
+        if (h.op == opRead) {
+            return readWatcher(*w, ep, h, body, fd);
+        }
+        return error(fd, unserved(h.op));
+    }
     auto* node = static_cast<Node*>(ep->node);
     switch (h.op) {
         case opRead:
@@ -1196,6 +1462,18 @@ static void fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
 // An endpoint that closes: its node goes with it when no name is left
 // of it.
 static void closing(Endpoint* ep) {
+    if (ep->role == Role::Kept) {
+        auto* w = static_cast<Watcher*>(ep->node);
+        if (w->kept == ep) {
+            close(w->memfd);
+            w->kept = nullptr;
+            w->memfd = -1;
+        }
+        return;
+    }
+    if (Watcher* w = watcherAt(ep)) {
+        return forgetWatcher(w);
+    }
     if (auto* n = static_cast<Node*>(ep->node)) {
         --n->opens;
         release(tree, n);

@@ -15465,3 +15465,141 @@ func (p *Process) libcTimespec_get(ts, base uint32) uint32 {
 
 	return base
 }
+
+func (p *Process) libcEventfd(count, flags uint32) uint32 {
+	if flags&^(EFD_SEMAPHORE|O_CLOEXEC|O_NONBLOCK) != 0 {
+		return p.result(0, EINVAL)
+	}
+
+	e := newEventFd(uint64(count), flags&EFD_SEMAPHORE != 0, flags&O_NONBLOCK != 0)
+
+	return p.result(p.install(e, 0, flags&O_CLOEXEC != 0))
+}
+
+func (p *Process) libcEventfd_read(fd, value uint32) uint32 {
+	if p.libcRead(fd, value, 8) != 8 {
+		return math.MaxUint32
+	}
+
+	return 0
+}
+
+func (p *Process) libcEventfd_write(fd uint32, value uint64) uint32 {
+	t, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	n, err := p.fileWrite(t, bytesFile(binary.LittleEndian.AppendUint64(nil, value)), 8, IoMode{})
+
+	if err == nil && n != 8 {
+		err = EIO
+	}
+
+	return p.result(0, err)
+}
+
+func (p *Process) libcTimerfd_create(clock, flags uint32) uint32 {
+	if clock != CLOCK_REALTIME && clock != CLOCK_MONOTONIC && clock != CLOCK_BOOTTIME || flags&^(O_CLOEXEC|O_NONBLOCK) != 0 {
+		return p.result(0, EINVAL)
+	}
+
+	return p.result(p.install(newTimerFd(clock, flags&O_NONBLOCK != 0), 0, flags&O_CLOEXEC != 0))
+}
+
+func (p *Process) libcTimerfd_settime(fd, flags, value, old uint32) uint32 {
+	if flags&^(TFD_TIMER_ABSTIME|TFD_TIMER_CANCEL_ON_SET) != 0 {
+		return p.result(0, EINVAL)
+	}
+
+	interval, err := p.timespec(value)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	first, err := p.timespec(value + sizeofTimespec)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	t, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	r := TimerSet{value: first, interval: interval, absolute: flags&TFD_TIMER_ABSTIME != 0}
+
+	if err := p.request(t, &r); err != nil {
+		return p.result(0, err)
+	}
+
+	if old != 0 {
+		p.putTimespec(old, r.every)
+		p.putTimespec(old+sizeofTimespec, r.left)
+	}
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcTimerfd_gettime(fd, at uint32) uint32 {
+	t, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	r := TimerGet{}
+
+	if err := p.request(t, &r); err != nil {
+		return p.result(0, err)
+	}
+
+	p.putTimespec(at, r.every)
+	p.putTimespec(at+sizeofTimespec, r.left)
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcInotify_init() uint32 {
+	return p.libcInotify_init1(0)
+}
+
+func (p *Process) libcInotify_init1(flags uint32) uint32 {
+	if flags&^(O_CLOEXEC|O_NONBLOCK) != 0 {
+		return p.result(0, EINVAL)
+	}
+
+	return p.result(p.install(newInotify(flags&O_NONBLOCK != 0), 0, flags&O_CLOEXEC != 0))
+}
+
+func (p *Process) libcInotify_add_watch(fd, path, mask uint32) uint32 {
+	if mask&IN_ALL_EVENTS == 0 || mask&IN_MASK_ADD != 0 && mask&IN_MASK_CREATE != 0 {
+		return p.result(0, EINVAL)
+	}
+
+	in, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	r := InotifyAdd{path: p.str(path), mask: mask}
+
+	err = p.request(in, &r)
+
+	return p.result(int(r.wd), err)
+}
+
+func (p *Process) libcInotify_rm_watch(fd, wd uint32) uint32 {
+	in, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	return p.result(0, p.request(in, &InotifyRemove{wd: int32(wd)}))
+}

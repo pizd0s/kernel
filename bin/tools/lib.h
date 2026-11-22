@@ -185,6 +185,7 @@ namespace tools {
     enum class Role : u8 {
         File,    // an open file: its requests come on it
         Channel, // rootfs's channel: its calls by node come on it
+        Kept,    // where a request a call keeps is answered: its CANCEL comes on it
     };
 
     struct Endpoint {
@@ -220,6 +221,16 @@ namespace tools {
     // open file's, where its requests come. That endpoint, or none, the
     // error answered.
     Endpoint* openFile(int fd, u32 flags, void* node, u64 dev, u64 ino, bool reads, bool writes);
+
+    // Keeps the request the loop handles, a READ or a WRITE of an open
+    // file that waits: where it is answered becomes an endpoint of the
+    // loop's, Kept, of node, on which the request's CANCEL comes to
+    // fileCall and the end of who asked to closing; its memfd stays open,
+    // the caller's. The endpoint, the memfd in memfd.
+    Endpoint* keep(void* node, int& memfd);
+
+    // A kept request answered: its endpoint closes, closing not told.
+    void unkeep(Endpoint* ep);
 
     // Where a READ or a WRITE of an open file goes: off with ioAt, else
     // its position, or the file's end, size, for a WRITE that appends.

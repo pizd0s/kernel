@@ -3723,6 +3723,55 @@ func libcTimespec_get(ts, tsSize, base uint32) uint32 {
 	return p.libcTimespec_get(ts, base)
 }
 
+func libcEventfd(count, flags uint32) uint32 {
+	return proc().libcEventfd(count, flags)
+}
+
+func libcEventfd_read(fd, value uint32) uint32 {
+	return proc().libcEventfd_read(fd, value)
+}
+
+func libcEventfd_write(fd uint32, value uint64) uint32 {
+	return proc().libcEventfd_write(fd, value)
+}
+
+func libcTimerfd_create(clock, flags uint32) uint32 {
+	return proc().libcTimerfd_create(clock, flags)
+}
+
+func libcTimerfd_settime(fd, flags, value, valueSize, old, oldSize uint32) uint32 {
+	p := proc()
+
+	p.sized("timerfd_settime", valueSize, sizeofItimerspec)
+	p.sized("timerfd_settime", oldSize, sizeofItimerspec)
+
+	return p.libcTimerfd_settime(fd, flags, value, old)
+}
+
+func libcTimerfd_gettime(fd, at, size uint32) uint32 {
+	p := proc()
+
+	p.sized("timerfd_gettime", size, sizeofItimerspec)
+
+	return p.libcTimerfd_gettime(fd, at)
+}
+
+func libcInotify_init() uint32 {
+	return proc().libcInotify_init()
+}
+
+func libcInotify_init1(flags uint32) uint32 {
+	return proc().libcInotify_init1(flags)
+}
+
+func libcInotify_add_watch(fd, path, mask uint32) uint32 {
+	return proc().libcInotify_add_watch(fd, path, mask)
+}
+
+func libcInotify_rm_watch(fd, wd uint32) uint32 {
+	return proc().libcInotify_rm_watch(fd, wd)
+}
+
 func ioctlSize(req uint32) uint32 {
 	switch req {
 	case TCGETS, TCSETS, TCSETS + 1, TCSETS + 2:

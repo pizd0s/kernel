@@ -37,6 +37,7 @@ TYPES = {
     "sizeofInAddr": "struct in_addr",
     "sizeofIovec": "struct iovec",
     "sizeofItimerval": "struct itimerval",
+    "sizeofItimerspec": "struct itimerspec",
     "sizeofJmpBuf": "jmp_buf",
     "sizeofLconv": "struct lconv",
     "sizeofMsghdr": "struct msghdr",

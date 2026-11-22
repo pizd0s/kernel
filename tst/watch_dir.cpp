@@ -103,7 +103,7 @@ int main() {
     show("w", w);
 
     fails("a device", open("/dev/null", O_RDONLY | O_CLOEXEC), 0);
-    fails("/run", open("/run", O_RDONLY | O_DIRECTORY | O_CLOEXEC), 0);
+    fails("/", open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC), 0);
     fails("no descriptor", -1, 0);
     fails("flags", dir, O_RDWR | O_APPEND);
     return 0;

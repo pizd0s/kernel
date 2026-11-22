@@ -47,8 +47,11 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <sys/execmode.h>
 #include <sys/watchdir.h>
+#include <sys/inotify.h>
+#include <sys/timerfd.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -233,6 +236,19 @@ KERNEL(int, epoll_create1, (int a), (a))
 KERNEL_SIZED(int, epoll_ctl, (int a, int b, int c, struct epoll_event* d), (int a, int b, int c, struct epoll_event* d, size_t d_size), (a, b, c, d, sizeof(struct epoll_event)))
 KERNEL_SIZED(int, epoll_wait, (int a, struct epoll_event* b, int c, int d), (int a, struct epoll_event* b, size_t b_size, int c, int d), (a, b, sizeof(struct epoll_event), c, d))
 KERNEL_SIZED(int, epoll_pwait, (int a, struct epoll_event* b, int c, int d, const sigset_t* e), (int a, struct epoll_event* b, size_t b_size, int c, int d, const sigset_t* e, size_t e_size), (a, b, sizeof(struct epoll_event), c, d, e, sizeof(sigset_t)))
+/* sys/eventfd.h */
+KERNEL(int, eventfd, (unsigned int a, int b), (a, b))
+KERNEL(int, eventfd_read, (int a, eventfd_t* b), (a, b))
+KERNEL(int, eventfd_write, (int a, eventfd_t b), (a, b))
+/* sys/timerfd.h */
+KERNEL(int, timerfd_create, (int a, int b), (a, b))
+KERNEL_SIZED(int, timerfd_settime, (int a, int b, const struct itimerspec* c, struct itimerspec* d), (int a, int b, const struct itimerspec* c, size_t c_size, struct itimerspec* d, size_t d_size), (a, b, c, sizeof(struct itimerspec), d, sizeof(struct itimerspec)))
+KERNEL_SIZED(int, timerfd_gettime, (int a, struct itimerspec* b), (int a, struct itimerspec* b, size_t b_size), (a, b, sizeof(struct itimerspec)))
+/* sys/inotify.h */
+KERNEL(int, inotify_init, (void), ())
+KERNEL(int, inotify_init1, (int a), (a))
+KERNEL(int, inotify_add_watch, (int a, const char* b, uint32_t c), (a, b, c))
+KERNEL(int, inotify_rm_watch, (int a, int b), (a, b))
 /* pthread.h */
 KERNEL_SIZED(int, pthread_create, (pthread_t* __restrict a, const pthread_attr_t* __restrict b, void* (*c)(void*), void* __restrict d), (pthread_t* __restrict a, const pthread_attr_t* __restrict b, size_t b_size, void* (*c)(void*), void* __restrict d), (a, b, sizeof(pthread_attr_t), c, d))
 KERNEL(int, pthread_join, (pthread_t a, void** b), (a, b))
