@@ -6,8 +6,9 @@
 // %e's form below 1e-4 and from the precision's power of ten on, its
 // trailing zeros dropped but with #; %a writes the hexadecimal digits, a
 // normal number's first 1, rounded to even past the precision; infinity
-// and NaN by their names with the sign, padded with spaces where 0 asks
-// for zeros. %n stores the count so far, past what snprintf keeps too, in
+// and NaN by their names, an infinity's sign too, a NaN's as the libcs
+// differ ([-]nan: C says no NaN is negative), padded with spaces where 0
+// asks for zeros. %n stores the count so far, past what snprintf keeps too, in
 // the type its length names, by position as well; %m is strerror(errno).
 
 #include <assert.h>
@@ -83,7 +84,9 @@ int main() {
     is("-inf", "%e", -INFINITY);
     is("INF", "%F", INFINITY);
     is("nan", "%g", NAN);
-    is("-nan", "%f", -NAN);
+    char nan[8];
+    snprintf(nan, sizeof nan, "%f", -NAN);
+    assert(strcmp(nan, "nan") == 0 || strcmp(nan, "-nan") == 0);
     is("  inf", "%05f", INFINITY);
     is("inf  ", "%-5f", INFINITY);
     is("+inf", "%+f", INFINITY);

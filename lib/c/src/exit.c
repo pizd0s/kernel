@@ -1,7 +1,8 @@
 #include <stdlib.h>
 
-// Bionic's stdio's end: every stream flushed, as fflush(NULL) does.
-void __libc_stdio_cleanup(void);
+// What stdio sets once a stream is used, FreeBSD's _cleanup: every stream
+// flushed, as fflush(NULL) does.
+void (*__cleanup)(void);
 
 /*
  * The handlers exit runs, last registered first: atexit's and C++'s static
@@ -64,6 +65,9 @@ void exit(int code) {
         }
     }
 
-    __libc_stdio_cleanup();
+    if (__cleanup) {
+        __cleanup();
+    }
+
     _Exit(code);
 }

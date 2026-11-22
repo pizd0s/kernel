@@ -2,7 +2,7 @@
 # (libc/shared/math), each a C function of the prototype here calling
 # LLVM's of its name, then the names that are the same function: long
 # double's, which is a double here, and GNU's; and the sources of its
-# functions Bionic takes of it (bionic/files.txt), a path alone. Chosen by speed in the
+# sorting, searching and hash tables, a path alone. Chosen by speed in the
 # system against FreeBSD's: LLVM's, correctly rounded, unless it is twice
 # as slow or more; of the exact functions the faster; and Arm's
 # optimized-routines' where they are faster still (arm/files.txt).

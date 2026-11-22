@@ -10,11 +10,11 @@ typedef struct __sFILE FILE;
 
 struct tm;
 
-// As Bionic's, whose multibyte functions lib/c's are: the bytes of a
-// character read so far.
-typedef struct {
-    unsigned char __seq[4];
-    unsigned char __reserved[4];
+// As FreeBSD's, whose multibyte functions lib/c's are: room for the state
+// of any of them, a state of char16_t's holding one of char32_t's.
+typedef union {
+    char __mbstate8[128];
+    long long _mbstateL;
 } mbstate_t;
 
 #define WEOF 0xffffffffU

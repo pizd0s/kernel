@@ -1,0 +1,26 @@
+lib/c has no extensible printf, FreeBSD's register_printf_function and
+its xprintf: vfprintf does not look for it, nor asks the environment for
+USE_XPRINTF at every call.
+
+--- a/lib/libc/stdio/vfprintf.c
++++ b/lib/libc/stdio/vfprintf.c
+@@ -59,7 +59,6 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <wchar.h>
+-#include <printf.h>
+ 
+ #include <stdarg.h>
+ #include "xlocale_private.h"
+@@ -448,11 +447,6 @@
+ 	} else { \
+ 		val = GETARG (int); \
+ 	}
+-
+-	if (__use_xprintf == 0 && getenv("USE_XPRINTF"))
+-		__use_xprintf = 1;
+-	if (__use_xprintf > 0)
+-		return (__xvprintf(fp, fmt0, ap));
+ 
+ 	/* sorry, fprintf(read_only_file, "") returns EOF, not 0 */
+ 	if (prepwrite(fp) != 0) {

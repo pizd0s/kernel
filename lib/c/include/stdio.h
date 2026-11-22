@@ -6,7 +6,7 @@ __BEGIN_DECLS
 
 typedef struct __sFILE FILE;
 
-// A position is an offset, as Bionic's stdio keeps it.
+// A position is an offset, as FreeBSD's stdio keeps it.
 typedef long long fpos_t;
 
 #define EOF (-1)

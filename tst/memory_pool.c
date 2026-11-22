@@ -4,7 +4,9 @@
 //
 // Six children, each forked once the one before holds its block, lie one
 // after another after the parent. A filler then takes all the memory left,
-// until malloc fails, and a fork finds no room. The first, third and fifth
+// in blocks of a MiB until malloc fails, then of half as much down to a
+// page's, so that no process fits in what is left, and a fork finds no
+// room. The first, third and fifth
 // children end: three holes, each about one child's region, between the
 // others. The second grows by two and a half regions, more than the holes
 // on either side of it together: the growth takes the three holes
@@ -101,8 +103,10 @@ static void child(unsigned k, int in, int out) {
 
 static void filler(int in, int out) {
     size_t taken = 0;
-    while (malloc(1 << 20)) {
-        taken++;
+    for (size_t size = 1 << 20; size >= 4096; size /= 2) {
+        while (malloc(size)) {
+            taken++;
+        }
     }
     assert(write(out, &taken, sizeof taken) == sizeof taken);
     hear(in);

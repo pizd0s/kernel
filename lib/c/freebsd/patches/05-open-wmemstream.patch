@@ -1,0 +1,19 @@
+open_wmemstream's write converted its bytes only while it had room for
+the characters it counted of them, so the bytes a stream's buffer ended
+with inside a character were not taken into the state: the stream wrote
+them alone next, which took none, an error, and fputwc failed wherever a
+character of more bytes than one crossed the buffer's end. The write
+goes on to the end of its bytes; an incomplete character's bytes stay in
+the state, as mbrtowc keeps them, and make no character.
+
+--- a/lib/libc/stdio/open_wmemstream.c
++++ b/lib/libc/stdio/open_wmemstream.c
+@@ -137,7 +137,7 @@
+ 	 * characters.
+ 	 */
+ 	consumed = 0;
+-	while (len > 0 && ms->offset < ms->len) {
++	while (len > 0) {
+ 		charlen = mbrtowc(*ms->bufp + ms->offset, buf, len,
+ 		    &ms->mbstate);
+ 		if (charlen == (size_t)-1) {

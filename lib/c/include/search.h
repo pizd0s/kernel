@@ -5,8 +5,9 @@
 __BEGIN_DECLS
 
 /*
- * Tables and trees of the program's own, searched by its functions:
- * lib/c's, musl's.
+ * Tables and trees of the program's own, searched by its functions. A
+ * tree's node is posix_tnode, void as POSIX.1-2024 has it: a pointer to
+ * one points at a pointer to its key.
  */
 typedef enum { FIND, ENTER } ACTION;
 typedef enum { preorder, postorder, endorder, leaf } VISIT;
@@ -42,10 +43,12 @@ void remque(void*);
 void* lsearch(const void*, void*, size_t*, size_t, int (*)(const void*, const void*));
 void* lfind(const void*, const void*, size_t*, size_t, int (*)(const void*, const void*));
 
-void* tdelete(const void* __restrict, void** __restrict, int (*)(const void*, const void*));
-void* tfind(const void*, void* const*, int (*)(const void*, const void*));
-void* tsearch(const void*, void**, int (*)(const void*, const void*));
-void twalk(const void*, void (*)(const void*, VISIT, int));
+typedef void posix_tnode;
+
+void* tdelete(const void* __restrict, posix_tnode** __restrict, int (*)(const void*, const void*));
+posix_tnode* tfind(const void*, posix_tnode* const*, int (*)(const void*, const void*));
+posix_tnode* tsearch(const void*, posix_tnode**, int (*)(const void*, const void*));
+void twalk(const posix_tnode*, void (*)(const posix_tnode*, VISIT, int));
 void tdestroy(void*, void (*)(void*));
 
 __END_DECLS

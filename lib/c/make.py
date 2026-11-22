@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Build lib/c's in-process archive: our own sources, FreeBSD's sources in
-freebsd/files.txt, LLVM libc's functions in llvm/files.txt, Arm's
-optimized-routines' in arm/files.txt and Bionic's sources in
-bionic/files.txt.
+freebsd/files.txt, LLVM libc's functions in llvm/files.txt and Arm's
+optimized-routines' in arm/files.txt.
 
-    make.py <cc> <ar> <freebsd-slice> <llvm-slice> <arm-tarball> <bionic-slice> <libc.a>
+    make.py <cc> <ar> <freebsd-slice> <llvm-slice> <arm-tarball> <libc.a>
     make.py headers <include.tar>
 
 The second packs include/, the headers as a program built inside the system
@@ -15,7 +14,11 @@ cut out of their release tarballs (dev/slice.py). FreeBSD's sources build
 over our headers with freebsd/'s for what they take of FreeBSD's own,
 sys/cdefs.h included first in each; FreeBSD's math.h is deleted, so their
 quoted include of it falls through to ours. A line of freebsd/files.txt is
-a path from the tree's root and the file's own flags.
+a path from the tree's root and the file's own flags. Its libc's sources
+have their stdio's and locale's headers on the path and xlocale/'s
+declarations, and freebsd/patches/ are changes of them for lib/c, each
+saying why, applied to the slice first; freebsd/*.c are lib/c's own, built
+as they are, over FreeBSD's FILE and locale.
 
 A line of llvm/files.txt is a C prototype, then the names of the same
 function: each becomes a C++ source of its own, the function calling LLVM
@@ -27,16 +30,6 @@ such a prototype and names, which a C source of ours includes it with and
 makes the aliases of; or a source alone. They build for the one rounding
 mode wasm has, to nearest, and set no errno, as math_errhandling says,
 with none of the names glibc's ABI adds.
-
-Bionic's sources build over our headers with bionic/'s for what they take
-of Bionic's own, sys/cdefs.h included first in each, its private headers,
-its stdio's and its OpenBSD compatibility on the path; those it carries of
-OpenBSD with openbsd-compat.h first, of FreeBSD with freebsd-compat.h, of
-NetBSD with netbsd-compat.h, as Bionic builds them. A line of
-bionic/files.txt is a path from the tree's root and the file's own flags.
-bionic/patches/ are changes of Bionic's sources for lib/c, each saying
-why, applied to the slice first; bionic/*.cpp are lib/c's own, built as
-Bionic's are, over its FILE.
 """
 import os
 import re
@@ -56,8 +49,6 @@ FLAGS = ["-O2", "-std=c99", "-D_XOPEN_SOURCE=700", "-w"]
 FREEBSD_FLAGS = ["-O2", "-std=c11", "-w", "-include", str(ROOT / "freebsd" / "sys" / "cdefs.h"), "-I", str(ROOT / "freebsd")]
 LLVM_FLAGS = ["-O2", "-std=c++17", "-fno-exceptions", "-fno-rtti", "-nostdinc++", "-w", "-DLIBC_NAMESPACE=__llvm_libc"]
 ARM_FLAGS = ["-O2", "-std=c11", "-w", "-DWANT_ROUNDING=0", "-DWANT_ERRNO=0", "-DUSE_GLIBC_ABI=0"]
-BIONIC_C_FLAGS = ["-O2", "-std=gnu11", "-w"]
-BIONIC_CXX_FLAGS = ["-O2", "-std=gnu++20", "-fno-exceptions", "-fno-rtti", "-nostdinc++", "-w"]
 
 
 def listed(path):
@@ -157,70 +148,50 @@ def main():
 
         return
 
-    cc, ar, freebsd_slice, llvm_slice, arm_tarball, bionic_slice, output = sys.argv[1:8]
+    cc, ar, freebsd_slice, llvm_slice, arm_tarball, output = sys.argv[1:7]
     work = Path(os.environ.get("TMPDIR") or "/tmp") / "libc"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     freebsd = unpack(freebsd_slice, work / "freebsd")
     (freebsd / "lib" / "msun" / "src" / "math.h").unlink()
+
+    for change in sorted((ROOT / "freebsd" / "patches").glob("*.patch")):
+        subprocess.run(["patch", "-p1", "--batch", "--forward", "-s", "-d", str(freebsd), "-i", str(change)], check=True)
     llvm = unpack(llvm_slice, work / "llvm")
 
     for fix in sorted((ROOT / "llvm" / "patches").glob("*.patch")):
         subprocess.run(["patch", "-p1", "--batch", "--forward", "-s", "-d", str(llvm), "-i", str(fix)], check=True)
     optimized = next(unpack(arm_tarball, work / "arm").glob("optimized-routines-*"))
-    bionic = unpack(bionic_slice, work / "bionic")
-
-    for change in sorted((ROOT / "bionic" / "patches").glob("*.patch")):
-        subprocess.run(["patch", "-p1", "--batch", "--forward", "-s", "-d", str(bionic), "-i", str(change)], check=True)
-
     units = []
 
     for source in sorted((ROOT / "src").glob("*.c")):
         units.append((source, work / "obj" / "pizdos" / source.with_suffix(".o").name,
                       FLAGS + ["-I", str(ROOT / "src"), "-isystem", str(ROOT / "include")]))
 
-    msun = ["-I", str(freebsd / "lib" / "msun" / "src"), "-isystem", str(ROOT / "include")]
+    msun = FREEBSD_FLAGS + ["-I", str(freebsd / "lib" / "msun" / "src"), "-isystem", str(ROOT / "include")]
+    libc = freebsd / "lib" / "libc"
+    bsd = ["-O2", "-std=gnu11", "-w", "-include", str(ROOT / "freebsd" / "sys" / "cdefs.h"), "-I", str(ROOT / "freebsd"),
+           "-I", str(libc / "locale"), "-I", str(libc / "stdio"), "-I", str(freebsd / "include"),
+           "-isystem", str(ROOT / "include")]
 
     for line in listed(ROOT / "freebsd" / "files.txt"):
         path, *flags = shlex.split(line)
-        units.append((freebsd / path, work / "obj" / "freebsd" / Path(path).with_suffix(".o").name,
-                      FREEBSD_FLAGS + msun + flags))
+
+        if path.startswith("lib/libc/"):
+            # Named by the path, as its files of one name are of more than one place.
+            units.append((freebsd / path, work / "obj" / "freebsd" / "-".join(Path(path).with_suffix(".o").parts[2:]),
+                          bsd + flags))
+        else:
+            units.append((freebsd / path, work / "obj" / "freebsd" / Path(path).with_suffix(".o").name, msun + flags))
+
+    for source in sorted((ROOT / "freebsd").glob("*.c")):
+        units.append((source, work / "obj" / "pizdos" / source.with_suffix(".o").name, bsd))
 
     (work / "llvm-wrappers").mkdir()
 
     for source in wrappers(work / "llvm-wrappers", llvm / "libc"):
         units.append((source, work / "obj" / "llvm" / source.with_suffix(".o").name,
                       LLVM_FLAGS + ["-DLIBC_COPT_PUBLIC_PACKAGING", "-I", str(llvm / "libc"), "-isystem", str(ROOT / "include")]))
-
-    compat = bionic / "libc" / "upstream-openbsd" / "android" / "include"
-    freebsd_compat = bionic / "libc" / "upstream-freebsd" / "android" / "include"
-    netbsd_compat = bionic / "libc" / "upstream-netbsd" / "android" / "include"
-    openbsd_libc = bionic / "libc" / "upstream-openbsd" / "lib" / "libc"
-    paths = ["-include", str(ROOT / "bionic" / "sys" / "cdefs.h"), "-I", str(ROOT / "bionic"), "-I", str(compat),
-             "-I", str(bionic / "libc"), "-I", str(bionic / "libc" / "private"), "-I", str(bionic / "libc" / "stdio"),
-             "-I", str(openbsd_libc / "include"), "-I", str(openbsd_libc / "stdio"), "-isystem", str(ROOT / "include")]
-
-    for line in listed(ROOT / "bionic" / "files.txt"):
-        path, *flags = shlex.split(line)
-        source = bionic / path
-        language = BIONIC_CXX_FLAGS if source.suffix == ".cpp" else BIONIC_C_FLAGS
-        upstream = []
-
-        if path.startswith("libc/upstream-openbsd/"):
-            # Bionic's switch for its OpenBSD sources over musl's headers,
-            # which lib/c's are of: explicit_bzero is the libc's.
-            upstream = ["-DANDROID_HOST_MUSL", "-include", str(compat / "openbsd-compat.h")]
-        elif path.startswith("libc/upstream-freebsd/"):
-            upstream = ["-include", str(freebsd_compat / "freebsd-compat.h"), "-I", str(freebsd_compat)]
-        elif path.startswith("libc/upstream-netbsd/"):
-            upstream = ["-DPOSIX_MISTAKE", "-include", str(netbsd_compat / "netbsd-compat.h"), "-I", str(netbsd_compat)]
-
-        # Named by the path, as Bionic's files of one name are of more than one place.
-        obj = "-".join(Path(path).with_suffix(".o").parts[1:])
-        units.append((source, work / "obj" / "bionic" / obj, language + paths + upstream + flags))
-
-    for source in sorted((ROOT / "bionic").glob("*.cpp")):
-        units.append((source, work / "obj" / "pizdos" / source.with_suffix(".o").name, BIONIC_CXX_FLAGS + paths))
 
     (work / "arm-wrappers").mkdir()
     math = optimized / "math"

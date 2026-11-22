@@ -1,0 +1,26 @@
+lib/c's prototypes, glibc's and musl's, where FreeBSD's are the BSDs':
+setbuffer's size is a size_t and setlinebuf returns nothing.
+
+--- a/lib/libc/stdio/setbuffer.c
++++ b/lib/libc/stdio/setbuffer.c
+@@ -38,7 +38,7 @@
+ #include <stdio.h>
+ 
+ void
+-setbuffer(FILE *fp, char *buf, int size)
++setbuffer(FILE *fp, char *buf, size_t size)
+ {
+ 
+ 	(void)setvbuf(fp, buf, buf ? _IOFBF : _IONBF, (size_t)size);
+@@ -47,9 +47,9 @@
+ /*
+  * set line buffering
+  */
+-int
++void
+ setlinebuf(FILE *fp)
+ {
+ 
+-	return (setvbuf(fp, (char *)NULL, _IOLBF, (size_t)0));
++	(void)setvbuf(fp, (char *)NULL, _IOLBF, (size_t)0);
+ }

@@ -40,7 +40,6 @@ STR = "e96fca3f07464a01a4a0f52deb0f6e69be293bd3"
 LLVM = "23.1.5"
 FREEBSD = "14.3"
 OPTIMIZED_ROUTINES = "26.07"
-BIONIC = "android-17.0.0_r1"
 MC = "4.8.33"
 GLIB = "2.90.1"
 SLANG = "2.3.3"
@@ -110,8 +109,8 @@ llvm_tarball = fetch(
     f"$(B)/ext/llvm-project-{LLVM}.src.tar.xz",
 )
 
-# FreeBSD's sources, of which lib/c builds msun (lib/c/freebsd): its
-# release's src.txz.
+# FreeBSD's sources, of which lib/c builds msun and of its libc the stdio
+# and more (lib/c/freebsd): its release's src.txz.
 freebsd_tarball = fetch(
     "freebsd_tarball",
     f"http://ftp-archive.freebsd.org/pub/FreeBSD-Archive/old-releases/amd64/{FREEBSD}-RELEASE/src.txz",
@@ -127,21 +126,6 @@ arm_tarball = fetch(
     f"https://github.com/ARM-software/optimized-routines/archive/refs/tags/v{OPTIMIZED_ROUTINES}.tar.gz",
     "0db974d39531e1e922cd1b31da2c3118881c4ce86b3323daf2c13830ef2b229c",
     f"$(B)/ext/optimized-routines-{OPTIMIZED_ROUTINES}.tar.gz",
-)
-
-
-# Bionic, Android's libc, of which lib/c builds stdio and more (lib/c/bionic):
-# AOSP has no tarball of stable bytes, so the paths lib/c/bionic/slice.txt
-# names, at the release's commit, from git (dev/fetch_git.py).
-bionic_slice = command(
-    name="bionic_slice",
-    local=True,
-    inputs=["$(S)/dev/fetch_git.py", "$(S)/lib/c/bionic/slice.txt"],
-    outputs=[f"$(B)/ext/bionic-{BIONIC}-libc.tar.gz"],
-    cmd=["python3", "$(S)/dev/fetch_git.py", "https://android.googlesource.com/platform/bionic", f"refs/tags/{BIONIC}",
-         "06356e41c5ed7b12220b24c05ba4fdb873b126a7", "$(S)/lib/c/bionic/slice.txt", f"$(B)/ext/bionic-{BIONIC}-libc.tar.gz"],
-    descr="FE",
-    color="blue",
 )
 
 
@@ -213,10 +197,10 @@ doom_wad = fetch(
 LIBC_HEADERS = build.glob("$(S)/lib/c/include/**/*.h")
 
 # lib/c: the in-process part of the C library, our sources plus FreeBSD's
-# msun sources in lib/c/freebsd/files.txt, LLVM libc's math in
-# lib/c/llvm/files.txt and Arm's optimized-routines' in lib/c/arm/files.txt,
-# Bionic's in lib/c/bionic/files.txt; every other libc function is a kernel
-# import declared by its header.
+# in lib/c/freebsd/files.txt, msun and of its libc the stdio, the multibyte
+# functions and more, LLVM libc's in lib/c/llvm/files.txt and Arm's
+# optimized-routines' in lib/c/arm/files.txt; every other libc function is
+# a kernel import declared by its header.
 libc = command(
     name="libc",
     inputs=[
@@ -227,17 +211,15 @@ libc = command(
         *build.glob("$(S)/lib/c/llvm/*.txt"),
         *build.glob("$(S)/lib/c/llvm/patches/*"),
         *build.glob("$(S)/lib/c/arm/*"),
-        *build.glob("$(S)/lib/c/bionic/**/*.h"),
-        *build.glob("$(S)/lib/c/bionic/*.txt"),
-        *build.glob("$(S)/lib/c/bionic/*.cpp"),
-        *build.glob("$(S)/lib/c/bionic/patches/*"),
+        *build.glob("$(S)/lib/c/freebsd/*.c"),
+        *build.glob("$(S)/lib/c/freebsd/patches/*"),
         "$(S)/lib/c/make.py",
         "$(S)/dev/wasm.py",
     ],
     outputs=["$(B)/lib/c/libc.a"],
-    deps=[freebsd_slice, llvm_libc_slice, arm_tarball, bionic_slice],
+    deps=[freebsd_slice, llvm_libc_slice, arm_tarball],
     cmd=["python3", "$(S)/lib/c/make.py", CLANG, LLVM_AR, freebsd_slice.outputs[0],
-         llvm_libc_slice.outputs[0], arm_tarball.outputs[0], bionic_slice.outputs[0], "$(B)/lib/c/libc.a"],
+         llvm_libc_slice.outputs[0], arm_tarball.outputs[0], "$(B)/lib/c/libc.a"],
     descr="CC",
     color="green",
 )
