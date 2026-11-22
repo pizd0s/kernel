@@ -1,0 +1,16 @@
+--- a/libc/src/__support/HashTable/generic/bitmask_impl.inc
++++ b/libc/src/__support/HashTable/generic/bitmask_impl.inc
+@@ -17,8 +17,12 @@
+ // GPU architectures are 64-bit but use 32-bit general purpose registers.
+ #ifdef LIBC_TARGET_ARCH_IS_GPU
+ using bitmask_t = uint32_t;
++// A word of a pointer's size, of the types Endian converts: wasm32's
++// uintptr_t is unsigned long, none of them.
++#elif UINTPTR_MAX == UINT32_MAX
++using bitmask_t = uint32_t;
+ #else
+-using bitmask_t = uintptr_t;
++using bitmask_t = uint64_t;
+ #endif
+ 
+ // Helper function to spread a byte across the whole word.

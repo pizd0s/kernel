@@ -20,10 +20,11 @@ int hcreate(size_t);
 void hdestroy(void);
 ENTRY* hsearch(ENTRY, ACTION);
 
+// As LLVM libc has it, whose hcreate_r and the others lib/c's are: what
+// they keep in __opaque.
 struct hsearch_data {
-    struct __tab* __tab;
-    unsigned int __unused1;
-    unsigned int __unused2;
+    void* __opaque;
+    unsigned int __reserved[2];
 };
 
 int hcreate_r(size_t, struct hsearch_data*);

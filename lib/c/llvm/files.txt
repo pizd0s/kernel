@@ -1,7 +1,8 @@
-# The functions lib/c takes of LLVM libc's header-only math
+# The functions lib/c takes of LLVM libc: of its header-only math
 # (libc/shared/math), each a C function of the prototype here calling
 # LLVM's of its name, then the names that are the same function: long
-# double's, which is a double here, and GNU's. Chosen by speed in the
+# double's, which is a double here, and GNU's; and the sources of its
+# functions Bionic takes of it (bionic/files.txt), a path alone. Chosen by speed in the
 # system against FreeBSD's: LLVM's, correctly rounded, unless it is twice
 # as slow or more; of the exact functions the faster; and Arm's
 # optimized-routines' where they are faster still (arm/files.txt).
@@ -55,3 +56,18 @@ float sinhf(float);
 double tan(double); tanl
 float tanf(float);
 float tanhf(float);
+src/stdlib/qsort.cpp
+src/stdlib/qsort_r.cpp
+src/stdlib/bsearch.cpp
+src/search/hsearch/global.cpp
+src/search/hcreate.cpp
+src/search/hcreate_r.cpp
+src/search/hdestroy.cpp
+src/search/hdestroy_r.cpp
+src/search/hsearch.cpp
+src/search/hsearch_r.cpp
+src/search/insque.cpp
+src/search/remque.cpp
+src/search/lfind.cpp
+src/search/lsearch.cpp
+src/__support/CPP/new.cpp

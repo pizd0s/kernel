@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Build lib/c's in-process archive: our own sources, the musl subset in
 musl/files.txt, FreeBSD's sources in freebsd/files.txt, LLVM libc's
-functions in llvm/files.txt and Arm's optimized-routines' in arm/files.txt.
+functions in llvm/files.txt, Arm's optimized-routines' in arm/files.txt
+and Bionic's sources in bionic/files.txt.
 
-    make.py <cc> <ar> <musl-tarball> <freebsd-slice> <llvm-slice> <arm-tarball> <libc.a>
+    make.py <cc> <ar> <musl-tarball> <freebsd-slice> <llvm-slice> <arm-tarball> <bionic-slice> <libc.a>
     make.py headers <include.tar>
 
 The second packs include/, the headers as a program built inside the system
@@ -24,16 +25,25 @@ a path from the tree's root and the file's own flags.
 A line of llvm/files.txt is a C prototype, then the names of the same
 function: each becomes a C++ source of its own, the function calling LLVM
 libc's of its name in libc/shared/math, header-only, and weak aliases of
-it. A line of arm/files.txt is a source of optimized-routines' math/ and
+it; or a source of LLVM libc's alone, which gives its C name itself.
+llvm/patches/ are fixes of LLVM libc's sources for wasm32, each saying
+why, applied to the slice first. A line of arm/files.txt is a source of optimized-routines' math/ and
 such a prototype and names, which a C source of ours includes it with and
 makes the aliases of; or a source alone. They build for the one rounding
 mode wasm has, to nearest, and set no errno, as math_errhandling says,
 with none of the names glibc's ABI adds.
+
+Bionic's sources build over our headers with bionic/'s for what they take
+of Bionic's own, sys/cdefs.h included first in each, its private headers
+and its OpenBSD compatibility on the path; those it carries of OpenBSD
+with openbsd-compat.h first, as Bionic builds them. A line of
+bionic/files.txt is a path from the tree's root and the file's own flags.
 """
 import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -47,6 +57,8 @@ FLAGS = ["-O2", "-std=c99", "-D_XOPEN_SOURCE=700", "-w"]
 FREEBSD_FLAGS = ["-O2", "-std=c11", "-w", "-include", str(ROOT / "freebsd" / "sys" / "cdefs.h"), "-I", str(ROOT / "freebsd")]
 LLVM_FLAGS = ["-O2", "-std=c++17", "-fno-exceptions", "-fno-rtti", "-nostdinc++", "-w", "-DLIBC_NAMESPACE=__llvm_libc"]
 ARM_FLAGS = ["-O2", "-std=c11", "-w", "-DWANT_ROUNDING=0", "-DWANT_ERRNO=0", "-DUSE_GLIBC_ABI=0"]
+BIONIC_C_FLAGS = ["-O2", "-std=gnu11", "-w"]
+BIONIC_CXX_FLAGS = ["-O2", "-std=gnu++20", "-fno-exceptions", "-fno-rtti", "-nostdinc++", "-w"]
 
 
 def listed(path):
@@ -96,11 +108,15 @@ def aliases(result, name, types, names, linkage):
     return lines
 
 
-def wrappers(work):
-    """llvm/files.txt's functions, a C++ source each."""
+def wrappers(work, llvm):
+    """llvm/files.txt's functions, a C++ source each, and its sources."""
     sources = []
 
     for line in listed(ROOT / "llvm" / "files.txt"):
+        if "(" not in line:
+            sources.append(llvm / line)
+            continue
+
         result, name, types, names = function(line, "llvm/files.txt")
         arguments = [f"a{i}" for i in range(len(types))]
         call = f"LIBC_NAMESPACE::shared::{name}({', '.join(arguments)})"
@@ -142,7 +158,7 @@ def main():
 
         return
 
-    cc, ar, tarball, freebsd_slice, llvm_slice, arm_tarball, output = sys.argv[1:8]
+    cc, ar, tarball, freebsd_slice, llvm_slice, arm_tarball, bionic_slice, output = sys.argv[1:9]
     work = Path(os.environ.get("TMPDIR") or "/tmp") / "libc"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -162,7 +178,11 @@ def main():
     freebsd = unpack(freebsd_slice, work / "freebsd")
     (freebsd / "lib" / "msun" / "src" / "math.h").unlink()
     llvm = unpack(llvm_slice, work / "llvm")
+
+    for fix in sorted((ROOT / "llvm" / "patches").glob("*.patch")):
+        subprocess.run(["patch", "-p1", "--batch", "--forward", "-s", "-d", str(llvm), "-i", str(fix)], check=True)
     optimized = next(unpack(arm_tarball, work / "arm").glob("optimized-routines-*"))
+    bionic = unpack(bionic_slice, work / "bionic")
 
     includes = [
         "-include", str(ROOT / "musl" / "features.h"),
@@ -190,9 +210,24 @@ def main():
 
     (work / "llvm-wrappers").mkdir()
 
-    for source in wrappers(work / "llvm-wrappers"):
+    for source in wrappers(work / "llvm-wrappers", llvm / "libc"):
         units.append((source, work / "obj" / "llvm" / source.with_suffix(".o").name,
-                      LLVM_FLAGS + ["-I", str(llvm / "libc"), "-isystem", str(ROOT / "include")]))
+                      LLVM_FLAGS + ["-DLIBC_COPT_PUBLIC_PACKAGING", "-I", str(llvm / "libc"), "-isystem", str(ROOT / "include")]))
+
+    compat = bionic / "libc" / "upstream-openbsd" / "android" / "include"
+    paths = ["-include", str(ROOT / "bionic" / "sys" / "cdefs.h"), "-I", str(ROOT / "bionic"), "-I", str(compat),
+             "-I", str(bionic / "libc"), "-I", str(bionic / "libc" / "private"), "-isystem", str(ROOT / "include")]
+
+    for line in listed(ROOT / "bionic" / "files.txt"):
+        path, *flags = shlex.split(line)
+        source = bionic / path
+        language = BIONIC_CXX_FLAGS if source.suffix == ".cpp" else BIONIC_C_FLAGS
+        # Bionic's switch for its OpenBSD sources over musl's headers, which
+        # lib/c's are of: explicit_bzero is the libc's.
+        openbsd = ["-DANDROID_HOST_MUSL", "-include", str(compat / "openbsd-compat.h")] if path.startswith("libc/upstream-openbsd/") else []
+        # Named by the path, as Bionic's files of one name are of more than one place.
+        obj = "-".join(Path(path).with_suffix(".o").parts[1:])
+        units.append((source, work / "obj" / "bionic" / obj, language + paths + openbsd + flags))
 
     (work / "arm-wrappers").mkdir()
     math = optimized / "math"
