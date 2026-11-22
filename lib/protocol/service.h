@@ -24,7 +24,7 @@ struct Device {
     Stat st;
 };
 
-// Registers a device of name and mode, S_IFCHR, S_IFBLK or S_IFSOCK with
+// Registers a file of name and mode, S_IFCHR, S_IFBLK, S_IFSOCK or S_IFREG with
 // the permissions, its owner uid and gid, on an endpoint of /dev/init/ctl:
 // the far end of a pair goes with the request, the device's stat comes
 // back on the endpoint. 0, or the errno.
@@ -32,6 +32,12 @@ int enroll(int registry, const char* name, uint32_t mode, uint32_t uid, uint32_t
 
 // Registers a device of the service's at /dev/init/ctl, or ends the service.
 Device enroll(const char* program, const char* name, uint32_t mode);
+
+// Registers a socket of the service's at /dev/init/ctl, of name and the
+// permissions of mode, and binds a socket of type to it, which listens:
+// the listener, the name's end in registered, or the service ends. The
+// name goes with the service, what is bound with the listener.
+int enrollSocket(const char* program, const char* name, uint32_t mode, int type, Device& registered);
 
 // The options before a service's arguments: -r fd, the descriptor it
 // closes once it is up, -1 without. The arguments left start at

@@ -17,11 +17,12 @@
 //     net/<name>/iface/status   where DHCP is (state), the lease's address,
 //                               router, name server and length when there
 //                               is one, and how many leases there were
-//     net/<name>/iface/stack    sockmgr's (bin/tools/sockmgr), which opens
-//                               it: a plain socket, on which the stack
+//     net/<name>/iface/stack    a socket, sockmgr's (bin/tools/sockmgr) to
+//                               connect to: on the connection the stack
 //                               tells its state (STACK), at once and at
 //                               each change, and takes the sockets sockmgr
-//                               hands it (HAND, sockets.cpp)
+//                               hands it (HAND, sockets.cpp); it listens
+//                               before iface/status is there
 //
 // The lease is asked for again at half its time and at seven eighths
 // (dhcp.cpp), and the stack has the address of each lease, none when it
@@ -97,6 +98,7 @@ namespace {
     Entry entries[5];
     size_t entryCount;
     int sockmgrTag; // what sockmgr's end of ours is of
+    int stackTag;   // what the stack's socket's listener is of
     int sockmgr = -1;
     Lease had; // the lease the stack's interface has
     bool loopback;
@@ -258,28 +260,31 @@ namespace {
 
     // sockmgr's open of the stack's file: a pair, ours its endpoint of the
     // loop's, the other end the open's, a plain socket; one at a time.
-    void joined(const Request& r) {
+    // A connection to the stack's socket: sockmgr's, told the stack's
+    // state at once; another while it is there is closed.
+    void accepted(Endpoint&, int connection) {
         if (sockmgr >= 0) {
-            return fail(r.reply(), EBUSY);
+            close(connection);
+            return;
         }
-        int pair[2];
-        if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
-            return fail(r.reply(), errno);
-        }
-        sockmgr = pair[0];
-        watch(epoll, {pair[0], false, true, true, &sockmgrTag});
-        const Header h{opOk, 0, 0, 0, 0, 0};
-        const iovec part{const_cast<Header*>(&h), sizeof h};
-        sendPacket(r.reply(), &part, 1, &pair[1], 1);
-        close(pair[1]);
+        sockmgr = connection;
+        watch(epoll, {connection, false, true, true, &sockmgrTag});
         told();
     }
 
-    // The stack's files, once it is up.
+    // The stack's files, once it is up: its socket first, listening
+    // before its status is there.
     void stackFiles() {
         socketsStart(epoll);
+        char full[PATH_MAX];
+        snprintf(full, sizeof full, "net/%s/iface/stack", name);
+        Entry& e = entries[entryCount++];
+        e.file = File::Stack;
+        Endpoint listener{enrollSocket("inet", full, 0600, SOCK_SEQPACKET, e.device), false, false, false, &stackTag};
+        listener.listens = true;
+        watch(epoll, listener);
+        watch(epoll, {e.device.end, true, false, false, &e});
         enrolled("iface/status", File::Status, S_IFCHR | 0444);
-        enrolled("iface/stack", File::Stack, S_IFCHR | 0600);
     }
 
     // A lease ACKed or gone: the stack starts with the first, its own
@@ -315,9 +320,6 @@ namespace {
             return;
         }
         Entry& f = *static_cast<Entry*>(e.of);
-        if (e.channel && f.file == File::Stack) {
-            return joined(r);
-        }
         if (e.channel) {
             answerOpen(epoll, r, {openedFile, 0, f.device.st.dev, f.device.st.ino, 0, POLLIN | POLLOUT}, e.of);
             return;
@@ -338,7 +340,7 @@ namespace {
 
     void gone(Endpoint& e) {
         if (e.of == &sockmgrTag) {
-            sockmgr = -1; // serve closes it; sockmgr opens the file again
+            sockmgr = -1; // serve closes it; sockmgr connects again
             return;
         }
         if (socketsGone(e)) {
@@ -398,7 +400,7 @@ namespace {
         if (ready >= 0) {
             close(ready);
         }
-        serve(epoll, handle, gone, nullptr, expire, frames);
+        serve(epoll, handle, gone, accepted, expire, frames);
         return 0;
     }
 
@@ -430,7 +432,7 @@ namespace {
         if (ready >= 0) {
             close(ready);
         }
-        serve(epoll, handle, gone, nullptr, expire, frames);
+        serve(epoll, handle, gone, accepted, expire, frames);
         return 0;
     }
 

@@ -2587,55 +2587,6 @@ static Task mountCall(Header h, int fd, Place root, Place from, int conn, Name t
     ok(fd);
 }
 
-// BIND: a socket node of the last name, which holds the listener the
-// call brings, made as MKNOD makes a name: one that is there, and ".",
-// ".." and the root alone, are EEXIST, which the kernel says
-// EADDRINUSE.
-static Task bindCall(Header h, int fd, Place root, Place from, int listener, Name path) {
-    Reply r{fd};
-    Reply object{listener};
-    Walk w;
-    w.start(h, from, root, path, false, false, false);
-    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
-        if (s == Walk::Step::Failed) {
-            error(fd, w.error);
-            co_return;
-        }
-    }
-    if (w.kind != lastName) {
-        error(fd, EEXIST);
-        co_return;
-    }
-    if (w.slash) {
-        const Answer a = co_await asking(w.here, h, fsLookup, w.last);
-        error(fd, a.error == 0 ? EEXIST : ENOENT);
-        co_return;
-    }
-    changing(w.here);
-    forgetName(w.here, w.last);
-    forgetStat(knownAt(w.here), false);
-    hand(w.here, h, fsBind, h.arg, nullptr, 0, w.last, fd, listener);
-}
-
-// CONNECT: the listener of the socket node a path names, a last link
-// followed; what is no socket refuses, ECONNREFUSED.
-static Task connectCall(Header h, int fd, Place root, Place from, Name path) {
-    Reply r{fd};
-    Walk w;
-    w.start(h, from, root, path, true, true, false);
-    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
-        if (s == Walk::Step::Failed) {
-            error(fd, w.error);
-            co_return;
-        }
-    }
-    if (!S_ISSOCK(w.target.st.mode)) {
-        error(fd, ECONNREFUSED);
-        co_return;
-    }
-    hand(w.target, h, fsConnect, 0, nullptr, 0, {}, fd);
-}
-
 // FSTAT of a handle: the stat of its place, which its file system
 // tells.
 static Task fstatCall(Header h, int fd, Place at) {
@@ -2856,7 +2807,7 @@ static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
 // open file's. Whether fd is kept: a call of the VFS's keeps it, and
 // closes it when it is done.
 static bool onHandle(Endpoint* ep, const Header& h, Body body, int fd) {
-    if (h.op < vfsOpen || h.op > vfsConnect) {
+    if (h.op < vfsOpen || h.op > vfsPath) {
         return onPlace(ep, h, body, fd);
     }
     Place root;
@@ -2934,18 +2885,6 @@ static bool onHandle(Endpoint* ep, const Header& h, Body body, int fd) {
             mountCall(h, fd, root, from, conn, target, body.rest());
             break;
         }
-        case vfsBind: {
-            if (packetFdCount != 2) {
-                return error(fd, EINVAL);
-            }
-            const int listener = packetFds[0];
-            packetFds[0] = -1; // the call's now
-            bindCall(h, fd, root, from, listener, body.rest());
-            break;
-        }
-        case vfsConnect:
-            connectCall(h, fd, root, from, body.rest());
-            break;
         case vfsUnmount:
             unmountCall(h, fd, root, from, body.rest());
             break;

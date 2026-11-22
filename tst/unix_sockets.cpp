@@ -1,9 +1,14 @@
 // The AF_UNIX sockets of a process of the system's for
 // tst/test_unix_sockets.py: SOCK_SEQPACKET sockets bound to a path of the
 // VFS's, which a socket node of the path's file system names, and connected
-// to through it. It prints what each call says, in order.
+// to through it. It prints what each call says, in order. With a name, it
+// registers a socket of that name in /dev first (REGISTER), its own while
+// it runs, as a service does before it binds one there, and at the end
+// binds to a name of /dev nobody registered.
 //
-//     unix_sockets <path>
+//     unix_sockets <path> [<name in /dev>]
+
+#include <lib/protocol/service.h>
 
 #include <errno.h>
 #include <stdio.h>
@@ -41,11 +46,14 @@ static int socketOf() {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        dprintf(STDERR_FILENO, "usage: unix_sockets <path>\n");
+    if (argc != 2 && argc != 3) {
+        dprintf(STDERR_FILENO, "usage: unix_sockets <path> [<name in /dev>]\n");
         return 2;
     }
     const char* path = argv[1];
+    if (argc == 3) {
+        enroll("unix_sockets", argv[2], S_IFSOCK | 0666);
+    }
     const int listening = socketOf();
     says("bind", bound(listening, path));
     struct stat st;
@@ -82,5 +90,8 @@ int main(int argc, char** argv) {
     says("connect after unlink", connected(socketOf(), path));
     says("connect to a file", connected(socketOf(), "/etc/motd"));
     says("bind in the image", bound(socketOf(), "/etc/socket"));
+    if (argc == 3) {
+        says("bind of no name in /dev", bound(socketOf(), "/dev/none"));
+    }
     return 0;
 }

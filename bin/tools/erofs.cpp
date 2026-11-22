@@ -440,7 +440,6 @@ static void fsCall(const Header& h, Body body, int fd) {
         }
         case fsMkdir:
         case fsMknod:
-        case fsBind:
             return error(fd, creates(n, body.rest(), h));
         case fsSymlink:
             body.string(); // the target
@@ -471,8 +470,6 @@ static void fsCall(const Header& h, Body body, int fd) {
         }
         case fsPath:
             return pathOf(n, fd);
-        case fsConnect:
-            return error(fd, ECONNREFUSED); // the image holds no socket
         default:
             return error(fd, ENOSYS);
     }

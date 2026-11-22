@@ -633,11 +633,11 @@ net_probe = executable("net_probe_exe", command(
 # The sockets of tst/test_unix_sockets.py, which hands them to the system.
 unix_sockets = executable("unix_sockets_exe", command(
     name="unix_sockets_module",
-    inputs=["$(S)/tst/unix_sockets.cpp", *TOOL_INPUTS],
+    inputs=["$(S)/tst/unix_sockets.cpp", *PROTOCOL_SOURCES, *TOOL_INPUTS],
     outputs=["$(B)/tst/unix_sockets.wasm"],
     deps=[libc],
     cmd=["python3", "$(S)/bin/tools/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], "$(B)/tst/unix_sockets.wasm",
-         "$(S)/tst/unix_sockets.cpp"],
+         "$(S)/tst/unix_sockets.cpp", *PROTOCOL_SOURCES],
     descr="CC",
     color="cyan",
 ), "$(B)/tst/unix_sockets")

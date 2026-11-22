@@ -10,6 +10,8 @@
 #include <sys/uio.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
 
 static bool stopping = false;
 static size_t watched = 0;
@@ -98,6 +100,18 @@ Device enroll(const char* program, const char* name, uint32_t mode) {
         fatal("%s: /dev/%s: %s", program, name, strerror(e));
     }
     return d;
+}
+
+int enrollSocket(const char* program, const char* name, uint32_t mode, int type, Device& registered) {
+    registered = enroll(program, name, S_IFSOCK | (mode & 07777));
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    snprintf(address.sun_path, sizeof address.sun_path, "/dev/%s", name);
+    const int s = socket(AF_UNIX, type | SOCK_CLOEXEC, 0);
+    if (s < 0 || bind(s, reinterpret_cast<const sockaddr*>(&address), sizeof address) != 0 || listen(s, 16) != 0) {
+        fatal("%s: %s: %s", program, address.sun_path, strerror(errno));
+    }
+    return s;
 }
 
 int readyDescriptor(int argc, char** argv, int& first) {

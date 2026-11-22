@@ -1,8 +1,9 @@
 // The system's libfuse: libfuse 2.9's high-level API (fuse.h) as a file
 // system of the VFS's (lib/protocol/protocol.h). fuse_main binds the file
 // system's socket, SOCK_SEQPACKET, at its mount point argument, a path of
-// /dev's when it is relative (mount <where> /dev/<name>), and serves it on
-// one thread: a request is a call of the file system's operations on a path,
+// /dev's when it is relative, which it registers there first (mount
+// <where> /dev/<name>), and serves it on one thread: a request is a call of
+// the file system's operations on a path,
 // answered before the next. The context of each call is the request's uid
 // and gid.
 //
@@ -87,6 +88,7 @@ static size_t channels;
 static char bytes[128 * 1024];
 static Node* nodes[1024];
 static Listing* listings;
+static Device registered{-1, {}}; // the socket's name in /dev, ours while we are up
 
 static void* allocate(size_t size) {
     void* p = calloc(1, size);
@@ -850,15 +852,29 @@ int fuse_main_real(int argc, char* argv[], const fuse_operations* op, size_t siz
         conn.capable = FUSE_CAP_BIG_WRITES | FUSE_CAP_ATOMIC_O_TRUNC;
         context.private_data = operations.init(&conn);
     }
-    // The file system's socket, at name or /dev/<name>, one a file system
-    // before it left taken away first.
+    // The file system's socket: at name, one a file system before it left
+    // taken away first, or at /dev/<name>, which we register as ours there
+    // first.
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
-    snprintf(address.sun_path, sizeof address.sun_path, "%s%s", name[0] == '/' ? "" : "/dev/", name);
-    const int listening = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
-    unlink(address.sun_path);
-    if (listening < 0 || bind(listening, reinterpret_cast<const sockaddr*>(&address), sizeof address) != 0 || listen(listening, 16) != 0) {
-        dprintf(STDERR_FILENO, "fuse: %s: %s\n", address.sun_path, strerror(errno));
+    const bool ours = name[0] != '/';
+    snprintf(address.sun_path, sizeof address.sun_path, "%s%s", ours ? "/dev/" : "", name);
+    int e = 0;
+    if (ours) {
+        const int registry = open("/dev/init/ctl", O_RDWR | O_CLOEXEC);
+        e = registry < 0 ? errno : enroll(registry, name, S_IFSOCK | 0755, uint32_t(geteuid()), uint32_t(getegid()), registered);
+        if (registry >= 0) {
+            close(registry);
+        }
+    } else {
+        unlink(address.sun_path);
+    }
+    const int listening = e != 0 ? -1 : socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    if (e == 0 && (listening < 0 || bind(listening, reinterpret_cast<const sockaddr*>(&address), sizeof address) != 0 || listen(listening, 16) != 0)) {
+        e = errno;
+    }
+    if (e != 0) {
+        dprintf(STDERR_FILENO, "fuse: %s: %s\n", address.sun_path, strerror(e));
         if (operations.destroy) {
             operations.destroy(context.private_data);
         }
@@ -871,7 +887,9 @@ int fuse_main_real(int argc, char* argv[], const fuse_operations* op, size_t siz
         close(ready);
     }
     serve(epoll, handle, gone, accepted);
-    unlink(address.sun_path);
+    if (!ours) {
+        unlink(address.sun_path);
+    }
     if (operations.destroy) {
         operations.destroy(context.private_data);
     }

@@ -153,8 +153,6 @@ func (r *NoRoot) call(p *Process, q Request, group uint32, waits bool) (bool, er
 		return false, r.gone(q.path, EISDIR)
 	case *VfsMount, *VfsUnmount:
 		return false, EINVAL
-	case *VfsBind, *VfsConnect:
-		return false, EOPNOTSUPP
 	case *FileGetfl:
 		var err error
 

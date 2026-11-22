@@ -14,6 +14,7 @@ type UnixSocket struct {
 	kind     int
 	mu       sync.Mutex
 	name     string
+	bound    *SocketName
 	listener *UnixListener
 	conn     *PairEnd
 	peer     string
@@ -45,14 +46,19 @@ func (s *UnixSocket) unref() {
 
 	s.mu.Lock()
 
-	l, c := s.listener, s.conn
+	l, c, b := s.listener, s.conn, s.bound
 
-	s.listener, s.conn = nil, nil
+	s.listener, s.conn, s.bound = nil, nil, nil
 	s.mu.Unlock()
 
 	if l != nil {
 		l.unsubscribe(&s.inner)
 		l.shut()
+
+		if b != nil {
+			b.forget(l)
+		}
+
 		l.unref()
 	}
 
@@ -170,13 +176,7 @@ func (s *UnixSocket) bind(p *Process, a Address) error {
 
 	l.refs.Store(1)
 
-	err = p.onPath(AT_FDCWD, path, func(v Object) error {
-		return p.dirBind(v, path, 0o777&^p.umask, l)
-	})
-
-	if err == EEXIST {
-		err = EADDRINUSE
-	}
+	b, err := p.bindName(path, l)
 
 	if err != nil {
 		l.unref()
@@ -185,7 +185,7 @@ func (s *UnixSocket) bind(p *Process, a Address) error {
 	}
 
 	s.mu.Lock()
-	s.name, s.listener = path, l
+	s.name, s.listener, s.bound = path, l, b
 	s.mu.Unlock()
 	s.attach(l)
 

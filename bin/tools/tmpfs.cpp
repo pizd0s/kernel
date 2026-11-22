@@ -28,7 +28,7 @@
 // it, which no other write comes between. The locks of flock and fcntl
 // are the kernel's, kept by the dev and ino an open file is made with. A
 // FIFO is a node and nothing more: the kernel makes the pipe its openers
-// share. The tree holds what its capacity lets it, in bytes and in nodes,
+// share; so is a socket, the kernel keeping what is bound to it. The tree holds what its capacity lets it, in bytes and in nodes,
 // a node a block's worth: past that, ENOSPC.
 //
 // Memory. A request is received into one buffer, packet, and answered
@@ -183,7 +183,7 @@ namespace {
         File,
         Link,
         Fifo,   // a named pipe: the kernel makes the pipe
-        Socket, // a socket's name: it holds the socket's listener, which CONNECT gives
+        Socket, // a socket's name: the kernel keeps what is bound to it
     };
 
     // A name of a directory: its bytes are the image's or follow the entry.
@@ -226,7 +226,6 @@ namespace {
         u32 holds = 0;         // what else points at it: directories under it, files opened in it by name
         bool released = false; // gone from its server, its memory kept for what holds it
         Kind kind = Kind::Dir;
-        int fd = -1;     // a socket's listener
         Content content; // a file's, a link's
         // a directory's
         Node* parent = nullptr; // where ".." goes; none for the root
@@ -437,10 +436,6 @@ static void release(Server& s, Node* n) {
             n->content.view = nullptr;
             n->content.viewSize = 0;
         }
-        if (n->fd >= 0) {
-            close(n->fd);
-            n->fd = -1;
-        }
         s.byIno.erase(hashIno(n->ino), n);
         --s.nodes;
         n->released = true;
@@ -605,8 +600,8 @@ static Statfs statfsOf(const Server& s) {
 // ---- the calls of a tree of ours, by node --------------------------------------
 
 // mkdir, mknod and symlink: a new name in the directory, who asks may
-// write, theirs, with the mode asked for. mknod makes FIFOs and regular
-// files; a device is EPERM.
+// write, theirs, with the mode asked for. mknod makes FIFOs, sockets and
+// regular files; a device is EPERM.
 static int makeOurs(Server& s, Node* dir, u32 op, u32 mode, Name name, Name target, const Header& h) {
     if (const int e = creates(&s, dir, name, h)) {
         return e;
@@ -618,6 +613,9 @@ static int makeOurs(Server& s, Node* dir, u32 op, u32 mode, Name name, Name targ
         switch (mode & S_IFMT) {
             case S_IFIFO:
                 kind = Kind::Fifo;
+                break;
+            case S_IFSOCK:
+                kind = Kind::Socket;
                 break;
             case 0:
             case S_IFREG:
@@ -1147,32 +1145,6 @@ static void fsCall(const Header& h, Body body, int fd) {
         }
         case fsPath:
             return pathOf(n, fd);
-        case fsBind: {
-            // A socket's name, which holds the listener the call brings.
-            if (packetFdCount != 2) {
-                return error(fd, EINVAL);
-            }
-            const Name name = body.rest();
-            if (const int e = creates(&tree, n, name, h)) {
-                return error(fd, e);
-            }
-            Node* made = makeNode(tree, n, name, Kind::Socket);
-            made->perm = h.arg & 07777;
-            made->uid = h.uid;
-            made->gid = h.gid;
-            made->fd = packetFds[0];
-            packetFds[0] = -1; // the node's now
-            return answer(fd, 0);
-        }
-        case fsConnect:
-            if (n->kind != Kind::Socket) {
-                return error(fd, ECONNREFUSED);
-            }
-            if (!may(n, h, 2)) {
-                return error(fd, EACCES);
-            }
-            reply(fd, opOk, 0, nullptr, 0, &n->fd, 1);
-            return;
         default:
             return error(fd, ENOSYS);
     }

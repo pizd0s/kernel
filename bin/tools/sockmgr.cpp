@@ -25,10 +25,12 @@
 // file, the stack's.
 //
 // sockmgr watches /dev/net for the cards (watchdir), starts the stack of
-// each card the pattern names, and opens each card's stack's file once it
-// is there (its directory watched, then its iface): a plain socket, on
-// which the stack tells its state (STACK) and takes the sockets sockmgr
-// hands it (HAND). sockmgr asks the cards, and they ask nothing of it.
+// each card the pattern names, and connects to each card's stack's socket
+// once it is there (its directory watched, then its iface), and again as
+// iface/status comes, which the stack makes once its socket listens: on
+// the connection the stack tells its state (STACK) and takes the sockets
+// sockmgr hands it (HAND). sockmgr asks the cards, and they ask nothing
+// of it.
 //
 //     sockmgr [-r fd]
 
@@ -49,6 +51,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <sys/watchdir.h>
 #include <unistd.h>
 
@@ -650,12 +653,22 @@ static Endpoint* watched(const char* path, void* of) {
     return watch(epoll, e);
 }
 
-// Opens the stack's file of a card's: the stack's end of sockmgr's.
+// Connects to the stack's socket of a card's, once: a refused connection,
+// before the stack listens, is tried again as iface/status comes.
 static void opens(const char* card) {
-    char path[PATH_MAX];
-    snprintf(path, sizeof path, "/dev/net/%s/iface/stack", card);
-    const int fd = open(path, O_RDWR | O_CLOEXEC);
-    if (fd < 0) {
+    for (const Stack* s = stacks; s; s = s->next) {
+        if (strcmp(s->card, card) == 0) {
+            return;
+        }
+    }
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    snprintf(address.sun_path, sizeof address.sun_path, "/dev/net/%s/iface/stack", card);
+    const int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    if (fd < 0 || connect(fd, reinterpret_cast<const sockaddr*>(&address), sizeof address) != 0) {
+        if (fd >= 0) {
+            close(fd);
+        }
         return;
     }
     auto* s = static_cast<Stack*>(calloc(1, sizeof(Stack)));
@@ -753,7 +766,7 @@ static void records(Endpoint& e) {
                 char path[PATH_MAX];
                 snprintf(path, sizeof path, "/dev/net/%s/iface", c->name);
                 c->iface = watched(path, &c->ifaceTag);
-            } else if (c && iface && strcmp(name, "stack") == 0) {
+            } else if (c && iface && (strcmp(name, "stack") == 0 || strcmp(name, "status") == 0)) {
                 opens(c->name);
             }
         }

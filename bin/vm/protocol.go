@@ -102,8 +102,6 @@ const (
 	vMount
 	vUnmount
 	vPath
-	vBind
-	vConnect
 )
 
 func served(p *Process, kind uint32, access int, dev, ino, id uint64, events uint32, end Object) (*RemoteFD, error) {

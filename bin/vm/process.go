@@ -6178,7 +6178,7 @@ func (p *Process) mkdir(dirfd int32, path string, mode uint32) error {
 
 func (p *Process) mknod(dirfd int32, path string, mode uint32, dev uint64) error {
 	switch mode & S_IFMT {
-	case 0, S_IFREG, S_IFIFO:
+	case 0, S_IFREG, S_IFIFO, S_IFSOCK:
 	default:
 		return EPERM
 	}
@@ -7930,8 +7930,87 @@ func (p *Process) unixSocketPath(at, n uint32) (string, error) {
 	return string(path), nil
 }
 
+func (p *Process) bindName(path string, held Object) (*SocketName, error) {
+	var name *SocketName
+
+	err := p.onPath(AT_FDCWD, path, func(v Object) error {
+		var st Stat
+
+		err := p.dirStat(v, path, false, &st)
+
+		if err == ENOENT {
+			if err = p.dirMknod(v, path, S_IFSOCK|0o777&^p.umask); err != nil {
+				return err
+			}
+
+			err = p.dirStat(v, path, false, &st)
+		}
+
+		switch {
+		case err != nil:
+			return err
+		case st.Mode&S_IFMT != S_IFSOCK:
+			return EADDRINUSE
+		}
+
+		key := FileKey{st.Dev, st.Ino}
+
+		p.k.mu.Lock()
+
+		defer p.k.mu.Unlock()
+
+		if p.k.sockets[key] != nil {
+			return EADDRINUSE
+		}
+
+		held.ref()
+		p.k.sockets[key] = held
+		name = &SocketName{k: p.k, key: key}
+
+		return nil
+	})
+
+	if err == EEXIST {
+		err = EADDRINUSE
+	}
+
+	return name, err
+}
+
+func (p *Process) boundAt(v Object, path string) (Object, error) {
+	var st Stat
+
+	if err := p.dirStat(v, path, true, &st); err != nil {
+		return nil, err
+	}
+
+	if st.Mode&S_IFMT != S_IFSOCK {
+		return nil, ECONNREFUSED
+	}
+
+	if !p.permits(&st, 2) {
+		return nil, EACCES
+	}
+
+	p.k.mu.Lock()
+
+	held := p.k.sockets[FileKey{st.Dev, st.Ino}]
+
+	if held != nil {
+		held.ref()
+	}
+
+	p.k.mu.Unlock()
+
+	if held == nil {
+		return nil, ECONNREFUSED
+	}
+
+	return held, nil
+}
+
 func (p *Process) connectUnix(v Object, path string, kind int, nonblock bool, to *atomic.Int64) (*PairEnd, error) {
-	f, err := p.dirConnect(v, path)
+	f, err := p.boundAt(v, path)
 
 	if err != nil {
 		return nil, err
@@ -7950,7 +8029,7 @@ func (p *Process) mouthOf(path string) (Object, error) {
 	var mouth Object
 
 	err := p.onPath(AT_FDCWD, path, func(v Object) error {
-		f, err := p.dirConnect(v, path)
+		f, err := p.boundAt(v, path)
 
 		if err != nil {
 			return err
@@ -13324,17 +13403,6 @@ func (p *Process) dirPath(d Object) (string, error) {
 
 func (p *Process) dirMount(d Object, target, source string, conn Object) error {
 	return p.request(d, &VfsMount{root: p.vfsRoot(d), target: target, source: source, conn: conn})
-}
-
-func (p *Process) dirBind(d Object, path string, mode uint32, held Object) error {
-	return p.request(d, &VfsBind{root: p.vfsRoot(d), path: path, mode: mode, held: held})
-}
-
-func (p *Process) dirConnect(d Object, path string) (Object, error) {
-	r := VfsConnect{root: p.vfsRoot(d), path: path}
-	err := p.request(d, &r)
-
-	return r.file, err
 }
 
 func (p *Process) dirUnmount(d Object, path string, flags uint32) error {

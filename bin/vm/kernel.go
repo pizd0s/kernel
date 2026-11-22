@@ -38,8 +38,9 @@ type Kernel struct {
 
 	codes map[CodeKey]*CodeEntry
 
-	fifos map[FileKey]*Pipe
-	locks LockTable
+	fifos   map[FileKey]*Pipe
+	sockets map[FileKey]Object
+	locks   LockTable
 
 	fg        int32
 	cttys     map[int32]Object
@@ -51,7 +52,7 @@ type Kernel struct {
 }
 
 func newKernel(user Cred, memory uint64) *Kernel {
-	k := &Kernel{procs: map[int32]*Process{}, codes: map[CodeKey]*CodeEntry{}, fifos: map[FileKey]*Pipe{},
+	k := &Kernel{procs: map[int32]*Process{}, codes: map[CodeKey]*CodeEntry{}, fifos: map[FileKey]*Pipe{}, sockets: map[FileKey]Object{},
 		exit: make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]Object{}, pool: newPool(memory)}
 
 	k.locks.files = map[FileKey]*LockedFile{}

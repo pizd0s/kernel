@@ -1,15 +1,16 @@
 // devfs: /dev, a file system of the VFS's (lib/protocol/protocol.h), which
 // rootfs starts and mounts on /dev with the channel it gives it: rootfs
 // asks it by node, its root node 1. It holds init/ctl, where the
-// services of the system register their devices (REGISTER,
-// lib/protocol/service.h); those devices, each a service's: an open of
-// one goes on to its service, where it is answered with it, and the
-// service serves the open file from then on; and the sockets the file
-// systems of the system bind there, for mount(2) to connect to. devfs
-// keeps a device's name, its mode and its owner, and lets the name go when
-// the service's end of the pair closes; a socket's goes when it is
-// unlinked. A device's name may be in a directory of /dev, pts/0: the
-// directory comes with the first device in it and goes with the last.
+// services of the system register their files (REGISTER,
+// lib/protocol/service.h): devices, each a service's, an open of one going
+// on to its service, where it is answered with it, and the service serving
+// the open file from then on; the files of text the services serve so;
+// and sockets, which a service binds its socket to as it registered them,
+// the kernel keeping what is bound (bind(2), connect(2)). Only REGISTER
+// makes a name in /dev. devfs keeps a file's name, its mode and its
+// owner, and lets the name go when the service's end of the pair closes,
+// whatever the file is. A name may be in a directory of /dev, pts/0: the
+// directory comes with the first name in it and goes with the last.
 // devfs starts the services of the system's devices, /bin/devices,
 // /bin/pty, /bin/sockmgr, /bin/dns, /bin/inet of the loopback, lo,
 // /bin/blk for each disk vm gave the system and /bin/inet for each card
@@ -43,8 +44,7 @@ namespace {
     enum class Kind {
         Dir,
         Registry,
-        Device, // a service's: a character or block device
-        Socket, // a socket's name: it holds the socket's listener, which CONNECT gives
+        Device, // a service's: a device, a socket or a file of text
     };
 
     // A node of /dev: its root or a directory of devices, init/ctl, or a
@@ -59,7 +59,7 @@ namespace {
         uint64_t atime;
         uint64_t mtime;
         uint64_t ctime;
-        int fd; // a device's end of its service's pair; a socket's listener
+        int fd; // a file's end of its service's pair
         char name[NAME_MAX + 1];
         Node* parent;  // the directory it is in; the root's is the root
         Node* entries; // a directory's, in their order
@@ -448,9 +448,6 @@ static void unregister(Node* n) {
         }
     }
     dir->mtime = dir->ctime = now();
-    if (n->kind == Kind::Socket && n->fd >= 0) {
-        close(n->fd);
-    }
     if (n->kind == Kind::Dir) {
         dirGone(*n);
     }
@@ -491,9 +488,6 @@ static void openNode(Node& n, Request& r) {
     const bool writes = access != O_RDONLY;
     if (n.kind == Kind::Dir) {
         return fail(r.reply(), EISDIR);
-    }
-    if (n.kind == Kind::Socket) {
-        return fail(r.reply(), ENXIO);
     }
     if (!may(n, r.h, (reads ? 4 : 0) | (writes || (r.h.arg & O_TRUNC) != 0 ? 2 : 0))) {
         return fail(r.reply(), EACCES);
@@ -628,58 +622,12 @@ static void fsCall(Request& r) {
             }
             return fail(r.reply(), named(*dir, name, length) ? EEXIST : EROFS);
         }
-        case fsUnlink: {
-            // A socket's name goes as a writer of /dev takes it away;
-            // nothing else of /dev does.
+        case fsUnlink:
+            // A name goes with its service, and with nothing else.
             if (!nameAt(r, 8, name, length)) {
                 return fail(r.reply(), EINVAL);
             }
-            Node* found = named(*n, name, length);
-            if (!found) {
-                return fail(r.reply(), ENOENT);
-            }
-            if (found->kind != Kind::Socket || (r.h.arg & AT_REMOVEDIR) != 0) {
-                return fail(r.reply(), EROFS);
-            }
-            if (!may(*n, r.h, 3)) {
-                return fail(r.reply(), EACCES);
-            }
-            unregister(found);
-            return answer(r.reply(), opOk, 0);
-        }
-        case fsBind: {
-            if (!nameAt(r, 8, name, length) || r.count != 2) {
-                return fail(r.reply(), EINVAL);
-            }
-            if (const int e = badName(name, length)) {
-                return fail(r.reply(), e);
-            }
-            if (n->kind != Kind::Dir) {
-                return fail(r.reply(), ENOTDIR);
-            }
-            if (named(*n, name, length)) {
-                return fail(r.reply(), EEXIST);
-            }
-            if (!may(*n, r.h, 3)) {
-                return fail(r.reply(), EACCES);
-            }
-            Node* made = add(*n, name, length, Kind::Socket, S_IFSOCK | (r.h.arg & 07777), r.h.uid, r.h.gid);
-            made->fd = r.fds[0];
-            r.fds[0] = -1; // the node's now
-            return answer(r.reply(), opOk, 0);
-        }
-        case fsConnect: {
-            if (n->kind != Kind::Socket) {
-                return fail(r.reply(), ECONNREFUSED);
-            }
-            if (!may(*n, r.h, 2)) {
-                return fail(r.reply(), EACCES);
-            }
-            const Header ok{opOk, 0, 0, 0, 0, 0};
-            const iovec parts[] = {{const_cast<Header*>(&ok), sizeof ok}};
-            sendPacket(r.reply(), parts, 1, &n->fd, 1);
-            return;
-        }
+            return fail(r.reply(), named(*n, name, length) ? EROFS : ENOENT);
         case fsRename:
         case fsChmod:
         case fsChown:
@@ -715,9 +663,10 @@ static void fsCall(Request& r) {
     }
 }
 
-// A service's device: a name in /dev of the mode asked for, S_IFCHR or
-// S_IFBLK, whose opens go on to the end of a pair the request brings,
-// the service's the other; its stat is the reply. A service registers
+// A service's file: a name in /dev of the mode asked for, S_IFCHR,
+// S_IFBLK, S_IFSOCK or S_IFREG, whose opens go on to the end of a pair the
+// request brings, the service's the other, a socket's none (the kernel
+// connects to what is bound to it); its stat is the reply. A service registers
 // files alone: a name with "/" is one in directories of /dev, which come
 // with the first name in them and go with the last. Only on an endpoint
 // of init open to write.
@@ -728,7 +677,7 @@ static void registerName(const Endpoint& e, Request& r) {
     if (!e.writes) {
         return fail(r.reply(), EBADF);
     }
-    if (r.count != 2 || (type != S_IFCHR && type != S_IFBLK) || !nameAt(r, 0, name, length)) {
+    if (r.count != 2 || (type != S_IFCHR && type != S_IFBLK && type != S_IFSOCK && type != S_IFREG) || !nameAt(r, 0, name, length)) {
         return fail(r.reply(), EINVAL);
     }
     for (const char *at = name, *end = name + length;;) {

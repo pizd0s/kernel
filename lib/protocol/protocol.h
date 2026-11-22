@@ -71,7 +71,8 @@
 //     STAT      arg follow  root u64, path    OK stat
 //     READLINK              root u64, path    OK target
 //     MKDIR     arg mode    root u64, path
-//     MKNOD     arg mode    root u64, path    a FIFO or a regular file
+//     MKNOD     arg mode    root u64, path    a FIFO, a socket or a regular
+//                                         file
 //     SYMLINK               root u64, target 0 path
 //     UNLINK    arg flags   root u64, path    AT_REMOVEDIR
 //     RENAME                root u64, to u64, old 0 new   new from the
@@ -93,13 +94,10 @@
 //                                         connection is its channel
 //     UNMOUNT   arg flags   root u64, path    UMOUNT_NOFOLLOW
 //     PATH                  root u64          OK the handle's path from the root
-//     BIND      arg mode    root u64, path    fds[0] a listener of the
-//                                         kernel's: a socket node of the
-//                                         last name holds it, made as MKNOD
-//                                         makes a name
-//     CONNECT               root u64, path    OK, fds[0] the listener the
-//                                         socket node holds
-//   and an open file's calls but READ and WRITE.
+//   and an open file's calls but READ and WRITE. A FIFO and a socket are
+//   names of the file systems' and nothing more: the kernel makes the pipe
+//   a FIFO's openers share, and keeps what a socket bound to a socket node
+//   is, by the node's dev and ino, which bind(2) and connect(2) find.
 //
 //   A file system's, on its channel, by node: a node is its inode number,
 //   the root's in the stat its connection answered, 1 for a file system
@@ -124,7 +122,8 @@
 //                                         not there; with O_EXCL EEXIST
 //                                         when it is
 //     MKDIR     arg mode    node u64, name
-//     MKNOD     arg mode    node u64, name    a FIFO or a regular file
+//     MKNOD     arg mode    node u64, name    a FIFO, a socket or a regular
+//                                         file
 //     SYMLINK               node u64, target 0 name
 //     LINK                  node u64, to u64, name   a name in to for node
 //     UNLINK    arg flags   node u64, name    AT_REMOVEDIR
@@ -136,11 +135,6 @@
 //     STATFS                                  OK statfs
 //     PATH                  node u64          OK the node's path from the
 //                                         file system's root
-//     BIND      arg mode    node u64, name    fds[0] a listener: a socket
-//                                         node of the name holds it
-//     CONNECT               node u64          OK, fds[0] the listener a
-//                                         socket node holds: who asks may
-//                                         write it
 //     ROOT                                    OK stat: the root's, then
 //                                         flags u32: fsNocache, of a file
 //                                         system that changes by itself
@@ -290,13 +284,14 @@
 //     SHUTDOWN  arg how
 //     SOCKTYPE                            OK type u32
 //
-//   A card's stack's and sockmgr's, on the open sockmgr has of the
-//   stack's net/<card>/iface/stack, a plain socket as /dev/init/ctl's, a
-//   request on it answered where it says:
+//   A card's stack's and sockmgr's, on sockmgr's connection to the
+//   stack's socket, net/<card>/iface/stack, a request on it answered
+//   where it says:
 //     STACK                 text        the stack's state, a line each,
 //                                         card <name>, inet <a>/<len>,
-//                                         gateway <a>, dns <a>: at the open
-//                                         and at every change; no answer
+//                                         gateway <a>, dns <a>: at the
+//                                         connection and at every change;
+//                                         no answer
 //     HAND      arg op      domain u32, type u32, protocol u32, nonblock
 //                           u32, call's arg u32, bound len u32 and sockaddr,
 //                           options u32, (level u32, name u32, len u32,
@@ -318,9 +313,10 @@
 //   /dev/init/ctl's open is a plain socket, an end of a pair devfs keeps the
 //   other end of, which its opener speaks the protocol on itself: a
 //   request on it is answered on it.
-//     REGISTER  arg mode    name          on /dev/init/ctl. OK stat: a device,
-//                                         S_IFCHR or S_IFBLK, of that name
-//                                         in /dev, whose owner is who asks
+//     REGISTER  arg mode    name          on /dev/init/ctl. OK stat: a file
+//                                         of that name in /dev, S_IFCHR,
+//                                         S_IFBLK, S_IFSOCK or S_IFREG,
+//                                         whose owner is who asks
 //                                         (the header's ids, the service's
 //                                         or whom it registers it for: a
 //                                         pseudoterminal's slave is its
@@ -328,10 +324,13 @@
 //                                         pair whose other end the service
 //                                         keeps, the channel: devfs hands
 //                                         every open of the name on to it,
-//                                         and the name goes when it closes
+//                                         and the name goes when it closes.
+//                                         A socket's is the service's to
+//                                         bind(2) its socket to; only
+//                                         REGISTER makes a name in /dev
 //
-//   A file system is a socket of its own, SOCK_SEQPACKET, bound to a path
-//   (BIND): mount(2) connects to it and mounts the connection, and every
+//   A file system is a socket of its own, SOCK_SEQPACKET, bound to a path:
+//   mount(2) connects to it and mounts the connection, and every
 //   connection the file system accepts is a channel of its calls.
 //
 //   rootfs keeps what a file system answers, a cache of names, as Linux's
@@ -395,8 +394,6 @@ enum : uint32_t {
     vfsMount,
     vfsUnmount,
     vfsPath,
-    vfsBind,
-    vfsConnect,
     // A file system's.
     fsLookup = 32,
     fsGetattr,
@@ -416,8 +413,6 @@ enum : uint32_t {
     fsTruncate,
     fsStatfs,
     fsPath,
-    fsBind,
-    fsConnect,
     fsRoot,
     fsWatch,
     // An open file's.

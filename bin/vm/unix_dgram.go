@@ -13,6 +13,7 @@ type UnixDgram struct {
 	inbox, mouth *PairEnd
 	mu           sync.Mutex
 	name, peer   string
+	bound        *SocketName
 	target       Object
 
 	writers Subscribers
@@ -41,14 +42,18 @@ func (s *UnixDgram) unref() {
 
 	s.mu.Lock()
 
-	t := s.target
+	t, b := s.target, s.bound
 
-	s.target = nil
+	s.target, s.bound = nil, nil
 	s.mu.Unlock()
 
 	if t != nil {
 		t.unsubscribe(&s.inner)
 		t.unref()
+	}
+
+	if b != nil {
+		b.forget(s.mouth)
 	}
 
 	s.inbox.unref()
@@ -144,17 +149,11 @@ func (s *UnixDgram) bind(p *Process, a Address) error {
 		return EINVAL
 	}
 
-	err = p.onPath(AT_FDCWD, path, func(v Object) error {
-		return p.dirBind(v, path, 0o777&^p.umask, s.mouth)
-	})
-
-	if err == EEXIST {
-		err = EADDRINUSE
-	}
+	b, err := p.bindName(path, s.mouth)
 
 	if err == nil {
 		s.mu.Lock()
-		s.name = path
+		s.name, s.bound = path, b
 		s.mu.Unlock()
 	}
 
