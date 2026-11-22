@@ -18,7 +18,9 @@ an extent tree of a leaf, holes and unwritten extents as zeros; links are
 followed, an absolute one from the root of the process; ".." out of the
 root goes to where it is mounted, and so does the path of a directory.
 Names are made, moved, linked and removed, modes, times and bytes
-written, and all of it is there when the system starts again: the test
+written, and watched (tst/watch_dir.cpp's names, on both file systems:
+libfuse's watchers see every change, which comes as a call of theirs),
+and all of it is there when the system starts again: the test
 syncs each, an fsync of a file of it, which has fuse2fs write what it
 holds. The system kills fuse2fs as it goes down, and a file system it
 had has no mark of being checked: fuse2fs, mounting it again, warns. flock's and fcntl's locks, which the
@@ -30,8 +32,9 @@ gets its inode, and nothing of the removed one's: not its names, not
 its "..". A file system of
 features fuse2fs does not know is refused.
 
-    test_mounts.py <vm> <rootfs>
+    test_mounts.py <vm> <rootfs> <watch_dir>
 """
+import base64
 import os
 import struct
 import subprocess
@@ -387,6 +390,12 @@ for name in "/run/two/hello.txt", "/run/four/hello.txt":
     os.fsync(f)
     os.close(f)
 '
+python3 -c 'import base64, sys; open("/run/watch_dir", "wb").write(base64.b64decode(sys.stdin.read()))' <<'PROGRAM'
+{program}
+PROGRAM
+chmod +x /run/watch_dir
+/run/watch_dir names /run/two
+/run/watch_dir names /run/four
 """
 
 EXT_WANT = """\
@@ -432,6 +441,44 @@ nothing of gone in back
 1004 b'tail'
 locks: busy b'pc' busy
 locks: busy b'pc' busy
+names: existing a
+names: idle
+quick: existing a
+quick: idle
+names: added b
+names: removed a
+names: removed b
+names: added c
+quick: removed a
+quick: added c
+quick: Resource temporarily unavailable
+names: added d
+names: Interrupted system call
+names: added e
+sub: idle
+sub: end
+names: removed e
+names: removed c
+names: removed d
+names: existing a
+names: idle
+quick: existing a
+quick: idle
+names: added b
+names: removed a
+names: removed b
+names: added c
+quick: removed a
+quick: added c
+quick: Resource temporarily unavailable
+names: added d
+names: Interrupted system call
+names: added e
+sub: idle
+sub: end
+names: removed e
+names: removed c
+names: removed d
 """
 
 EXT_ERRORS = """\
@@ -481,7 +528,8 @@ def run(vm, rootfs, flags, script, cwd):
 
 
 def main():
-    vm, rootfs = sys.argv[1:3]
+    vm, rootfs, watch_dir = sys.argv[1:4]
+    program = base64.encodebytes(open(watch_dir, "rb").read()).decode().strip()
     with tempfile.TemporaryDirectory(prefix="pizdos-mounts-") as work:
         empty = os.path.join(work, "empty")
         os.mkdir(empty)
@@ -492,7 +540,7 @@ def main():
         struct.pack_into("<I", strange, 1024 + 96, 0x2 | 0x40000000)
         disk = os.path.join(work, "disk.img")
         gpt_image(disk, [tree(Image(1024, 4096, False, owner)), tree(Image(4096, 2048, True, owner)), bytes(strange)])
-        result = run(vm, rootfs, ["--disk", f"sda={disk}"], EXT, empty)
+        result = run(vm, rootfs, ["--disk", f"sda={disk}"], EXT.replace("{program}", program), empty)
         assert (result.returncode, result.stdout.decode(), result.stderr.decode()) == (3, EXT_WANT, EXT_ERRORS), result
         result = run(vm, rootfs, ["--disk", f"sda={disk}"], AGAIN, empty)
         errors = "".join(sorted(result.stderr.decode().splitlines(keepends=True)))

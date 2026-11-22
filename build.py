@@ -1192,7 +1192,7 @@ APPLICATION_TESTED = {
     "console": [vm, rootfs],
     "devices": [vm, rootfs, devices_service],
     "disks": [vm, rootfs],
-    "mounts": [vm, rootfs],
+    "mounts": [vm, rootfs, watch_dir],
     "net": [vm, net_probe, inet_exe, rootfs, inet_sockets],
     "watchdir": [vm, rootfs, watch_dir],
     "unix_sockets": [vm, rootfs, unix_sockets],

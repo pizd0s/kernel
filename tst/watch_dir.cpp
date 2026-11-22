@@ -3,19 +3,29 @@
 // them, a name added, one removed and one back, which is another; a
 // watch that does not wait, and poll of it; a directory that goes with
 // its last name, whose watch tells the name gone and then ends; and the
-// errors: no directory, a file system that does not watch, no descriptor,
-// flags it does not take, a read too short for a record.
+// errors: no directory, no descriptor, flags it does not take, a read too
+// short for a record.
+//
+// With names and a directory, a watch of a directory "watched" it makes
+// there, on any file system that changes: its names as it starts, a name
+// added, one removed, a rename, a name that came and went between two
+// reads, which is not told, a read that waits until a child's change or
+// a signal, and a watched directory removed, whose watch ends.
 //
 //     watch_dir
+//     watch_dir names <directory>
 
 #include <lib/protocol/service.h>
 
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/wait.h>
 #include <sys/watchdir.h>
 #include <unistd.h>
 
@@ -56,9 +66,89 @@ namespace {
         const int w = watchdir(fd, flags);
         printf("%s: %d %s\n", label, w < 0 ? -1 : 0, strerror(errno));
     }
+
+    void alarmed(int) {
+    }
+
+    int names(const char* path) {
+        char base[256];
+        char at[300];
+        snprintf(base, sizeof base, "%s/watched", path);
+        auto in = [&](const char* name) {
+            snprintf(at, sizeof at, "%s/%s", base, name);
+            return at;
+        };
+        auto touch = [&](const char* name) {
+            close(open(in(name), O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
+        };
+        if (mkdir(base, 0755) != 0) {
+            printf("mkdir %s: %s\n", base, strerror(errno));
+            return 1;
+        }
+        touch("a");
+        const int dir = open(base, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        const int w = watchdir(dir, O_CLOEXEC);
+        const int quick = watchdir(dir, O_NONBLOCK | O_CLOEXEC);
+        if (dir < 0 || w < 0 || quick < 0) {
+            printf("watchdir %s: %s\n", base, strerror(errno));
+            return 1;
+        }
+        show("names", w);
+        show("quick", quick);
+        touch("b");
+        show("names", w);
+        unlink(in("a"));
+        show("names", w);
+        char from[300];
+        snprintf(from, sizeof from, "%s/b", base);
+        rename(from, in("c"));
+        show("names", w);
+        touch("x");
+        unlink(in("x"));
+        show("quick", quick);
+        show("quick", quick);
+
+        const pid_t child = fork();
+        if (child == 0) {
+            usleep(20000);
+            mkdir(in("d"), 0755);
+            _exit(0);
+        }
+        show("names", w);
+        waitpid(child, nullptr, 0);
+        struct sigaction action {};
+        action.sa_handler = alarmed;
+        sigaction(SIGALRM, &action, nullptr);
+        itimerval timer{};
+        timer.it_value.tv_usec = 20000;
+        setitimer(ITIMER_REAL, &timer, nullptr);
+        show("names", w);
+
+        mkdir(in("e"), 0755);
+        show("names", w);
+        const int e = open(in("e"), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        const int sub = watchdir(e, O_CLOEXEC);
+        show("sub", sub);
+        close(e);
+        rmdir(in("e"));
+        show("sub", sub);
+        show("names", w);
+        unlink(in("c"));
+        rmdir(in("d"));
+        show("names", w);
+        close(sub);
+        close(quick);
+        close(w);
+        close(dir);
+        rmdir(base);
+        return 0;
+    }
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 3 && strcmp(argv[1], "names") == 0) {
+        return names(argv[2]);
+    }
     registry = open("/dev/init/ctl", O_RDWR | O_CLOEXEC);
     if (registry < 0) {
         printf("/dev/init/ctl: %s\n", strerror(errno));
@@ -103,7 +193,6 @@ int main() {
     show("w", w);
 
     fails("a device", open("/dev/null", O_RDONLY | O_CLOEXEC), 0);
-    fails("/", open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC), 0);
     fails("no descriptor", -1, 0);
     fails("flags", dir, O_RDWR | O_APPEND);
     return 0;
