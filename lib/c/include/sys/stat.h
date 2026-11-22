@@ -72,6 +72,7 @@ int fstat(int, struct stat*);
 int lstat(const char* __restrict, struct stat* __restrict);
 int fstatat(int, const char* __restrict, struct stat* __restrict, int);
 int chmod(const char*, mode_t);
+int lchmod(const char*, mode_t);
 int fchmod(int, mode_t);
 int fchmodat(int, const char*, mode_t, int);
 int mkdir(const char*, mode_t);

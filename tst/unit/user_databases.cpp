@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 static void fixture(const char* path, const char* text) {
     FILE* file = fopen(path, "w");
@@ -25,6 +26,12 @@ int main() {
     assert(user && strcmp(user->pw_name, "test") == 0 && user->pw_gid == 100);
     assert(strcmp(user->pw_gecos, "Test User") == 0 && strcmp(user->pw_dir, "/run/test-home") == 0);
     assert(getpwuid(9999) == nullptr);
+    // cuserid (SUSv2's): the effective user's name, empty with none.
+    char name[L_cuserid] = "x";
+    assert(cuserid(name) == name && name[0] == 0 && cuserid(nullptr) == nullptr);
+    assert(chmod("/etc", 0755) == 0 && seteuid(1234) == 0);
+    assert(cuserid(name) == name && strcmp(name, "test") == 0 && strcmp(cuserid(nullptr), "test") == 0);
+    assert(seteuid(0) == 0);
     passwd password{}, *passwordResult = reinterpret_cast<passwd*>(1);
     char passwordBuffer[256];
     assert(getpwnam_r("test", &password, passwordBuffer, 1, &passwordResult) == ERANGE && passwordResult == nullptr);

@@ -63,6 +63,11 @@ int puts(const char*);
 size_t fread(void* __restrict, size_t, size_t, FILE* __restrict);
 size_t fwrite(const void* __restrict, size_t, size_t, FILE* __restrict);
 ssize_t getline(char** __restrict, size_t* __restrict, FILE* __restrict);
+char* fgetln(FILE*, size_t*);
+int getw(FILE*);
+int putw(int, FILE*);
+#define L_cuserid 20
+char* cuserid(char*);
 ssize_t getdelim(char** __restrict, size_t* __restrict, int, FILE* __restrict);
 
 int fseek(FILE*, long, int);
@@ -89,10 +94,7 @@ int vfprintf(FILE* __restrict, const char* __restrict, va_list) __PRINTF(2, 0);
 int vsprintf(char* __restrict, const char* __restrict, va_list) __PRINTF(2, 0);
 int vsnprintf(char* __restrict, size_t, const char* __restrict, va_list) __PRINTF(3, 0);
 int vdprintf(int, const char* __restrict, va_list) __PRINTF(2, 0);
-#ifndef __cplusplus
-/* C++ has libc++'s own, its locale fallback for a libc without xlocale */
 int vasprintf(char**, const char*, va_list) __PRINTF(2, 0);
-#endif
 
 int scanf(const char* __restrict, ...) __SCANF(1, 2);
 int fscanf(FILE* __restrict, const char* __restrict, ...) __SCANF(2, 3);

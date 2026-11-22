@@ -85,6 +85,17 @@ def headers(tree, include):
         raise SystemExit("abi.h does not define _LIBCPP_ABI_ALTERNATE_STRING_LAYOUT once")
 
     abi.write_text(text.replace(layout, ""))
+    # the locale fallback's own strtod_l, strtof_l, strtold_l and vasprintf,
+    # for a libc without them: lib/c has them, so C++ gets lib/c's
+    ibm = include / "__locale_dir/locale_base_api/ibm.h"
+    text = ibm.read_text()
+    start = text.find("// The following are not POSIX routines.")
+    end = text.find("#endif // _LIBCPP___LOCALE_DIR_LOCALE_BASE_API_IBM_H")
+
+    if start < 0 or end < start:
+        raise SystemExit("ibm.h's fallback functions are not where they were")
+
+    ibm.write_text(text[:start] + text[end:])
     shutil.copy(tree / "libcxx/vendor/llvm/default_assertion_handler.in", include / "__assertion_handler")
 
     for name in ("cxxabi.h", "__cxxabi_config.h"):

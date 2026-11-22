@@ -98,6 +98,14 @@ int main() {
     fd = mkstemps(suffix, 4);
     assert(fd >= 0 && strcmp(suffix + strlen(suffix) - 4, ".txt") == 0);
     assert(close(fd) == 0 && unlink(suffix) == 0);
+    char flagged[] = "flags-XXXXXX.log";
+    fd = mkostemps(flagged, 4, O_CLOEXEC);
+    assert(fd >= 0 && (fcntl(fd, F_GETFD) & FD_CLOEXEC) && strcmp(flagged + strlen(flagged) - 4, ".log") == 0);
+    assert(strncmp(flagged, "flags-", 6) == 0 && close(fd) == 0 && unlink(flagged) == 0);
+    char few[] = "XXXXX.log";
+    assert(mkostemps(few, 4, 0) == -1 && errno == EINVAL);
+    assert(lchmod(file, 0640) == 0 && stat(file, &metadata) == 0 && (metadata.st_mode & 0777) == 0640);
+    assert(lchmod("symbolic", 0600) == -1 && errno == EOPNOTSUPP);
     char unused[] = "unused-XXXXXX";
     assert(mktemp(unused) == unused && unused[0]);
     assert(access(unused, F_OK) == -1 && errno == ENOENT);

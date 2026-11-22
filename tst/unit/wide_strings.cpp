@@ -71,5 +71,22 @@ int main() {
     assert(wcsftime(result, 32, malformed, &value) == 2);
     assert(result[0] == 0xfffd && result[1] == 0xfffd && result[2] == 0);
 #endif
+    wchar_t built[16] = L"ab";
+    assert(wcsncat(built, L"cdef", 2) == built && wcscmp(built, L"abcd") == 0);
+    assert(wcsncat(built, L"", 5) == built && wcscmp(built, L"abcd") == 0);
+    assert(wcpcpy(result, L"xyz") == result + 3 && wcscmp(result, L"xyz") == 0);
+    assert(wcpncpy(result, L"ab", 4) == result + 2 && result[2] == 0 && result[3] == 0);
+    assert(wcpncpy(result, L"abcd", 2) == result + 2 && wmemcmp(result, L"ab", 2) == 0);
+    assert(wcscasecmp(L"HeLLo", L"hEllO") == 0 && wcscasecmp(L"a", L"B") < 0 && wcscasecmp(L"b", L"A") > 0);
+    assert(wcscasecmp(L"é", L"É") == 0 && wcscasecmp(L"ab", L"A") > 0 && wcscasecmp(L"", L"a") < 0);
+    assert(wcsncasecmp(L"abcX", L"ABCY", 3) == 0 && wcsncasecmp(L"abcX", L"ABCY", 4) < 0);
+    assert(wcsncasecmp(L"a", L"b", 0) == 0);
+    locale_t utf8 = newlocale(LC_ALL_MASK, "C.UTF-8", (locale_t)0);
+    assert(utf8);
+    assert(wcscasecmp_l(L"É", L"é", utf8) == 0 && wcsncasecmp_l(L"ÉA", L"éb", 1, utf8) == 0);
+    assert(wcsncasecmp_l(L"ÉA", L"éb", 2, utf8) < 0);
+    assert(wcsftime_l(result, 32, L"%Y-%m-%d", &value, utf8) == 10 && wcscmp(result, L"1970-01-01") == 0);
+    freelocale(utf8);
+    assert(wcswcs(source, L"éa") == source + 2 && wcswcs(source, L"zz") == nullptr);
     puts("wide strings: ok");
 }

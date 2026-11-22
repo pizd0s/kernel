@@ -14,5 +14,7 @@ int ffsl(long);
 int ffsll(long long);
 int strcasecmp(const char*, const char*);
 int strncasecmp(const char*, const char*, size_t);
+int strcasecmp_l(const char*, const char*, locale_t);
+int strncasecmp_l(const char*, const char*, size_t, locale_t);
 
 __END_DECLS

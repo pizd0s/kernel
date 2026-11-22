@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/des"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -241,6 +242,7 @@ type Process struct {
 	regexes   map[uint32]*PosixRegex
 	nextRegex uint32
 
+	desKey       [8]byte
 	syncs        map[int32]Object
 	nextSync     int32
 	keys         [PTHREAD_KEYS_MAX]Key
@@ -544,7 +546,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0
 		p.regexes, p.constants, p.locale = map[uint32]*PosixRegex{}, map[string]uint32{}, [LC_ALL]string{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
-		p.defaultStack, p.defaultGuard = 0, 0
+		p.defaultStack, p.defaultGuard, p.desKey = 0, 0, [8]byte{}
 		p.envStrings, p.mappings = map[uint32]bool{}, map[uint32]Mapping{}
 		p.jumps, p.stackAt = map[uint32]*JmpBuf{}, 0
 		enter = func() {
@@ -2111,7 +2113,7 @@ func (p *Process) startVfork() uint32 {
 	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo
 	c.regexes, c.nextRegex, c.constants, c.jumps, c.stackAt = p.regexes, p.nextRegex, p.constants, p.jumps, p.stackAt
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
-	c.defaultStack, c.defaultGuard = p.defaultStack, p.defaultGuard
+	c.defaultStack, c.defaultGuard, c.desKey = p.defaultStack, p.defaultGuard, p.desKey
 	c.locale, c.envStrings, c.mappings, c.tzAt, c.herrnoAt, c.passwordAt = p.locale, p.envStrings, p.mappings, p.tzAt, p.herrnoAt, p.passwordAt
 	c.token.Store(p.token.Load())
 	c.inherit(p)
@@ -2176,7 +2178,7 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 	}
 
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = map[int32]Object{}, p.nextSync, map[string]*SemOpen{}, p.keys, p.thread
-	c.defaultStack, c.defaultGuard = p.defaultStack, p.defaultGuard
+	c.defaultStack, c.defaultGuard, c.desKey = p.defaultStack, p.defaultGuard, p.desKey
 
 	for h, o := range p.syncs {
 		r := SyncCopy{}
@@ -6820,7 +6822,11 @@ func (p *Process) libcChmod(path, mode uint32) uint32 {
 }
 
 func (p *Process) libcFchmodat(dirfd, path, mode, flags uint32) uint32 {
-	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(a Object) error {
+	return p.fchmodat(int32(dirfd), path, mode, flags)
+}
+
+func (p *Process) fchmodat(dirfd int32, path, mode, flags uint32) uint32 {
+	return p.result(0, p.onAt(dirfd, p.str(path), flags, func(a Object) error {
 		return p.request(a, &FileChmod{mode: mode & 0o7777})
 	}, func(d Object, follow bool) error {
 		return p.dirChmod(d, p.str(path), mode&0o7777, follow)
@@ -15286,4 +15292,176 @@ func errnoOrNil(code uint32) error {
 	}
 
 	return Errno(code)
+}
+
+func (p *Process) libcMkostemps(template, suffix, flags uint32) uint32 {
+	return p.mkstemp(template, suffix, flags)
+}
+
+func (p *Process) libcSetkey(key uint32) {
+	k := p.span(key, 64)
+
+	for i := range p.desKey {
+		b := byte(0)
+
+		for j := range 8 {
+			b = b<<1 | k[8*i+j]&1
+		}
+
+		p.desKey[i] = b
+	}
+}
+
+func (p *Process) libcEncrypt(block, decrypt uint32) {
+	b := p.span(block, 64)
+
+	var data [8]byte
+
+	for i := range data {
+		for j := range 8 {
+			data[i] = data[i]<<1 | b[8*i+j]&1
+		}
+	}
+
+	c, err := des.NewCipher(p.desKey[:])
+
+	if err != nil {
+		return
+	}
+
+	if decrypt != 0 {
+		c.Decrypt(data[:], data[:])
+	} else {
+		c.Encrypt(data[:], data[:])
+	}
+
+	for i := range data {
+		for j := range 8 {
+			b[8*i+j] = data[i] >> (7 - j) & 1
+		}
+	}
+}
+
+func (p *Process) libcStrerror_l(e, locale uint32) uint32 {
+	return p.libcStrerror(e)
+}
+
+func (p *Process) libcStrcasecmp_l(a, b, locale uint32) uint32 {
+	return p.libcStrcasecmp(a, b)
+}
+
+func (p *Process) libcStrncasecmp_l(a, b, n, locale uint32) uint32 {
+	return p.libcStrncasecmp(a, b, n)
+}
+
+func (p *Process) libcLchmod(path, mode uint32) uint32 {
+	return p.fchmodat(AT_FDCWD, path, mode, AT_SYMLINK_NOFOLLOW)
+}
+
+func (p *Process) libcPosix_close(fd, flags uint32) uint32 {
+	return p.libcClose(fd)
+}
+
+func (p *Process) libcBrk(end uint32) uint32 {
+	return p.result(0, ENOMEM)
+}
+
+func (p *Process) libcSbrk(increment uint32) uint32 {
+	if increment != 0 {
+		p.setErrno(ENOMEM)
+
+		return math.MaxUint32
+	}
+
+	return uint32(min(p.inst.memory.pages*pageSize, math.MaxUint32))
+}
+
+func (p *Process) libcIssetugid() uint32 {
+	return bit(p.cred.uid() != p.cred.euid() || p.cred.gid() != p.cred.egid())
+}
+
+func (p *Process) libcWcsncat(d, s, n uint32) uint32 {
+	at, l := d+4*p.wcslen(d), p.wcsnlen(s, n)
+
+	copy(p.wide(at, l), p.wide(s, l))
+	p.put32(at+4*l, 0)
+
+	return d
+}
+
+func (p *Process) libcWcpcpy(d, s uint32) uint32 {
+	n := p.wcslen(s)
+
+	p.wcscpy(d, s)
+
+	return d + 4*n
+}
+
+func (p *Process) libcWcpncpy(d, s, n uint32) uint32 {
+	l := p.wcsnlen(s, n)
+
+	p.libcWcsncpy(d, s, n)
+
+	return d + 4*l
+}
+
+func (p *Process) wcscasecmp(a, b, n uint32) uint32 {
+	for i := uint32(0); i < n; i++ {
+		x, y := towlower(p.wcharAt(a, i)), towlower(p.wcharAt(b, i))
+
+		if x != y || x == 0 {
+			return wcmp(x, y)
+		}
+	}
+
+	return 0
+}
+
+func (p *Process) libcWcscasecmp(a, b uint32) uint32 {
+	return p.wcscasecmp(a, b, math.MaxUint32)
+}
+
+func (p *Process) libcWcsncasecmp(a, b, n uint32) uint32 {
+	return p.wcscasecmp(a, b, n)
+}
+
+func (p *Process) libcWcscasecmp_l(a, b, locale uint32) uint32 {
+	return p.wcscasecmp(a, b, math.MaxUint32)
+}
+
+func (p *Process) libcWcsncasecmp_l(a, b, n, locale uint32) uint32 {
+	return p.wcscasecmp(a, b, n)
+}
+
+func (p *Process) libcWcswcs(h, n uint32) uint32 {
+	return p.libcWcsstr(h, n)
+}
+
+func (p *Process) libcWcsftime_l(s, max, format, tm, locale uint32) uint32 {
+	return p.wcsftime(s, max, format, tm)
+}
+
+func (p *Process) libcTowctrans_l(c, trans, locale uint32) uint32 {
+	return p.libcTowctrans(c, trans)
+}
+
+func (p *Process) libcWctrans_l(name, locale uint32) uint32 {
+	return p.libcWctrans(name)
+}
+
+func (p *Process) libcTimespec_get(ts, base uint32) uint32 {
+	if base != TIME_UTC {
+		return 0
+	}
+
+	t, err := p.clockNow(CLOCK_REALTIME)
+
+	if err != nil {
+		return 0
+	}
+
+	p.put64(ts, uint64(t/1e9))
+	p.put32(ts+8, uint32(t%1e9))
+
+	return base
 }

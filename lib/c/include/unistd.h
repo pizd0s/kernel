@@ -99,6 +99,12 @@ ssize_t pwrite(int, const void*, size_t, off_t);
 ssize_t copy_file_range(int, off_t*, int, off_t*, size_t, unsigned);
 off_t lseek(int, off_t, int);
 int close(int);
+#define POSIX_CLOSE_RESTART 0
+int posix_close(int, int);
+int brk(void*);
+void* sbrk(intptr_t);
+int issetugid(void);
+void encrypt(char*, int);
 int dup(int);
 int dup2(int, int);
 int dup3(int, int, int);
@@ -113,6 +119,7 @@ int truncate(const char*, off_t);
 int lockf(int, int, off_t);
 
 pid_t fork(void) __RETURNS_TWICE;
+pid_t _Fork(void) __RETURNS_TWICE;
 pid_t vfork(void) __RETURNS_TWICE;
 int execve(const char*, char* const[], char* const[]);
 int execv(const char*, char* const[]);
@@ -237,6 +244,10 @@ __INLINE pid_t fork(void) {
 
 __INLINE pid_t vfork(void) {
     return __kernel_vfork();
+}
+
+__INLINE pid_t _Fork(void) {
+    return __kernel_fork();
 }
 
 __END_DECLS

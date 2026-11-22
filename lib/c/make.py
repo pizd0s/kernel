@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Build lib/c's in-process archive: our own sources and the musl subset in musl/files.txt.
+"""Build lib/c's in-process archive: our own sources, the musl subset in musl/files.txt
+and the FreeBSD msun sources in freebsd/.
 
     make.py <cc> <ar> <musl-tarball> <libc.a>
     make.py headers <include.tar>
@@ -10,6 +11,12 @@ finds them.
 A .h line of files.txt names a musl internal header to keep; every other
 header of src/internal is deleted, so a quoted include of it falls through to
 our replacement in musl/. musl's public headers are never on the path.
+
+freebsd/ holds copies of FreeBSD 14.3's lib/msun/src/catrig.c, catrigf.c,
+s_clog.c and s_clogf.c, unchanged: complex.h's inverse functions and clog,
+which musl's follow neither Annex G at its special values nor accuracy near
+|z| = 1. Its math_private.h and fpmath.h are ours, what those take of
+FreeBSD's.
 """
 import os
 import shutil
@@ -64,6 +71,10 @@ def main():
 
     for source in sorted((ROOT / "src").glob("*.c")):
         units.append((source, work / "obj" / "pizdos" / source.with_suffix(".o").name, FLAGS + includes))
+
+    for source in sorted((ROOT / "freebsd").glob("*.c")):
+        units.append((source, work / "obj" / "freebsd" / source.with_suffix(".o").name,
+                      FLAGS + ["-I", str(ROOT / "freebsd")] + includes))
 
     wasm.compile_all(cc, units)
     wasm.archive(ar, output, [obj for source, obj, flags in units])

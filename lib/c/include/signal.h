@@ -45,6 +45,7 @@ typedef struct {
 } stack_t;
 
 #define SIG_ERR ((void (*)(int)) - 1)
+#define SIG_HOLD ((void (*)(int))2)
 #define SIG_DFL ((void (*)(int))0)
 /* Table index 1 can name a real Wasm function. */
 #define SIG_IGN ((void (*)(int)) - 2)
@@ -133,6 +134,11 @@ int sigwaitinfo(const sigset_t* __restrict, siginfo_t* __restrict);
 int sigtimedwait(const sigset_t* __restrict, siginfo_t* __restrict, const struct timespec* __restrict);
 int sigqueue(pid_t, int, union sigval);
 int siginterrupt(int, int);
+int sighold(int);
+int sigrelse(int);
+int sigignore(int);
+int sigpause(int);
+void (*sigset(int, void (*)(int)))(int);
 int sigaltstack(const stack_t* __restrict, stack_t* __restrict);
 int sigemptyset(sigset_t*);
 int sigfillset(sigset_t*);

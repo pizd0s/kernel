@@ -309,6 +309,7 @@ const (
 	PTHREAD_STACK_MIN                 = 2048
 	SEM_VALUE_MAX                     = 0x7fffffff
 	NAME_MAX                          = 255
+	TIME_UTC                          = 1
 	thrd_success                      = 0
 	thrd_busy                         = 1
 	thrd_error                        = 2

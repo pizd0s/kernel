@@ -27,6 +27,8 @@ wint_t towlower(wint_t);
 wint_t towupper(wint_t);
 wint_t towctrans(wint_t, wctrans_t);
 wctrans_t wctrans(const char*);
+wint_t towctrans_l(wint_t, wctrans_t, locale_t);
+wctrans_t wctrans_l(const char*, locale_t);
 
 int iswalnum_l(wint_t, locale_t);
 int iswalpha_l(wint_t, locale_t);

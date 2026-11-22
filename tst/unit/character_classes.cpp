@@ -112,6 +112,10 @@ int main() {
     assert(towlower_l(0xc9, locale) == 0xe9 && towupper_l(0xe9, locale) == 0xc9);
     assert(towctrans(0xc9, wctrans("tolower")) == 0xe9);
     assert(towctrans(0xe9, wctrans("toupper")) == 0xc9);
+    locale_t utf8 = newlocale(LC_ALL_MASK, "C.UTF-8", (locale_t)0);
+    assert(utf8 && towctrans_l(L'a', wctrans_l("toupper", utf8), utf8) == L'A');
+    assert(towctrans_l(0xc9, wctrans_l("tolower", utf8), utf8) == 0xe9 && wctrans_l("missing", utf8) == nullptr);
+    freelocale(utf8);
     assert(towlower(WEOF) == WEOF && towupper(WEOF) == WEOF);
     assert(strcmp(nl_langinfo(CODESET), "UTF-8") == 0);
     assert(strcmp(nl_langinfo(ABDAY_1), "Sun") == 0 && strcmp(nl_langinfo(DAY_7), "Saturday") == 0);

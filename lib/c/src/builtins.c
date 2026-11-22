@@ -1,3 +1,5 @@
+#include <complex.h>
+#include <math.h>
 #include <stdint.h>
 
 /*
@@ -177,4 +179,184 @@ __int128 __modti3(__int128 a, __int128 b) {
     divideUnsigned(magnitude(x), magnitude(y), &r);
 
     return ((int64_t)x.parts.high < 0 ? negate(r) : r).all;
+}
+
+/*
+ * Products and quotients of complex numbers, which clang leaves to the
+ * runtime: C's Annex G (G.5.1), as compiler-rt has them. The plain
+ * formula first; where it gives NaN in both parts and an operand is
+ * infinite, the result is an infinity, a quotient by zero too.
+ */
+static double complex doubleComplex(double x, double y) {
+    union {
+        double complex z;
+        double parts[2];
+    } u = {.parts = {x, y}};
+
+    return u.z;
+}
+
+static float complex floatComplex(float x, float y) {
+    union {
+        float complex z;
+        float parts[2];
+    } u = {.parts = {x, y}};
+
+    return u.z;
+}
+
+double complex __muldc3(double a, double b, double c, double d) {
+    double ac = a * c;
+    double bd = b * d;
+    double ad = a * d;
+    double bc = b * c;
+    double x = ac - bd;
+    double y = ad + bc;
+
+    if (isnan(x) && isnan(y)) {
+        int again = 0;
+
+        if (isinf(a) || isinf(b)) {
+            a = copysign(isinf(a) ? 1 : 0, a);
+            b = copysign(isinf(b) ? 1 : 0, b);
+            c = isnan(c) ? copysign(0, c) : c;
+            d = isnan(d) ? copysign(0, d) : d;
+            again = 1;
+        }
+
+        if (isinf(c) || isinf(d)) {
+            c = copysign(isinf(c) ? 1 : 0, c);
+            d = copysign(isinf(d) ? 1 : 0, d);
+            a = isnan(a) ? copysign(0, a) : a;
+            b = isnan(b) ? copysign(0, b) : b;
+            again = 1;
+        }
+
+        if (!again && (isinf(ac) || isinf(bd) || isinf(ad) || isinf(bc))) {
+            a = isnan(a) ? copysign(0, a) : a;
+            b = isnan(b) ? copysign(0, b) : b;
+            c = isnan(c) ? copysign(0, c) : c;
+            d = isnan(d) ? copysign(0, d) : d;
+            again = 1;
+        }
+
+        if (again) {
+            x = INFINITY * (a * c - b * d);
+            y = INFINITY * (a * d + b * c);
+        }
+    }
+
+    return doubleComplex(x, y);
+}
+
+float complex __mulsc3(float a, float b, float c, float d) {
+    float ac = a * c;
+    float bd = b * d;
+    float ad = a * d;
+    float bc = b * c;
+    float x = ac - bd;
+    float y = ad + bc;
+
+    if (isnan(x) && isnan(y)) {
+        int again = 0;
+
+        if (isinf(a) || isinf(b)) {
+            a = copysignf(isinf(a) ? 1 : 0, a);
+            b = copysignf(isinf(b) ? 1 : 0, b);
+            c = isnan(c) ? copysignf(0, c) : c;
+            d = isnan(d) ? copysignf(0, d) : d;
+            again = 1;
+        }
+
+        if (isinf(c) || isinf(d)) {
+            c = copysignf(isinf(c) ? 1 : 0, c);
+            d = copysignf(isinf(d) ? 1 : 0, d);
+            a = isnan(a) ? copysignf(0, a) : a;
+            b = isnan(b) ? copysignf(0, b) : b;
+            again = 1;
+        }
+
+        if (!again && (isinf(ac) || isinf(bd) || isinf(ad) || isinf(bc))) {
+            a = isnan(a) ? copysignf(0, a) : a;
+            b = isnan(b) ? copysignf(0, b) : b;
+            c = isnan(c) ? copysignf(0, c) : c;
+            d = isnan(d) ? copysignf(0, d) : d;
+            again = 1;
+        }
+
+        if (again) {
+            x = INFINITY * (a * c - b * d);
+            y = INFINITY * (a * d + b * c);
+        }
+    }
+
+    return floatComplex(x, y);
+}
+
+double complex __divdc3(double a, double b, double c, double d) {
+    int scale = 0;
+    double w = logb(fmax(fabs(c), fabs(d)));
+
+    if (isfinite(w)) {
+        scale = (int)w;
+        c = scalbn(c, -scale);
+        d = scalbn(d, -scale);
+    }
+
+    double denominator = c * c + d * d;
+    double x = scalbn((a * c + b * d) / denominator, -scale);
+    double y = scalbn((b * c - a * d) / denominator, -scale);
+
+    if (isnan(x) && isnan(y)) {
+        if (denominator == 0 && (!isnan(a) || !isnan(b))) {
+            x = copysign(INFINITY, c) * a;
+            y = copysign(INFINITY, c) * b;
+        } else if ((isinf(a) || isinf(b)) && isfinite(c) && isfinite(d)) {
+            a = copysign(isinf(a) ? 1 : 0, a);
+            b = copysign(isinf(b) ? 1 : 0, b);
+            x = INFINITY * (a * c + b * d);
+            y = INFINITY * (b * c - a * d);
+        } else if (isinf(w) && w > 0 && isfinite(a) && isfinite(b)) {
+            c = copysign(isinf(c) ? 1 : 0, c);
+            d = copysign(isinf(d) ? 1 : 0, d);
+            x = 0 * (a * c + b * d);
+            y = 0 * (b * c - a * d);
+        }
+    }
+
+    return doubleComplex(x, y);
+}
+
+float complex __divsc3(float a, float b, float c, float d) {
+    int scale = 0;
+    float w = logbf(fmaxf(fabsf(c), fabsf(d)));
+
+    if (isfinite(w)) {
+        scale = (int)w;
+        c = scalbnf(c, -scale);
+        d = scalbnf(d, -scale);
+    }
+
+    float denominator = c * c + d * d;
+    float x = scalbnf((a * c + b * d) / denominator, -scale);
+    float y = scalbnf((b * c - a * d) / denominator, -scale);
+
+    if (isnan(x) && isnan(y)) {
+        if (denominator == 0 && (!isnan(a) || !isnan(b))) {
+            x = copysignf(INFINITY, c) * a;
+            y = copysignf(INFINITY, c) * b;
+        } else if ((isinf(a) || isinf(b)) && isfinite(c) && isfinite(d)) {
+            a = copysignf(isinf(a) ? 1 : 0, a);
+            b = copysignf(isinf(b) ? 1 : 0, b);
+            x = INFINITY * (a * c + b * d);
+            y = INFINITY * (b * c - a * d);
+        } else if (isinf(w) && w > 0 && isfinite(a) && isfinite(b)) {
+            c = copysignf(isinf(c) ? 1 : 0, c);
+            d = copysignf(isinf(d) ? 1 : 0, d);
+            x = 0 * (a * c + b * d);
+            y = 0 * (b * c - a * d);
+        }
+    }
+
+    return floatComplex(x, y);
 }

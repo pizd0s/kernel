@@ -3623,6 +3623,106 @@ func libcSem_open(name, flags, va, semSize uint32) uint32 {
 	return p.libcSem_open(name, flags, va)
 }
 
+func libcMkostemps(template, suffix, flags uint32) uint32 {
+	return proc().libcMkostemps(template, suffix, flags)
+}
+
+func libcSetkey(key uint32) {
+	proc().libcSetkey(key)
+}
+
+func libcEncrypt(block, decrypt uint32) {
+	proc().libcEncrypt(block, decrypt)
+}
+
+func libcStrerror_l(e, locale uint32) uint32 {
+	return proc().libcStrerror_l(e, locale)
+}
+
+func libcStrcasecmp_l(a, b, locale uint32) uint32 {
+	return proc().libcStrcasecmp_l(a, b, locale)
+}
+
+func libcStrncasecmp_l(a, b, n, locale uint32) uint32 {
+	return proc().libcStrncasecmp_l(a, b, n, locale)
+}
+
+func libcLchmod(path, mode uint32) uint32 {
+	return proc().libcLchmod(path, mode)
+}
+
+func libcPosix_close(fd, flags uint32) uint32 {
+	return proc().libcPosix_close(fd, flags)
+}
+
+func libcBrk(end uint32) uint32 {
+	return proc().libcBrk(end)
+}
+
+func libcSbrk(increment uint32) uint32 {
+	return proc().libcSbrk(increment)
+}
+
+func libcIssetugid() uint32 {
+	return proc().libcIssetugid()
+}
+
+func libcWcsncat(d, s, n uint32) uint32 {
+	return proc().libcWcsncat(d, s, n)
+}
+
+func libcWcpcpy(d, s uint32) uint32 {
+	return proc().libcWcpcpy(d, s)
+}
+
+func libcWcpncpy(d, s, n uint32) uint32 {
+	return proc().libcWcpncpy(d, s, n)
+}
+
+func libcWcscasecmp(a, b uint32) uint32 {
+	return proc().libcWcscasecmp(a, b)
+}
+
+func libcWcsncasecmp(a, b, n uint32) uint32 {
+	return proc().libcWcsncasecmp(a, b, n)
+}
+
+func libcWcscasecmp_l(a, b, locale uint32) uint32 {
+	return proc().libcWcscasecmp_l(a, b, locale)
+}
+
+func libcWcsncasecmp_l(a, b, n, locale uint32) uint32 {
+	return proc().libcWcsncasecmp_l(a, b, n, locale)
+}
+
+func libcWcswcs(h, n uint32) uint32 {
+	return proc().libcWcswcs(h, n)
+}
+
+func libcWcsftime_l(s, max, format, tm, tmSize, locale uint32) uint32 {
+	p := proc()
+
+	p.sized("wcsftime_l", tmSize, sizeofTm)
+
+	return p.libcWcsftime_l(s, max, format, tm, locale)
+}
+
+func libcTowctrans_l(c, trans, locale uint32) uint32 {
+	return proc().libcTowctrans_l(c, trans, locale)
+}
+
+func libcWctrans_l(name, locale uint32) uint32 {
+	return proc().libcWctrans_l(name, locale)
+}
+
+func libcTimespec_get(ts, tsSize, base uint32) uint32 {
+	p := proc()
+
+	p.sized("timespec_get", tsSize, sizeofTimespec)
+
+	return p.libcTimespec_get(ts, base)
+}
+
 func ioctlSize(req uint32) uint32 {
 	switch req {
 	case TCGETS, TCSETS, TCSETS + 1, TCSETS + 2:

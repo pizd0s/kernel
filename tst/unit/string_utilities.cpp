@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <libgen.h>
+#include <locale.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -122,6 +123,11 @@ int main() {
     assert(strerror_r(ENOENT, result, sizeof(result)) == 0 && result[0]);
     assert(strerror_r(ENOENT, result, 1) == ERANGE);
     assert(strerror_r(ENOENT, result, 0) == ERANGE);
+    locale_t c = newlocale(LC_ALL_MASK, "C", (locale_t)0);
+    assert(c && strcmp(strerror_l(ENOENT, c), strerror(ENOENT)) == 0);
+    assert(strcasecmp_l("AbC", "aBc", c) == 0 && strcasecmp_l("abc", "ABCd", c) < 0);
+    assert(strncasecmp_l("abX", "ABY", 2, c) == 0 && strncasecmp_l("abX", "ABY", 3, c) < 0);
+    freelocale(c);
     assert(strsignal(SIGINT)[0] && strsignal(SIGRTMIN)[0] && strsignal(99999)[0]);
 
     char utf8[] = "Äbc";

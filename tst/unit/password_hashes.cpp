@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -49,5 +50,31 @@ int main() {
     }
 #endif
     assert(strcmp(crypt("password", "ab"), "abJnggxhB/yWI") == 0);
+
+    // setkey and encrypt, XSI's DES of a 64-bit block, a char a bit:
+    // the classic example, key 133457799BBCDFF1 taking 0123456789ABCDEF
+    // to 85E813540F0AB405, and back; errno unchanged.
+    auto bits = [](unsigned long long v, char* out) {
+        for (int i = 0; i < 64; i++) {
+            out[i] = (v >> (63 - i)) & 1;
+        }
+    };
+    auto value = [](const char* in) {
+        unsigned long long v = 0;
+        for (int i = 0; i < 64; i++) {
+            v = v << 1 | (in[i] & 1);
+        }
+        return v;
+    };
+    char key[64];
+    char block[64];
+    bits(0x133457799BBCDFF1ULL, key);
+    setkey(key);
+    bits(0x0123456789ABCDEFULL, block);
+    errno = 0;
+    encrypt(block, 0);
+    assert(errno == 0 && value(block) == 0x85E813540F0AB405ULL);
+    encrypt(block, 1);
+    assert(value(block) == 0x0123456789ABCDEFULL);
     puts("password hashes: ok");
 }

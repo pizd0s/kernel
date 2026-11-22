@@ -41,6 +41,9 @@ double atof(const char*);
 double strtod(const char* __restrict, char** __restrict);
 float strtof(const char* __restrict, char** __restrict);
 long double strtold(const char* __restrict, char** __restrict);
+float strtof_l(const char* __restrict, char** __restrict, locale_t);
+double strtod_l(const char* __restrict, char** __restrict, locale_t);
+long double strtold_l(const char* __restrict, char** __restrict, locale_t);
 long strtol(const char* __restrict, char** __restrict, int);
 unsigned long strtoul(const char* __restrict, char** __restrict, int);
 long long strtoll(const char* __restrict, char** __restrict, int);
@@ -59,6 +62,8 @@ size_t wcstombs(char* __restrict, const wchar_t* __restrict, size_t);
 int atexit(void (*)(void));
 __NORETURN void exit(int);
 __NORETURN void _Exit(int);
+int at_quick_exit(void (*)(void));
+__NORETURN void quick_exit(int);
 __NORETURN void abort(void);
 
 char* getenv(const char*);
@@ -75,6 +80,7 @@ char* mktemp(char*);
 int mkstemp(char*);
 int mkostemp(char*, int);
 int mkstemps(char*, int);
+int mkostemps(char*, int, int);
 char* mkdtemp(char*);
 
 int abs(int);
@@ -83,6 +89,25 @@ long long llabs(long long);
 div_t div(int, int);
 ldiv_t ldiv(long, long);
 lldiv_t lldiv(long long, long long);
+
+double drand48(void);
+double erand48(unsigned short[3]);
+long lrand48(void);
+long nrand48(unsigned short[3]);
+long mrand48(void);
+long jrand48(unsigned short[3]);
+void srand48(long);
+unsigned short* seed48(unsigned short[3]);
+void lcong48(unsigned short[7]);
+
+long a64l(const char*);
+char* l64a(long);
+
+char* ecvt(double, int, int*, int*);
+char* fcvt(double, int, int*, int*);
+char* gcvt(double, int, char*);
+
+void setkey(const char*);
 
 int rand(void);
 void srand(unsigned);

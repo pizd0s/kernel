@@ -163,14 +163,16 @@ doom_wad = fetch(
 LIBC_HEADERS = build.glob("$(S)/lib/c/include/**/*.h")
 
 # lib/c: the in-process part of the C library, our sources plus the musl
-# subset named in lib/c/musl/files.txt; every other libc function is a kernel
-# import declared by its header.
+# subset named in lib/c/musl/files.txt and FreeBSD's complex functions in
+# lib/c/freebsd; every other libc function is a kernel import declared by its
+# header.
 libc = command(
     name="libc",
     inputs=[
         *LIBC_HEADERS,
         *build.glob("$(S)/lib/c/musl/*"),
         *build.glob("$(S)/lib/c/src/*"),
+        *build.glob("$(S)/lib/c/freebsd/*"),
         "$(S)/lib/c/make.py",
         "$(S)/dev/wasm.py",
     ],
