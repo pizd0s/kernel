@@ -4,7 +4,7 @@
 // sockmgr, the card's stack. getaddrinfo asks it of a name /etc/hosts
 // does not have.
 //
-// Its file, which it registers at /dev/init:
+// Its file, which it registers at /dev/init/ctl:
 //
 //     dns/query   a write of "<name> a" asks, and waits until the name is
 //                 found: ENOENT, no such name, or none of its addresses;

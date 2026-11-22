@@ -20,7 +20,7 @@ Directives use trustme's //@ spelling. stdout/stderr are JSON strings;
 compile-flags, aot-flags, run-flags and args use shell quoting. host: false
 disables the native reference for programs that depend on this kernel.
 run-flags are --asan, --user and --disk <name>=<path>: --user is the
-system's, everyone's in it, as vm's; a disk is /dev/<name> in
+system's, everyone's in it, as vm's; a disk is /dev/blk/<name>/data in
 the system, which the program gets open to read and write as its
 descriptors after 2, in order, their names in DISKS, as the first process
 gets vm's disks. $ROOT in a disk's path is a directory of the host with
@@ -192,7 +192,7 @@ def run(source, prefix, name, tools):
         shutil.copy(executable, root / "bin/check")
         asan, named = disks(case)
         flags = [*asan, *(arg for disk, path in named for arg in ("--disk", f"{disk}={path.replace('$ROOT', str(root))}"))]
-        opened = " ".join(f"{3 + i}<>/dev/{disk}" for i, (disk, _) in enumerate(named))
+        opened = " ".join(f"{3 + i}<>/dev/blk/{disk}/data" for i, (disk, _) in enumerate(named))
         variables = [f"{key}={value}" for key, value in case.get("env", {}).items()]
         if named:
             variables.append("DISKS=" + " ".join(disk for disk, _ in named))

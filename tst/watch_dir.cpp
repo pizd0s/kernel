@@ -1,5 +1,5 @@
 // watchdir of devfs's directories, by a program that registers the names
-// itself at /dev/init: the names there as a watch starts and the end of
+// itself at /dev/init/ctl: the names there as a watch starts and the end of
 // them, a name added, one removed and one back, which is another; a
 // watch that does not wait, and poll of it; a directory that goes with
 // its last name, whose watch tells the name gone and then ends; and the
@@ -59,9 +59,9 @@ namespace {
 }
 
 int main() {
-    registry = open("/dev/init", O_RDWR | O_CLOEXEC);
+    registry = open("/dev/init/ctl", O_RDWR | O_CLOEXEC);
     if (registry < 0) {
-        printf("/dev/init: %s\n", strerror(errno));
+        printf("/dev/init/ctl: %s\n", strerror(errno));
         return 1;
     }
     Device a = made("w/a");

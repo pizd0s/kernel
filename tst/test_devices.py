@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The devices of /dev are services': rootfs's /dev/init takes a name, a
+"""The devices of /dev are services': rootfs's /dev/init/ctl takes a name, a
 mode and the end of a pair (REGISTER, bin/tools/protocol.h), and every
 open of /dev/<name> goes on to the service that registered it, which
 serves the open file from then on. A read that waits there ends for a
@@ -27,7 +27,7 @@ import tempfile
 
 SCRIPT = """\
 ls /dev
-stat -c '%F %a' /dev/init /dev/null
+stat -c '%F %a' /dev/init/ctl /dev/null
 echo dropped > /dev/null && cat /dev/null | wc -c
 head -c 5 /dev/zero | od -An -tx1
 head -c 300 /dev/random | wc -c
@@ -109,7 +109,7 @@ full
 init
 net
 null
-pty
+ptmx
 random
 sockmgr
 tty
@@ -171,7 +171,7 @@ def main():
         result = subprocess.run([vm, "run", "--", rootfs], input=(script + "exit 3\n").encode(), capture_output=True, cwd=empty,
                                 env=env, timeout=180)
         assert (result.returncode, result.stdout.decode(), result.stderr) == (3, WANT, b""), result
-    print("devices: services register the devices of /dev at /dev/init, serve their opens, and take them along when they go")
+    print("devices: services register the devices of /dev at /dev/init/ctl, serve their opens, and take them along when they go")
 
 
 if __name__ == "__main__":

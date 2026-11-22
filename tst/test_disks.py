@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Disks of the host as block devices of the system: vm run --disk gives
-rootfs a file of the host, /bin/blk serves it as /dev/<name> and each
-partition of its GUID partition table as /dev/<name><n>, or <name>p<n>
-after a digit; the shell starts once they are all there. A partition's
+rootfs a file of the host, /bin/blk serves it as /dev/blk/<name>/data and
+each partition of its GUID partition table as /dev/blk/<name>/<n>/data;
+the shell starts once they are all there. A partition's
 READs and WRITEs are the disk's, moved and cut at the partition's end,
 and the disk's bytes go between the host's file and the reader's or
 writer's memory. What is written is in the host's file after vm ends; a
@@ -44,18 +44,19 @@ def gpt_image(path, sectors, partitions):
 
 SCRIPT = """\
 ls /dev
-stat -c '%F %a' /dev/sda /dev/sda1 /dev/vd0p1
-head -c 13 /dev/sda1; echo; head -c 13 /dev/sda2; echo; head -c 5 /dev/vd0p1; echo
+ls -R /dev/blk
+stat -c '%F %a' /dev/blk/sda/data /dev/blk/sda/1/data /dev/blk/vd0/1/data
+head -c 13 /dev/blk/sda/1/data; echo; head -c 13 /dev/blk/sda/2/data; echo; head -c 5 /dev/blk/vd0/1/data; echo
 python3 -c '
 import os
-d = os.open("/dev/sda", os.O_RDONLY)
-p = os.open("/dev/sda1", os.O_RDWR)
-print(os.lseek(d, 0, 2), os.lseek(p, 0, 2), os.fstat(p).st_size, os.lseek(os.open("/dev/raw", os.O_RDONLY), 0, 2))
+d = os.open("/dev/blk/sda/data", os.O_RDONLY)
+p = os.open("/dev/blk/sda/1/data", os.O_RDWR)
+print(os.lseek(d, 0, 2), os.lseek(p, 0, 2), os.fstat(p).st_size, os.lseek(os.open("/dev/blk/raw/data", os.O_RDONLY), 0, 2))
 print(os.pread(p, 10, (1 << 20) - 4), os.pread(p, 4, 1 << 20))
 pattern = bytes(i % 251 for i in range(1 << 20))
 print(os.pwrite(p, pattern, 0), os.pread(p, 1 << 20, 0) == pattern, os.pread(d, 1 << 20, 2048 * 512) == pattern)
 print(os.pwrite(p, b"written", 100), os.pread(d, 7, 2048 * 512 + 100))
-print(os.pwrite(p, b"edge", (1 << 20) - 2), os.pread(os.open("/dev/sda2", os.O_RDONLY), 4, 0))
+print(os.pwrite(p, b"edge", (1 << 20) - 2), os.pread(os.open("/dev/blk/sda/2/data", os.O_RDONLY), 4, 0))
 try: os.pwrite(p, b"x", 1 << 20)
 except OSError as e: print(e.strerror)
 os.lseek(p, 50, 0)
@@ -66,23 +67,43 @@ os.fsync(p)
 """
 
 WANT = """\
+blk
 dns
 full
 init
 net
 null
-pty
+ptmx
 random
-raw
-sda
-sda1
-sda2
 sockmgr
 tty
 urandom
-vd0
-vd0p1
 zero
+/dev/blk:
+raw
+sda
+vd0
+
+/dev/blk/raw:
+data
+
+/dev/blk/sda:
+1
+2
+data
+
+/dev/blk/sda/1:
+data
+
+/dev/blk/sda/2:
+data
+
+/dev/blk/vd0:
+1
+data
+
+/dev/blk/vd0/1:
+data
 block special file 660
 block special file 660
 block special file 660

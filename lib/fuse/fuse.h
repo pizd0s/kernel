@@ -3,9 +3,10 @@
 /*
  * libfuse 2.9's high-level API, as the system's libfuse has it (lib/fuse):
  * a file system's operations on paths, fuse_main to serve them, and the
- * context of the call being served. fuse_main registers the file system
- * at rootfs's /dev/init by the name its mount point argument gives, and
- * serves it on one thread, a file system of the VFS's by node.
+ * context of the call being served. fuse_main binds the file system's
+ * socket at its mount point argument, a path of /dev's when it is
+ * relative, and serves it on one thread, a file system of the VFS's by
+ * node.
  */
 
 #ifndef FUSE_USE_VERSION

@@ -2,7 +2,7 @@
 """watchdir of devfs's directories (lib/c's <sys/watchdir.h>): a watch's
 records of the names of a directory as it starts, then of what changes,
 which tst/watch_dir.cpp, a program the test hands the system, makes by
-registering names at /dev/init and letting them go; and the directories
+registering names at /dev/init/ctl and letting them go; and the directories
 of /dev, which come with the first name registered in them, at any
 depth, and go with the last.
 

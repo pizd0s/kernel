@@ -3,7 +3,7 @@
 // runs it, in one thread: a process a card, its drivers and protocols in
 // one program. devfs starts it for each card vm gave, and it is the
 // card's in /dev, files of a directory of its name, which it registers
-// at /dev/init:
+// at /dev/init/ctl:
 //
 //     net/<name>/ctl     commands, a line each: "stack" starts the stack,
 //                        its address by DHCP; "renew" asks for the lease

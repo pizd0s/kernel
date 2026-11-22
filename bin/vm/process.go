@@ -8526,7 +8526,7 @@ func (p *Process) terminalName(fd uint32) (string, Errno) {
 }
 
 func (p *Process) libcPosix_openpt(flags uint32) uint32 {
-	return p.result(p.open(AT_FDCWD, "/dev/pty", flags, 0))
+	return p.result(p.open(AT_FDCWD, "/dev/ptmx", flags, 0))
 }
 
 func (p *Process) libcGrantpt(fd uint32) uint32 {
@@ -8583,7 +8583,7 @@ func (p *Process) ptsname(fd uint32) (string, error) {
 }
 
 func (p *Process) openPty(termp, winp uint32) (int, int, string, error) {
-	master, err := p.open(AT_FDCWD, "/dev/pty", O_RDWR|O_NOCTTY, 0)
+	master, err := p.open(AT_FDCWD, "/dev/ptmx", O_RDWR|O_NOCTTY, 0)
 
 	if err != nil {
 		return 0, 0, "", err

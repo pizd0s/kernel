@@ -10,7 +10,7 @@ there, not a directory, or a device is refused.
 
 File systems on a disk: blk serves the disk and each partition, and
 starts fuse2fs, on the system's libfuse, for one with an ext2 file
-system, /dev/<part>fs, a file system to mount, there before the shell
+system, /dev/blk/<disk>/<n>/fs, a file system to mount, there before the shell
 starts. The disk's ext2 and ext4 file systems are made here (Image),
 the test's user's: their files' bytes come whole from runs of blocks,
 from blocks interleaved with another file's, through indirect blocks and
@@ -322,9 +322,9 @@ mount: /run/what on /run: Device or resource busy
 """
 
 EXT = """\
-ls /dev | grep fs
+ls /dev/blk/sda/*/fs
 mkdir /run/two /run/four
-mount /run/two /dev/sda1fs && mount /run/four /dev/sda2fs && ls /run/four
+mount /run/two /dev/blk/sda/1/fs && mount /run/four /dev/blk/sda/2/fs && ls /run/four
 cat /run/two/hello.txt /run/four/sub/deep.txt /run/two/link /run/four/long /run/two/long
 readlink /run/two/abs; head -1 /run/four/abs
 python3 -c '
@@ -390,8 +390,8 @@ for name in "/run/two/hello.txt", "/run/four/hello.txt":
 """
 
 EXT_WANT = """\
-sda1fs
-sda2fs
+/dev/blk/sda/1/fs
+/dev/blk/sda/2/fs
 abs
 big
 filler
@@ -435,15 +435,15 @@ locks: busy b'pc' busy
 """
 
 EXT_ERRORS = """\
-FUSE2FS (sda3): Filesystem has unsupported feature(s).
-FUSE2FS (sda3): Please run e2fsck -fy.
+FUSE2FS (data): Filesystem has unsupported feature(s).
+FUSE2FS (data): Please run e2fsck -fy.
 rmdir: '/run/two/dir': Directory not empty
 """
 
 # What the first start wrote, there when the system starts again.
 AGAIN = """\
 mkdir /run/two /run/four
-mount /run/two /dev/sda1fs && mount /run/four /dev/sda2fs
+mount /run/two /dev/blk/sda/1/fs && mount /run/four /dev/blk/sda/2/fs
 cat /run/two/dir/moved.txt /run/four/dir/moved.txt
 readlink /run/two/sym; readlink /run/four/sym
 stat -c '%a %Y' /run/two/hello.txt /run/four/hello.txt
@@ -467,10 +467,10 @@ hello.txt
 """
 
 AGAIN_ERRORS = """\
-FUSE2FS (sda1): Warning: Mounting unchecked fs, running e2fsck is recommended.
-FUSE2FS (sda2): Warning: Mounting unchecked fs, running e2fsck is recommended.
-FUSE2FS (sda3): Filesystem has unsupported feature(s).
-FUSE2FS (sda3): Please run e2fsck -fy.
+FUSE2FS (data): Filesystem has unsupported feature(s).
+FUSE2FS (data): Please run e2fsck -fy.
+FUSE2FS (data): Warning: Mounting unchecked fs, running e2fsck is recommended.
+FUSE2FS (data): Warning: Mounting unchecked fs, running e2fsck is recommended.
 """
 
 

@@ -1,9 +1,9 @@
 // A service of one device for tst/test_devices.py: it registers name at
-// rootfs's /dev/init with the mode given in octal, says so, and serves the
+// rootfs's /dev/init/ctl with the mode given in octal, says so, and serves the
 // device in a child whose pid is /run/<name>.pid, a "/" of the name "_"
 // there: the device's bytes are
 // the text given, read at any offset into the reader's memory, through the
-// memfd a READ brings. ro registers on an endpoint of /dev/init open to
+// memfd a READ brings. ro registers on an endpoint of /dev/init/ctl open to
 // read only.
 //
 // wait makes the device a mailbox whose reads wait: a READ that finds no
@@ -344,7 +344,7 @@ int main(int argc, char** argv) {
     mailbox = argc > 4 && strcmp(argv[4], "wait") == 0;
     keeping = argc > 4 && strcmp(argv[4], "keep") == 0;
     const bool readOnly = argc > 4 && strcmp(argv[4], "ro") == 0;
-    const int registry = open("/dev/init", readOnly ? O_RDONLY : O_RDWR);
+    const int registry = open("/dev/init/ctl", readOnly ? O_RDONLY : O_RDWR);
     const int e = registry < 0 ? errno : enroll(registry, name, uint32_t(strtoul(argv[2], nullptr, 8)), uint32_t(geteuid()), uint32_t(getegid()), device);
     if (e != 0) {
         printf("register %s: %s\n", name, strerror(e));

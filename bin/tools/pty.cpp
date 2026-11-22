@@ -1,5 +1,5 @@
 // pty: the system's pseudoterminals, a service (lib/protocol/service.h)
-// that registers /dev/pty at /dev/init. Each open of /dev/pty is a new
+// that registers /dev/ptmx at /dev/init/ctl. Each open of /dev/ptmx is a new
 // terminal: the open is its master, and its slave is /dev/pts/N, a device
 // the service registers as the terminal comes, the opener's and 0600, as
 // Linux's devpts makes it, and lets go when the master goes. The open
@@ -1098,7 +1098,7 @@ static void name(const Open& o, const Request& r) {
         return fail(r.reply(), ENOTTY);
     }
     if (o.master && r.h.arg == 0) {
-        snprintf(path, sizeof path, "/dev/pty");
+        snprintf(path, sizeof path, "/dev/ptmx");
     } else {
         snprintf(path, sizeof path, "/dev/pts/%d", o.terminal->number);
     }
@@ -1279,7 +1279,7 @@ static void opened(Terminal& t, bool master, Request& r) {
     fail(r.reply(), ENFILE);
 }
 
-// An open of /dev/pty: a new terminal, whose slave is registered, the
+// An open of /dev/ptmx: a new terminal, whose slave is registered, the
 // opener's, who asked, and only the opener's to open, as grantpt leaves
 // it on Linux.
 static void openMaster(Request& r) {
@@ -1434,7 +1434,7 @@ int ptyMain(int argc, char** argv) {
         dprintf(STDERR_FILENO, "usage: pty [-r fd]\n");
         return 2;
     }
-    registry = open("/dev/init", O_RDWR | O_CLOEXEC);
+    registry = open("/dev/init/ctl", O_RDWR | O_CLOEXEC);
     epoll = epoll_create1(EPOLL_CLOEXEC);
     if (registry < 0 || epoll < 0) {
         fatal("pty: errno %d", errno);
@@ -1443,7 +1443,7 @@ int ptyMain(int argc, char** argv) {
         w.memfd = -1;
     }
     signal(SIGPIPE, SIG_IGN);
-    device = enroll("pty", "pty", S_IFCHR | 0666);
+    device = enroll("pty", "ptmx", S_IFCHR | 0666);
     watch(epoll, {device.end, true, false, false, &ptyTag});
     if (ready >= 0) {
         close(ready);

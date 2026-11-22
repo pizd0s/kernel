@@ -1,4 +1,4 @@
-// devices: the devices every system has, a service of rootfs's /dev/init
+// devices: the devices every system has, a service of rootfs's /dev/init/ctl
 // (lib/protocol/service.h): null, which reads nothing; zero, which reads
 // zeros; full, which reads zeros and has no room for a write, ENOSPC;
 // random and urandom, which read the kernel's entropy. The others take

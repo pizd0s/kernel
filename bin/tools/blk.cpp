@@ -1,14 +1,14 @@
-// blk: a disk as a block device, a service of rootfs's /dev/init
+// blk: a disk as a block device, a service of rootfs's /dev/init/ctl
 // (lib/protocol/service.h). The disk is a file of the host vm gives the
-// system (vm run --disk), descriptor fd here, and /dev/<name> its bytes:
-// the host copies a READ's straight into the memory of who reads, through
-// the memfd the READ brings, and a WRITE's straight from the writer's, one
-// copy (copy_file_range). Each partition of the disk's GUID partition
-// table, 512-byte blocks, is a block device of blk's too, /dev/<name><n>,
-// or <name>p<n> when name ends in a digit: the disk's bytes [first, first
-// + length), served the same, cut at the partition's end. A partition
-// with an ext2, ext3 or ext4 file system gets /bin/fuse2fs for it,
-// /dev/<partition>fs.
+// system (vm run --disk), descriptor fd here, and /dev/blk/<name>/data its
+// bytes: the host copies a READ's straight into the memory of who reads,
+// through the memfd the READ brings, and a WRITE's straight from the
+// writer's, one copy (copy_file_range). Each partition of the disk's GUID
+// partition table, 512-byte blocks, is a block device of blk's too,
+// /dev/blk/<name>/<n>/data: the disk's bytes [first, first + length),
+// served the same, cut at the partition's end. A partition with an ext2,
+// ext3 or ext4 file system gets /bin/fuse2fs for it, which binds
+// /dev/blk/<name>/<n>/fs.
 //
 //     blk [-r fd] <name> <fd>
 //
@@ -154,7 +154,7 @@ static void handle(Endpoint& e, Request& r) {
     }
 }
 
-// Registers an area of name on /dev/init's registry and serves its opens;
+// Registers an area of name on /dev/init/ctl's registry and serves its opens;
 // false when it is not there, which is told.
 static bool registered(int registry, const char* named, Area& a) {
     if (const int e = enroll(registry, named, S_IFBLK | 0660, uint32_t(geteuid()), uint32_t(getegid()), a.device)) {
@@ -165,14 +165,14 @@ static bool registered(int registry, const char* named, Area& a) {
     return true;
 }
 
-// Starts /bin/fuse2fs for the file system of the partition part, with the
-// descriptor ready, which it closes once it is up.
-static void fileSystem(const char* part, int ready) {
-    char path[64];
-    char fsName[64];
+// Starts /bin/fuse2fs for the file system of the partition number, with
+// the descriptor ready, which it closes once it is up.
+static void fileSystem(uint32_t number, int ready) {
+    char path[128];
+    char fsName[128];
     char options[32];
-    snprintf(path, sizeof path, "/dev/%s", part);
-    snprintf(fsName, sizeof fsName, "%sfs", part);
+    snprintf(path, sizeof path, "/dev/blk/%s/%u/data", name, number);
+    snprintf(fsName, sizeof fsName, "blk/%s/%u/fs", name, number);
     snprintf(options, sizeof options, "ready=%d", ready);
     char fuse2fs[] = "fuse2fs";
     char option[] = "-o";
@@ -208,8 +208,6 @@ static void partitions(int registry, int ready) {
     if (entrySize < 128 || entrySize > 4096 || count > 1024) {
         return;
     }
-    const size_t n = strlen(name);
-    const bool digit = n > 0 && name[n - 1] >= '0' && name[n - 1] <= '9';
     unsigned char entry[4096];
     static const unsigned char none[16] = {};
     for (uint32_t i = 0; i < count; ++i) {
@@ -229,15 +227,15 @@ static void partitions(int registry, int ready) {
         }
         a->first = firstBlock * block;
         a->length = (lastBlock - firstBlock + 1) * block;
-        char part[64];
-        snprintf(part, sizeof part, "%s%s%u", name, digit ? "p" : "", i + 1);
+        char part[128];
+        snprintf(part, sizeof part, "blk/%s/%u/data", name, i + 1);
         if (!registered(registry, part, *a)) {
             free(a);
             continue;
         }
         unsigned char magic[2];
         if (pread(disk, magic, sizeof magic, off_t(a->first + 1024 + 56)) == ssize_t(sizeof magic) && magic[0] == 0x53 && magic[1] == 0xEF) {
-            fileSystem(part, ready);
+            fileSystem(i + 1, ready);
         }
     }
 }
@@ -261,11 +259,13 @@ int blkMain(int argc, char** argv) {
     if (epoll < 0) {
         fatal("blk: epoll_create1: errno %d", errno);
     }
-    const int registry = open("/dev/init", O_RDWR | O_CLOEXEC);
+    const int registry = open("/dev/init/ctl", O_RDWR | O_CLOEXEC);
     if (registry < 0) {
-        fatal("blk: /dev/init: %s", strerror(errno));
+        fatal("blk: /dev/init/ctl: %s", strerror(errno));
     }
-    if (!registered(registry, name, whole)) {
+    char data[128];
+    snprintf(data, sizeof data, "blk/%s/data", name);
+    if (!registered(registry, data, whole)) {
         exit(1);
     }
     partitions(registry, ready);

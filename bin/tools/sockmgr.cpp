@@ -6,7 +6,7 @@
 // sockmgr's). Every card has its own stack (bin/inet), isolated: an
 // address is one card's, and so is a port.
 //
-// Its files, which it registers at /dev/init:
+// Its files, which it registers at /dev/init/ctl:
 //
 //     sockmgr/socket   an open is a socket on no stack (socket(2) opens it)
 //     sockmgr/ctl      commands, a line each: "attach <card>" starts the

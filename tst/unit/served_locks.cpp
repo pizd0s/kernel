@@ -108,7 +108,7 @@ static ssize_t receiveWith(int from, void* data, size_t size, int& fd) {
     return n;
 }
 
-// A device of ours in /dev, registered at /dev/init: its path, and our
+// A device of ours in /dev, registered at /dev/init/ctl: its path, and our
 // end of the pair devfs hands its opens on to.
 static char devicePath[64];
 
@@ -116,7 +116,7 @@ static int device(const char* name) {
     char registered[48];
     snprintf(registered, sizeof registered, "%s_%d", name, int(getpid()));
     snprintf(devicePath, sizeof devicePath, "/dev/%s", registered);
-    const int registry = open("/dev/init", O_RDWR | O_CLOEXEC);
+    const int registry = open("/dev/init/ctl", O_RDWR | O_CLOEXEC);
     int pair[2];
     assert(registry >= 0 && socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) == 0);
 

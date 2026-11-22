@@ -88,7 +88,7 @@ int enroll(int registry, const char* name, uint32_t mode, uint32_t uid, uint32_t
 }
 
 Device enroll(const char* program, const char* name, uint32_t mode) {
-    const int registry = open("/dev/init", O_RDWR | O_CLOEXEC);
+    const int registry = open("/dev/init/ctl", O_RDWR | O_CLOEXEC);
     Device d{};
     const int e = registry < 0 ? errno : enroll(registry, name, mode, uint32_t(geteuid()), uint32_t(getegid()), d);
     if (registry >= 0) {

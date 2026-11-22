@@ -1,8 +1,8 @@
 // The system's libfuse: libfuse 2.9's high-level API (fuse.h) as a file
 // system of the VFS's (lib/protocol/protocol.h). fuse_main binds the file
-// system's socket, SOCK_SEQPACKET, at /dev/<name>, the name its mount
-// point argument gives (mount <where> /dev/<name>), and serves it on one
-// thread: a request is a call of the file system's operations on a path,
+// system's socket, SOCK_SEQPACKET, at its mount point argument, a path of
+// /dev's when it is relative (mount <where> /dev/<name>), and serves it on
+// one thread: a request is a call of the file system's operations on a path,
 // answered before the next. The context of each call is the request's uid
 // and gid.
 //
@@ -833,9 +833,6 @@ int fuse_main_real(int argc, char* argv[], const fuse_operations* op, size_t siz
         dprintf(STDERR_FILENO, "fuse: no mount point\n");
         return 2;
     }
-    if (const char* slash = strrchr(name, '/')) {
-        name = slash + 1;
-    }
     memset(&operations, 0, sizeof operations);
     memcpy(&operations, op, MIN(size, sizeof operations));
     context.private_data = data;
@@ -853,11 +850,11 @@ int fuse_main_real(int argc, char* argv[], const fuse_operations* op, size_t siz
         conn.capable = FUSE_CAP_BIG_WRITES | FUSE_CAP_ATOMIC_O_TRUNC;
         context.private_data = operations.init(&conn);
     }
-    // The file system's socket, /dev/<name>, one a file system before it
-    // left taken away first.
+    // The file system's socket, at name or /dev/<name>, one a file system
+    // before it left taken away first.
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
-    snprintf(address.sun_path, sizeof address.sun_path, "/dev/%s", name);
+    snprintf(address.sun_path, sizeof address.sun_path, "%s%s", name[0] == '/' ? "" : "/dev/", name);
     const int listening = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     unlink(address.sun_path);
     if (listening < 0 || bind(listening, reinterpret_cast<const sockaddr*>(&address), sizeof address) != 0 || listen(listening, 16) != 0) {

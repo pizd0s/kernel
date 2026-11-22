@@ -1,7 +1,7 @@
 // devfs: /dev, a file system of the VFS's (lib/protocol/protocol.h), which
 // rootfs starts and mounts on /dev with the channel it gives it: rootfs
 // asks it by node, its root node 1. It holds tty, whose open is of the
-// opener's controlling terminal, which the kernel opens instead; init,
+// opener's controlling terminal, which the kernel opens instead; init/ctl,
 // where the services of the system register their devices (REGISTER,
 // lib/protocol/service.h); those devices, each a service's: an open of
 // one goes on to its service, where it is answered with it, and the
@@ -49,7 +49,7 @@ namespace {
         Socket, // a socket's name: it holds the socket's listener, which CONNECT gives
     };
 
-    // A node of /dev: its root or a directory of devices, tty, init, or a
+    // A node of /dev: its root or a directory of devices, tty, init/ctl, or a
     // service's device; pos its place among its directory's entries.
     struct Node {
         uint64_t ino;
@@ -844,7 +844,8 @@ int devfsMain(int argc, char** argv) {
     root.atime = root.mtime = root.ctime = now();
     root.parent = &root;
     add(root, "tty", 3, Kind::Controlling, S_IFCHR | 0666, 0, 0);
-    add(root, "init", 4, Kind::Registry, S_IFCHR | 0600, uint32_t(geteuid()), uint32_t(getegid()));
+    Node* init = add(root, "init", 4, Kind::Dir, S_IFDIR | 0755, uint32_t(geteuid()), uint32_t(getegid()));
+    add(*init, "ctl", 3, Kind::Registry, S_IFCHR | 0600, uint32_t(geteuid()), uint32_t(getegid()));
     epoll = epoll_create1(EPOLL_CLOEXEC);
     if (epoll < 0 || fcntl(channel, F_SETFD, FD_CLOEXEC) != 0) {
         fatal("devfs: errno %d", errno);

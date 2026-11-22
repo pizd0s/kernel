@@ -293,7 +293,7 @@
 //     SOCKTYPE                            OK type u32
 //
 //   A card's stack's and sockmgr's, on the open sockmgr has of the
-//   stack's net/<card>/iface/stack, a plain socket as /dev/init's, a
+//   stack's net/<card>/iface/stack, a plain socket as /dev/init/ctl's, a
 //   request on it answered where it says:
 //     STACK                 text        the stack's state, a line each,
 //                                         card <name>, inet <a>/<len>,
@@ -313,15 +313,15 @@
 //                           tells of connections and ACCEPT takes one
 //
 //   A device's service's, on the channel devfs has of it, and on
-//   /dev/init:
+//   /dev/init/ctl:
 //     OPEN      arg flags   mode u32      OK, fds[0] the open file
 //     OPEN of /dev/tty, devfs's, is the opener's controlling terminal: its
 //     OK has openControlling, and the kernel opens that terminal instead,
 //     with an OPEN on the open file it keeps of it, a slave's.
-//   /dev/init's open is a plain socket, an end of a pair devfs keeps the
+//   /dev/init/ctl's open is a plain socket, an end of a pair devfs keeps the
 //   other end of, which its opener speaks the protocol on itself: a
 //   request on it is answered on it.
-//     REGISTER  arg mode    name          on /dev/init. OK stat: a device,
+//     REGISTER  arg mode    name          on /dev/init/ctl. OK stat: a device,
 //                                         S_IFCHR or S_IFBLK, of that name
 //                                         in /dev, whose owner is who asks
 //                                         (the header's ids, the service's
