@@ -243,6 +243,8 @@ type Process struct {
 	failure   Errno
 	regexes   map[uint32]*PosixRegex
 	nextRegex uint32
+	iconvs    map[uint32]*Iconv
+	nextIconv uint32
 
 	desKey       [8]byte
 	posixTimers  map[int32]*PosixTimer
@@ -548,6 +550,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
 		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0
 		p.regexes, p.constants, p.locale = map[uint32]*PosixRegex{}, map[string]uint32{}, [LC_ALL]string{}
+		p.iconvs = map[uint32]*Iconv{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
 		p.defaultStack, p.defaultGuard, p.desKey = 0, 0, [8]byte{}
 
@@ -2121,6 +2124,7 @@ func (p *Process) startVfork() uint32 {
 	c.image, c.vfork = p.image, v
 	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo
 	c.regexes, c.nextRegex, c.constants, c.jumps, c.stackAt = p.regexes, p.nextRegex, p.constants, p.jumps, p.stackAt
+	c.iconvs, c.nextIconv = p.iconvs, p.nextIconv
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
 	c.defaultStack, c.defaultGuard, c.desKey = p.defaultStack, p.defaultGuard, p.desKey
 	c.locale, c.envStrings, c.mappings, c.tzAt, c.herrnoAt, c.passwordAt = p.locale, p.envStrings, p.mappings, p.tzAt, p.herrnoAt, p.passwordAt
@@ -2175,11 +2179,16 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap.clone(), p.stack.clone(), p.static, p.env, p.errnoAt, p.environAt, p.siginfo
 	c.nextRegex, c.stackAt, c.locale, c.tzAt, c.herrnoAt, c.passwordAt = p.nextRegex, p.stackAt, p.locale, p.tzAt, p.herrnoAt, p.passwordAt
 	c.regexes, c.constants, c.jumps = map[uint32]*PosixRegex{}, map[string]uint32{}, map[uint32]*JmpBuf{}
+	c.iconvs, c.nextIconv = map[uint32]*Iconv{}, p.nextIconv
 
 	for id, r := range p.regexes {
 		copied := *r
 
 		c.regexes[id] = &copied
+	}
+
+	for id, cd := range p.iconvs {
+		c.iconvs[id] = cd.copy()
 	}
 
 	for s, at := range p.constants {
@@ -13335,6 +13344,77 @@ func (p *Process) libcWcscspn(s, set uint32) uint32 {
 
 func (p *Process) libcWcsftime(s, max, format, tm uint32) uint32 {
 	return p.wcsftime(s, max, format, tm)
+}
+
+func (p *Process) libcIconv_open(to, from uint32) uint32 {
+	c, ok := newIconv(p.str(to), p.str(from))
+
+	if !ok {
+		p.setErrno(EINVAL)
+
+		return ^uint32(0)
+	}
+
+	p.nextIconv++
+	p.iconvs[p.nextIconv] = c
+
+	return p.nextIconv
+}
+
+func (p *Process) libcIconv(cd, inbuf, inleft, outbuf, outleft uint32) uint32 {
+	c, ok := p.iconvs[cd]
+
+	if !ok {
+		p.setErrno(EBADF)
+
+		return ^uint32(0)
+	}
+
+	var out []byte
+
+	outAt := uint32(0)
+
+	if outbuf != 0 && outleft != 0 {
+		if outAt = p.u32(outbuf); outAt != 0 {
+			out = p.span(outAt, p.u32(outleft))
+		}
+	}
+
+	nIn, nOut, count, e := 0, 0, 0, Errno(0)
+
+	if inbuf == 0 || p.u32(inbuf) == 0 {
+		nOut, e = c.reset(out, out != nil)
+	} else {
+		inAt := p.u32(inbuf)
+
+		nIn, nOut, count, e = c.convert(p.span(inAt, p.u32(inleft)), out)
+
+		p.put32(inbuf, inAt+uint32(nIn))
+		p.put32(inleft, p.u32(inleft)-uint32(nIn))
+	}
+
+	if out != nil {
+		p.put32(outbuf, outAt+uint32(nOut))
+		p.put32(outleft, p.u32(outleft)-uint32(nOut))
+	}
+
+	if e != 0 {
+		p.setErrno(e)
+
+		return ^uint32(0)
+	}
+
+	return uint32(count)
+}
+
+func (p *Process) libcIconv_close(cd uint32) uint32 {
+	if _, ok := p.iconvs[cd]; !ok {
+		return p.result(0, EBADF)
+	}
+
+	delete(p.iconvs, cd)
+
+	return p.result(0, nil)
 }
 
 func (p *Process) libcRegcomp(preg, pattern, flags uint32) uint32 {

@@ -1,2 +1,0 @@
-locale/iconv.c
-locale/iconv_close.c

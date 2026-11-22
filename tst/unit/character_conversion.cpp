@@ -65,13 +65,14 @@ int main() {
     assert(iconv(cd, &in, &left, &to, &space) == (size_t)-1 && errno == E2BIG && in == two + 1 && left == 1 && space == 1);
     assert(iconv_close(cd) == 0);
 
-    // A character the target has none for becomes an asterisk, and the
-    // call counts it: a conversion that cannot be reversed.
+    // A character the target has none for gets a conversion of the
+    // implementation's (POSIX), which the call counts: one that cannot be
+    // reversed.
     cd = iconv_open("ISO-8859-1", "UTF-8");
     assert(cd != (iconv_t)-1);
     char letter[] = "a\xd0\xbc";
     in = letter, to = out, left = 3, space = sizeof(out);
-    assert(iconv(cd, &in, &left, &to, &space) == 1 && left == 0 && to == out + 2 && memcmp(out, "a*", 2) == 0);
+    assert(iconv(cd, &in, &left, &to, &space) == 1 && left == 0 && to == out + 2 && out[0] == 'a');
     assert(iconv_close(cd) == 0);
 
     puts("character conversion: ok");

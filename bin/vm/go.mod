@@ -6,6 +6,7 @@ require (
 	github.com/containers/gvisor-tap-vsock v0.8.9
 	github.com/klauspost/compress v1.20.3
 	github.com/sirupsen/logrus v1.10.2
+	golang.org/x/text v0.36.0
 )
 
 require (

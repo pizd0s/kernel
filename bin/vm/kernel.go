@@ -96,7 +96,7 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 }
 
 func (k *Kernel) process(pid int32, parent *Process) *Process {
-	p := &Process{k: k, pid: pid, umask: 0o022, regexes: map[uint32]*PosixRegex{}, seed: 0, syncs: map[int32]Object{},
+	p := &Process{k: k, pid: pid, umask: 0o022, regexes: map[uint32]*PosixRegex{}, iconvs: map[uint32]*Iconv{}, seed: 0, syncs: map[int32]Object{},
 		semOpens: map[string]*SemOpen{}}
 
 	p.own.signal.kind, p.own.continued.kind = eventSignal, eventContinued
@@ -717,6 +717,9 @@ func (k *Kernel) functionTable() map[string]any {
 		"sigignore":                        libcSigignore,
 		"sigpause":                         libcSigpause,
 		"sigset":                           libcSigset,
+		"iconv_open":                       libcIconv_open,
+		"iconv":                            libcIconv,
+		"iconv_close":                      libcIconv_close,
 		"__dtoa":                           libc__dtoa,
 		"__ldtoa":                          libc__ldtoa,
 		"__hdtoa":                          libc__hdtoa,

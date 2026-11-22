@@ -33,7 +33,6 @@ __pycache__/
 /aot_chaos_coverage_aot
 /aot_measure
 /testsuite_tarball
-/musl_tarball
 /bionic_slice
 /busybox_tarball
 /doom

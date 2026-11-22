@@ -850,6 +850,18 @@ func libcSigset(sig, disp uint32) uint32 {
 	return proc().libcSigset(sig, disp)
 }
 
+func libcIconv_open(to, from uint32) uint32 {
+	return proc().libcIconv_open(to, from)
+}
+
+func libcIconv(cd, inbuf, inleft, outbuf, outleft uint32) uint32 {
+	return proc().libcIconv(cd, inbuf, inleft, outbuf, outleft)
+}
+
+func libcIconv_close(cd uint32) uint32 {
+	return proc().libcIconv_close(cd)
+}
+
 func libc__dtoa(v float64, mode, n, decpt, sign, end uint32) uint32 {
 	return proc().libc__dtoa(v, mode, n, decpt, sign, end)
 }

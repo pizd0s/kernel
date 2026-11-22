@@ -1,19 +1,14 @@
 #!/usr/bin/env python3
-"""Build lib/c's in-process archive: our own sources, the musl subset in
-musl/files.txt, FreeBSD's sources in freebsd/files.txt, LLVM libc's
-functions in llvm/files.txt, Arm's optimized-routines' in arm/files.txt
-and Bionic's sources in bionic/files.txt.
+"""Build lib/c's in-process archive: our own sources, FreeBSD's sources in
+freebsd/files.txt, LLVM libc's functions in llvm/files.txt, Arm's
+optimized-routines' in arm/files.txt and Bionic's sources in
+bionic/files.txt.
 
-    make.py <cc> <ar> <musl-tarball> <freebsd-slice> <llvm-slice> <arm-tarball> <bionic-slice> <libc.a>
+    make.py <cc> <ar> <freebsd-slice> <llvm-slice> <arm-tarball> <bionic-slice> <libc.a>
     make.py headers <include.tar>
 
 The second packs include/, the headers as a program built inside the system
 finds them.
-
-A .h line of musl/files.txt names a musl internal header to keep; every
-other header of src/internal is deleted, so a quoted include of it falls
-through to our replacement in musl/. musl's public headers are never on the
-path.
 
 The FreeBSD and LLVM slices are what freebsd/slice.txt and llvm/slice.txt
 cut out of their release tarballs (dev/slice.py). FreeBSD's sources build
@@ -162,23 +157,10 @@ def main():
 
         return
 
-    cc, ar, tarball, freebsd_slice, llvm_slice, arm_tarball, bionic_slice, output = sys.argv[1:9]
+    cc, ar, freebsd_slice, llvm_slice, arm_tarball, bionic_slice, output = sys.argv[1:8]
     work = Path(os.environ.get("TMPDIR") or "/tmp") / "libc"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
-
-    with tarfile.open(tarball) as archive:
-        archive.extractall(work, filter="data")
-
-    tree = next(work.glob("musl-*"))
-    musl = tree / "src"
-    lines = list(listed(ROOT / "musl" / "files.txt"))
-    kept = {musl / line for line in lines if line.endswith(".h")}
-
-    for header in (musl / "internal").glob("*.h"):
-        if header not in kept:
-            header.unlink()
-
     freebsd = unpack(freebsd_slice, work / "freebsd")
     (freebsd / "lib" / "msun" / "src" / "math.h").unlink()
     llvm = unpack(llvm_slice, work / "llvm")
@@ -191,22 +173,11 @@ def main():
     for change in sorted((ROOT / "bionic" / "patches").glob("*.patch")):
         subprocess.run(["patch", "-p1", "--batch", "--forward", "-s", "-d", str(bionic), "-i", str(change)], check=True)
 
-    includes = [
-        "-include", str(ROOT / "musl" / "features.h"),
-        "-I", str(ROOT / "src"),
-        "-I", str(ROOT / "musl"),
-        "-I", str(musl / "internal"),
-        "-I", str(tree / "arch" / "generic"),
-        "-isystem", str(ROOT / "include"),
-    ]
     units = []
 
-    for line in lines:
-        if not line.endswith(".h"):
-            units.append((musl / line, work / "obj" / Path(line).with_suffix(".o"), FLAGS + includes))
-
     for source in sorted((ROOT / "src").glob("*.c")):
-        units.append((source, work / "obj" / "pizdos" / source.with_suffix(".o").name, FLAGS + includes))
+        units.append((source, work / "obj" / "pizdos" / source.with_suffix(".o").name,
+                      FLAGS + ["-I", str(ROOT / "src"), "-isystem", str(ROOT / "include")]))
 
     msun = ["-I", str(freebsd / "lib" / "msun" / "src"), "-isystem", str(ROOT / "include")]
 

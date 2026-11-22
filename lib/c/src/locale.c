@@ -20,9 +20,6 @@ struct __locale_struct {
 static struct __locale_struct cLocale;
 static locale_t current = LC_GLOBAL_LOCALE;
 
-// what musl's iconv saves and restores (musl/locale_impl.h)
-locale_t __current_locale;
-
 // utf8 is whether a locale name's codeset is UTF-8, as in en_US.UTF-8.
 static int utf8(const char* name) {
     const char* dot = strchr(name, '.');

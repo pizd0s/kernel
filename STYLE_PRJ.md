@@ -25,10 +25,12 @@ Per-project settings that the shared [STYLE.md](STYLE.md) delegates here.
   `__kernel_<name>` (`src/kernel.c`, or `__INLINE` in its header); the
   import name is spelled out so the linker can tell an import from a
   missing definition. No other declaration has the attribute.
-- **Third-party code.** musl and busybox sources are fetched as release
-  tarballs and are never edited; what they need from us lives in `lib/c/musl`
-  (replacement internal headers) and `lib/c/src`. A program whose own error
-  the system cannot live with is patched as it is built, by patch files
-  beside its build script, each with its reason at its head and fit to send
-  to its authors: GLib and mc (`bin/mc/*.patch`).
+- **Third-party code.** Sources are fetched (release tarballs, or a commit's
+  paths cut into a tarball of their own: `dev/fetch_git.py`, `dev/slice.py`)
+  and never edited in place; what they need from us lives beside their build
+  (lib/c's `freebsd/`, `llvm/`, `bionic/` headers, and `lib/c/src`). Code
+  whose own error the system cannot live with is patched as it is built, by
+  patch files beside its build script, each with its reason at its head and
+  fit to send to its authors: GLib and mc (`bin/mc/*.patch`), LLVM libc and
+  Bionic (`lib/c/llvm/patches`, `lib/c/bionic/patches`).
 - **Formatter.** None yet: `style.py` covers C++ only.

@@ -32,7 +32,6 @@ LLVM_RANLIB = tool("llvm-ranlib")
 WASM_LD = tool("wasm-ld")
 GO = tool("go")
 
-MUSL = "1.2.5"
 BUSYBOX = "1.36.1"
 E2FSPROGS = "1.47.4"
 DOOMGENERIC = "e257a09527062bfb986b6e5e0780839b6cbd5b71"
@@ -61,13 +60,6 @@ def fetch(name, url, sha256, output):
         color="blue",
     )
 
-
-musl_tarball = fetch(
-    "musl_tarball",
-    f"https://musl.libc.org/releases/musl-{MUSL}.tar.gz",
-    "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
-    f"$(B)/ext/musl-{MUSL}.tar.gz",
-)
 
 busybox_tarball = fetch(
     "busybox_tarball",
@@ -220,16 +212,15 @@ doom_wad = fetch(
 
 LIBC_HEADERS = build.glob("$(S)/lib/c/include/**/*.h")
 
-# lib/c: the in-process part of the C library, our sources plus the musl
-# subset named in lib/c/musl/files.txt, FreeBSD's msun sources in
-# lib/c/freebsd/files.txt, LLVM libc's math in lib/c/llvm/files.txt and Arm's
-# optimized-routines' in lib/c/arm/files.txt, Bionic's in lib/c/bionic/files.txt;
-# every other libc function is a kernel import declared by its header.
+# lib/c: the in-process part of the C library, our sources plus FreeBSD's
+# msun sources in lib/c/freebsd/files.txt, LLVM libc's math in
+# lib/c/llvm/files.txt and Arm's optimized-routines' in lib/c/arm/files.txt,
+# Bionic's in lib/c/bionic/files.txt; every other libc function is a kernel
+# import declared by its header.
 libc = command(
     name="libc",
     inputs=[
         *LIBC_HEADERS,
-        *build.glob("$(S)/lib/c/musl/*"),
         *build.glob("$(S)/lib/c/src/*"),
         *build.glob("$(S)/lib/c/freebsd/**/*.h"),
         *build.glob("$(S)/lib/c/freebsd/*.txt"),
@@ -244,8 +235,8 @@ libc = command(
         "$(S)/dev/wasm.py",
     ],
     outputs=["$(B)/lib/c/libc.a"],
-    deps=[musl_tarball, freebsd_slice, llvm_libc_slice, arm_tarball, bionic_slice],
-    cmd=["python3", "$(S)/lib/c/make.py", CLANG, LLVM_AR, musl_tarball.outputs[0], freebsd_slice.outputs[0],
+    deps=[freebsd_slice, llvm_libc_slice, arm_tarball, bionic_slice],
+    cmd=["python3", "$(S)/lib/c/make.py", CLANG, LLVM_AR, freebsd_slice.outputs[0],
          llvm_libc_slice.outputs[0], arm_tarball.outputs[0], bionic_slice.outputs[0], "$(B)/lib/c/libc.a"],
     descr="CC",
     color="green",

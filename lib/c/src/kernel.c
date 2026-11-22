@@ -25,6 +25,7 @@
 #include <fnmatch.h>
 #include <glob.h>
 #include <grp.h>
+#include <iconv.h>
 #include <inttypes.h>
 #include <langinfo.h>
 #include <libgen.h>
@@ -181,6 +182,11 @@ KERNEL_VOID(endgrent, (void), ())
 KERNEL(int, getgrouplist, (const char* a, gid_t b, gid_t* c, int* d), (a, b, c, d))
 KERNEL(int, initgroups, (const char* a, gid_t b), (a, b))
 KERNEL(int, setgroups, (size_t a, const gid_t* b), (a, b))
+
+/* iconv.h */
+KERNEL(iconv_t, iconv_open, (const char* a, const char* b), (a, b))
+KERNEL(size_t, iconv, (iconv_t a, char** __restrict b, size_t* __restrict c, char** __restrict d, size_t* __restrict e), (a, b, c, d, e))
+KERNEL(int, iconv_close, (iconv_t a), (a))
 
 /* inttypes.h */
 KERNEL(intmax_t, imaxabs, (intmax_t a), (a))
