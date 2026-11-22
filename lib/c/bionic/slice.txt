@@ -8,7 +8,6 @@ libc/private
 libc/platform/bionic
 libc/upstream-openbsd/android
 libc/upstream-openbsd/lib/libc/stdio
-libc/upstream-openbsd/lib/libc/gdtoa
 libc/upstream-openbsd/lib/libc/stdlib
 libc/upstream-netbsd/lib/libc/stdlib
 libc/upstream-freebsd/lib/libc/stdlib
@@ -20,7 +19,5 @@ libc/bionic/c32rtomb.cpp
 libc/bionic/strtol.cpp
 libc/bionic/atof.cpp
 libc/bionic/strtod.cpp
-libc/bionic/strtold.cpp
-libc/bionic/wcstod.cpp
 libc/bionic/tdestroy.cpp
 libc/bionic/signal.cpp

@@ -216,7 +216,6 @@ char* nl_langinfo_l(nl_item item, locale_t locale) {
     return nl_langinfo(item);
 }
 
-// Bionic's strtold_l is an alias of strtold, a prototype wasm would trap at.
 long double strtold_l(const char* restrict s, char** restrict end, locale_t locale) {
     return strtold(s, end);
 }

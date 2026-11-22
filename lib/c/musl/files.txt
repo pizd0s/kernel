@@ -100,7 +100,6 @@ stdio/vwprintf.c
 stdio/vwscanf.c
 stdio/wprintf.c
 stdio/wscanf.c
-stdlib/wcstod.c
 misc/getopt.c
 misc/getopt_long.c
 multibyte/btowc.c

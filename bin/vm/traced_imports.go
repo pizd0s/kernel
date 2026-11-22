@@ -122,19 +122,20 @@ var callFormats = func() map[string]string {
 		strcasecmp_l:dssd strcasestr:sss strcat:sps strchr:ssd strchrnul:ssd strcmp:dss strcoll:dss strcpy:sps strcspn:dss strdup:ss
 		strerror:sd strerror_l:sdd strerror_r:ddpd strftime:dpdspd strlcat:dpsd strlcpy:dpsd strlen:ds strncasecmp:dssd
 		strncasecmp_l:dssdd strncat:spsd strncmp:dssd strncpy:spsd strndup:ssd strnlen:dsd strpbrk:sss strptime:ssspd strrchr:ssd
-		strsep:sps strsignal:sd strspn:dss strstr:sss strtok:sps strtok_r:spsp strverscmp:dss strxfrm:dpsd swab:vppd symlink:dss
-		symlinkat:dsds sync:v syncfs:dd sysconf:dd sysinfo:dpd system:ds tcdrain:dd tcflow:ddd tcflush:ddd tcgetattr:ddpd tcgetpgrp:dd
-		tcgetsid:dd tcsendbreak:ddd tcsetattr:dddpd tcsetpgrp:ddd telldir:dp thrd_create:dpdp thrd_current:d thrd_detach:dd thrd_equal:ddd
-		thrd_join:ddp thrd_sleep:dpdpd thrd_yield:v time:dp timegm:dpd timer_create:ddpdp timer_delete:dd timer_getoverrun:dd
-		timer_gettime:ddpd timer_settime:dddpdpd timerfd_create:ddd timerfd_gettime:ddpd timerfd_settime:dddpdpd times:dpd
-		timespec_get:dpdd toascii:dd tolower:dd toupper:dd towctrans:ddd towctrans_l:dddd towlower:dd towupper:dd truncate:dsd
-		tss_create:dpd tss_delete:vd tss_get:pd tss_set:ddp ttyname:sd ttyname_r:ddpd tzset:v ualarm:ddd umask:oo umount:ds umount2:dsd
-		uname:dpd unlink:ds unlinkat:ddsd unlockpt:dd unsetenv:ds usleep:dd utime:dspd utimensat:ddspdd utimes:dspd valloc:pd
-		versionsort:dpdpd vfork:d vhangup:d wait:dp wait3:dpdpd wait4:ddpdpd waitid:dddpdd waitpid:ddpd watchdir:ddd wcpcpy:ppp
+		strsep:sps strsignal:sd strspn:dss strstr:sss strtod:fsp strtof:fsp strtok:sps strtok_r:spsp strtold:fsp strverscmp:dss
+		strxfrm:dpsd swab:vppd symlink:dss symlinkat:dsds sync:v syncfs:dd sysconf:dd sysinfo:dpd system:ds tcdrain:dd tcflow:ddd
+		tcflush:ddd tcgetattr:ddpd tcgetpgrp:dd tcgetsid:dd tcsendbreak:ddd tcsetattr:dddpd tcsetpgrp:ddd telldir:dp thrd_create:dpdp
+		thrd_current:d thrd_detach:dd thrd_equal:ddd thrd_join:ddp thrd_sleep:dpdpd thrd_yield:v time:dp timegm:dpd timer_create:ddpdp
+		timer_delete:dd timer_getoverrun:dd timer_gettime:ddpd timer_settime:dddpdpd timerfd_create:ddd timerfd_gettime:ddpd
+		timerfd_settime:dddpdpd times:dpd timespec_get:dpdd toascii:dd tolower:dd toupper:dd towctrans:ddd towctrans_l:dddd towlower:dd
+		towupper:dd truncate:dsd tss_create:dpd tss_delete:vd tss_get:pd tss_set:ddp ttyname:sd ttyname_r:ddpd tzset:v ualarm:ddd umask:oo
+		umount:ds umount2:dsd uname:dpd unlink:ds unlinkat:ddsd unlockpt:dd unsetenv:ds usleep:dd utime:dspd utimensat:ddspdd utimes:dspd
+		valloc:pd versionsort:dpdpd vfork:d vhangup:d wait:dp wait3:dpdpd wait4:ddpdpd waitid:dddpdd waitpid:ddpd watchdir:ddd wcpcpy:ppp
 		wcpncpy:pppd wcscasecmp:dpp wcscasecmp_l:dppd wcscat:ppp wcschr:ppd wcscmp:dpp wcscoll:dpp wcscpy:ppp wcscspn:dpp wcsdup:pp
 		wcsftime:dpdppd wcsftime_l:dpdppdd wcslen:dp wcsncasecmp:dppd wcsncasecmp_l:dppdd wcsncat:pppd wcsncmp:dppd wcsncpy:pppd
-		wcsnlen:dpd wcspbrk:ppp wcsrchr:ppd wcsspn:dpp wcsstr:ppp wcstok:pppp wcswcs:ppp wcswidth:dpd wcsxfrm:dppd wctrans:ds
-		wctrans_l:dsd wctype:ds wcwidth:dd wmemchr:ppdd wmemcmp:dppd wmemcpy:pppd wmemmove:pppd wmemset:ppdd write:ddpd writev:ddpdd
+		wcsnlen:dpd wcspbrk:ppp wcsrchr:ppd wcsspn:dpp wcsstr:ppp wcstod:fpp wcstof:fpp wcstok:pppp wcstold:fpp wcswcs:ppp wcswidth:dpd
+		wcsxfrm:dppd wctrans:ds wctrans_l:dsd wctype:ds wcwidth:dd wmemchr:ppdd wmemcmp:dppd wmemcpy:pppd wmemmove:pppd wmemset:ppdd
+		write:ddpd writev:ddpdd
 	`) {
 		name, format, _ := strings.Cut(word, ":")
 

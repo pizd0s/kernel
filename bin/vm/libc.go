@@ -790,6 +790,30 @@ func libcStrverscmp(a, b uint32) uint32 {
 	return proc().libcStrverscmp(a, b)
 }
 
+func libcStrtod(s, end uint32) float64 {
+	return proc().libcStrtod(s, end)
+}
+
+func libcStrtof(s, end uint32) float32 {
+	return proc().libcStrtof(s, end)
+}
+
+func libcStrtold(s, end uint32) float64 {
+	return proc().libcStrtod(s, end)
+}
+
+func libcWcstod(s, end uint32) float64 {
+	return proc().libcWcstod(s, end)
+}
+
+func libcWcstof(s, end uint32) float32 {
+	return proc().libcWcstof(s, end)
+}
+
+func libcWcstold(s, end uint32) float64 {
+	return proc().libcWcstod(s, end)
+}
+
 func libcAbs(n uint32) uint32 {
 	return proc().libcAbs(n)
 }

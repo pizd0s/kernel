@@ -12335,6 +12335,48 @@ func (p *Process) libcStrverscmp(a, b uint32) uint32 {
 	return uint32(int32(strverscmp(p.cstr(a), p.cstr(b))))
 }
 
+func (p *Process) floatEnd(s, end uint32, n int, size uint32, erange bool) {
+	if end != 0 {
+		p.put32(end, s+uint32(n)*size)
+	}
+
+	if erange {
+		p.setErrno(ERANGE)
+	}
+}
+
+func (p *Process) libcStrtod(s, end uint32) float64 {
+	v, n, erange := scanFloat(p.cstr(s), 64)
+
+	p.floatEnd(s, end, n, 1, erange)
+
+	return v
+}
+
+func (p *Process) libcStrtof(s, end uint32) float32 {
+	v, n, erange := scanFloat(p.cstr(s), 32)
+
+	p.floatEnd(s, end, n, 1, erange)
+
+	return float32(v)
+}
+
+func (p *Process) libcWcstod(s, end uint32) float64 {
+	v, n, erange := scanWideFloat(p.wstring(s), 64)
+
+	p.floatEnd(s, end, n, 4, erange)
+
+	return v
+}
+
+func (p *Process) libcWcstof(s, end uint32) float32 {
+	v, n, erange := scanWideFloat(p.wstring(s), 32)
+
+	p.floatEnd(s, end, n, 4, erange)
+
+	return float32(v)
+}
+
 func (p *Process) libcAbs(n uint32) uint32 {
 	if int32(n) < 0 {
 		return uint32(-int32(n))
