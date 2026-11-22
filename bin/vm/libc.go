@@ -4286,3 +4286,91 @@ func libcPosix_getdents(fd, buf, n, flags uint32) uint32 {
 func libcPosix_devctl(fd, cmd, data, n, info uint32) uint32 {
 	return proc().libcPosix_devctl(fd, cmd, data, n, info)
 }
+
+func libcSetservent(stay uint32) {
+	proc().libcSetservent(stay)
+}
+
+func libcEndservent() {
+	proc().libcEndservent()
+}
+
+func libcGetservent(size uint32) uint32 {
+	p := proc()
+
+	p.sized("getservent", size, sizeofServent)
+
+	return p.libcGetservent()
+}
+
+func libcSetprotoent(stay uint32) {
+	proc().libcSetprotoent(stay)
+}
+
+func libcEndprotoent() {
+	proc().libcEndprotoent()
+}
+
+func libcGetprotoent(size uint32) uint32 {
+	p := proc()
+
+	p.sized("getprotoent", size, sizeofProtoent)
+
+	return p.libcGetprotoent()
+}
+
+func libcSetnetent(stay uint32) {
+	proc().libcSetnetent(stay)
+}
+
+func libcEndnetent() {
+	proc().libcEndnetent()
+}
+
+func libcGetnetent(size uint32) uint32 {
+	p := proc()
+
+	p.sized("getnetent", size, sizeofNetent)
+
+	return p.libcGetnetent()
+}
+
+func libcGethostbyname_r(name, ret, retSize, buf, n, result, resultSize, herr uint32) uint32 {
+	p := proc()
+
+	p.sized("gethostbyname_r", retSize, sizeofHostent, resultSize, sizeofHostent)
+
+	return p.libcGethostbyname_r(name, ret, buf, n, result, herr)
+}
+
+func libcGethostbyname2_r(name, family, ret, retSize, buf, n, result, resultSize, herr uint32) uint32 {
+	p := proc()
+
+	p.sized("gethostbyname2_r", retSize, sizeofHostent, resultSize, sizeofHostent)
+
+	return p.libcGethostbyname2_r(name, family, ret, buf, n, result, herr)
+}
+
+func libcGethostbyaddr_r(addr, length, family, ret, retSize, buf, n, result, resultSize, herr uint32) uint32 {
+	p := proc()
+
+	p.sized("gethostbyaddr_r", retSize, sizeofHostent, resultSize, sizeofHostent)
+
+	return p.libcGethostbyaddr_r(addr, length, family, ret, buf, n, result, herr)
+}
+
+func libcGetservbyname_r(name, proto, ret, retSize, buf, n, result, resultSize uint32) uint32 {
+	p := proc()
+
+	p.sized("getservbyname_r", retSize, sizeofServent, resultSize, sizeofServent)
+
+	return p.libcGetservbyname_r(name, proto, ret, buf, n, result)
+}
+
+func libcGetservbyport_r(port, proto, ret, retSize, buf, n, result, resultSize uint32) uint32 {
+	p := proc()
+
+	p.sized("getservbyport_r", retSize, sizeofServent, resultSize, sizeofServent)
+
+	return p.libcGetservbyport_r(port, proto, ret, buf, n, result)
+}

@@ -8,9 +8,18 @@
 #include <assert.h>
 #include <net/if.h>
 #include <netdb.h>
+#include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+
+// The databases of the files in /etc: hosts, services, protocols and
+// networks, an entry a line with its aliases; their enumerations; the
+// lookups by name, alias, number and address; the reentrant forms, which
+// write an entry's strings and lists into the buffer given, aligned, and
+// return ERANGE where it is too small and a null result where there is no
+// entry; getaddrinfo and getnameinfo over them.
 
 static void fixture(const char* path, const char* text) {
     FILE* file = fopen(path, "w");
@@ -24,6 +33,7 @@ int main() {
     sethostent(1);
     hostent* host = gethostent();
     assert(host && strcmp(host->h_name, "alpha.test") == 0 && host->h_addrtype == AF_INET && host->h_length == 4);
+    assert(strcmp(host->h_aliases[0], "alias") == 0 && !host->h_aliases[1]);
     in_addr address{};
     memcpy(&address, host->h_addr, 4);
     assert(ntohl(address.s_addr) == 0xc000020a);
@@ -169,5 +179,60 @@ int main() {
     assert(getaddrinfo("alias", "stream-alias", &hints, &result) == 0);
     assert(result->ai_canonname && strcmp(result->ai_canonname, "alpha.test") == 0);
     freeaddrinfo(result);
+
+    fixture("/etc/protocols", "# isolated protocols\nbad\nip 0 IP\ntcp 6 TCP\nudp 17 UDP\n");
+    fixture("/etc/networks", "# isolated networks\nbad x\nloopback 127\nlocal-net 10.1 lan\n");
+    setservent(1);
+    service = getservent();
+    assert(service && strcmp(service->s_name, "pizdos-stream") == 0 && strcmp(service->s_proto, "tcp") == 0);
+    assert(strcmp(service->s_aliases[0], "stream-alias") == 0 && !service->s_aliases[1]);
+    service = getservent();
+    assert(service && strcmp(service->s_name, "pizdos-dgram") == 0 && ntohs(service->s_port) == 4102 && strcmp(service->s_proto, "udp") == 0);
+    assert(getservent() == nullptr);
+    endservent();
+    service = getservent();
+    assert(service && strcmp(service->s_name, "pizdos-stream") == 0);
+    setprotoent(0);
+    protocol = getprotoent();
+    assert(protocol && strcmp(protocol->p_name, "ip") == 0 && protocol->p_proto == 0 && strcmp(protocol->p_aliases[0], "IP") == 0);
+    assert(getprotoent() && getprotoent() && getprotoent() == nullptr);
+    endprotoent();
+    protocol = getprotobyname("TCP");
+    assert(protocol && strcmp(protocol->p_name, "tcp") == 0 && protocol->p_proto == 6);
+    setnetent(1);
+    netent* network = getnetent();
+    assert(network && strcmp(network->n_name, "loopback") == 0 && network->n_net == 127 && network->n_addrtype == AF_INET);
+    assert(!network->n_aliases[0]);
+    network = getnetent();
+    assert(network && strcmp(network->n_name, "local-net") == 0 && network->n_net == 0x0a01 && strcmp(network->n_aliases[0], "lan") == 0);
+    assert(getnetent() == nullptr);
+    endnetent();
+    network = getnetbyname("lan");
+    assert(network && strcmp(network->n_name, "local-net") == 0);
+    network = getnetbyaddr(127, AF_INET);
+    assert(network && strcmp(network->n_name, "loopback") == 0);
+    assert(getnetbyaddr(127, AF_INET6) == nullptr);
+
+    alignas(8) char buf[512];
+    hostent he{}, *hr = nullptr;
+    int herr = 0;
+    assert(gethostbyname_r("alias", &he, buf, sizeof buf, &hr, &herr) == 0 && hr == &he);
+    assert(strcmp(he.h_name, "alpha.test") == 0 && he.h_length == 4 && memcmp(he.h_addr, &address, 4) == 0 && !he.h_addr_list[1]);
+    assert(gethostbyname_r("alias", &he, buf, 8, &hr, &herr) == ERANGE && hr == nullptr);
+    assert(gethostbyname2_r("beta6", AF_INET6, &he, buf + 1, sizeof buf - 1, &hr, &herr) == 0 && hr == &he);
+    assert(he.h_length == 16 && memcmp(he.h_addr, &address6, 16) == 0 && uintptr_t(he.h_addr_list) % 4 == 0);
+    assert(gethostbyname2_r("alpha.test", AF_INET6, &he, buf, sizeof buf, &hr, &herr) == 0 && hr == nullptr && herr == HOST_NOT_FOUND);
+    assert(gethostbyname2_r("alpha.test", 999, &he, buf, sizeof buf, &hr, &herr) != 0 && hr == nullptr && herr == NO_RECOVERY);
+    assert(gethostbyaddr_r(&address, 4, AF_INET, &he, buf, sizeof buf, &hr, &herr) == 0 && hr == &he);
+    assert(strcmp(he.h_name, "alpha.test") == 0);
+    assert(gethostbyaddr_r(&address, 1, AF_INET, &he, buf, sizeof buf, &hr, &herr) != 0 && hr == nullptr && herr == NO_RECOVERY);
+    servent se{}, *sr = nullptr;
+    assert(getservbyname_r("dgram-alias", "udp", &se, buf + 3, sizeof buf - 3, &sr) == 0 && sr == &se);
+    assert(strcmp(se.s_name, "pizdos-dgram") == 0 && strcmp(se.s_aliases[0], "dgram-alias") == 0 && uintptr_t(se.s_aliases) % 4 == 0);
+    assert(ntohs(se.s_port) == 4102 && strcmp(se.s_proto, "udp") == 0);
+    assert(getservbyname_r("dgram-alias", "udp", &se, buf, 4, &sr) == ERANGE && sr == nullptr);
+    assert(getservbyname_r("missing-service", nullptr, &se, buf, sizeof buf, &sr) == 0 && sr == nullptr);
+    assert(getservbyport_r(htons(4101), "tcp", &se, buf, sizeof buf, &sr) == 0 && sr == &se && strcmp(se.s_name, "pizdos-stream") == 0);
+    assert(getservbyport_r(htons(1), "tcp", &se, buf, sizeof buf, &sr) == 0 && sr == nullptr);
     puts("network databases: ok");
 }

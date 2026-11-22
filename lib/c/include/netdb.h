@@ -99,6 +99,29 @@ struct protoent* getprotobyname(const char*);
 struct protoent* getprotobynumber(int);
 struct netent* getnetbyname(const char*);
 struct netent* getnetbyaddr(uint32_t, int);
+void setservent(int);
+void endservent(void);
+struct servent* getservent(void);
+void setprotoent(int);
+void endprotoent(void);
+struct protoent* getprotoent(void);
+void setnetent(int);
+void endnetent(void);
+struct netent* getnetent(void);
+
+/*
+ * The reentrant lookups the libcs share: the entry in ret, its strings
+ * and lists in buf; ERANGE where buflen is too small, *result null where
+ * there is no entry.
+ */
+int gethostbyname_r(const char* __restrict, struct hostent* __restrict, char* __restrict, size_t, struct hostent** __restrict, int* __restrict);
+int gethostbyname2_r(const char* __restrict, int, struct hostent* __restrict, char* __restrict, size_t, struct hostent** __restrict,
+                     int* __restrict);
+int gethostbyaddr_r(const void* __restrict, socklen_t, int, struct hostent* __restrict, char* __restrict, size_t,
+                    struct hostent** __restrict, int* __restrict);
+int getservbyname_r(const char* __restrict, const char* __restrict, struct servent* __restrict, char* __restrict, size_t,
+                    struct servent** __restrict);
+int getservbyport_r(int, const char* __restrict, struct servent* __restrict, char* __restrict, size_t, struct servent** __restrict);
 void herror(const char*);
 const char* hstrerror(int);
 
