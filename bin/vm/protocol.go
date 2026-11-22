@@ -7,31 +7,29 @@ import (
 )
 
 const (
-	openedFile             = 1
-	openedTerminal         = 2
-	openedDir              = 3
-	openedPath             = 4
-	sizeofOpened           = 40
-	sockmgrSocket          = "/dev/sockmgr/socket"
-	dnsQuery               = "/dev/dns/query"
-	dnsNameMax             = 253
-	rOk             uint32 = 128
-	rErr            uint32 = 129
-	rBackground     uint32 = 130
-	remoteHeader           = 24
-	remoteStat             = 64
-	remoteStatfs           = 52
-	whenAtimeNow           = 2
-	whenMtimeNow           = 4
-	whenAtimeKept          = 8
-	whenMtimeKept          = 16
-	rOpen           uint32 = 96
-	ioAt                   = 4
-	openControlling        = 4
-	cttyTake               = 1
-	cttyGone               = 2
-	cttyDropped            = 3
-	errUnserved     Errno  = 1 << 16
+	openedFile            = 1
+	openedTerminal        = 2
+	openedDir             = 3
+	openedPath            = 4
+	sizeofOpened          = 40
+	sockmgrSocket         = "/dev/sockmgr/socket"
+	dnsQuery              = "/dev/dns/query"
+	dnsNameMax            = 253
+	rOk            uint32 = 128
+	rErr           uint32 = 129
+	rBackground    uint32 = 130
+	remoteHeader          = 24
+	remoteStat            = 64
+	remoteStatfs          = 52
+	whenAtimeNow          = 2
+	whenMtimeNow          = 4
+	whenAtimeKept         = 8
+	whenMtimeKept         = 16
+	ioAt                  = 4
+	cttyTake              = 1
+	cttyGone              = 2
+	cttyDropped           = 3
+	errUnserved    Errno  = 1 << 16
 )
 
 const (

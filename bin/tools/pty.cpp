@@ -4,8 +4,9 @@
 // the service registers as the terminal comes, the opener's and 0600, as
 // Linux's devpts makes it, and lets go when the master goes. The open
 // files of both ends are a terminal's (openedTerminal), of the device of
-// their end, and tell their readiness; an OPEN on a slave's is another
-// open of the slave, /dev/tty's.
+// their end, and tell their readiness. It registers /dev/tty too: an open
+// of it is another open of the slave of the terminal that controls the
+// opener's session.
 // The service keeps all of a terminal: its settings, which the master's
 // calls get and set too, as Linux's do, its window's size, the session it
 // controls and its foreground group, by which it holds back the calls of
@@ -156,7 +157,9 @@ static Waiting waits[64];
 static int epoll = -1;
 static int registry = -1;
 static Device device;
+static Device controlling;
 static int ptyTag;
+static int ttyTag;
 
 size_t Output::room() const {
     return sizeof bytes - count;
@@ -1168,18 +1171,17 @@ static void putForeground(Open& o, const Request& r) {
 
 static void opened(Terminal& t, bool master, Request& r);
 
-// Another open of a slave, on an open file of it: the kernel's of its
-// controlling terminal, /dev/tty's open, which asks no path, and so no
-// owner's permission, as Linux's does not.
-static void reopened(const Open& o, Request& r) {
-    Terminal& t = *o.terminal;
-    if (o.master) {
-        return fail(r.reply(), EINVAL);
+// An open of /dev/tty: another open of the slave of the terminal that
+// controls the opener's session, the session its header says, with no
+// owner's permission asked, as Linux's asks none; ENXIO when no terminal
+// controls it, a hung up one none.
+static void openControlling(Request& r) {
+    for (Terminal* t : terminals) {
+        if (t && !t->hungUp && t->session != 0 && t->session == pid_t(r.h.sid)) {
+            return opened(*t, false, r);
+        }
     }
-    if (t.hungUp) {
-        return fail(r.reply(), ENXIO);
-    }
-    opened(t, false, r);
+    fail(r.reply(), ENXIO);
 }
 
 static void fileCall(Open& o, const Endpoint& e, Request& r) {
@@ -1248,8 +1250,6 @@ static void fileCall(Open& o, const Endpoint& e, Request& r) {
             return putForeground(o, r);
         case opSetCtty:
             return controls(o, r);
-        case opOpen:
-            return reopened(o, r);
         default:
             return fail(r.reply(), unserved(r.h.op));
     }
@@ -1337,6 +1337,8 @@ static void hangUp(Terminal& t) {
 static void handle(Endpoint& e, Request& r) {
     if (e.channel && e.of == &ptyTag) {
         openMaster(r);
+    } else if (e.channel && e.of == &ttyTag) {
+        openControlling(r);
     } else if (e.channel) {
         Terminal& t = *static_cast<Terminal*>(e.of);
         if (t.hungUp) {
@@ -1445,6 +1447,8 @@ int ptyMain(int argc, char** argv) {
     signal(SIGPIPE, SIG_IGN);
     device = enroll("pty", "ptmx", S_IFCHR | 0666);
     watch(epoll, {device.end, true, false, false, &ptyTag});
+    controlling = enroll("pty", "tty", S_IFCHR | 0666);
+    watch(epoll, {controlling.end, true, false, false, &ttyTag});
     if (ready >= 0) {
         close(ready);
     }

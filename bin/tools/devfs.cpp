@@ -1,8 +1,7 @@
 // devfs: /dev, a file system of the VFS's (lib/protocol/protocol.h), which
 // rootfs starts and mounts on /dev with the channel it gives it: rootfs
-// asks it by node, its root node 1. It holds tty, whose open is of the
-// opener's controlling terminal, which the kernel opens instead; init/ctl,
-// where the services of the system register their devices (REGISTER,
+// asks it by node, its root node 1. It holds init/ctl, where the
+// services of the system register their devices (REGISTER,
 // lib/protocol/service.h); those devices, each a service's: an open of
 // one goes on to its service, where it is answered with it, and the
 // service serves the open file from then on; and the sockets the file
@@ -43,13 +42,12 @@
 namespace {
     enum class Kind {
         Dir,
-        Controlling, // tty: the opener's controlling terminal
         Registry,
         Device, // a service's: a character or block device
         Socket, // a socket's name: it holds the socket's listener, which CONNECT gives
     };
 
-    // A node of /dev: its root or a directory of devices, tty, init/ctl, or a
+    // A node of /dev: its root or a directory of devices, init/ctl, or a
     // service's device; pos its place among its directory's entries.
     struct Node {
         uint64_t ino;
@@ -483,11 +481,10 @@ static bool nameAt(const Request& r, size_t at, const char*& name, size_t& lengt
     return length > 0;
 }
 
-// An open of a node: tty's the opener's controlling terminal, which the
-// kernel opens; init's a plain socket, an end of a pair of ours, which
-// the opener speaks the protocol on itself, REGISTER; a device's open
-// handed on to its service with where it is answered, which the service
-// answers on, ENXIO when the service is gone.
+// An open of a node: init/ctl's a plain socket, an end of a pair of
+// ours, which the opener speaks the protocol on itself, REGISTER; a
+// device's open handed on to its service with where it is answered,
+// which the service answers on, ENXIO when the service is gone.
 static void openNode(Node& n, Request& r) {
     const uint32_t access = r.h.arg & O_ACCMODE;
     const bool reads = access != O_WRONLY;
@@ -502,8 +499,6 @@ static void openNode(Node& n, Request& r) {
         return fail(r.reply(), EACCES);
     }
     switch (n.kind) {
-        case Kind::Controlling:
-            return answer(r.reply(), opOk, openControlling);
         case Kind::Registry: {
             int pair[2];
             if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
@@ -843,7 +838,6 @@ int devfsMain(int argc, char** argv) {
     root.gid = uint32_t(getegid());
     root.atime = root.mtime = root.ctime = now();
     root.parent = &root;
-    add(root, "tty", 3, Kind::Controlling, S_IFCHR | 0666, 0, 0);
     Node* init = add(root, "init", 4, Kind::Dir, S_IFDIR | 0755, uint32_t(geteuid()), uint32_t(getegid()));
     add(*init, "ctl", 3, Kind::Registry, S_IFCHR | 0600, uint32_t(geteuid()), uint32_t(getegid()));
     epoll = epoll_create1(EPOLL_CLOEXEC);

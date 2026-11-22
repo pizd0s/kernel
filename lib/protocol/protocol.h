@@ -257,8 +257,6 @@
 //                                         cttyDropped, the leader gave it up
 //                                         (TIOCNOTTY), SIGHUP and SIGCONT. It
 //                                         controls no session then
-//     OPEN      arg flags                 on a slave's: another open file of
-//                                         the slave, as its device's OPEN
 //
 //   A socket's, on a socket's open file, as a service of sockets serves
 //   it; a sockaddr is lib/c's struct sockaddr, len bytes of it, and a
@@ -315,9 +313,8 @@
 //   A device's service's, on the channel devfs has of it, and on
 //   /dev/init/ctl:
 //     OPEN      arg flags   mode u32      OK, fds[0] the open file
-//     OPEN of /dev/tty, devfs's, is the opener's controlling terminal: its
-//     OK has openControlling, and the kernel opens that terminal instead,
-//     with an OPEN on the open file it keeps of it, a slave's.
+//     OPEN of /dev/tty, pty's, is another open of the slave of the
+//     terminal that controls the session the header says, ENXIO when none.
 //   /dev/init/ctl's open is a plain socket, an end of a pair devfs keeps the
 //   other end of, which its opener speaks the protocol on itself: a
 //   request on it is answered on it.
@@ -485,9 +482,6 @@ enum : uint32_t {
 constexpr size_t maxFds = 4;
 constexpr uint32_t noId = 0xffffffff; // a uid or gid CHOWN keeps
 constexpr uint32_t fsNocache = 1;     // ROOT's flags: the file system changes by itself
-// An OPEN's OK's arg: the open is of the opener's controlling terminal,
-// which the kernel opens.
-constexpr uint32_t openControlling = 4;
 // SETCTTY's how.
 constexpr uint32_t cttyTake = 1;
 constexpr uint32_t cttyGone = 2;

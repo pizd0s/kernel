@@ -8149,26 +8149,6 @@ func (p *Process) isCtty(t Object) bool {
 	return c != nil && p.sameTerminal(c, t)
 }
 
-func (p *Process) openControlling(flags int) (Object, error) {
-	p.k.mu.Lock()
-
-	c := p.k.cttys[p.sid.Load()]
-
-	if c != nil {
-		c.ref()
-	}
-
-	p.k.mu.Unlock()
-
-	if c == nil {
-		return nil, ENXIO
-	}
-
-	defer c.unref()
-
-	return p.ttyReopen(c, flags)
-}
-
 func (p *Process) acquire(t Object) {
 	p.k.mu.Lock()
 
@@ -13238,8 +13218,6 @@ func (p *Process) dirOpen(d Object, path string, flags int, mode uint32) (Object
 	}
 
 	switch {
-	case r.controlling:
-		return p.openControlling(flags)
 	case r.fifo:
 		return p.openFifo(&r.st, flags)
 	case r.terminal && flags&O_NOCTTY == 0:
@@ -13447,13 +13425,6 @@ func (p *Process) ttySetForeground(t Object, pgrp uint32) error {
 
 func (p *Process) ttyControl(t Object, how uint32) error {
 	return p.request(t, &TtyControl{how: how})
-}
-
-func (p *Process) ttyReopen(t Object, flags int) (Object, error) {
-	r := TtyReopen{flags: flags}
-	err := p.request(t, &r)
-
-	return r.file, err
 }
 
 func (p *Process) ttyName(t Object, peer bool) (string, error) {
