@@ -58,6 +58,7 @@ typedef long long off_t;
 typedef long long off64_t;
 typedef long long loff_t;
 typedef int pid_t;
+typedef int pthread_t;
 typedef unsigned uid_t;
 typedef unsigned gid_t;
 typedef unsigned id_t;

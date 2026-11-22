@@ -60,6 +60,7 @@ int nanosleep(const struct timespec*, struct timespec*);
 int clock_gettime(clockid_t, struct timespec*);
 int clock_settime(clockid_t, const struct timespec*);
 int clock_getres(clockid_t, struct timespec*);
+int clock_getcpuclockid(pid_t, clockid_t*);
 int clock_nanosleep(clockid_t, int, const struct timespec*, struct timespec*);
 int stime(const time_t*);
 

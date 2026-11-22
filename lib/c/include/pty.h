@@ -13,9 +13,14 @@ pid_t forkpty(int*, char*, const struct termios*, const struct winsize*) __RETUR
  * later return lands in. There is no definition to point to.
  */
 pid_t __kernel_forkpty(int*, char*, const struct termios*, size_t, const struct winsize*, size_t) __RETURNS_TWICE __KERNEL(forkpty);
+void __fork_prepare(void);
+void __fork_done(pid_t);
 
 __INLINE pid_t forkpty(int* __a, char* __b, const struct termios* __c, const struct winsize* __d) {
-    return __kernel_forkpty(__a, __b, __c, sizeof(struct termios), __d, sizeof(struct winsize));
+    __fork_prepare();
+    pid_t __pid = __kernel_forkpty(__a, __b, __c, sizeof(struct termios), __d, sizeof(struct winsize));
+    __fork_done(__pid);
+    return __pid;
 }
 
 __END_DECLS

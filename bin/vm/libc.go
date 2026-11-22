@@ -2635,6 +2635,994 @@ func fcntlSize(cmd uint32) uint32 {
 	return 0
 }
 
+func libcPthread_create(thread, attr, attrSize, fn, d uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_create", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_create(thread, attr, fn, d)
+}
+
+func libcPthread_join(thread, out uint32) uint32 {
+	return proc().libcPthread_join(thread, out)
+}
+
+func libcPthread_detach(thread uint32) uint32 {
+	return proc().libcPthread_detach(thread)
+}
+
+func libcPthread_self() uint32 {
+	return proc().libcPthread_self()
+}
+
+func libcPthread_equal(a, b uint32) uint32 {
+	return proc().libcPthread_equal(a, b)
+}
+
+func libcPthread_cancel(thread uint32) uint32 {
+	return proc().libcPthread_cancel(thread)
+}
+
+func libcPthread_setcancelstate(value, out uint32) uint32 {
+	return proc().libcPthread_setcancelstate(value, out)
+}
+
+func libcPthread_setcanceltype(value, out uint32) uint32 {
+	return proc().libcPthread_setcanceltype(value, out)
+}
+
+func libcPthread_getschedparam(thread, out, param, paramSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_getschedparam", paramSize, sizeofSchedParam)
+
+	return p.libcPthread_getschedparam(thread, out, param)
+}
+
+func libcPthread_setschedparam(thread, value, param, paramSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_setschedparam", paramSize, sizeofSchedParam)
+
+	return p.libcPthread_setschedparam(thread, value, param)
+}
+
+func libcPthread_setschedprio(thread, value uint32) uint32 {
+	return proc().libcPthread_setschedprio(thread, value)
+}
+
+func libcPthread_getconcurrency() uint32 {
+	return proc().libcPthread_getconcurrency()
+}
+
+func libcPthread_setconcurrency(value uint32) uint32 {
+	return proc().libcPthread_setconcurrency(value)
+}
+
+func libcPthread_getcpuclockid(thread, out uint32) uint32 {
+	return proc().libcPthread_getcpuclockid(thread, out)
+}
+
+func libcPthread_attr_init(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_init", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_init(attr)
+}
+
+func libcPthread_attr_destroy(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_destroy", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_destroy(attr)
+}
+
+func libcPthread_attr_setdetachstate(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_setdetachstate", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_setdetachstate(attr, value)
+}
+
+func libcPthread_attr_getdetachstate(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_getdetachstate", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_getdetachstate(attr, out)
+}
+
+func libcPthread_attr_setstacksize(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_setstacksize", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_setstacksize(attr, value)
+}
+
+func libcPthread_attr_getstacksize(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_getstacksize", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_getstacksize(attr, out)
+}
+
+func libcPthread_attr_setguardsize(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_setguardsize", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_setguardsize(attr, value)
+}
+
+func libcPthread_attr_getguardsize(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_getguardsize", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_getguardsize(attr, out)
+}
+
+func libcPthread_attr_setscope(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_setscope", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_setscope(attr, value)
+}
+
+func libcPthread_attr_getscope(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_getscope", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_getscope(attr, out)
+}
+
+func libcPthread_attr_setschedpolicy(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_setschedpolicy", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_setschedpolicy(attr, value)
+}
+
+func libcPthread_attr_getschedpolicy(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_getschedpolicy", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_getschedpolicy(attr, out)
+}
+
+func libcPthread_attr_setinheritsched(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_setinheritsched", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_setinheritsched(attr, value)
+}
+
+func libcPthread_attr_getinheritsched(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_getinheritsched", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_getinheritsched(attr, out)
+}
+
+func libcPthread_attr_setstack(attr, attrSize, b, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_setstack", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_setstack(attr, b, value)
+}
+
+func libcPthread_attr_getstack(attr, attrSize, b, c uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_getstack", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_attr_getstack(attr, b, c)
+}
+
+func libcPthread_attr_setschedparam(attr, attrSize, param, paramSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_setschedparam", attrSize, sizeofPthreadAttr, paramSize, sizeofSchedParam)
+
+	return p.libcPthread_attr_setschedparam(attr, param)
+}
+
+func libcPthread_attr_getschedparam(attr, attrSize, param, paramSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_attr_getschedparam", attrSize, sizeofPthreadAttr, paramSize, sizeofSchedParam)
+
+	return p.libcPthread_attr_getschedparam(attr, param)
+}
+
+func libcPthread_key_create(key, fn uint32) uint32 {
+	return proc().libcPthread_key_create(key, fn)
+}
+
+func libcPthread_key_delete(key uint32) uint32 {
+	return proc().libcPthread_key_delete(key)
+}
+
+func libcPthread_getspecific(key uint32) uint32 {
+	return proc().libcPthread_getspecific(key)
+}
+
+func libcPthread_setspecific(key, b uint32) uint32 {
+	return proc().libcPthread_setspecific(key, b)
+}
+
+func libcPthread_mutexattr_init(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutexattr_init", attrSize, sizeofPthreadMutexattr)
+
+	return p.libcPthread_mutexattr_init(attr)
+}
+
+func libcPthread_mutexattr_destroy(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutexattr_destroy", attrSize, sizeofPthreadMutexattr)
+
+	return p.libcPthread_mutexattr_destroy(attr)
+}
+
+func libcPthread_mutexattr_settype(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutexattr_settype", attrSize, sizeofPthreadMutexattr)
+
+	return p.libcPthread_mutexattr_settype(attr, value)
+}
+
+func libcPthread_mutexattr_gettype(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutexattr_gettype", attrSize, sizeofPthreadMutexattr)
+
+	return p.libcPthread_mutexattr_gettype(attr, out)
+}
+
+func libcPthread_mutexattr_setprotocol(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutexattr_setprotocol", attrSize, sizeofPthreadMutexattr)
+
+	return p.libcPthread_mutexattr_setprotocol(attr, value)
+}
+
+func libcPthread_mutexattr_getprotocol(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutexattr_getprotocol", attrSize, sizeofPthreadMutexattr)
+
+	return p.libcPthread_mutexattr_getprotocol(attr, out)
+}
+
+func libcPthread_mutexattr_setrobust(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutexattr_setrobust", attrSize, sizeofPthreadMutexattr)
+
+	return p.libcPthread_mutexattr_setrobust(attr, value)
+}
+
+func libcPthread_mutexattr_getrobust(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutexattr_getrobust", attrSize, sizeofPthreadMutexattr)
+
+	return p.libcPthread_mutexattr_getrobust(attr, out)
+}
+
+func libcPthread_mutexattr_setpshared(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutexattr_setpshared", attrSize, sizeofPthreadMutexattr)
+
+	return p.libcPthread_mutexattr_setpshared(attr, value)
+}
+
+func libcPthread_mutexattr_getpshared(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutexattr_getpshared", attrSize, sizeofPthreadMutexattr)
+
+	return p.libcPthread_mutexattr_getpshared(attr, out)
+}
+
+func libcPthread_mutexattr_setprioceiling(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutexattr_setprioceiling", attrSize, sizeofPthreadMutexattr)
+
+	return p.libcPthread_mutexattr_setprioceiling(attr, value)
+}
+
+func libcPthread_mutexattr_getprioceiling(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutexattr_getprioceiling", attrSize, sizeofPthreadMutexattr)
+
+	return p.libcPthread_mutexattr_getprioceiling(attr, out)
+}
+
+func libcPthread_mutex_init(mutex, mutexSize, attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutex_init", mutexSize, sizeofPthreadMutex, attrSize, sizeofPthreadMutexattr)
+
+	return p.libcPthread_mutex_init(mutex, attr)
+}
+
+func libcPthread_mutex_destroy(mutex, mutexSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutex_destroy", mutexSize, sizeofPthreadMutex)
+
+	return p.libcPthread_mutex_destroy(mutex)
+}
+
+func libcPthread_mutex_lock(mutex, mutexSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutex_lock", mutexSize, sizeofPthreadMutex)
+
+	return p.libcPthread_mutex_lock(mutex)
+}
+
+func libcPthread_mutex_trylock(mutex, mutexSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutex_trylock", mutexSize, sizeofPthreadMutex)
+
+	return p.libcPthread_mutex_trylock(mutex)
+}
+
+func libcPthread_mutex_unlock(mutex, mutexSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutex_unlock", mutexSize, sizeofPthreadMutex)
+
+	return p.libcPthread_mutex_unlock(mutex)
+}
+
+func libcPthread_mutex_consistent(mutex, mutexSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutex_consistent", mutexSize, sizeofPthreadMutex)
+
+	return p.libcPthread_mutex_consistent(mutex)
+}
+
+func libcPthread_mutex_timedlock(mutex, mutexSize, at, atSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutex_timedlock", mutexSize, sizeofPthreadMutex, atSize, sizeofTimespec)
+
+	return p.libcPthread_mutex_timedlock(mutex, at)
+}
+
+func libcPthread_mutex_getprioceiling(mutex, mutexSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutex_getprioceiling", mutexSize, sizeofPthreadMutex)
+
+	return p.libcPthread_mutex_getprioceiling(mutex, out)
+}
+
+func libcPthread_mutex_setprioceiling(mutex, mutexSize, value, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_mutex_setprioceiling", mutexSize, sizeofPthreadMutex)
+
+	return p.libcPthread_mutex_setprioceiling(mutex, value, out)
+}
+
+func libcPthread_condattr_init(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_condattr_init", attrSize, sizeofPthreadCondattr)
+
+	return p.libcPthread_condattr_init(attr)
+}
+
+func libcPthread_condattr_destroy(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_condattr_destroy", attrSize, sizeofPthreadCondattr)
+
+	return p.libcPthread_condattr_destroy(attr)
+}
+
+func libcPthread_condattr_setclock(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_condattr_setclock", attrSize, sizeofPthreadCondattr)
+
+	return p.libcPthread_condattr_setclock(attr, value)
+}
+
+func libcPthread_condattr_getclock(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_condattr_getclock", attrSize, sizeofPthreadCondattr)
+
+	return p.libcPthread_condattr_getclock(attr, out)
+}
+
+func libcPthread_condattr_setpshared(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_condattr_setpshared", attrSize, sizeofPthreadCondattr)
+
+	return p.libcPthread_condattr_setpshared(attr, value)
+}
+
+func libcPthread_condattr_getpshared(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_condattr_getpshared", attrSize, sizeofPthreadCondattr)
+
+	return p.libcPthread_condattr_getpshared(attr, out)
+}
+
+func libcPthread_cond_init(cond, condSize, attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_cond_init", condSize, sizeofPthreadCond, attrSize, sizeofPthreadCondattr)
+
+	return p.libcPthread_cond_init(cond, attr)
+}
+
+func libcPthread_cond_destroy(cond, condSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_cond_destroy", condSize, sizeofPthreadCond)
+
+	return p.libcPthread_cond_destroy(cond)
+}
+
+func libcPthread_cond_signal(cond, condSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_cond_signal", condSize, sizeofPthreadCond)
+
+	return p.libcPthread_cond_signal(cond)
+}
+
+func libcPthread_cond_broadcast(cond, condSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_cond_broadcast", condSize, sizeofPthreadCond)
+
+	return p.libcPthread_cond_broadcast(cond)
+}
+
+func libcPthread_cond_wait(cond, condSize, mutex, mutexSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_cond_wait", condSize, sizeofPthreadCond, mutexSize, sizeofPthreadMutex)
+
+	return p.libcPthread_cond_wait(cond, mutex)
+}
+
+func libcPthread_cond_timedwait(cond, condSize, mutex, mutexSize, at, atSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_cond_timedwait", condSize, sizeofPthreadCond, mutexSize, sizeofPthreadMutex, atSize, sizeofTimespec)
+
+	return p.libcPthread_cond_timedwait(cond, mutex, at)
+}
+
+func libcPthread_rwlockattr_init(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlockattr_init", attrSize, sizeofPthreadRwlockattr)
+
+	return p.libcPthread_rwlockattr_init(attr)
+}
+
+func libcPthread_rwlockattr_destroy(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlockattr_destroy", attrSize, sizeofPthreadRwlockattr)
+
+	return p.libcPthread_rwlockattr_destroy(attr)
+}
+
+func libcPthread_rwlockattr_setpshared(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlockattr_setpshared", attrSize, sizeofPthreadRwlockattr)
+
+	return p.libcPthread_rwlockattr_setpshared(attr, value)
+}
+
+func libcPthread_rwlockattr_getpshared(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlockattr_getpshared", attrSize, sizeofPthreadRwlockattr)
+
+	return p.libcPthread_rwlockattr_getpshared(attr, out)
+}
+
+func libcPthread_rwlock_init(lock, lockSize, attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlock_init", lockSize, sizeofPthreadRwlock, attrSize, sizeofPthreadRwlockattr)
+
+	return p.libcPthread_rwlock_init(lock, attr)
+}
+
+func libcPthread_rwlock_destroy(lock, lockSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlock_destroy", lockSize, sizeofPthreadRwlock)
+
+	return p.libcPthread_rwlock_destroy(lock)
+}
+
+func libcPthread_rwlock_rdlock(lock, lockSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlock_rdlock", lockSize, sizeofPthreadRwlock)
+
+	return p.libcPthread_rwlock_rdlock(lock)
+}
+
+func libcPthread_rwlock_tryrdlock(lock, lockSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlock_tryrdlock", lockSize, sizeofPthreadRwlock)
+
+	return p.libcPthread_rwlock_tryrdlock(lock)
+}
+
+func libcPthread_rwlock_wrlock(lock, lockSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlock_wrlock", lockSize, sizeofPthreadRwlock)
+
+	return p.libcPthread_rwlock_wrlock(lock)
+}
+
+func libcPthread_rwlock_trywrlock(lock, lockSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlock_trywrlock", lockSize, sizeofPthreadRwlock)
+
+	return p.libcPthread_rwlock_trywrlock(lock)
+}
+
+func libcPthread_rwlock_unlock(lock, lockSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlock_unlock", lockSize, sizeofPthreadRwlock)
+
+	return p.libcPthread_rwlock_unlock(lock)
+}
+
+func libcPthread_rwlock_timedrdlock(lock, lockSize, at, atSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlock_timedrdlock", lockSize, sizeofPthreadRwlock, atSize, sizeofTimespec)
+
+	return p.libcPthread_rwlock_timedrdlock(lock, at)
+}
+
+func libcPthread_rwlock_timedwrlock(lock, lockSize, at, atSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_rwlock_timedwrlock", lockSize, sizeofPthreadRwlock, atSize, sizeofTimespec)
+
+	return p.libcPthread_rwlock_timedwrlock(lock, at)
+}
+
+func libcPthread_barrierattr_init(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_barrierattr_init", attrSize, sizeofPthreadBarrierattr)
+
+	return p.libcPthread_barrierattr_init(attr)
+}
+
+func libcPthread_barrierattr_destroy(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_barrierattr_destroy", attrSize, sizeofPthreadBarrierattr)
+
+	return p.libcPthread_barrierattr_destroy(attr)
+}
+
+func libcPthread_barrierattr_setpshared(attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_barrierattr_setpshared", attrSize, sizeofPthreadBarrierattr)
+
+	return p.libcPthread_barrierattr_setpshared(attr, value)
+}
+
+func libcPthread_barrierattr_getpshared(attr, attrSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_barrierattr_getpshared", attrSize, sizeofPthreadBarrierattr)
+
+	return p.libcPthread_barrierattr_getpshared(attr, out)
+}
+
+func libcPthread_barrier_init(barrier, barrierSize, attr, attrSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_barrier_init", barrierSize, sizeofPthreadBarrier, attrSize, sizeofPthreadBarrierattr)
+
+	return p.libcPthread_barrier_init(barrier, attr, value)
+}
+
+func libcPthread_barrier_destroy(barrier, barrierSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_barrier_destroy", barrierSize, sizeofPthreadBarrier)
+
+	return p.libcPthread_barrier_destroy(barrier)
+}
+
+func libcPthread_barrier_wait(barrier, barrierSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_barrier_wait", barrierSize, sizeofPthreadBarrier)
+
+	return p.libcPthread_barrier_wait(barrier)
+}
+
+func libcPthread_spin_init(lock, value uint32) uint32 {
+	return proc().libcPthread_spin_init(lock, value)
+}
+
+func libcPthread_spin_destroy(lock uint32) uint32 {
+	return proc().libcPthread_spin_destroy(lock)
+}
+
+func libcPthread_spin_lock(lock uint32) uint32 {
+	return proc().libcPthread_spin_lock(lock)
+}
+
+func libcPthread_spin_trylock(lock uint32) uint32 {
+	return proc().libcPthread_spin_trylock(lock)
+}
+
+func libcPthread_spin_unlock(lock uint32) uint32 {
+	return proc().libcPthread_spin_unlock(lock)
+}
+
+func libcPthread_getaffinity_np(thread, value, set uint32) uint32 {
+	return proc().libcPthread_getaffinity_np(thread, value, set)
+}
+
+func libcPthread_setaffinity_np(thread, value, set uint32) uint32 {
+	return proc().libcPthread_setaffinity_np(thread, value, set)
+}
+
+func libcPthread_getattr_np(thread, attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_getattr_np", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_getattr_np(thread, attr)
+}
+
+func libcPthread_getattr_default_np(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_getattr_default_np", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_getattr_default_np(attr)
+}
+
+func libcPthread_setattr_default_np(attr, attrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_setattr_default_np", attrSize, sizeofPthreadAttr)
+
+	return p.libcPthread_setattr_default_np(attr)
+}
+
+func libcPthread_getname_np(thread, b, value uint32) uint32 {
+	return proc().libcPthread_getname_np(thread, b, value)
+}
+
+func libcPthread_setname_np(thread, b uint32) uint32 {
+	return proc().libcPthread_setname_np(thread, b)
+}
+
+func libcPthread_tryjoin_np(thread, out uint32) uint32 {
+	return proc().libcPthread_tryjoin_np(thread, out)
+}
+
+func libcPthread_timedjoin_np(thread, out, at, atSize uint32) uint32 {
+	p := proc()
+
+	p.sized("pthread_timedjoin_np", atSize, sizeofTimespec)
+
+	return p.libcPthread_timedjoin_np(thread, out, at)
+}
+
+func libc__pthread_once_begin(once uint32) uint32 {
+	return proc().libc__pthread_once_begin(once)
+}
+
+func libc__pthread_once_end(once uint32) {
+	proc().libc__pthread_once_end(once)
+}
+
+func libc__pthread_cancelled(value uint32) uint32 {
+	return proc().libc__pthread_cancelled(value)
+}
+
+func libc__pthread_key_take(key, fn uint32) uint32 {
+	return proc().libc__pthread_key_take(key, fn)
+}
+
+func libc__sched_cpucount(value, set uint32) uint32 {
+	return proc().libc__sched_cpucount(value, set)
+}
+
+func libcSched_getaffinity(a, b, set uint32) uint32 {
+	return proc().libcSched_getaffinity(a, b, set)
+}
+
+func libcSched_setaffinity(a, b, set uint32) uint32 {
+	return proc().libcSched_setaffinity(a, b, set)
+}
+
+func libcSched_getcpu() uint32 {
+	return proc().libcSched_getcpu()
+}
+
+func libcSem_init(sem, semSize, b, c uint32) uint32 {
+	p := proc()
+
+	p.sized("sem_init", semSize, sizeofSem)
+
+	return p.libcSem_init(sem, b, c)
+}
+
+func libcSem_destroy(sem, semSize uint32) uint32 {
+	p := proc()
+
+	p.sized("sem_destroy", semSize, sizeofSem)
+
+	return p.libcSem_destroy(sem)
+}
+
+func libcSem_wait(sem, semSize uint32) uint32 {
+	p := proc()
+
+	p.sized("sem_wait", semSize, sizeofSem)
+
+	return p.libcSem_wait(sem)
+}
+
+func libcSem_trywait(sem, semSize uint32) uint32 {
+	p := proc()
+
+	p.sized("sem_trywait", semSize, sizeofSem)
+
+	return p.libcSem_trywait(sem)
+}
+
+func libcSem_post(sem, semSize uint32) uint32 {
+	p := proc()
+
+	p.sized("sem_post", semSize, sizeofSem)
+
+	return p.libcSem_post(sem)
+}
+
+func libcSem_close(sem, semSize uint32) uint32 {
+	p := proc()
+
+	p.sized("sem_close", semSize, sizeofSem)
+
+	return p.libcSem_close(sem)
+}
+
+func libcSem_timedwait(sem, semSize, at, atSize uint32) uint32 {
+	p := proc()
+
+	p.sized("sem_timedwait", semSize, sizeofSem, atSize, sizeofTimespec)
+
+	return p.libcSem_timedwait(sem, at)
+}
+
+func libcSem_getvalue(sem, semSize, out uint32) uint32 {
+	p := proc()
+
+	p.sized("sem_getvalue", semSize, sizeofSem)
+
+	return p.libcSem_getvalue(sem, out)
+}
+
+func libcSem_unlink(a uint32) uint32 {
+	return proc().libcSem_unlink(a)
+}
+
+func libcPthread_kill(thread, value uint32) uint32 {
+	return proc().libcPthread_kill(thread, value)
+}
+
+func libcThrd_create(thread, fn, c uint32) uint32 {
+	return proc().libcThrd_create(thread, fn, c)
+}
+
+func libcThrd_join(thread, out uint32) uint32 {
+	return proc().libcThrd_join(thread, out)
+}
+
+func libcThrd_detach(thread uint32) uint32 {
+	return proc().libcThrd_detach(thread)
+}
+
+func libcThrd_current() uint32 {
+	return proc().libcThrd_current()
+}
+
+func libcThrd_equal(a, b uint32) uint32 {
+	return proc().libcThrd_equal(a, b)
+}
+
+func libcThrd_sleep(a, aSize, b, bSize uint32) uint32 {
+	p := proc()
+
+	p.sized("thrd_sleep", aSize, sizeofTimespec, bSize, sizeofTimespec)
+
+	return p.libcThrd_sleep(a, b)
+}
+
+func libcThrd_yield() {
+	proc().libcThrd_yield()
+}
+
+func libcMtx_init(mutex, mutexSize, value uint32) uint32 {
+	p := proc()
+
+	p.sized("mtx_init", mutexSize, sizeofMtx)
+
+	return p.libcMtx_init(mutex, value)
+}
+
+func libcMtx_destroy(mutex, mutexSize uint32) {
+	p := proc()
+
+	p.sized("mtx_destroy", mutexSize, sizeofMtx)
+
+	p.libcMtx_destroy(mutex)
+}
+
+func libcMtx_lock(mutex, mutexSize uint32) uint32 {
+	p := proc()
+
+	p.sized("mtx_lock", mutexSize, sizeofMtx)
+
+	return p.libcMtx_lock(mutex)
+}
+
+func libcMtx_trylock(mutex, mutexSize uint32) uint32 {
+	p := proc()
+
+	p.sized("mtx_trylock", mutexSize, sizeofMtx)
+
+	return p.libcMtx_trylock(mutex)
+}
+
+func libcMtx_unlock(mutex, mutexSize uint32) uint32 {
+	p := proc()
+
+	p.sized("mtx_unlock", mutexSize, sizeofMtx)
+
+	return p.libcMtx_unlock(mutex)
+}
+
+func libcMtx_timedlock(mutex, mutexSize, at, atSize uint32) uint32 {
+	p := proc()
+
+	p.sized("mtx_timedlock", mutexSize, sizeofMtx, atSize, sizeofTimespec)
+
+	return p.libcMtx_timedlock(mutex, at)
+}
+
+func libcCnd_init(cond, condSize uint32) uint32 {
+	p := proc()
+
+	p.sized("cnd_init", condSize, sizeofCnd)
+
+	return p.libcCnd_init(cond)
+}
+
+func libcCnd_destroy(cond, condSize uint32) {
+	p := proc()
+
+	p.sized("cnd_destroy", condSize, sizeofCnd)
+
+	p.libcCnd_destroy(cond)
+}
+
+func libcCnd_broadcast(cond, condSize uint32) uint32 {
+	p := proc()
+
+	p.sized("cnd_broadcast", condSize, sizeofCnd)
+
+	return p.libcCnd_broadcast(cond)
+}
+
+func libcCnd_signal(cond, condSize uint32) uint32 {
+	p := proc()
+
+	p.sized("cnd_signal", condSize, sizeofCnd)
+
+	return p.libcCnd_signal(cond)
+}
+
+func libcCnd_timedwait(cond, condSize, mutex, mutexSize, at, atSize uint32) uint32 {
+	p := proc()
+
+	p.sized("cnd_timedwait", condSize, sizeofCnd, mutexSize, sizeofMtx, atSize, sizeofTimespec)
+
+	return p.libcCnd_timedwait(cond, mutex, at)
+}
+
+func libcCnd_wait(cond, condSize, mutex, mutexSize uint32) uint32 {
+	p := proc()
+
+	p.sized("cnd_wait", condSize, sizeofCnd, mutexSize, sizeofMtx)
+
+	return p.libcCnd_wait(cond, mutex)
+}
+
+func libcTss_create(key, fn uint32) uint32 {
+	return proc().libcTss_create(key, fn)
+}
+
+func libcTss_delete(key uint32) {
+	proc().libcTss_delete(key)
+}
+
+func libcTss_set(key, b uint32) uint32 {
+	return proc().libcTss_set(key, b)
+}
+
+func libcTss_get(key uint32) uint32 {
+	return proc().libcTss_get(key)
+}
+
+func libcGettid() uint32 {
+	return proc().libcGettid()
+}
+
+func libcClock_getcpuclockid(pid, out uint32) uint32 {
+	return proc().libcClock_getcpuclockid(pid, out)
+}
+
+func libcSem_open(name, flags, va, semSize uint32) uint32 {
+	p := proc()
+
+	p.sized("sem_open", semSize, sizeofSem)
+
+	return p.libcSem_open(name, flags, va)
+}
+
 func ioctlSize(req uint32) uint32 {
 	switch req {
 	case TCGETS, TCSETS, TCSETS + 1, TCSETS + 2:

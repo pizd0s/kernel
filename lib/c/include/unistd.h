@@ -34,6 +34,16 @@ __BEGIN_DECLS
 #define _POSIX_SAVED_IDS 1
 #define _POSIX_MONOTONIC_CLOCK _POSIX_VERSION
 #define _POSIX_TIMERS _POSIX_VERSION
+#define _POSIX_THREADS _POSIX_VERSION
+#define _POSIX_THREAD_SAFE_FUNCTIONS _POSIX_VERSION
+#define _POSIX_THREAD_ATTR_STACKADDR _POSIX_VERSION
+#define _POSIX_THREAD_ATTR_STACKSIZE _POSIX_VERSION
+#define _POSIX_THREAD_CPUTIME _POSIX_VERSION
+#define _POSIX_SEMAPHORES _POSIX_VERSION
+#define _POSIX_BARRIERS _POSIX_VERSION
+#define _POSIX_SPIN_LOCKS _POSIX_VERSION
+#define _POSIX_READER_WRITER_LOCKS _POSIX_VERSION
+#define _POSIX_TIMEOUTS _POSIX_VERSION
 
 #define _PC_LINK_MAX 0
 #define _PC_MAX_CANON 1
@@ -116,6 +126,7 @@ __NORETURN void _exit(int);
 
 pid_t getpid(void);
 pid_t getppid(void);
+pid_t gettid(void);
 pid_t getpgrp(void);
 pid_t getpgid(pid_t);
 int setpgid(pid_t, pid_t);
@@ -209,13 +220,19 @@ void swab(const void* __restrict, void* __restrict, ssize_t);
 
 /*
  * Inline only: the import's call is in the caller's frame, which a
- * later return lands in. There is no definition to point to.
+ * later return lands in. There is no definition to point to. fork runs
+ * pthread_atfork's handlers around it (lib/c's pthread.c); vfork none.
  */
 pid_t __kernel_fork(void) __RETURNS_TWICE __KERNEL(fork);
 pid_t __kernel_vfork(void) __RETURNS_TWICE __KERNEL(vfork);
+void __fork_prepare(void);
+void __fork_done(pid_t);
 
 __INLINE pid_t fork(void) {
-    return __kernel_fork();
+    __fork_prepare();
+    pid_t __pid = __kernel_fork();
+    __fork_done(__pid);
+    return __pid;
 }
 
 __INLINE pid_t vfork(void) {

@@ -241,6 +241,14 @@ type Process struct {
 	regexes   map[uint32]*PosixRegex
 	nextRegex uint32
 
+	syncs        map[int32]Object
+	nextSync     int32
+	keys         [PTHREAD_KEYS_MAX]Key
+	thread       Thread
+	semOpens     map[string]*SemOpen
+	defaultStack uint32
+	defaultGuard uint32
+
 	constants map[string]uint32
 	siginfo   uint32
 
@@ -535,6 +543,8 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
 		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0
 		p.regexes, p.constants, p.locale = map[uint32]*PosixRegex{}, map[string]uint32{}, [LC_ALL]string{}
+		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
+		p.defaultStack, p.defaultGuard = 0, 0
 		p.envStrings, p.mappings = map[uint32]bool{}, map[uint32]Mapping{}
 		p.jumps, p.stackAt = map[uint32]*JmpBuf{}, 0
 		enter = func() {
@@ -1992,22 +2002,26 @@ func (p *Process) libcSched_setscheduler(pid, policy, param uint32) uint32 {
 		return p.result(0, err)
 	}
 
+	return p.result(0, p.scheduler(q, policy, param))
+}
+
+func (p *Process) scheduler(q *Process, policy, param uint32) error {
 	switch policy {
 	case SCHED_OTHER, SCHED_BATCH, SCHED_IDLE:
 		if p.u32(param) != 0 {
-			return p.result(0, EINVAL)
+			return EINVAL
 		}
 
 		p.k.mu.Lock()
 		q.policy = int32(policy)
 		p.k.mu.Unlock()
 
-		return p.result(0, nil)
+		return nil
 	case SCHED_FIFO, SCHED_RR:
-		return p.result(0, EPERM)
+		return EPERM
 	}
 
-	return p.result(0, EINVAL)
+	return EINVAL
 }
 
 func (p *Process) libcSched_rr_get_interval(pid, ts uint32) uint32 {
@@ -2096,6 +2110,8 @@ func (p *Process) startVfork() uint32 {
 	c.image, c.vfork = p.image, v
 	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo
 	c.regexes, c.nextRegex, c.constants, c.jumps, c.stackAt = p.regexes, p.nextRegex, p.constants, p.jumps, p.stackAt
+	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
+	c.defaultStack, c.defaultGuard = p.defaultStack, p.defaultGuard
 	c.locale, c.envStrings, c.mappings, c.tzAt, c.herrnoAt, c.passwordAt = p.locale, p.envStrings, p.mappings, p.tzAt, p.herrnoAt, p.passwordAt
 	c.token.Store(p.token.Load())
 	c.inherit(p)
@@ -2157,6 +2173,23 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 
 	for s, at := range p.constants {
 		c.constants[s] = at
+	}
+
+	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = map[int32]Object{}, p.nextSync, map[string]*SemOpen{}, p.keys, p.thread
+	c.defaultStack, c.defaultGuard = p.defaultStack, p.defaultGuard
+
+	for h, o := range p.syncs {
+		r := SyncCopy{}
+
+		if p.request(o, &r) == nil && r.copy != nil {
+			c.syncs[h] = r.copy
+		}
+	}
+
+	for name, o := range p.semOpens {
+		copied := *o
+
+		c.semOpens[name] = &copied
 	}
 
 	c.envStrings, c.mappings = maps.Clone(p.envStrings), map[uint32]Mapping{}
@@ -9174,7 +9207,7 @@ func (p *Process) libcClock() uint64 {
 }
 
 func (p *Process) libcClock_getres(clock, res uint32) uint32 {
-	host, ok := hostClock(clock)
+	host, ok := p.hostClock(clock)
 
 	if !ok {
 		return p.result(0, EINVAL)
@@ -9355,8 +9388,42 @@ func (p *Process) libcClock_gettime(clock, ts uint32) uint32 {
 	return p.result(0, nil)
 }
 
+func (p *Process) hostClock(clock uint32) (uintptr, bool) {
+	if host, ok := hostClock(clock); ok {
+		return host, true
+	}
+
+	id := int32(clock)
+
+	if id >= 0 || id&3 == 3 {
+		return 0, false
+	}
+
+	pid := ^(id >> 3)
+
+	if id&4 != 0 {
+		return hostClockProcessCputime, pid == p.pid
+	}
+
+	if _, err := p.process(pid); err != nil {
+		return 0, false
+	}
+
+	return hostClockProcessCputime, true
+}
+
+func (p *Process) libcClock_getcpuclockid(pid, out uint32) uint32 {
+	if _, err := p.process(int32(pid)); err != nil {
+		return uint32(ESRCH)
+	}
+
+	p.put32(out, uint32((-int32(pid)-1)*8+2))
+
+	return 0
+}
+
 func (p *Process) clockNow(clock uint32) (int64, error) {
-	host, ok := hostClock(clock)
+	host, ok := p.hostClock(clock)
 
 	if !ok {
 		return 0, EINVAL
@@ -13838,4 +13905,1385 @@ func (p *Process) fileLock(o Object, cmd int, lk *Flock) error {
 	}
 
 	return p.k.locks.lock(p, want, cmd == fOfdSetlkw)
+}
+
+func codeOf(err error) uint32 {
+	return uint32(errnoOf(err))
+}
+
+func threadsCode(err error) uint32 {
+	switch err {
+	case nil:
+		return thrd_success
+	case EBUSY:
+		return thrd_busy
+	case ETIMEDOUT:
+		return thrd_timedout
+	case EAGAIN, ENOMEM:
+		return thrd_nomem
+	}
+
+	return thrd_error
+}
+
+func (p *Process) sleepUntil(end time.Time) bool {
+	for {
+		left := time.Until(end)
+
+		if left <= 0 {
+			return false
+		}
+
+		p.sleep(left)
+	}
+}
+
+func (p *Process) deadlineOf(at, clock uint32) (time.Time, error) {
+	d, err := p.timespec(at)
+
+	if err != nil {
+		return time.Time{}, EINVAL
+	}
+
+	host, ok := hostClocks[clock]
+
+	if !ok {
+		return time.Time{}, EINVAL
+	}
+
+	return time.Now().Add(d - clockGettime(host)), nil
+}
+
+func (p *Process) addSync(o Object) int32 {
+	for {
+		p.nextSync++
+
+		if p.nextSync <= 0 {
+			p.nextSync = 1
+		}
+
+		if p.syncs[p.nextSync] == nil {
+			break
+		}
+	}
+
+	p.syncs[p.nextSync] = o
+
+	return p.nextSync
+}
+
+func (p *Process) syncAt(at uint32, made func() Object) (Object, error) {
+	if at == 0 {
+		return nil, EINVAL
+	}
+
+	h := int32(p.u32(at))
+
+	if h == 0 && made != nil {
+		o := made()
+
+		p.put32(at, uint32(p.addSync(o)))
+
+		return o, nil
+	}
+
+	if o := p.syncs[h]; o != nil {
+		return o, nil
+	}
+
+	return nil, EINVAL
+}
+
+func (p *Process) dropSync(at uint32) {
+	if at == 0 {
+		return
+	}
+
+	h := int32(p.u32(at))
+
+	if o := p.syncs[h]; o != nil {
+		delete(p.syncs, h)
+		o.unref()
+	}
+
+	p.put32(at, 0)
+}
+
+func (p *Process) syncCall(at uint32, made func() Object, r Request) error {
+	o, err := p.syncAt(at, made)
+
+	if err != nil {
+		return err
+	}
+
+	return p.request(o, r)
+}
+
+func (p *Process) timedLock(at uint32, made func() Object, shared bool, deadline uint32, clock uint32) error {
+	r := SyncLock{thread: p.pid, try: true, shared: shared}
+
+	if err := p.syncCall(at, made, &r); err != EBUSY {
+		return err
+	}
+
+	end, err := p.deadlineOf(deadline, clock)
+
+	if err != nil {
+		return err
+	}
+
+	r.try, r.end = false, end
+
+	return p.syncCall(at, made, &r)
+}
+
+func defaultMutex() Object {
+	return newMutex(PTHREAD_MUTEX_NORMAL)
+}
+
+func defaultCond() Object {
+	return newCond(CLOCK_REALTIME)
+}
+
+func defaultRWLock() Object {
+	return newRWLock()
+}
+
+func defaultSpinLock() Object {
+	return newSpinLock()
+}
+
+func notRunOnce() Object {
+	return newOnce(onceNotRun)
+}
+
+func (p *Process) self(thread uint32) bool {
+	return int32(thread) == p.pid
+}
+
+func (p *Process) libcGettid() uint32 {
+	return uint32(p.pid)
+}
+
+func (p *Process) libcPthread_create(thread, attr, fn, arg uint32) uint32 {
+	return uint32(EAGAIN)
+}
+
+func (p *Process) libcPthread_join(thread, out uint32) uint32 {
+	if p.self(thread) {
+		return uint32(EDEADLK)
+	}
+
+	return uint32(ESRCH)
+}
+
+func (p *Process) libcPthread_tryjoin_np(thread, out uint32) uint32 {
+	if p.self(thread) {
+		return uint32(EBUSY)
+	}
+
+	return uint32(ESRCH)
+}
+
+func (p *Process) libcPthread_timedjoin_np(thread, out, at uint32) uint32 {
+	if !p.self(thread) {
+		return uint32(ESRCH)
+	}
+
+	end, err := p.deadlineOf(at, CLOCK_REALTIME)
+
+	if err != nil {
+		return codeOf(err)
+	}
+
+	p.sleepUntil(end)
+
+	return uint32(ETIMEDOUT)
+}
+
+func (p *Process) libcPthread_detach(thread uint32) uint32 {
+	if !p.self(thread) {
+		return uint32(ESRCH)
+	}
+
+	p.thread.detached = true
+
+	return 0
+}
+
+func (p *Process) libcPthread_self() uint32 {
+	return uint32(p.pid)
+}
+
+func (p *Process) libcPthread_equal(a, b uint32) uint32 {
+	return bit(a == b)
+}
+
+func (p *Process) libcPthread_kill(thread, sig uint32) uint32 {
+	switch {
+	case !p.self(thread):
+		return uint32(ESRCH)
+	case sig == 0:
+		return 0
+	case !validSignal(sig):
+		return uint32(EINVAL)
+	}
+
+	p.sendSelf(int(sig))
+
+	return 0
+}
+
+func (p *Process) libcPthread_cancel(thread uint32) uint32 {
+	if !p.self(thread) {
+		return uint32(ESRCH)
+	}
+
+	p.thread.cancelled = true
+
+	return 0
+}
+
+func (p *Process) libcPthread_setcancelstate(value, out uint32) uint32 {
+	if value > PTHREAD_CANCEL_MASKED {
+		return uint32(EINVAL)
+	}
+
+	if out != 0 {
+		p.put32(out, p.thread.cancelState)
+	}
+
+	p.thread.cancelState = value
+
+	return 0
+}
+
+func (p *Process) libcPthread_setcanceltype(value, out uint32) uint32 {
+	if value > PTHREAD_CANCEL_ASYNCHRONOUS {
+		return uint32(EINVAL)
+	}
+
+	if out != 0 {
+		p.put32(out, p.thread.cancelType)
+	}
+
+	p.thread.cancelType = value
+
+	return 0
+}
+
+func (p *Process) libc__pthread_cancelled(asynchronous uint32) uint32 {
+	t := &p.thread
+	acts := t.cancelled && t.cancelState == PTHREAD_CANCEL_ENABLE && (asynchronous == 0 || t.cancelType == PTHREAD_CANCEL_ASYNCHRONOUS)
+
+	if acts {
+		t.cancelled = false
+	}
+
+	return bit(acts)
+}
+
+func (p *Process) libcPthread_getschedparam(thread, out, param uint32) uint32 {
+	if !p.self(thread) {
+		return uint32(ESRCH)
+	}
+
+	p.k.mu.Lock()
+
+	policy := p.policy
+
+	p.k.mu.Unlock()
+	p.put32(out, uint32(policy))
+	p.put32(param, 0)
+
+	return 0
+}
+
+func (p *Process) libcPthread_setschedparam(thread, policy, param uint32) uint32 {
+	if !p.self(thread) {
+		return uint32(ESRCH)
+	}
+
+	return codeOf(p.scheduler(p, policy, param))
+}
+
+func (p *Process) libcPthread_setschedprio(thread, value uint32) uint32 {
+	switch {
+	case !p.self(thread):
+		return uint32(ESRCH)
+	case value != 0:
+		return uint32(EINVAL)
+	}
+
+	return 0
+}
+
+func (p *Process) libcPthread_getconcurrency() uint32 {
+	return 0
+}
+
+func (p *Process) libcPthread_setconcurrency(value uint32) uint32 {
+	switch {
+	case int32(value) < 0:
+		return uint32(EINVAL)
+	case value > 0:
+		return uint32(EAGAIN)
+	}
+
+	return 0
+}
+
+func (p *Process) libcPthread_getcpuclockid(thread, out uint32) uint32 {
+	if !p.self(thread) {
+		return uint32(ESRCH)
+	}
+
+	p.put32(out, uint32((-p.pid-1)*8+6))
+
+	return 0
+}
+
+func (p *Process) libcPthread_getname_np(thread, out, n uint32) uint32 {
+	name := p.name()
+
+	switch {
+	case !p.self(thread):
+		return uint32(ESRCH)
+	case n < 16:
+		return uint32(ERANGE)
+	}
+
+	b := p.span(out, uint32(len(name))+1)
+
+	copy(b, name)
+	b[len(name)] = 0
+
+	return 0
+}
+
+func (p *Process) libcPthread_setname_np(thread, name uint32) uint32 {
+	s := p.str(name)
+
+	switch {
+	case !p.self(thread):
+		return uint32(ESRCH)
+	case len(s) > 15:
+		return uint32(ERANGE)
+	}
+
+	p.comm = &s
+
+	return 0
+}
+
+func (p *Process) affinity(size, set uint32, get bool) error {
+	n := uint32(runtime.NumCPU())
+
+	if get {
+		if size*8 < n {
+			return EINVAL
+		}
+
+		b := p.span(set, size)
+
+		clear(b)
+
+		for i := range n {
+			b[i/8] |= 1 << (i % 8)
+		}
+
+		return nil
+	}
+
+	b := p.span(set, size)
+
+	for i := uint32(0); i < n && i/8 < size; i++ {
+		if b[i/8]&(1<<(i%8)) != 0 {
+			return nil
+		}
+	}
+
+	return EINVAL
+}
+
+func (p *Process) libc__sched_cpucount(size, set uint32) uint32 {
+	n := 0
+
+	for _, b := range p.span(set, size) {
+		n += bits.OnesCount8(b)
+	}
+
+	return uint32(n)
+}
+
+func (p *Process) libcSched_getaffinity(pid, size, set uint32) uint32 {
+	if _, err := p.process(int32(pid)); err != nil {
+		return p.result(0, err)
+	}
+
+	return p.result(0, p.affinity(size, set, true))
+}
+
+func (p *Process) libcSched_setaffinity(pid, size, set uint32) uint32 {
+	if _, err := p.process(int32(pid)); err != nil {
+		return p.result(0, err)
+	}
+
+	return p.result(0, p.affinity(size, set, false))
+}
+
+func (p *Process) libcSched_getcpu() uint32 {
+	return 0
+}
+
+func (p *Process) libcPthread_getaffinity_np(thread, size, set uint32) uint32 {
+	if !p.self(thread) {
+		return uint32(ESRCH)
+	}
+
+	return codeOf(p.affinity(size, set, true))
+}
+
+func (p *Process) libcPthread_setaffinity_np(thread, size, set uint32) uint32 {
+	if !p.self(thread) {
+		return uint32(ESRCH)
+	}
+
+	return codeOf(p.affinity(size, set, false))
+}
+
+func (p *Process) threadDefaults() (uint32, uint32) {
+	stack, guard := p.defaultStack, p.defaultGuard
+
+	if stack == 0 {
+		stack = defaultThreadStack
+	}
+
+	if guard == 0 {
+		guard = defaultThreadGuard
+	}
+
+	return stack, guard
+}
+
+func (p *Process) libcPthread_attr_init(attr uint32) uint32 {
+	stack, guard := p.threadDefaults()
+
+	clear(p.span(attr, sizeofPthreadAttr))
+	p.put32(attr+20, stack)
+	p.put32(attr+24, guard)
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_destroy(attr uint32) uint32 {
+	return 0
+}
+
+func (p *Process) libcPthread_attr_setdetachstate(attr, value uint32) uint32 {
+	if value > PTHREAD_CREATE_DETACHED {
+		return uint32(EINVAL)
+	}
+
+	p.put32(attr, value)
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_getdetachstate(attr, out uint32) uint32 {
+	p.put32(out, p.u32(attr))
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_setinheritsched(attr, value uint32) uint32 {
+	if value > PTHREAD_EXPLICIT_SCHED {
+		return uint32(EINVAL)
+	}
+
+	p.put32(attr+4, value)
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_getinheritsched(attr, out uint32) uint32 {
+	p.put32(out, p.u32(attr+4))
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_setschedpolicy(attr, value uint32) uint32 {
+	p.put32(attr+8, value)
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_getschedpolicy(attr, out uint32) uint32 {
+	p.put32(out, p.u32(attr+8))
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_setschedparam(attr, param uint32) uint32 {
+	p.put32(attr+12, p.u32(param))
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_getschedparam(attr, param uint32) uint32 {
+	p.put32(param, p.u32(attr+12))
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_setscope(attr, value uint32) uint32 {
+	switch value {
+	case PTHREAD_SCOPE_SYSTEM:
+		return 0
+	case PTHREAD_SCOPE_PROCESS:
+		return uint32(ENOTSUP)
+	}
+
+	return uint32(EINVAL)
+}
+
+func (p *Process) libcPthread_attr_getscope(attr, out uint32) uint32 {
+	p.put32(out, PTHREAD_SCOPE_SYSTEM)
+
+	return 0
+}
+
+func stackSizeBad(size uint32) bool {
+	return size-PTHREAD_STACK_MIN > math.MaxUint32/4
+}
+
+func (p *Process) libcPthread_attr_setstacksize(attr, value uint32) uint32 {
+	if stackSizeBad(value) {
+		return uint32(EINVAL)
+	}
+
+	p.put32(attr+20, value)
+	p.put32(attr+28, 0)
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_getstacksize(attr, out uint32) uint32 {
+	p.put32(out, p.u32(attr+20))
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_setguardsize(attr, value uint32) uint32 {
+	if value > math.MaxUint32/8 {
+		return uint32(EINVAL)
+	}
+
+	p.put32(attr+24, value)
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_getguardsize(attr, out uint32) uint32 {
+	p.put32(out, p.u32(attr+24))
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_setstack(attr, stack, size uint32) uint32 {
+	if stackSizeBad(size) {
+		return uint32(EINVAL)
+	}
+
+	p.put32(attr+20, size)
+	p.put32(attr+28, stack+size)
+
+	return 0
+}
+
+func (p *Process) libcPthread_attr_getstack(attr, stack, size uint32) uint32 {
+	top, n := p.u32(attr+28), p.u32(attr+20)
+
+	if top == 0 {
+		return uint32(EINVAL)
+	}
+
+	p.put32(size, n)
+	p.put32(stack, top-n)
+
+	return 0
+}
+
+func (p *Process) libcPthread_getattr_np(thread, attr uint32) uint32 {
+	if !p.self(thread) {
+		return uint32(ESRCH)
+	}
+
+	p.libcPthread_attr_init(attr)
+	p.put32(attr, bit(p.thread.detached))
+	p.k.mu.Lock()
+	p.put32(attr+8, uint32(p.policy))
+	p.k.mu.Unlock()
+
+	return 0
+}
+
+func (p *Process) libcPthread_getattr_default_np(attr uint32) uint32 {
+	return p.libcPthread_attr_init(attr)
+}
+
+func (p *Process) libcPthread_setattr_default_np(attr uint32) uint32 {
+	b := p.span(attr, sizeofPthreadAttr)
+
+	for i, c := range b {
+		if c != 0 && (i < 20 || i >= 28) {
+			return uint32(EINVAL)
+		}
+	}
+
+	stack, guard := p.threadDefaults()
+
+	p.defaultStack = max(stack, min(p.u32(attr+20), defaultThreadStackMax))
+	p.defaultGuard = max(guard, min(p.u32(attr+24), defaultThreadGuardMax))
+
+	return 0
+}
+
+func (p *Process) libcPthread_key_create(key, fn uint32) uint32 {
+	for k := range p.keys {
+		if !p.keys[k].used {
+			p.keys[k] = Key{used: true, destructor: fn}
+			p.thread.values[k] = 0
+			p.put32(key, uint32(k))
+
+			return 0
+		}
+	}
+
+	return uint32(EAGAIN)
+}
+
+func (p *Process) keyUsed(key uint32) bool {
+	return key < PTHREAD_KEYS_MAX && p.keys[key].used
+}
+
+func (p *Process) libcPthread_key_delete(key uint32) uint32 {
+	if !p.keyUsed(key) {
+		return uint32(EINVAL)
+	}
+
+	p.keys[key] = Key{}
+	p.thread.values[key] = 0
+
+	return 0
+}
+
+func (p *Process) libcPthread_getspecific(key uint32) uint32 {
+	if !p.keyUsed(key) {
+		return 0
+	}
+
+	return p.thread.values[key]
+}
+
+func (p *Process) libcPthread_setspecific(key, value uint32) uint32 {
+	if !p.keyUsed(key) {
+		return uint32(EINVAL)
+	}
+
+	p.thread.values[key] = value
+
+	return 0
+}
+
+func (p *Process) libc__pthread_key_take(key, fn uint32) uint32 {
+	for k := p.u32(key); k < PTHREAD_KEYS_MAX; k++ {
+		if v := p.thread.values[k]; v != 0 && p.keys[k].used && p.keys[k].destructor != 0 {
+			p.thread.values[k] = 0
+			p.put32(key, k+1)
+			p.put32(fn, p.keys[k].destructor)
+
+			return v
+		}
+	}
+
+	p.put32(key, PTHREAD_KEYS_MAX)
+
+	return 0
+}
+
+func (p *Process) libc__pthread_once_begin(once uint32) uint32 {
+	r := SyncLock{thread: p.pid}
+
+	if p.syncCall(once, notRunOnce, &r) != nil {
+		return 0
+	}
+
+	return bit(r.run)
+}
+
+func (p *Process) libc__pthread_once_end(once uint32) {
+	p.syncCall(once, notRunOnce, &SyncUnlock{thread: p.pid})
+}
+
+func (p *Process) attrSet(attr, at, value, most uint32) uint32 {
+	if value > most {
+		return uint32(EINVAL)
+	}
+
+	p.put32(attr+at, value)
+
+	return 0
+}
+
+func (p *Process) attrGet(attr, at, out uint32) uint32 {
+	p.put32(out, p.u32(attr+at))
+
+	return 0
+}
+
+func (p *Process) libcPthread_mutexattr_init(attr uint32) uint32 {
+	clear(p.span(attr, sizeofPthreadMutexattr))
+
+	return 0
+}
+
+func (p *Process) libcPthread_mutexattr_destroy(attr uint32) uint32 {
+	return 0
+}
+
+func (p *Process) libcPthread_mutexattr_settype(attr, value uint32) uint32 {
+	return p.attrSet(attr, 0, value, PTHREAD_MUTEX_ERRORCHECK)
+}
+
+func (p *Process) libcPthread_mutexattr_gettype(attr, out uint32) uint32 {
+	return p.attrGet(attr, 0, out)
+}
+
+func (p *Process) libcPthread_mutexattr_setprotocol(attr, value uint32) uint32 {
+	if value == PTHREAD_PRIO_PROTECT {
+		return uint32(ENOTSUP)
+	}
+
+	return p.attrSet(attr, 4, value, PTHREAD_PRIO_INHERIT)
+}
+
+func (p *Process) libcPthread_mutexattr_getprotocol(attr, out uint32) uint32 {
+	return p.attrGet(attr, 4, out)
+}
+
+func (p *Process) libcPthread_mutexattr_setrobust(attr, value uint32) uint32 {
+	return p.attrSet(attr, 8, value, PTHREAD_MUTEX_ROBUST)
+}
+
+func (p *Process) libcPthread_mutexattr_getrobust(attr, out uint32) uint32 {
+	return p.attrGet(attr, 8, out)
+}
+
+func (p *Process) libcPthread_mutexattr_setpshared(attr, value uint32) uint32 {
+	return p.attrSet(attr, 12, value, PTHREAD_PROCESS_SHARED)
+}
+
+func (p *Process) libcPthread_mutexattr_getpshared(attr, out uint32) uint32 {
+	return p.attrGet(attr, 12, out)
+}
+
+func (p *Process) libcPthread_mutexattr_setprioceiling(attr, value uint32) uint32 {
+	return p.attrSet(attr, 16, value, math.MaxInt32)
+}
+
+func (p *Process) libcPthread_mutexattr_getprioceiling(attr, out uint32) uint32 {
+	return p.attrGet(attr, 16, out)
+}
+
+func (p *Process) libcPthread_mutex_init(mutex, attr uint32) uint32 {
+	kind := uint32(PTHREAD_MUTEX_NORMAL)
+
+	if attr != 0 {
+		kind = p.u32(attr)
+	}
+
+	p.put32(mutex, uint32(p.addSync(newMutex(kind))))
+
+	return 0
+}
+
+func (p *Process) libcPthread_mutex_destroy(mutex uint32) uint32 {
+	p.dropSync(mutex)
+
+	return 0
+}
+
+func (p *Process) libcPthread_mutex_lock(mutex uint32) uint32 {
+	return codeOf(p.syncCall(mutex, defaultMutex, &SyncLock{thread: p.pid}))
+}
+
+func (p *Process) libcPthread_mutex_trylock(mutex uint32) uint32 {
+	return codeOf(p.syncCall(mutex, defaultMutex, &SyncLock{thread: p.pid, try: true}))
+}
+
+func (p *Process) libcPthread_mutex_timedlock(mutex, at uint32) uint32 {
+	return codeOf(p.timedLock(mutex, defaultMutex, false, at, CLOCK_REALTIME))
+}
+
+func (p *Process) libcPthread_mutex_unlock(mutex uint32) uint32 {
+	return codeOf(p.syncCall(mutex, defaultMutex, &SyncUnlock{thread: p.pid}))
+}
+
+func (p *Process) libcPthread_mutex_consistent(mutex uint32) uint32 {
+	return uint32(EINVAL)
+}
+
+func (p *Process) libcPthread_mutex_getprioceiling(mutex, out uint32) uint32 {
+	return uint32(EINVAL)
+}
+
+func (p *Process) libcPthread_mutex_setprioceiling(mutex, value, out uint32) uint32 {
+	return uint32(EINVAL)
+}
+
+func (p *Process) libcPthread_condattr_init(attr uint32) uint32 {
+	clear(p.span(attr, sizeofPthreadCondattr))
+
+	return 0
+}
+
+func (p *Process) libcPthread_condattr_destroy(attr uint32) uint32 {
+	return 0
+}
+
+func (p *Process) libcPthread_condattr_setclock(attr, clock uint32) uint32 {
+	if int32(clock) < 0 || clock == CLOCK_PROCESS_CPUTIME_ID || clock == CLOCK_THREAD_CPUTIME_ID {
+		return uint32(EINVAL)
+	}
+
+	p.put32(attr, clock)
+
+	return 0
+}
+
+func (p *Process) libcPthread_condattr_getclock(attr, out uint32) uint32 {
+	return p.attrGet(attr, 0, out)
+}
+
+func (p *Process) libcPthread_condattr_setpshared(attr, value uint32) uint32 {
+	return p.attrSet(attr, 4, value, PTHREAD_PROCESS_SHARED)
+}
+
+func (p *Process) libcPthread_condattr_getpshared(attr, out uint32) uint32 {
+	return p.attrGet(attr, 4, out)
+}
+
+func (p *Process) libcPthread_cond_init(cond, attr uint32) uint32 {
+	clock := uint32(CLOCK_REALTIME)
+
+	if attr != 0 {
+		clock = p.u32(attr)
+	}
+
+	p.put32(cond, uint32(p.addSync(newCond(clock))))
+
+	return 0
+}
+
+func (p *Process) libcPthread_cond_destroy(cond uint32) uint32 {
+	p.dropSync(cond)
+
+	return 0
+}
+
+func (p *Process) libcPthread_cond_signal(cond uint32) uint32 {
+	return codeOf(p.syncCall(cond, defaultCond, &SyncWake{}))
+}
+
+func (p *Process) libcPthread_cond_broadcast(cond uint32) uint32 {
+	return codeOf(p.syncCall(cond, defaultCond, &SyncWake{all: true}))
+}
+
+func (p *Process) condWaitForever(call string) {
+	msg := call + ": no other thread to signal\n"
+
+	if t, err := p.fd(2); err == nil {
+		p.fileWrite(t, bytesFile([]byte(msg)), len(msg), IoMode{})
+	}
+
+	p.abort()
+}
+
+func (p *Process) libcPthread_cond_wait(cond, mutex uint32) uint32 {
+	p.condWaitForever("pthread_cond_wait")
+
+	return 0
+}
+
+func (p *Process) condTimedwait(cond, mutex, at uint32) error {
+	c, err := p.syncAt(cond, defaultCond)
+
+	if err != nil {
+		return err
+	}
+
+	m, err := p.syncAt(mutex, defaultMutex)
+
+	if err != nil {
+		return err
+	}
+
+	return p.request(c, &SyncWait{thread: p.pid, lock: m, at: at})
+}
+
+func (p *Process) libcPthread_cond_timedwait(cond, mutex, at uint32) uint32 {
+	return codeOf(p.condTimedwait(cond, mutex, at))
+}
+
+func (p *Process) libcPthread_rwlockattr_init(attr uint32) uint32 {
+	clear(p.span(attr, sizeofPthreadRwlockattr))
+
+	return 0
+}
+
+func (p *Process) libcPthread_rwlockattr_destroy(attr uint32) uint32 {
+	return 0
+}
+
+func (p *Process) libcPthread_rwlockattr_setpshared(attr, value uint32) uint32 {
+	return p.attrSet(attr, 0, value, PTHREAD_PROCESS_SHARED)
+}
+
+func (p *Process) libcPthread_rwlockattr_getpshared(attr, out uint32) uint32 {
+	return p.attrGet(attr, 0, out)
+}
+
+func (p *Process) libcPthread_rwlock_init(lock, attr uint32) uint32 {
+	p.put32(lock, uint32(p.addSync(newRWLock())))
+
+	return 0
+}
+
+func (p *Process) libcPthread_rwlock_destroy(lock uint32) uint32 {
+	p.dropSync(lock)
+
+	return 0
+}
+
+func (p *Process) libcPthread_rwlock_rdlock(lock uint32) uint32 {
+	return codeOf(p.syncCall(lock, defaultRWLock, &SyncLock{thread: p.pid, shared: true}))
+}
+
+func (p *Process) libcPthread_rwlock_tryrdlock(lock uint32) uint32 {
+	return codeOf(p.syncCall(lock, defaultRWLock, &SyncLock{thread: p.pid, shared: true, try: true}))
+}
+
+func (p *Process) libcPthread_rwlock_timedrdlock(lock, at uint32) uint32 {
+	return codeOf(p.timedLock(lock, defaultRWLock, true, at, CLOCK_REALTIME))
+}
+
+func (p *Process) libcPthread_rwlock_wrlock(lock uint32) uint32 {
+	return codeOf(p.syncCall(lock, defaultRWLock, &SyncLock{thread: p.pid}))
+}
+
+func (p *Process) libcPthread_rwlock_trywrlock(lock uint32) uint32 {
+	return codeOf(p.syncCall(lock, defaultRWLock, &SyncLock{thread: p.pid, try: true}))
+}
+
+func (p *Process) libcPthread_rwlock_timedwrlock(lock, at uint32) uint32 {
+	return codeOf(p.timedLock(lock, defaultRWLock, false, at, CLOCK_REALTIME))
+}
+
+func (p *Process) libcPthread_rwlock_unlock(lock uint32) uint32 {
+	return codeOf(p.syncCall(lock, defaultRWLock, &SyncUnlock{thread: p.pid}))
+}
+
+func (p *Process) libcPthread_barrierattr_init(attr uint32) uint32 {
+	clear(p.span(attr, sizeofPthreadBarrierattr))
+
+	return 0
+}
+
+func (p *Process) libcPthread_barrierattr_destroy(attr uint32) uint32 {
+	return 0
+}
+
+func (p *Process) libcPthread_barrierattr_setpshared(attr, value uint32) uint32 {
+	return p.attrSet(attr, 0, value, PTHREAD_PROCESS_SHARED)
+}
+
+func (p *Process) libcPthread_barrierattr_getpshared(attr, out uint32) uint32 {
+	return p.attrGet(attr, 0, out)
+}
+
+func (p *Process) libcPthread_barrier_init(barrier, attr, count uint32) uint32 {
+	if count == 0 || count > math.MaxInt32 {
+		return uint32(EINVAL)
+	}
+
+	p.put32(barrier, uint32(p.addSync(newBarrier(count))))
+
+	return 0
+}
+
+func (p *Process) libcPthread_barrier_destroy(barrier uint32) uint32 {
+	p.dropSync(barrier)
+
+	return 0
+}
+
+func (p *Process) libcPthread_barrier_wait(barrier uint32) uint32 {
+	r := SyncArrive{}
+
+	if err := p.syncCall(barrier, nil, &r); err != nil {
+		return codeOf(err)
+	}
+
+	if r.serial {
+		return math.MaxUint32
+	}
+
+	return 0
+}
+
+func (p *Process) libcPthread_spin_init(lock, value uint32) uint32 {
+	p.put32(lock, uint32(p.addSync(newSpinLock())))
+
+	return 0
+}
+
+func (p *Process) libcPthread_spin_destroy(lock uint32) uint32 {
+	p.dropSync(lock)
+
+	return 0
+}
+
+func (p *Process) libcPthread_spin_lock(lock uint32) uint32 {
+	return codeOf(p.syncCall(lock, defaultSpinLock, &SyncLock{thread: p.pid}))
+}
+
+func (p *Process) libcPthread_spin_trylock(lock uint32) uint32 {
+	return codeOf(p.syncCall(lock, defaultSpinLock, &SyncLock{thread: p.pid, try: true}))
+}
+
+func (p *Process) libcPthread_spin_unlock(lock uint32) uint32 {
+	return codeOf(p.syncCall(lock, defaultSpinLock, &SyncUnlock{thread: p.pid}))
+}
+
+func (p *Process) libcSem_init(sem, shared, value uint32) uint32 {
+	if value > SEM_VALUE_MAX {
+		return p.result(0, EINVAL)
+	}
+
+	p.put32(sem, uint32(p.addSync(newSemaphore(value))))
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcSem_destroy(sem uint32) uint32 {
+	p.dropSync(sem)
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcSem_wait(sem uint32) uint32 {
+	return p.result(0, p.syncCall(sem, nil, &SyncLock{thread: p.pid}))
+}
+
+func (p *Process) libcSem_trywait(sem uint32) uint32 {
+	return p.result(0, p.syncCall(sem, nil, &SyncLock{thread: p.pid, try: true}))
+}
+
+func (p *Process) libcSem_timedwait(sem, at uint32) uint32 {
+	err := p.syncCall(sem, nil, &SyncLock{thread: p.pid, try: true})
+
+	if err != EAGAIN {
+		return p.result(0, err)
+	}
+
+	end, err := p.deadlineOf(at, CLOCK_REALTIME)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	return p.result(0, p.syncCall(sem, nil, &SyncLock{thread: p.pid, end: end}))
+}
+
+func (p *Process) libcSem_post(sem uint32) uint32 {
+	return p.result(0, p.syncCall(sem, nil, &SyncPost{}))
+}
+
+func (p *Process) libcSem_getvalue(sem, out uint32) uint32 {
+	r := SyncValue{}
+
+	if err := p.syncCall(sem, nil, &r); err != nil {
+		return p.result(0, err)
+	}
+
+	p.put32(out, r.value)
+
+	return p.result(0, nil)
+}
+
+func semaphoreName(name string) (string, error) {
+	key := strings.TrimLeft(name, "/")
+
+	switch {
+	case key == "" || key == "." || key == ".." || strings.Contains(key, "/"):
+		return "", EINVAL
+	case len(key) > NAME_MAX:
+		return "", ENAMETOOLONG
+	}
+
+	return key, nil
+}
+
+func (p *Process) semOpen(name string, flags, va uint32) (uint32, error) {
+	key, err := semaphoreName(name)
+
+	if err != nil {
+		return 0, err
+	}
+
+	if o := p.semOpens[key]; o != nil {
+		if flags&(O_CREAT|O_EXCL) == O_CREAT|O_EXCL {
+			return 0, EEXIST
+		}
+
+		o.count++
+
+		return o.at, nil
+	}
+
+	p.k.mu.Lock()
+
+	s := p.k.semaphores[key]
+
+	switch {
+	case s != nil && flags&(O_CREAT|O_EXCL) == O_CREAT|O_EXCL:
+		p.k.mu.Unlock()
+
+		return 0, EEXIST
+	case s == nil && flags&O_CREAT == 0:
+		p.k.mu.Unlock()
+
+		return 0, ENOENT
+	case s == nil:
+		value := p.u32(va + 4)
+
+		if value > SEM_VALUE_MAX {
+			p.k.mu.Unlock()
+
+			return 0, EINVAL
+		}
+
+		s = newSemaphore(value)
+		s.name, s.mode, s.uid, s.gid = key, p.u32(va)&0o777&^p.umask, p.cred.euid(), p.cred.egid()
+
+		p.k.semaphores[key] = s
+	}
+
+	p.k.mu.Unlock()
+
+	if !p.permits(&Stat{Mode: s.mode, Uid: s.uid, Gid: s.gid}, 6) {
+		return 0, EACCES
+	}
+
+	at := p.malloc(sizeofSem)
+
+	if at == 0 {
+		return 0, ENOMEM
+	}
+
+	s.ref()
+	p.put32(at, uint32(p.addSync(s)))
+	p.semOpens[key] = &SemOpen{at: at, count: 1}
+
+	return at, nil
+}
+
+func (p *Process) libcSem_open(name, flags, va uint32) uint32 {
+	at, err := p.semOpen(p.str(name), flags, va)
+
+	if err != nil {
+		p.setErrno(errnoOf(err))
+
+		return 0
+	}
+
+	return at
+}
+
+func (p *Process) libcSem_close(sem uint32) uint32 {
+	for key, o := range p.semOpens {
+		if o.at != sem {
+			continue
+		}
+
+		if o.count--; o.count == 0 {
+			p.dropSync(sem)
+			p.free(sem)
+			delete(p.semOpens, key)
+		}
+
+		return p.result(0, nil)
+	}
+
+	return p.result(0, EINVAL)
+}
+
+func (p *Process) libcSem_unlink(name uint32) uint32 {
+	key, err := semaphoreName(p.str(name))
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	p.k.mu.Lock()
+
+	defer p.k.mu.Unlock()
+
+	s := p.k.semaphores[key]
+
+	switch {
+	case s == nil:
+		return p.result(0, ENOENT)
+	case !p.cred.privileged() && p.cred.euid() != s.uid:
+		return p.result(0, EACCES)
+	}
+
+	delete(p.k.semaphores, key)
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcThrd_create(thread, fn, arg uint32) uint32 {
+	return threadsCode(EAGAIN)
+}
+
+func (p *Process) libcThrd_join(thread, out uint32) uint32 {
+	return thrd_error
+}
+
+func (p *Process) libcThrd_detach(thread uint32) uint32 {
+	return threadsCode(errnoOrNil(p.libcPthread_detach(thread)))
+}
+
+func (p *Process) libcThrd_current() uint32 {
+	return uint32(p.pid)
+}
+
+func (p *Process) libcThrd_equal(a, b uint32) uint32 {
+	return bit(a == b)
+}
+
+func (p *Process) libcThrd_sleep(at, rem uint32) uint32 {
+	d, err := p.timespec(at)
+
+	if err != nil {
+		return math.MaxUint32 - 1
+	}
+
+	if left := p.sleep(d); left > 0 {
+		if rem != 0 {
+			p.putTimespec(rem, left)
+		}
+
+		return math.MaxUint32
+	}
+
+	return 0
+}
+
+func (p *Process) libcThrd_yield() {
+	runtime.Gosched()
+}
+
+func (p *Process) libcMtx_init(mutex, kind uint32) uint32 {
+	m := uint32(PTHREAD_MUTEX_NORMAL)
+
+	if kind&mtx_recursive != 0 {
+		m = PTHREAD_MUTEX_RECURSIVE
+	}
+
+	p.put32(mutex, uint32(p.addSync(newMutex(m))))
+
+	return thrd_success
+}
+
+func (p *Process) libcMtx_destroy(mutex uint32) {
+	p.dropSync(mutex)
+}
+
+func (p *Process) libcMtx_lock(mutex uint32) uint32 {
+	return threadsCode(errnoOrNil(p.libcPthread_mutex_lock(mutex)))
+}
+
+func (p *Process) libcMtx_trylock(mutex uint32) uint32 {
+	return threadsCode(errnoOrNil(p.libcPthread_mutex_trylock(mutex)))
+}
+
+func (p *Process) libcMtx_timedlock(mutex, at uint32) uint32 {
+	return threadsCode(errnoOrNil(p.libcPthread_mutex_timedlock(mutex, at)))
+}
+
+func (p *Process) libcMtx_unlock(mutex uint32) uint32 {
+	return threadsCode(errnoOrNil(p.libcPthread_mutex_unlock(mutex)))
+}
+
+func (p *Process) libcCnd_init(cond uint32) uint32 {
+	p.put32(cond, uint32(p.addSync(newCond(CLOCK_REALTIME))))
+
+	return thrd_success
+}
+
+func (p *Process) libcCnd_destroy(cond uint32) {
+	p.dropSync(cond)
+}
+
+func (p *Process) libcCnd_broadcast(cond uint32) uint32 {
+	return threadsCode(errnoOrNil(p.libcPthread_cond_broadcast(cond)))
+}
+
+func (p *Process) libcCnd_signal(cond uint32) uint32 {
+	return threadsCode(errnoOrNil(p.libcPthread_cond_signal(cond)))
+}
+
+func (p *Process) libcCnd_wait(cond, mutex uint32) uint32 {
+	p.condWaitForever("cnd_wait")
+
+	return thrd_error
+}
+
+func (p *Process) libcCnd_timedwait(cond, mutex, at uint32) uint32 {
+	return threadsCode(p.condTimedwait(cond, mutex, at))
+}
+
+func (p *Process) libcTss_create(key, fn uint32) uint32 {
+	if p.libcPthread_key_create(key, fn) != 0 {
+		return thrd_error
+	}
+
+	return thrd_success
+}
+
+func (p *Process) libcTss_delete(key uint32) {
+	p.libcPthread_key_delete(key)
+}
+
+func (p *Process) libcTss_set(key, value uint32) uint32 {
+	if p.libcPthread_setspecific(key, value) != 0 {
+		return thrd_error
+	}
+
+	return thrd_success
+}
+
+func (p *Process) libcTss_get(key uint32) uint32 {
+	return p.libcPthread_getspecific(key)
+}
+
+func errnoOrNil(code uint32) error {
+	if code == 0 {
+		return nil
+	}
+
+	return Errno(code)
 }

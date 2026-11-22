@@ -1,0 +1,25 @@
+//go:build linux && amd64
+
+package main
+
+type SyncCopy struct {
+	copy Object
+}
+
+func (r *SyncCopy) op() uint32 {
+	return 0
+}
+
+func (r *SyncCopy) unserved() error {
+	return EINVAL
+}
+
+func (r *SyncCopy) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+	return 0, b, nil
+}
+
+func (r *SyncCopy) des(p *Process, pk *Packet) error {
+	dropFiles(pk.files)
+
+	return nil
+}

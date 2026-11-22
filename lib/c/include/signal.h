@@ -125,6 +125,7 @@ sighandler_t bsd_signal(int, sighandler_t);
 int sigaction(int, const struct sigaction* __restrict, struct sigaction* __restrict);
 int sigprocmask(int, const sigset_t* __restrict, sigset_t* __restrict);
 int pthread_sigmask(int, const sigset_t* __restrict, sigset_t* __restrict);
+int pthread_kill(pthread_t, int);
 int sigsuspend(const sigset_t*);
 int sigpending(sigset_t*);
 int sigwait(const sigset_t* __restrict, int* __restrict);
