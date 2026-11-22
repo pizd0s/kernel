@@ -212,7 +212,3 @@ size_t strftime_l(char* restrict s, size_t n, const char* restrict format, const
 char* nl_langinfo_l(nl_item item, locale_t locale) {
     return nl_langinfo(item);
 }
-
-long double strtold_l(const char* restrict s, char** restrict end, locale_t locale) {
-    return strtold(s, end);
-}

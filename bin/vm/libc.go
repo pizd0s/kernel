@@ -862,6 +862,66 @@ func libcIconv_close(cd uint32) uint32 {
 	return proc().libcIconv_close(cd)
 }
 
+func libcStrtol(s, end, base uint32) uint32 {
+	return proc().libcStrtol(s, end, base)
+}
+
+func libcStrtoul(s, end, base uint32) uint32 {
+	return proc().libcStrtoul(s, end, base)
+}
+
+func libcStrtoll(s, end, base uint32) uint64 {
+	return proc().libcStrtoll(s, end, base)
+}
+
+func libcStrtoull(s, end, base uint32) uint64 {
+	return proc().libcStrtoull(s, end, base)
+}
+
+func libcWcstol(s, end, base uint32) uint32 {
+	return proc().libcWcstol(s, end, base)
+}
+
+func libcWcstoul(s, end, base uint32) uint32 {
+	return proc().libcWcstoul(s, end, base)
+}
+
+func libcWcstoll(s, end, base uint32) uint64 {
+	return proc().libcWcstoll(s, end, base)
+}
+
+func libcWcstoull(s, end, base uint32) uint64 {
+	return proc().libcWcstoull(s, end, base)
+}
+
+func libcAtoi(s uint32) uint32 {
+	return proc().libcAtol(s)
+}
+
+func libcAtol(s uint32) uint32 {
+	return proc().libcAtol(s)
+}
+
+func libcAtoll(s uint32) uint64 {
+	return proc().libcAtoll(s)
+}
+
+func libcAtof(s uint32) float64 {
+	return proc().libcAtof(s)
+}
+
+func libcStrtod_l(s, end, locale uint32) float64 {
+	return proc().libcStrtod(s, end)
+}
+
+func libcStrtof_l(s, end, locale uint32) float32 {
+	return proc().libcStrtof(s, end)
+}
+
+func libcStrtold_l(s, end, locale uint32) float64 {
+	return proc().libcStrtod(s, end)
+}
+
 func libc__dtoa(v float64, mode, n, decpt, sign, end uint32) uint32 {
 	return proc().libc__dtoa(v, mode, n, decpt, sign, end)
 }

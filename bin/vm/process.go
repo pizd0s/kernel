@@ -12418,7 +12418,7 @@ func (p *Process) libcStrverscmp(a, b uint32) uint32 {
 	return uint32(int32(strverscmp(p.cstr(a), p.cstr(b))))
 }
 
-func (p *Process) floatEnd(s, end uint32, n int, size uint32, erange bool) {
+func (p *Process) numberEnd(s, end uint32, n int, size uint32, erange bool) {
 	if end != 0 {
 		p.put32(end, s+uint32(n)*size)
 	}
@@ -12431,7 +12431,7 @@ func (p *Process) floatEnd(s, end uint32, n int, size uint32, erange bool) {
 func (p *Process) libcStrtod(s, end uint32) float64 {
 	v, n, erange := scanFloat(p.cstr(s), 64)
 
-	p.floatEnd(s, end, n, 1, erange)
+	p.numberEnd(s, end, n, 1, erange)
 
 	return v
 }
@@ -12439,7 +12439,7 @@ func (p *Process) libcStrtod(s, end uint32) float64 {
 func (p *Process) libcStrtof(s, end uint32) float32 {
 	v, n, erange := scanFloat(p.cstr(s), 32)
 
-	p.floatEnd(s, end, n, 1, erange)
+	p.numberEnd(s, end, n, 1, erange)
 
 	return float32(v)
 }
@@ -12447,7 +12447,7 @@ func (p *Process) libcStrtof(s, end uint32) float32 {
 func (p *Process) libcWcstod(s, end uint32) float64 {
 	v, n, erange := scanWideFloat(p.wstring(s), 64)
 
-	p.floatEnd(s, end, n, 4, erange)
+	p.numberEnd(s, end, n, 4, erange)
 
 	return v
 }
@@ -12455,9 +12455,92 @@ func (p *Process) libcWcstod(s, end uint32) float64 {
 func (p *Process) libcWcstof(s, end uint32) float32 {
 	v, n, erange := scanWideFloat(p.wstring(s), 32)
 
-	p.floatEnd(s, end, n, 4, erange)
+	p.numberEnd(s, end, n, 4, erange)
 
 	return float32(v)
+}
+
+func (p *Process) integerOf(s, end, base uint32, signed bool, bits int, wide bool) uint64 {
+	if b := int32(base); b != 0 && (b < 2 || b > 36) {
+		p.numberEnd(s, end, 0, 1, false)
+		p.setErrno(EINVAL)
+
+		return 0
+	}
+
+	var (
+		v        uint64
+		negative bool
+		n        int
+		over     bool
+	)
+
+	size := uint32(1)
+
+	if wide {
+		v, negative, n, over = scanWideInteger(p.wstring(s), int(base))
+		size = 4
+	} else {
+		v, negative, n, over = scanInteger(p.cstr(s), int(base))
+	}
+
+	r, erange := integerIn(v, negative, over, signed, bits)
+
+	p.numberEnd(s, end, n, size, erange)
+
+	return r
+}
+
+func (p *Process) libcStrtol(s, end, base uint32) uint32 {
+	return uint32(p.integerOf(s, end, base, true, 32, false))
+}
+
+func (p *Process) libcStrtoul(s, end, base uint32) uint32 {
+	return uint32(p.integerOf(s, end, base, false, 32, false))
+}
+
+func (p *Process) libcStrtoll(s, end, base uint32) uint64 {
+	return p.integerOf(s, end, base, true, 64, false)
+}
+
+func (p *Process) libcStrtoull(s, end, base uint32) uint64 {
+	return p.integerOf(s, end, base, false, 64, false)
+}
+
+func (p *Process) libcWcstol(s, end, base uint32) uint32 {
+	return uint32(p.integerOf(s, end, base, true, 32, true))
+}
+
+func (p *Process) libcWcstoul(s, end, base uint32) uint32 {
+	return uint32(p.integerOf(s, end, base, false, 32, true))
+}
+
+func (p *Process) libcWcstoll(s, end, base uint32) uint64 {
+	return p.integerOf(s, end, base, true, 64, true)
+}
+
+func (p *Process) libcWcstoull(s, end, base uint32) uint64 {
+	return p.integerOf(s, end, base, false, 64, true)
+}
+
+func (p *Process) libcAtol(s uint32) uint32 {
+	v, negative, _, over := scanInteger(p.cstr(s), 10)
+	r, _ := integerIn(v, negative, over, true, 32)
+
+	return uint32(r)
+}
+
+func (p *Process) libcAtoll(s uint32) uint64 {
+	v, negative, _, over := scanInteger(p.cstr(s), 10)
+	r, _ := integerIn(v, negative, over, true, 64)
+
+	return r
+}
+
+func (p *Process) libcAtof(s uint32) float64 {
+	v, _, _ := scanFloat(p.cstr(s), 64)
+
+	return v
 }
 
 func (p *Process) digitsOut(text string, point int, negative bool, decpt, sign, end uint32) uint32 {

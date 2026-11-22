@@ -3,14 +3,9 @@
 # and NetBSD, which build with openbsd-compat.h, freebsd-compat.h and
 # netbsd-compat.h first;
 # what Bionic takes of LLVM libc is in
-# llvm/files.txt. strtod, strtof and strtold, and their wide forms, are the
-# kernel's, strconv's parse of C's syntax, not gdtoa's as Bionic's are; its
-# atof and _l functions call them, and its scanf. The digits printf writes
-# of a double are the kernel's too (gdtoa.h). A line is a path and the
-# file's own flags.
-libc/bionic/strtol.cpp
-libc/bionic/atof.cpp
-libc/bionic/strtod.cpp
+# llvm/files.txt. The conversions of strings to numbers are the kernel's,
+# by C's syntax, and the digits printf writes of a double (gdtoa.h). A line
+# is a path and the file's own flags.
 libc/bionic/tdestroy.cpp
 libc/upstream-openbsd/lib/libc/stdlib/tsearch.c
 libc/upstream-openbsd/lib/libc/stdlib/tfind.c
