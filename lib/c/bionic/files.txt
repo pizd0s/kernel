@@ -1,6 +1,7 @@
 # The Bionic sources lib/c compiles, from its tree's root (make.py), as
-# Bionic composes its libc: its own and what it carries of OpenBSD and
-# FreeBSD, which build with openbsd-compat.h and freebsd-compat.h first;
+# Bionic composes its libc: its own and what it carries of OpenBSD, FreeBSD
+# and NetBSD, which build with openbsd-compat.h, freebsd-compat.h and
+# netbsd-compat.h first;
 # what Bionic takes of LLVM libc is in
 # llvm/files.txt. strtod, strtof and strtold, and their wide forms, are the
 # kernel's, strconv's parse of C's syntax, not gdtoa's as Bionic's are; its
@@ -60,3 +61,20 @@ libc/upstream-openbsd/lib/libc/locale/wctomb.c
 # getopt, getopt_long and getopt_long_only: FreeBSD's, as Bionic's, which
 # builds with freebsd-compat.h first.
 libc/upstream-freebsd/lib/libc/stdlib/getopt_long.c
+
+# The drand48 family, NetBSD's, as Bionic's, which builds with
+# netbsd-compat.h first.
+libc/upstream-netbsd/lib/libc/stdlib/_rand48.c
+libc/upstream-netbsd/lib/libc/stdlib/drand48.c
+libc/upstream-netbsd/lib/libc/stdlib/erand48.c
+libc/upstream-netbsd/lib/libc/stdlib/jrand48.c
+libc/upstream-netbsd/lib/libc/stdlib/lcong48.c
+libc/upstream-netbsd/lib/libc/stdlib/lrand48.c
+libc/upstream-netbsd/lib/libc/stdlib/mrand48.c
+libc/upstream-netbsd/lib/libc/stdlib/nrand48.c
+libc/upstream-netbsd/lib/libc/stdlib/seed48.c
+libc/upstream-netbsd/lib/libc/stdlib/srand48.c
+
+# quick_exit and at_quick_exit, FreeBSD's, as Bionic's: the handlers are
+# the program's functions.
+libc/upstream-freebsd/lib/libc/stdlib/quick_exit.c

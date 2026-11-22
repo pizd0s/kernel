@@ -11,6 +11,7 @@ libc/upstream-openbsd/lib/libc/stdio
 libc/upstream-openbsd/lib/libc/locale
 libc/upstream-openbsd/lib/libc/include
 libc/upstream-openbsd/lib/libc/stdlib
+libc/upstream-netbsd/android
 libc/upstream-netbsd/lib/libc/stdlib
 libc/upstream-freebsd/android
 libc/upstream-freebsd/lib/libc/stdlib

@@ -102,6 +102,9 @@ const (
 	continued                         = 0xffff
 	SIG_DFL                           = 0
 	SIG_IGN                           = 0xfffffffe
+	SIG_ERR                           = 0xffffffff
+	SIG_HOLD                          = 2
+	L_cuserid                         = 20
 	SA_NOCLDSTOP                      = 1
 	SA_NOCLDWAIT                      = 2
 	SA_SIGINFO                        = 4

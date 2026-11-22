@@ -139,7 +139,9 @@ const (
 	staticProtoent   = 528
 	staticNtoa       = 532
 	staticCrypt      = 548
-	staticSize       = 560
+	staticL64a       = 552
+	staticCuserid    = 560
+	staticSize       = 580
 	niceMin          = -20
 	niceMax          = 19
 	ngroupsMax       = 65536
@@ -3478,8 +3480,8 @@ func (p *Process) libcPause() uint32 {
 	return p.result(0, EINTR)
 }
 
-func (p *Process) libcSigsuspend(set uint32) uint32 {
-	old := p.setMask(p.u64(set))
+func (p *Process) suspendWith(mask uint64) uint32 {
+	old := p.setMask(mask)
 
 	for {
 		if p.idle(-1, false) != nil {
@@ -3491,6 +3493,78 @@ func (p *Process) libcSigsuspend(set uint32) uint32 {
 	p.setMask(old)
 
 	return p.result(0, EINTR)
+}
+
+func (p *Process) libcSigsuspend(set uint32) uint32 {
+	return p.suspendWith(p.u64(set))
+}
+
+func (p *Process) libcSighold(sig uint32) uint32 {
+	if !validSignal(sig) {
+		return p.result(0, EINVAL)
+	}
+
+	p.setMask(p.mask() | sigBit(int(sig)))
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcSigrelse(sig uint32) uint32 {
+	if !validSignal(sig) {
+		return p.result(0, EINVAL)
+	}
+
+	p.setMask(p.mask() &^ sigBit(int(sig)))
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcSigignore(sig uint32) uint32 {
+	if !validSignal(sig) || sig == uint32(SIGKILL) || sig == uint32(SIGSTOP) {
+		return p.result(0, EINVAL)
+	}
+
+	p.setAction(int(sig), SigAction{handler: SIG_IGN})
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcSigpause(sig uint32) uint32 {
+	if !validSignal(sig) {
+		return p.result(0, EINVAL)
+	}
+
+	return p.suspendWith(p.mask() &^ sigBit(int(sig)))
+}
+
+func (p *Process) libcSigset(sig, disp uint32) uint32 {
+	if !validSignal(sig) || disp != SIG_HOLD && (sig == uint32(SIGKILL) || sig == uint32(SIGSTOP)) {
+		p.setErrno(EINVAL)
+
+		return SIG_ERR
+	}
+
+	bit := sigBit(int(sig))
+	held := p.mask()&bit != 0
+
+	p.sig.mu.Lock()
+
+	prev := p.sig.actions[sig]
+
+	p.sig.mu.Unlock()
+
+	if disp == SIG_HOLD {
+		p.setMask(p.mask() | bit)
+	} else {
+		prev = p.setAction(int(sig), SigAction{handler: disp})
+		p.setMask(p.mask() &^ bit)
+	}
+
+	if held {
+		return SIG_HOLD
+	}
+
+	return prev.handler
 }
 
 func (p *Process) libcRaise(sig uint32) uint32 {
@@ -12442,6 +12516,44 @@ func (p *Process) libc__hdtoa(v float64, xdigits, n, decpt, sign, end uint32) ui
 	}
 
 	return p.digitsOut(text, point, math.Signbit(v), decpt, sign, end)
+}
+
+func (p *Process) libcA64l(s uint32) uint32 {
+	return radix64Value(p.limited(s, 6))
+}
+
+func (p *Process) libcL64a(v uint32) uint32 {
+	at := p.staticAt(staticL64a)
+
+	p.putString(at, radix64Text(v))
+
+	return at
+}
+
+func (p *Process) libcGcvt(v float64, n, buf uint32) uint32 {
+	p.putString(buf, shortFloatText(v, int(int32(n))))
+
+	return buf
+}
+
+func (p *Process) libcCuserid(s uint32) uint32 {
+	if s != 0 {
+		p.span(s, 1)[0] = 0
+	}
+
+	e := p.passwdBy(byUid(p.cred.euid()))
+
+	if e == nil || len(e.name) >= L_cuserid {
+		return s
+	}
+
+	if s == 0 {
+		s = p.staticAt(staticCuserid)
+	}
+
+	p.putString(s, e.name)
+
+	return s
 }
 
 func (p *Process) libcAbs(n uint32) uint32 {

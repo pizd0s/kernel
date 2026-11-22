@@ -45,19 +45,19 @@ var callFormats = func() map[string]string {
 	for _, word := range strings.Fields(`
 		_Exit:vd __assert_fail:vssds __dtoa:sfddppp __hdtoa:sfsdppp __hldtoa:sfsdppp __ldtoa:spddppp __pthread_cancelled:dd
 		__pthread_key_take:ppp __pthread_once_begin:dp __pthread_once_end:vp __sched_cpucount:ddp _exit:vd _longjmp:vpdd _setjmp:dpd
-		abort:v abs:dd accept:ddpp accept4:ddppd access:dsd acct:ds adjtime:dpdpd alarm:dd aligned_alloc:pdd alphasort:dpdpd asctime:spd
-		asctime_r:spdp attach:dd basename:sp bcmp:dppd bcopy:vppd bind:ddpd brk:dp bsd_signal:ddd bzero:vpd calloc:pdd
+		a64l:ds abort:v abs:dd accept:ddpp accept4:ddppd access:dsd acct:ds adjtime:dpdpd alarm:dd aligned_alloc:pdd alphasort:dpdpd
+		asctime:spd asctime_r:spdp attach:dd basename:sp bcmp:dppd bcopy:vppd bind:ddpd brk:dp bsd_signal:ddd bzero:vpd calloc:pdd
 		canonicalize_file_name:ss cfgetispeed:dpd cfgetospeed:dpd cfmakeraw:vpd cfsetispeed:dpdd cfsetospeed:dpdd cfsetspeed:dpdd chdir:ds
 		chmod:dso chown:dsdd chroot:ds clearenv:d clock:d clock_getcpuclockid:ddp clock_getres:ddpd clock_gettime:ddpd
 		clock_nanosleep:dddpdpd clock_settime:ddpd close:dd closedir:dp closelog:v cnd_broadcast:dpd cnd_destroy:vpd cnd_init:dpd
 		cnd_signal:dpd cnd_timedwait:dpdpdpd cnd_wait:dpdpd confstr:ddpd connect:ddpd copy_file_range:ddpdpdd creat:dso crypt:sss
-		ctermid:sp ctime:sp ctime_r:spp daemon:ddd difftime:fdd dirfd:dp dirname:sp div:ddd dup:dd dup2:ddd dup3:dddd eaccess:dsd
-		encrypt:vpd endgrent:v endhostent:v endpwent:v endusershell:v epoll_create:dd epoll_create1:dd epoll_ctl:ddddpd
+		ctermid:sp ctime:sp ctime_r:spp cuserid:sp daemon:ddd difftime:fdd dirfd:dp dirname:sp div:ddd dup:dd dup2:ddd dup3:dddd
+		eaccess:dsd encrypt:vpd endgrent:v endhostent:v endpwent:v endusershell:v epoll_create:dd epoll_create1:dd epoll_ctl:ddddpd
 		epoll_pwait:ddpdddpd epoll_wait:ddpddd euidaccess:dsd eventfd:ddd eventfd_read:ddp eventfd_write:ddd execl:dssp execle:dssp
 		execlp:dssp execmode:dddd execv:dsp execve:dspp execvp:dsp execvpe:dspp explicit_bzero:vpd faccessat:ddsdd fchdir:dd fchmod:ddo
 		fchmodat:ddsod fchown:dddd fchownat:ddsddd fcntl:dddpd fdatasync:dd fdopendir:pd fexecve:ddpp ffs:dd ffsl:dd ffsll:dd flock:ddd
 		fnmatch:dssd fork:d forkpty:dpppdpd fpathconf:ddd free:vp freeaddrinfo:vpd fstat:ddpd fstatat:ddspdd fstatfs:ddpd fstatvfs:ddpd
-		fsync:dd ftruncate:ddd futimens:ddpd futimes:ddpd gai_strerror:sd get_avphys_pages:d get_current_dir_name:s get_nprocs:d
+		fsync:dd ftruncate:ddd futimens:ddpd futimes:ddpd gai_strerror:sd gcvt:sfdp get_avphys_pages:d get_current_dir_name:s get_nprocs:d
 		get_nprocs_conf:d get_phys_pages:d getaddrinfo:dsspdpd getcwd:spd getdomainname:dpd getdtablesize:d getegid:d getentropy:dpd
 		getenv:ss geteuid:d getgid:d getgrent:pd getgrgid:pdd getgrgid_r:ddpdpdpd getgrnam:psd getgrnam_r:dspdpdpd getgrouplist:dsdpp
 		getgroups:ddp gethostbyaddr:ppddd gethostbyname:psd gethostbyname2:psdd gethostent:pd gethostid:d gethostname:dpd getitimer:ddpd
@@ -71,12 +71,12 @@ var callFormats = func() map[string]string {
 		inotify_add_watch:ddsd inotify_init:d inotify_init1:dd inotify_rm_watch:ddd ioctl:dddpd isalnum:dd isalpha:dd isascii:dd isatty:dd
 		isblank:dd iscntrl:dd isdigit:dd isgraph:dd islower:dd isprint:dd ispunct:dd issetugid:d isspace:dd isupper:dd iswalnum:dd
 		iswalpha:dd iswblank:dd iswcntrl:dd iswctype:ddd iswdigit:dd iswgraph:dd iswlower:dd iswprint:dd iswpunct:dd iswspace:dd
-		iswupper:dd iswxdigit:dd isxdigit:dd kill:ddd killpg:ddd labs:dd lchmod:dso lchown:dsdd ldiv:ddd link:dss linkat:ddsdsd listen:ddd
-		llabs:dd lldiv:ddd localeconv:pd localtime:ppd localtime_r:pppdd lockf:dddd longjmp:vpdd lseek:dddd lstat:dspd lutimes:dspd
-		madvise:dpdd malloc:pd malloc_trim:dd malloc_usable_size:dp mallopt:ddd memalign:pdd memccpy:pppdd memchr:ppdd memcmp:dppd
-		memcpy:pppd memfd_create:dpdd memmem:ppdpd memmove:pppd mempcpy:pppd memrchr:ppdd memset:ppdd mkdir:dso mkdirat:ddso mkdtemp:sp
-		mkfifo:dso mkfifoat:ddso mknod:dsod mknodat:ddsod mkostemp:dpd mkostemps:dpdd mkstemp:dp mkstemps:dpd mktemp:sp mktime:dpd
-		mlock:dpd mlockall:dd mmap:ppddddd mount:dsssdp mprotect:dpdd msync:dpdd mtx_destroy:vpd mtx_init:dpdd mtx_lock:dpd
+		iswupper:dd iswxdigit:dd isxdigit:dd kill:ddd killpg:ddd l64a:sd labs:dd lchmod:dso lchown:dsdd ldiv:ddd link:dss linkat:ddsdsd
+		listen:ddd llabs:dd lldiv:ddd localeconv:pd localtime:ppd localtime_r:pppdd lockf:dddd longjmp:vpdd lseek:dddd lstat:dspd
+		lutimes:dspd madvise:dpdd malloc:pd malloc_trim:dd malloc_usable_size:dp mallopt:ddd memalign:pdd memccpy:pppdd memchr:ppdd
+		memcmp:dppd memcpy:pppd memfd_create:dpdd memmem:ppdpd memmove:pppd mempcpy:pppd memrchr:ppdd memset:ppdd mkdir:dso mkdirat:ddso
+		mkdtemp:sp mkfifo:dso mkfifoat:ddso mknod:dsod mknodat:ddsod mkostemp:dpd mkostemps:dpdd mkstemp:dp mkstemps:dpd mktemp:sp
+		mktime:dpd mlock:dpd mlockall:dd mmap:ppddddd mount:dsssdp mprotect:dpdd msync:dpdd mtx_destroy:vpd mtx_init:dpdd mtx_lock:dpd
 		mtx_timedlock:dpdpd mtx_trylock:dpd mtx_unlock:dpd munlock:dpd munlockall:d munmap:dpd nanosleep:dpdpd nice:dd nl_langinfo:sd
 		open:dsdp openat:ddsdp opendir:ps openlog:vsdd openpty:dppppdpd pathconf:dsd pause:d pipe:dp pipe2:dpd poll:dpddd posix_close:ddd
 		posix_fadvise:ddddd posix_fallocate:dddd posix_memalign:dpdd posix_openpt:dd ppoll:dpddpdpd prctl:ddp pread:ddpdd preadv:ddpddd
@@ -117,26 +117,26 @@ var callFormats = func() map[string]string {
 		setjmp:dpd setkey:vs setlocale:sds setlogmask:dd setpgid:ddd setpgrp:d setpriority:dddd setpwent:v setregid:ddd setresgid:dddd
 		setresuid:dddd setreuid:ddd setrlimit:ddpd setsid:d setsockopt:ddddpd setstate:sp settimeofday:dpdpd setuid:dd setusershell:v
 		shutdown:ddd sigaction:ddpdpdd sigaddset:dpdd sigaltstack:dpdpd sigandset:dpdpdpd sigdelset:dpdd sigemptyset:dpd sigfillset:dpd
-		siginterrupt:ddd sigisemptyset:dpd sigismember:dpdd siglongjmp:vpdd signal:ddd sigorset:dpdpdpd sigpending:dpd sigprocmask:ddpdpd
-		sigqueue:dddd sigsetjmp:dpdd sigsuspend:dpd sigtimedwait:dpdpdpd sigwait:dpdp sigwaitinfo:dpdpd sleep:dd sockatmark:dd socket:dddd
-		socketpair:ddddp srand:vd srandom:vd stat:dspd statfs:dspd statvfs:dspd stime:dp stpcpy:sps stpncpy:spsd strcasecmp:dss
-		strcasecmp_l:dssd strcasestr:sss strcat:sps strchr:ssd strchrnul:ssd strcmp:dss strcoll:dss strcpy:sps strcspn:dss strdup:ss
-		strerror:sd strerror_l:sdd strerror_r:ddpd strftime:dpdspd strlcat:dpsd strlcpy:dpsd strlen:ds strncasecmp:dssd
-		strncasecmp_l:dssdd strncat:spsd strncmp:dssd strncpy:spsd strndup:ssd strnlen:dsd strpbrk:sss strptime:ssspd strrchr:ssd
-		strsep:sps strsignal:sd strspn:dss strstr:sss strtod:fsp strtof:fsp strtok:sps strtok_r:spsp strtold:fsp strverscmp:dss
-		strxfrm:dpsd swab:vppd symlink:dss symlinkat:dsds sync:v syncfs:dd sysconf:dd sysinfo:dpd system:ds tcdrain:dd tcflow:ddd
-		tcflush:ddd tcgetattr:ddpd tcgetpgrp:dd tcgetsid:dd tcsendbreak:ddd tcsetattr:dddpd tcsetpgrp:ddd telldir:dp thrd_create:dpdp
-		thrd_current:d thrd_detach:dd thrd_equal:ddd thrd_join:ddp thrd_sleep:dpdpd thrd_yield:v time:dp timegm:dpd timer_create:ddpdp
-		timer_delete:dd timer_getoverrun:dd timer_gettime:ddpd timer_settime:dddpdpd timerfd_create:ddd timerfd_gettime:ddpd
-		timerfd_settime:dddpdpd times:dpd timespec_get:dpdd toascii:dd tolower:dd toupper:dd towctrans:ddd towctrans_l:dddd towlower:dd
-		towupper:dd truncate:dsd tss_create:dpd tss_delete:vd tss_get:pd tss_set:ddp ttyname:sd ttyname_r:ddpd tzset:v ualarm:ddd umask:oo
-		umount:ds umount2:dsd uname:dpd unlink:ds unlinkat:ddsd unlockpt:dd unsetenv:ds usleep:dd utime:dspd utimensat:ddspdd utimes:dspd
-		valloc:pd versionsort:dpdpd vfork:d vhangup:d wait:dp wait3:dpdpd wait4:ddpdpd waitid:dddpdd waitpid:ddpd watchdir:ddd wcpcpy:ppp
-		wcpncpy:pppd wcscasecmp:dpp wcscasecmp_l:dppd wcscat:ppp wcschr:ppd wcscmp:dpp wcscoll:dpp wcscpy:ppp wcscspn:dpp wcsdup:pp
-		wcsftime:dpdppd wcsftime_l:dpdppdd wcslen:dp wcsncasecmp:dppd wcsncasecmp_l:dppdd wcsncat:pppd wcsncmp:dppd wcsncpy:pppd
-		wcsnlen:dpd wcspbrk:ppp wcsrchr:ppd wcsspn:dpp wcsstr:ppp wcstod:fpp wcstof:fpp wcstok:pppp wcstold:fpp wcswcs:ppp wcswidth:dpd
-		wcsxfrm:dppd wctrans:ds wctrans_l:dsd wctype:ds wcwidth:dd wmemchr:ppdd wmemcmp:dppd wmemcpy:pppd wmemmove:pppd wmemset:ppdd
-		write:ddpd writev:ddpdd
+		sighold:dd sigignore:dd siginterrupt:ddd sigisemptyset:dpd sigismember:dpdd siglongjmp:vpdd signal:ddd sigorset:dpdpdpd
+		sigpause:dd sigpending:dpd sigprocmask:ddpdpd sigqueue:dddd sigrelse:dd sigset:ddd sigsetjmp:dpdd sigsuspend:dpd
+		sigtimedwait:dpdpdpd sigwait:dpdp sigwaitinfo:dpdpd sleep:dd sockatmark:dd socket:dddd socketpair:ddddp srand:vd srandom:vd
+		stat:dspd statfs:dspd statvfs:dspd stime:dp stpcpy:sps stpncpy:spsd strcasecmp:dss strcasecmp_l:dssd strcasestr:sss strcat:sps
+		strchr:ssd strchrnul:ssd strcmp:dss strcoll:dss strcpy:sps strcspn:dss strdup:ss strerror:sd strerror_l:sdd strerror_r:ddpd
+		strftime:dpdspd strlcat:dpsd strlcpy:dpsd strlen:ds strncasecmp:dssd strncasecmp_l:dssdd strncat:spsd strncmp:dssd strncpy:spsd
+		strndup:ssd strnlen:dsd strpbrk:sss strptime:ssspd strrchr:ssd strsep:sps strsignal:sd strspn:dss strstr:sss strtod:fsp strtof:fsp
+		strtok:sps strtok_r:spsp strtold:fsp strverscmp:dss strxfrm:dpsd swab:vppd symlink:dss symlinkat:dsds sync:v syncfs:dd sysconf:dd
+		sysinfo:dpd system:ds tcdrain:dd tcflow:ddd tcflush:ddd tcgetattr:ddpd tcgetpgrp:dd tcgetsid:dd tcsendbreak:ddd tcsetattr:dddpd
+		tcsetpgrp:ddd telldir:dp thrd_create:dpdp thrd_current:d thrd_detach:dd thrd_equal:ddd thrd_join:ddp thrd_sleep:dpdpd thrd_yield:v
+		time:dp timegm:dpd timer_create:ddpdp timer_delete:dd timer_getoverrun:dd timer_gettime:ddpd timer_settime:dddpdpd
+		timerfd_create:ddd timerfd_gettime:ddpd timerfd_settime:dddpdpd times:dpd timespec_get:dpdd toascii:dd tolower:dd toupper:dd
+		towctrans:ddd towctrans_l:dddd towlower:dd towupper:dd truncate:dsd tss_create:dpd tss_delete:vd tss_get:pd tss_set:ddp ttyname:sd
+		ttyname_r:ddpd tzset:v ualarm:ddd umask:oo umount:ds umount2:dsd uname:dpd unlink:ds unlinkat:ddsd unlockpt:dd unsetenv:ds
+		usleep:dd utime:dspd utimensat:ddspdd utimes:dspd valloc:pd versionsort:dpdpd vfork:d vhangup:d wait:dp wait3:dpdpd wait4:ddpdpd
+		waitid:dddpdd waitpid:ddpd watchdir:ddd wcpcpy:ppp wcpncpy:pppd wcscasecmp:dpp wcscasecmp_l:dppd wcscat:ppp wcschr:ppd wcscmp:dpp
+		wcscoll:dpp wcscpy:ppp wcscspn:dpp wcsdup:pp wcsftime:dpdppd wcsftime_l:dpdppdd wcslen:dp wcsncasecmp:dppd wcsncasecmp_l:dppdd
+		wcsncat:pppd wcsncmp:dppd wcsncpy:pppd wcsnlen:dpd wcspbrk:ppp wcsrchr:ppd wcsspn:dpp wcsstr:ppp wcstod:fpp wcstof:fpp wcstok:pppp
+		wcstold:fpp wcswcs:ppp wcswidth:dpd wcsxfrm:dppd wctrans:ds wctrans_l:dsd wctype:ds wcwidth:dd wmemchr:ppdd wmemcmp:dppd
+		wmemcpy:pppd wmemmove:pppd wmemset:ppdd write:ddpd writev:ddpdd
 `) {
 		name, format, _ := strings.Cut(word, ":")
 

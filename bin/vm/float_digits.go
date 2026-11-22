@@ -103,6 +103,62 @@ func decimalDigits(v float64, mode, n int) (string, int) {
 	return shortestDigits(v)
 }
 
+func shortFloatText(v float64, n int) string {
+	sign := ""
+
+	if math.Signbit(v) {
+		sign, v = "-", -v
+	}
+
+	switch {
+	case math.IsNaN(v):
+		return sign + "nan"
+	case math.IsInf(v, 0):
+		return sign + "inf"
+	case v == 0:
+		return sign + "0"
+	}
+
+	if n < 0 {
+		n = 6
+	}
+
+	n = min(max(n, 1), 17)
+
+	digits, point := significantDigits(v, n)
+
+	if point-1 < -4 || point-1 >= n {
+		mantissa := digits[:1]
+
+		if len(digits) > 1 {
+			mantissa += "." + digits[1:]
+		}
+
+		power, minus := point-1, "+"
+
+		if power < 0 {
+			power, minus = -power, "-"
+		}
+
+		exponent := strconv.Itoa(power)
+
+		if power < 10 {
+			exponent = "0" + exponent
+		}
+
+		return sign + mantissa + "e" + minus + exponent
+	}
+
+	switch {
+	case point <= 0:
+		return sign + "0." + strings.Repeat("0", -point) + digits
+	case point >= len(digits):
+		return sign + digits + strings.Repeat("0", point-len(digits))
+	}
+
+	return sign + digits[:point] + "." + digits[point:]
+}
+
 func hexDigits(v float64, n int) ([]byte, int) {
 	bits := math.Float64bits(v)
 	exponent := int(bits >> 52 & 0x7ff)

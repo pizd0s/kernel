@@ -814,6 +814,42 @@ func libcWcstold(s, end uint32) float64 {
 	return proc().libcWcstod(s, end)
 }
 
+func libcA64l(s uint32) uint32 {
+	return proc().libcA64l(s)
+}
+
+func libcL64a(v uint32) uint32 {
+	return proc().libcL64a(v)
+}
+
+func libcGcvt(v float64, n, buf uint32) uint32 {
+	return proc().libcGcvt(v, n, buf)
+}
+
+func libcCuserid(s uint32) uint32 {
+	return proc().libcCuserid(s)
+}
+
+func libcSighold(sig uint32) uint32 {
+	return proc().libcSighold(sig)
+}
+
+func libcSigrelse(sig uint32) uint32 {
+	return proc().libcSigrelse(sig)
+}
+
+func libcSigignore(sig uint32) uint32 {
+	return proc().libcSigignore(sig)
+}
+
+func libcSigpause(sig uint32) uint32 {
+	return proc().libcSigpause(sig)
+}
+
+func libcSigset(sig, disp uint32) uint32 {
+	return proc().libcSigset(sig, disp)
+}
+
 func libc__dtoa(v float64, mode, n, decpt, sign, end uint32) uint32 {
 	return proc().libc__dtoa(v, mode, n, decpt, sign, end)
 }
