@@ -3772,6 +3772,38 @@ func libcInotify_rm_watch(fd, wd uint32) uint32 {
 	return proc().libcInotify_rm_watch(fd, wd)
 }
 
+func libcTimer_create(clock, event, eventSize, at uint32) uint32 {
+	p := proc()
+
+	p.sized("timer_create", eventSize, sizeofSigevent)
+
+	return p.libcTimer_create(clock, event, at)
+}
+
+func libcTimer_delete(timer uint32) uint32 {
+	return proc().libcTimer_delete(timer)
+}
+
+func libcTimer_settime(timer, flags, value, valueSize, old, oldSize uint32) uint32 {
+	p := proc()
+
+	p.sized("timer_settime", valueSize, sizeofItimerspec, oldSize, sizeofItimerspec)
+
+	return p.libcTimer_settime(timer, flags, value, old)
+}
+
+func libcTimer_gettime(timer, at, size uint32) uint32 {
+	p := proc()
+
+	p.sized("timer_gettime", size, sizeofItimerspec)
+
+	return p.libcTimer_gettime(timer, at)
+}
+
+func libcTimer_getoverrun(timer uint32) uint32 {
+	return proc().libcTimer_getoverrun(timer)
+}
+
 func ioctlSize(req uint32) uint32 {
 	switch req {
 	case TCGETS, TCSETS, TCSETS + 1, TCSETS + 2:

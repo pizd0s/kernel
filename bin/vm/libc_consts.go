@@ -328,6 +328,14 @@ const (
 	WATCH_IDLE                        = 2
 	WATCH_ADDED                       = 3
 	WATCH_REMOVED                     = 4
+	SIGEV_SIGNAL                      = 0
+	SIGEV_NONE                        = 1
+	SIGEV_THREAD                      = 2
+	SIGEV_THREAD_ID                   = 4
+	SI_USER                           = 0
+	SI_QUEUE                          = -1
+	SI_TIMER                          = -2
+	DELAYTIMER_MAX                    = 0x7fffffff
 	thrd_success                      = 0
 	thrd_busy                         = 1
 	thrd_error                        = 2
@@ -336,7 +344,7 @@ const (
 	mtx_recursive                     = 1
 	sizeofServent                     = 16
 	sizeofSigaction                   = 24
-	sizeofSiginfo                     = 36
+	sizeofSiginfo                     = 44
 	sizeofSigset                      = 8
 	sizeofStack                       = 12
 	sizeofStat                        = 112
@@ -345,6 +353,7 @@ const (
 	sizeofSysinfo                     = 312
 	sizeofTermios                     = 60
 	sizeofTimespec                    = 16
+	sizeofSigevent                    = 64
 	sizeofItimerspec                  = 32
 	sizeofTimeval                     = 16
 	sizeofTimezone                    = 8

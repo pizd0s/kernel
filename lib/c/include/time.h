@@ -56,6 +56,21 @@ char* ctime_r(const time_t*, char*);
 size_t strftime(char* __restrict, size_t, const char* __restrict, const struct tm* __restrict);
 char* strptime(const char* __restrict, const char* __restrict, struct tm* __restrict);
 int timespec_get(struct timespec*, int);
+
+/*
+ * Timers of a process, the kernel's, of CLOCK_REALTIME, CLOCK_MONOTONIC
+ * or CLOCK_BOOTTIME; a CPU-time clock's ENOTSUP. One tells its expiry as
+ * its sigevent says, SIGALRM with its id as the value without one; a
+ * signal of it pending, another expiry counts in timer_getoverrun's, up
+ * to DELAYTIMER_MAX. A child of fork has none; exec ends them.
+ */
+struct sigevent;
+
+int timer_create(clockid_t, struct sigevent* __restrict, timer_t* __restrict);
+int timer_delete(timer_t);
+int timer_settime(timer_t, int, const struct itimerspec* __restrict, struct itimerspec* __restrict);
+int timer_gettime(timer_t, struct itimerspec*);
+int timer_getoverrun(timer_t);
 extern int getdate_err;
 struct tm* getdate(const char*);
 void tzset(void);

@@ -243,6 +243,7 @@ type Process struct {
 	nextRegex uint32
 
 	desKey       [8]byte
+	posixTimers  map[int32]*PosixTimer
 	syncs        map[int32]Object
 	nextSync     int32
 	keys         [PTHREAD_KEYS_MAX]Key
@@ -547,6 +548,12 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 		p.regexes, p.constants, p.locale = map[uint32]*PosixRegex{}, map[string]uint32{}, [LC_ALL]string{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
 		p.defaultStack, p.defaultGuard, p.desKey = 0, 0, [8]byte{}
+
+		for _, t := range p.posixTimers {
+			p.disarmPosix(t)
+		}
+
+		p.posixTimers = nil
 		p.envStrings, p.mappings = map[uint32]bool{}, map[uint32]Mapping{}
 		p.jumps, p.stackAt = map[uint32]*JmpBuf{}, 0
 		enter = func() {
@@ -2422,7 +2429,7 @@ func (p *Process) waitid(idtype, id, info, options uint32) uint32 {
 	}
 
 	if info != 0 {
-		clear(p.span(info, 36))
+		clear(p.span(info, sizeofSiginfo))
 
 		if q != 0 {
 			code, value := CLD_EXITED, status>>8&0xff
@@ -2573,10 +2580,48 @@ func sigBit(sig int) uint64 {
 func (s *SignalState) sent(sig int) {
 	switch {
 	case sig == SIGCONT:
-		s.pending &^= stopSignals
+		s.drop(stopSignals)
 	case sigBit(sig)&stopSignals != 0:
-		s.pending &^= sigBit(SIGCONT)
+		s.drop(sigBit(SIGCONT))
 	}
+}
+
+func (s *SignalState) post(sig int, info SigInfo) bool {
+	switch {
+	case sig >= SIGRTMIN && len(s.infos[sig]) >= sigQueueMax:
+		return false
+	case sig >= SIGRTMIN || s.pending&sigBit(sig) == 0:
+		s.infos[sig] = append(s.infos[sig], info)
+	}
+
+	s.pending |= sigBit(sig)
+
+	return true
+}
+
+func (s *SignalState) taken(sig int) SigInfo {
+	var info SigInfo
+
+	if q := s.infos[sig]; len(q) > 0 {
+		info, s.infos[sig] = q[0], q[1:]
+	}
+
+	if len(s.infos[sig]) == 0 {
+		s.pending &^= sigBit(sig)
+		s.infos[sig] = nil
+	}
+
+	return info
+}
+
+func (s *SignalState) drop(mask uint64) {
+	for sig := 1; sig < NSIG; sig++ {
+		if mask&sigBit(sig) != 0 {
+			s.infos[sig] = nil
+		}
+	}
+
+	s.pending &^= mask
 }
 
 type SigAction struct {
@@ -2590,6 +2635,7 @@ type SignalState struct {
 	actions [NSIG]SigAction
 	blocked uint64
 	pending uint64
+	infos   [NSIG][]SigInfo
 
 	dead bool
 
@@ -2609,6 +2655,10 @@ func (a SigAction) ignored(sig int) bool {
 }
 
 func (p *Process) send(sig int) {
+	p.sendInfo(sig, SigInfo{})
+}
+
+func (p *Process) sendInfo(sig int, info SigInfo) bool {
 	if sig == SIGCONT {
 		p.cont()
 	}
@@ -2622,7 +2672,7 @@ func (p *Process) send(sig int) {
 	if act.ignored(sig) && !blocked {
 		p.sig.mu.Unlock()
 
-		return
+		return true
 	}
 
 	if p == p.k.first && !blocked && act.handler == SIG_DFL && defaultAction(sig) == actTerminate {
@@ -2630,7 +2680,11 @@ func (p *Process) send(sig int) {
 		os.Exit(128 + sig)
 	}
 
-	p.sig.pending |= sigBit(sig)
+	if !p.sig.post(sig, info) {
+		p.sig.mu.Unlock()
+
+		return false
+	}
 
 	token := p.token.Load()
 
@@ -2647,6 +2701,8 @@ func (p *Process) send(sig int) {
 		runtime.Interrupt(token)
 		p.chase()
 	}
+
+	return true
 }
 
 func (p *Process) chase() {
@@ -2776,17 +2832,24 @@ func (p *Process) interrupt() {
 }
 
 func (p *Process) sendSelf(sig int) {
+	p.sendSelfInfo(sig, SigInfo{pid: int32(p.pid), uid: uint32(p.cred.uid())})
+}
+
+func (p *Process) sendSelfInfo(sig int, info SigInfo) bool {
 	p.sig.mu.Lock()
 	p.sig.sent(sig)
 
 	act := p.sig.actions[sig]
+	posted := true
 
 	if !act.ignored(sig) || p.sig.blocked&sigBit(sig) != 0 {
-		p.sig.pending |= sigBit(sig)
+		posted = p.sig.post(sig, info)
 	}
 
 	p.sig.mu.Unlock()
 	p.signalled()
+
+	return posted
 }
 
 func (p *Process) signalled() {
@@ -2860,7 +2923,7 @@ func (p *Process) unask(outer *Answer, was bool) {
 	p.asking, p.cancelled = outer, was
 }
 
-func (p *Process) take() (int, SigAction) {
+func (p *Process) take() (int, SigAction, SigInfo) {
 	p.sig.mu.Lock()
 
 	defer p.sig.mu.Unlock()
@@ -2868,20 +2931,30 @@ func (p *Process) take() (int, SigAction) {
 	ready := p.sig.pending &^ p.sig.blocked
 
 	if ready == 0 {
-		return 0, SigAction{}
+		return 0, SigAction{}, SigInfo{}
 	}
 
 	sig := bits.TrailingZeros64(ready) + 1
-
-	p.sig.pending &^= sigBit(sig)
-
+	info := p.delivered(p.sig.taken(sig))
 	act := p.sig.actions[sig]
 
 	if act.handler != SIG_DFL && act.handler != SIG_IGN && act.flags&SA_RESETHAND != 0 {
 		p.sig.actions[sig] = SigAction{}
 	}
 
-	return sig, act
+	return sig, act, info
+}
+
+func (p *Process) delivered(info SigInfo) SigInfo {
+	if info.code != SI_TIMER {
+		return info
+	}
+
+	if t := p.posixTimers[info.timer]; t != nil {
+		info.overrun, t.last, t.overrun = t.overrun, t.overrun, 0
+	}
+
+	return info
 }
 
 func (p *Process) deliver() {
@@ -2898,7 +2971,7 @@ func (p *Process) handleSignals() (taken, restart bool) {
 	restart = true
 
 	for {
-		sig, act := p.take()
+		sig, act, info := p.take()
 
 		if sig == 0 {
 			return taken, restart
@@ -2921,7 +2994,7 @@ func (p *Process) handleSignals() (taken, restart bool) {
 				restart = false
 			}
 
-			p.runHandler(sig, act)
+			p.runHandler(sig, act, info)
 		}
 	}
 }
@@ -2944,7 +3017,7 @@ func (p *Process) stop(sig int) {
 	p.stopped(sig)
 }
 
-func (p *Process) runHandler(sig int, act SigAction) {
+func (p *Process) runHandler(sig int, act SigAction, info SigInfo) {
 	if p.chaosMoves() && p.inst.memory != nil {
 		p.inst.move()
 	}
@@ -2973,14 +3046,10 @@ func (p *Process) runHandler(sig int, act SigAction) {
 
 	if act.flags&SA_SIGINFO != 0 {
 		if p.siginfo == 0 {
-			p.siginfo = p.malloc(36)
+			p.siginfo = p.malloc(sizeofSiginfo)
 		}
 
-		info := p.span(p.siginfo, 36)
-
-		clear(info)
-		p.put32(p.siginfo, uint32(sig))
-		p.put32(p.siginfo+12, uint32(p.pid))
+		p.putSiginfo(p.siginfo, sig, info)
 
 		f, _ := p.inst.export("__call_signal_action")
 
@@ -3028,7 +3097,7 @@ func (p *Process) sigprocmask(how, set, old uint32) error {
 	return nil
 }
 
-func (p *Process) sigwait(set uint64, timeout time.Duration) (int, error) {
+func (p *Process) sigwait(set uint64, timeout time.Duration) (int, SigInfo, error) {
 	set &^= unblockable
 	var end time.Time
 
@@ -3042,12 +3111,14 @@ func (p *Process) sigwait(set uint64, timeout time.Duration) (int, error) {
 
 	sig := 0
 
+	var info SigInfo
+
 	timedOut, err := p.wait(end, func(*Event) (bool, error) {
 		p.sig.mu.Lock()
 
 		if ready := p.sig.pending & set; ready != 0 {
 			sig = bits.TrailingZeros64(ready) + 1
-			p.sig.pending &^= sigBit(sig)
+			info = p.delivered(p.sig.taken(sig))
 		}
 
 		p.sig.mu.Unlock()
@@ -3060,17 +3131,26 @@ func (p *Process) sigwait(set uint64, timeout time.Duration) (int, error) {
 	})
 
 	if timedOut {
-		return 0, EAGAIN
+		return 0, info, EAGAIN
 	}
 
-	return sig, err
+	return sig, info, err
 }
 
-func (p *Process) putSiginfo(at uint32, sig int) {
-	if at != 0 {
-		clear(p.span(at, 36))
-		p.put32(at, uint32(sig))
+func (p *Process) putSiginfo(at uint32, sig int, info SigInfo) {
+	if at == 0 {
+		return
 	}
+
+	clear(p.span(at, sizeofSiginfo))
+	p.put32(at, uint32(sig))
+	p.put32(at+8, uint32(info.code))
+	p.put32(at+12, uint32(info.pid))
+	p.put32(at+16, info.uid)
+	p.put32(at+20, uint32(info.status))
+	p.put32(at+32, info.value)
+	p.put32(at+36, uint32(info.timer))
+	p.put32(at+40, uint32(info.overrun))
 }
 
 func (p *Process) setMember(sig uint32) bool {
@@ -3093,7 +3173,7 @@ func (p *Process) setAction(sig int, act SigAction) SigAction {
 	p.sig.actions[sig] = act
 
 	if act.ignored(sig) {
-		p.sig.pending &^= sigBit(sig)
+		p.sig.drop(sigBit(sig))
 	}
 
 	return old
@@ -3134,6 +3214,10 @@ func validSignal(sig uint32) bool {
 }
 
 func (p *Process) kill(pid int32, sig uint32) error {
+	return p.killInfo(pid, sig, SigInfo{code: SI_USER})
+}
+
+func (p *Process) killInfo(pid int32, sig uint32, info SigInfo) error {
 	if sig != 0 && !validSignal(sig) {
 		return EINVAL
 	}
@@ -3144,12 +3228,14 @@ func (p *Process) kill(pid int32, sig uint32) error {
 		return ESRCH
 	}
 
+	info.pid, info.uid = int32(p.pid), uint32(p.cred.uid())
+
 	if sig != 0 {
 		for _, q := range targets {
-			if q == p {
-				q.sendSelf(int(sig))
-			} else {
-				q.send(int(sig))
+			posted := q == p && q.sendSelfInfo(int(sig), info) || q != p && q.sendInfo(int(sig), info)
+
+			if !posted {
+				return EAGAIN
 			}
 		}
 	}
@@ -3271,7 +3357,7 @@ func (p *Process) libcSigpending(set uint32) uint32 {
 
 func (p *Process) libcSigwait(set, at uint32) uint32 {
 	for {
-		sig, err := p.sigwait(p.u64(set), -1)
+		sig, _, err := p.sigwait(p.u64(set), -1)
 
 		if err == nil {
 			p.put32(at, uint32(sig))
@@ -3282,10 +3368,10 @@ func (p *Process) libcSigwait(set, at uint32) uint32 {
 }
 
 func (p *Process) libcSigwaitinfo(set, info uint32) uint32 {
-	sig, err := p.sigwait(p.u64(set), -1)
+	sig, si, err := p.sigwait(p.u64(set), -1)
 
 	if err == nil {
-		p.putSiginfo(info, sig)
+		p.putSiginfo(info, sig, si)
 	}
 
 	return p.result(sig, err)
@@ -3302,10 +3388,10 @@ func (p *Process) libcSigtimedwait(set, info, timeout uint32) uint32 {
 		}
 	}
 
-	sig, err := p.sigwait(p.u64(set), d)
+	sig, si, err := p.sigwait(p.u64(set), d)
 
 	if err == nil {
-		p.putSiginfo(info, sig)
+		p.putSiginfo(info, sig, si)
 	}
 
 	return p.result(sig, err)
@@ -3426,7 +3512,7 @@ func (p *Process) libcSigqueue(pid, sig, value uint32) uint32 {
 		return p.result(0, EINVAL)
 	}
 
-	return p.result(0, p.kill(int32(pid), sig))
+	return p.result(0, p.killInfo(int32(pid), sig, SigInfo{code: SI_QUEUE, value: p.u32(value)}))
 }
 
 func (p *Process) libcKillpg(pgrp, sig uint32) uint32 {
@@ -8966,6 +9052,12 @@ func (p *Process) timerDue(which int, epoch uint64) {
 }
 
 func (p *Process) stopTimers() {
+	for _, t := range p.posixTimers {
+		p.disarmPosix(t)
+	}
+
+	p.posixTimers = nil
+
 	for i := range p.timers {
 		t := &p.timers[i]
 
@@ -15602,4 +15694,207 @@ func (p *Process) libcInotify_rm_watch(fd, wd uint32) uint32 {
 	}
 
 	return p.result(0, p.request(in, &InotifyRemove{wd: int32(wd)}))
+}
+
+func (p *Process) libcTimer_create(clock, event, at uint32) uint32 {
+	switch clock {
+	case CLOCK_REALTIME, CLOCK_MONOTONIC, CLOCK_BOOTTIME:
+	case CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID:
+		return p.result(0, ENOTSUP)
+	default:
+		if _, ok := p.hostClock(clock); ok && int32(clock) < 0 {
+			return p.result(0, ENOTSUP)
+		}
+
+		return p.result(0, EINVAL)
+	}
+
+	id := int32(0)
+
+	for p.posixTimers[id] != nil {
+		id++
+	}
+
+	t := &PosixTimer{id: id, clock: clock, notify: SIGEV_SIGNAL, signal: SIGALRM, value: uint32(id)}
+
+	if event != 0 {
+		t.value, t.signal, t.notify = p.u32(event), int(p.u32(event+4)), p.u32(event+8)
+
+		switch t.notify {
+		case SIGEV_NONE:
+		case SIGEV_THREAD:
+			return p.result(0, EAGAIN)
+		case SIGEV_THREAD_ID:
+			if p.u32(event+12) != uint32(p.pid) || !validSignal(uint32(t.signal)) {
+				return p.result(0, EINVAL)
+			}
+		case SIGEV_SIGNAL:
+			if !validSignal(uint32(t.signal)) {
+				return p.result(0, EINVAL)
+			}
+		default:
+			return p.result(0, EINVAL)
+		}
+	}
+
+	if p.posixTimers == nil {
+		p.posixTimers = map[int32]*PosixTimer{}
+	}
+
+	p.posixTimers[id] = t
+	p.put32(at, uint32(id))
+
+	return p.result(0, nil)
+}
+
+func (p *Process) posixTimer(timer uint32) (*PosixTimer, error) {
+	if t := p.posixTimers[int32(timer)]; t != nil {
+		return t, nil
+	}
+
+	return nil, EINVAL
+}
+
+func (p *Process) disarmPosix(t *PosixTimer) {
+	if t.timer != nil {
+		t.timer.Stop()
+	}
+
+	t.epoch++
+	t.timer, t.interval = nil, 0
+}
+
+func (p *Process) armPosix(t *PosixTimer, end time.Time) {
+	t.end = end
+
+	epoch, id := t.epoch, t.id
+	e := &Event{kind: eventTimer, run: func(p *Process) { p.posixDue(id, epoch) }}
+
+	t.timer = time.AfterFunc(time.Until(end), func() {
+		p.post(e)
+		p.nudge()
+	})
+}
+
+func (p *Process) timerQueued(t *PosixTimer) bool {
+	p.sig.mu.Lock()
+
+	defer p.sig.mu.Unlock()
+
+	for _, info := range p.sig.infos[t.signal] {
+		if info.code == SI_TIMER && info.timer == t.id {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (p *Process) posixDue(id int32, epoch uint64) {
+	t := p.posixTimers[id]
+
+	if t == nil || t.epoch != epoch {
+		return
+	}
+
+	t.epoch++
+
+	passed := int64(1)
+
+	if t.interval > 0 {
+		passed += int64(max(time.Since(t.end), 0) / t.interval)
+		p.armPosix(t, t.end.Add(time.Duration(passed)*t.interval))
+	} else {
+		t.timer = nil
+	}
+
+	if t.notify == SIGEV_NONE {
+		return
+	}
+
+	if p.timerQueued(t) {
+		t.overrun = int32(min(int64(t.overrun)+passed, DELAYTIMER_MAX))
+
+		return
+	}
+
+	t.overrun = int32(min(passed-1, DELAYTIMER_MAX))
+	p.sendSelfInfo(t.signal, SigInfo{code: SI_TIMER, value: t.value, timer: t.id})
+}
+
+func (p *Process) libcTimer_delete(timer uint32) uint32 {
+	t, err := p.posixTimer(timer)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	p.disarmPosix(t)
+	delete(p.posixTimers, t.id)
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcTimer_settime(timer, flags, value, old uint32) uint32 {
+	t, err := p.posixTimer(timer)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	interval, err := p.timespec(value)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	first, err := p.timespec(value + sizeofTimespec)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	left, every := t.left(), t.interval
+
+	p.disarmPosix(t)
+	t.overrun = 0
+
+	if first > 0 {
+		if host, ok := hostClock(t.clock); ok && flags&TIMER_ABSTIME != 0 {
+			first = max(first-clockGettime(host), time.Nanosecond)
+		}
+
+		t.interval = interval
+		p.armPosix(t, time.Now().Add(first))
+	}
+
+	if old != 0 {
+		p.putTimespec(old, every)
+		p.putTimespec(old+sizeofTimespec, left)
+	}
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcTimer_gettime(timer, at uint32) uint32 {
+	t, err := p.posixTimer(timer)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	p.putTimespec(at, t.interval)
+	p.putTimespec(at+sizeofTimespec, t.left())
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcTimer_getoverrun(timer uint32) uint32 {
+	t, err := p.posixTimer(timer)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	return uint32(t.last)
 }

@@ -13,6 +13,14 @@ union sigval {
     void* sival_ptr;
 };
 
+/*
+ * What a signal comes with, each instance its own: si_code SI_USER of
+ * kill and raise, SI_QUEUE of sigqueue, SI_TIMER of a timer of
+ * timer_create, with the sender's si_pid and si_uid, si_value of the last
+ * two, and a timer's si_timerid and si_overrun, its expirations the
+ * signal stood for after the first. A real-time signal queues, an
+ * instance each; another signal sent while it is pending is the first.
+ */
 typedef struct {
     int si_signo;
     int si_errno;
@@ -23,7 +31,38 @@ typedef struct {
     void* si_addr;
     long si_band;
     union sigval si_value;
+    int si_timerid;
+    int si_overrun;
 } siginfo_t;
+
+/*
+ * How a timer, or another event, is told (sigevent): SIGEV_SIGNAL a
+ * signal, sigev_signo, with sigev_value; SIGEV_NONE nothing;
+ * SIGEV_THREAD_ID a signal to the thread sigev_notify_thread_id, here the
+ * process's one; SIGEV_THREAD a new thread, which the process cannot make.
+ */
+struct sigevent {
+    union sigval sigev_value;
+    int sigev_signo;
+    int sigev_notify;
+    union {
+        char __pad[64 - 2 * sizeof(int) - sizeof(union sigval)];
+        pid_t sigev_notify_thread_id;
+        struct {
+            void (*sigev_notify_function)(union sigval);
+            void* sigev_notify_attributes;
+        } __sev_thread;
+    } __sev_fields;
+};
+
+#define sigev_notify_thread_id __sev_fields.sigev_notify_thread_id
+#define sigev_notify_function __sev_fields.__sev_thread.sigev_notify_function
+#define sigev_notify_attributes __sev_fields.__sev_thread.sigev_notify_attributes
+
+#define SIGEV_SIGNAL 0
+#define SIGEV_NONE 1
+#define SIGEV_THREAD 2
+#define SIGEV_THREAD_ID 4
 
 struct sigaction {
     union {

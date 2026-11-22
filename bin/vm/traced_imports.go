@@ -125,8 +125,9 @@ var callFormats = func() map[string]string {
 		strsep:sps strsignal:sd strspn:dss strstr:sss strtok:sps strtok_r:spsp strverscmp:dss strxfrm:dpsd swab:vppd symlink:dss
 		symlinkat:dsds sync:v syncfs:dd sysconf:dd sysinfo:dpd system:ds tcdrain:dd tcflow:ddd tcflush:ddd tcgetattr:ddpd tcgetpgrp:dd
 		tcgetsid:dd tcsendbreak:ddd tcsetattr:dddpd tcsetpgrp:ddd telldir:dp thrd_create:dpdp thrd_current:d thrd_detach:dd thrd_equal:ddd
-		thrd_join:ddp thrd_sleep:dpdpd thrd_yield:v time:dp timegm:dpd timerfd_create:ddd timerfd_gettime:ddpd timerfd_settime:dddpdpd
-		times:dpd timespec_get:dpdd toascii:dd tolower:dd toupper:dd towctrans:ddd towctrans_l:dddd towlower:dd towupper:dd truncate:dsd
+		thrd_join:ddp thrd_sleep:dpdpd thrd_yield:v time:dp timegm:dpd timer_create:ddpdp timer_delete:dd timer_getoverrun:dd
+		timer_gettime:ddpd timer_settime:dddpdpd timerfd_create:ddd timerfd_gettime:ddpd timerfd_settime:dddpdpd times:dpd
+		timespec_get:dpdd toascii:dd tolower:dd toupper:dd towctrans:ddd towctrans_l:dddd towlower:dd towupper:dd truncate:dsd
 		tss_create:dpd tss_delete:vd tss_get:pd tss_set:ddp ttyname:sd ttyname_r:ddpd tzset:v ualarm:ddd umask:oo umount:ds umount2:dsd
 		uname:dpd unlink:ds unlinkat:ddsd unlockpt:dd unsetenv:ds usleep:dd utime:dspd utimensat:ddspdd utimes:dspd valloc:pd
 		versionsort:dpdpd vfork:d vhangup:d wait:dp wait3:dpdpd wait4:ddpdpd waitid:dddpdd waitpid:ddpd watchdir:ddd wcpcpy:ppp

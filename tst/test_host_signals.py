@@ -46,7 +46,7 @@ def check(value, expected):
 
 def program(mode):
     # sigprocmask and sigwaitinfo take the size of each structure after its
-    # pointer: 8 for a sigset_t, 36 for a siginfo_t.
+    # pointer: 8 for a sigset_t, 44 for a siginfo_t.
     imports = [("write", 1), ("raise", 2), ("sigprocmask", 5), ("sigwaitinfo", 6), ("signal", 3)]
     types = [b"\x60\0\0", b"\x60\3\x7f\x7f\x7f\1\x7f", b"\x60\1\x7f\1\x7f",
              b"\x60\2\x7f\x7f\1\x7f", b"\x60\2\x7f\x7f\0",
@@ -65,7 +65,7 @@ def program(mode):
     elif mode == "stop":
         entry += check(constant(19) + b"\x10\1", 0) + write(4113)
     elif mode == "wait":
-        entry += check(constant(4096) + constant(8) + constant(0) + constant(36) + b"\x10\3", 10) + write(4113)
+        entry += check(constant(4096) + constant(8) + constant(0) + constant(44) + b"\x10\3", 10) + write(4113)
     else:
         # The handler changes an ordinary mutable global, then returns to
         # this uninterrupted loop's condition.

@@ -38,6 +38,7 @@ TYPES = {
     "sizeofIovec": "struct iovec",
     "sizeofItimerval": "struct itimerval",
     "sizeofItimerspec": "struct itimerspec",
+    "sizeofSigevent": "struct sigevent",
     "sizeofJmpBuf": "jmp_buf",
     "sizeofLconv": "struct lconv",
     "sizeofMsghdr": "struct msghdr",
