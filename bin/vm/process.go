@@ -5014,11 +5014,19 @@ func (p *Process) gatherIn(small []byte, iovs, count uint32, max int) ([]byte, e
 		return nil, EINVAL
 	}
 
+	var few [4][]byte
+
 	table := p.span(iovs, 8*count)
 	total := 0
 
 	for i := range count {
-		total += len(p.span(binary.LittleEndian.Uint32(table[8*i:]), binary.LittleEndian.Uint32(table[8*i+4:])))
+		b := p.span(binary.LittleEndian.Uint32(table[8*i:]), binary.LittleEndian.Uint32(table[8*i+4:]))
+
+		if i < uint32(len(few)) {
+			few[i] = b
+		}
+
+		total += len(b)
 	}
 
 	if total > max {
@@ -5036,7 +5044,13 @@ func (p *Process) gatherIn(small []byte, iovs, count uint32, max int) ([]byte, e
 	at := 0
 
 	for i := range count {
-		at += copy(data[at:], p.span(binary.LittleEndian.Uint32(table[8*i:]), binary.LittleEndian.Uint32(table[8*i+4:])))
+		b := few[min(i, uint32(len(few)-1))]
+
+		if i >= uint32(len(few)) {
+			b = p.span(binary.LittleEndian.Uint32(table[8*i:]), binary.LittleEndian.Uint32(table[8*i+4:]))
+		}
+
+		at += copy(data[at:], b)
 	}
 
 	return data, nil
@@ -7633,7 +7647,10 @@ func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	iov, count := p.u32(msg+8), p.u32(msg+12)
+	h := p.span(msg, sizeofMsghdr)
+	name, nameRoom := binary.LittleEndian.Uint32(h), binary.LittleEndian.Uint32(h[4:])
+	iov, count := binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:])
+	control, room := binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:])
 	spans, err := p.ioSpansIn(few[:0], iov, count)
 
 	if err != nil {
@@ -7650,15 +7667,20 @@ func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	written, cut := p.putControl(r.files, r.cred, p.u32(msg+16), p.u32(msg+20), flags&MSG_CMSG_CLOEXEC != 0)
+	written, cut := p.putControl(r.files, r.cred, control, room, flags&MSG_CMSG_CLOEXEC != 0)
 
-	if name := p.u32(msg); name != 0 {
-		copy(p.span(name, min(p.u32(msg+4), uint32(len(r.addr)))), r.addr)
-		p.put32(msg+4, uint32(len(r.addr)))
+	if name != 0 {
+		copy(p.span(name, min(nameRoom, uint32(len(r.addr)))), r.addr)
 	}
 
-	p.put32(msg+20, written)
-	p.put32(msg+24, r.out|cut|flags&MSG_CMSG_CLOEXEC)
+	h = p.span(msg, sizeofMsghdr)
+
+	if name != 0 {
+		binary.LittleEndian.PutUint32(h[4:], uint32(len(r.addr)))
+	}
+
+	binary.LittleEndian.PutUint32(h[20:], written)
+	binary.LittleEndian.PutUint32(h[24:], r.out|cut|flags&MSG_CMSG_CLOEXEC)
 	p.packetDone(r.pk)
 
 	return p.result(r.n, nil)
@@ -7773,14 +7795,14 @@ func (p *Process) putControl(files []Object, cred *Ucred, control, room uint32, 
 		return written, cut | MSG_CTRUNC
 	}
 
-	at := control + written
+	out := p.span(control+written, size)
 
-	p.put32(at, size)
-	p.put32(at+4, SOL_SOCKET)
-	p.put32(at+8, SCM_CREDENTIALS)
-	p.put32(at+12, cred.pid)
-	p.put32(at+16, cred.uid)
-	p.put32(at+20, cred.gid)
+	binary.LittleEndian.PutUint32(out, size)
+	binary.LittleEndian.PutUint32(out[4:], SOL_SOCKET)
+	binary.LittleEndian.PutUint32(out[8:], SCM_CREDENTIALS)
+	binary.LittleEndian.PutUint32(out[12:], cred.pid)
+	binary.LittleEndian.PutUint32(out[16:], cred.uid)
+	binary.LittleEndian.PutUint32(out[20:], cred.gid)
 
 	return written + min(guestAlign(size), room-written), cut
 }
@@ -7792,15 +7814,21 @@ func (p *Process) ucred() *Ucred {
 func (p *Process) rights(files []Object, at, n uint32) ([]Object, *Ucred, error) {
 	var cred *Ucred
 
+	if n < sizeofCmsghdr {
+		return files, nil, nil
+	}
+
+	control := p.span(at, n)
+
 	for off := uint32(0); off+sizeofCmsghdr <= n; {
-		length := p.u32(at + off)
+		length := binary.LittleEndian.Uint32(control[off:])
 
 		if length < sizeofCmsghdr || off+length > n {
 			return nil, nil, EINVAL
 		}
 
-		level, kind := p.u32(at+off+4), p.u32(at+off+8)
-		data := p.span(at+off+sizeofCmsghdr, length-sizeofCmsghdr)
+		level, kind := binary.LittleEndian.Uint32(control[off+4:]), binary.LittleEndian.Uint32(control[off+8:])
+		data := control[off+sizeofCmsghdr : off+length]
 
 		switch {
 		case level == SOL_SOCKET && kind == SCM_RIGHTS:
@@ -7836,12 +7864,22 @@ func (p *Process) putRights(files []Object, at, room uint32, cloexec bool) (uint
 		return 0, 0
 	}
 
-	var fds []byte
+	fits := 0
 
-	flags := uint32(0)
+	if room >= sizeofCmsghdr {
+		fits = min(len(files), int((room-sizeofCmsghdr)/4))
+	}
 
-	for _, f := range files {
-		if sizeofCmsghdr+uint32(len(fds))+4 > room {
+	var out []byte
+
+	if fits > 0 {
+		out = p.span(at, sizeofCmsghdr+uint32(4*fits))
+	}
+
+	flags, put := uint32(0), uint32(0)
+
+	for i, f := range files {
+		if i >= fits {
 			f.unref()
 			flags |= MSG_CTRUNC
 
@@ -7856,19 +7894,19 @@ func (p *Process) putRights(files []Object, at, room uint32, cloexec bool) (uint
 			continue
 		}
 
-		fds = binary.LittleEndian.AppendUint32(fds, uint32(fd))
+		binary.LittleEndian.PutUint32(out[sizeofCmsghdr+4*put:], uint32(fd))
+		put++
 	}
 
-	if len(fds) == 0 {
+	if put == 0 {
 		return 0, flags
 	}
 
-	size := sizeofCmsghdr + uint32(len(fds))
+	size := sizeofCmsghdr + 4*put
 
-	p.put32(at, size)
-	p.put32(at+4, SOL_SOCKET)
-	p.put32(at+8, SCM_RIGHTS)
-	copy(p.span(at+sizeofCmsghdr, uint32(len(fds))), fds)
+	binary.LittleEndian.PutUint32(out, size)
+	binary.LittleEndian.PutUint32(out[4:], SOL_SOCKET)
+	binary.LittleEndian.PutUint32(out[8:], SCM_RIGHTS)
 
 	return min(guestAlign(size), room), flags
 }

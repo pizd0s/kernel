@@ -93,6 +93,12 @@ func (t *FdTree) clear(n int) {
 }
 
 func (t *FdTree) lowestFree(min int) int {
+	if min < 64 && len(t.levels) > 0 && len(t.levels[0]) > 0 {
+		if room := ^t.levels[0][0] &^ (1<<uint(min) - 1); room != 0 {
+			return bits.TrailingZeros64(room)
+		}
+	}
+
 	pos, level := min, 0
 
 	for {
