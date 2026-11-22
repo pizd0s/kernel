@@ -6,13 +6,15 @@
 
 __BEGIN_DECLS
 
-typedef struct _IO_FILE FILE;
+typedef struct __sFILE FILE;
 
 struct tm;
 
+// As Bionic's, whose multibyte functions lib/c's are: the bytes of a
+// character read so far.
 typedef struct {
-    unsigned __opaque1;
-    unsigned __opaque2;
+    unsigned char __seq[4];
+    unsigned char __reserved[4];
 } mbstate_t;
 
 #define WEOF 0xffffffffU

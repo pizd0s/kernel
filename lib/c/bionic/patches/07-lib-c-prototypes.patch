@@ -1,0 +1,38 @@
+lib/c's prototypes, glibc's and musl's, where Bionic's are the BSDs':
+setbuffer's size is a size_t and setlinebuf returns nothing. More FILEs
+come of malloc: new needs C++'s runtime, which lib/c has not.
+
+--- a/libc/stdio/stdio.cpp
++++ b/libc/stdio/stdio.cpp
+@@ -138,9 +138,9 @@
+ };
+ 
+ static glue* moreglue(int n) {
+-  char* data = new char[sizeof(glue) +
+-                        alignof(FILE) + n * sizeof(FILE) +
+-                        alignof(__sfileext) + n * sizeof(__sfileext)];
++  char* data = static_cast<char*>(malloc(sizeof(glue) +
++                                         alignof(FILE) + n * sizeof(FILE) +
++                                         alignof(__sfileext) + n * sizeof(__sfileext)));
+   if (data == nullptr) return nullptr;
+ 
+   glue* g = reinterpret_cast<glue*>(data);
+@@ -1126,14 +1126,14 @@
+   setbuffer(fp, buf, BUFSIZ);
+ }
+ 
+-void setbuffer(FILE* fp, char* buf, int size) {
++void setbuffer(FILE* fp, char* buf, size_t size) {
+   CHECK_FP(fp);
+   setvbuf(fp, buf, buf ? _IOFBF : _IONBF, size);
+ }
+ 
+-int setlinebuf(FILE* fp) {
+-  CHECK_FP(fp);
+-  return setvbuf(fp, nullptr, _IOLBF, 0);
++void setlinebuf(FILE* fp) {
++  CHECK_FP(fp);
++  setvbuf(fp, nullptr, _IOLBF, 0);
+ }
+ 
+ /*

@@ -1,0 +1,72 @@
+lib/c's FILE is its own, not Android's 32-bit ABI's, which wasm32 would
+take: its descriptor and flags are ints, as on Android's 64-bit ABI, so a
+descriptor past SHRT_MAX is a stream's too, and no size is checked against
+Android's public stub. local.h includes stdio.h for FILE and fpos_t, which
+Bionic's wchar.h gives it.
+
+--- a/libc/stdio/local.h
++++ b/libc/stdio/local.h
+@@ -35,6 +35,7 @@
+ #pragma once
+ 
+ #include <pthread.h>
++#include <stdio.h>
+ #include <stdbool.h>
+ #include <wchar.h>
+ 
+@@ -54,13 +55,8 @@
+   unsigned char* _p; /* current position in (some) buffer */
+   int _r;            /* read space left for getc() */
+   int _w;            /* write space left for putc() */
+-#if defined(__LP64__)
+   int _flags; /* flags, below; this FILE is free if 0 */
+   int _file;  /* fileno, if Unix descriptor, else -1 */
+-#else
+-  short _flags; /* flags, below; this FILE is free if 0 */
+-  short _file;  /* fileno, if Unix descriptor, else -1 */
+-#endif
+   struct __sbuf _bf; /* the buffer (at least 1 byte, if !NULL) */
+   int _lbfsize;      /* 0 or -_bf._size, for inline putc */
+ 
+@@ -104,11 +100,6 @@
+ //
+ // If you need to make any changes, they need to be in the `__sfileext` struct
+ // below, and accessed via `_EXT()`.
+-#if defined(__LP64__)
+-_Static_assert(sizeof(struct __sFILE) == 152, "__sFILE changed size");
+-#else
+-_Static_assert(sizeof(struct __sFILE) == 84, "__sFILE changed size");
+-#endif
+ 
+ /* minimal requirement of SUSv2 */
+ #define WCIO_UNGETWC_BUFSIZE 1
+--- a/libc/stdio/stdio.cpp
++++ b/libc/stdio/stdio.cpp
+@@ -385,10 +385,6 @@
+ static FILE* __FILE_init(FILE* fp, int fd, int flags) {
+   if (fp == nullptr) return nullptr;
+ 
+-#if !defined(__LP64__)
+-  if (fd > SHRT_MAX) __fortify_fatal("stdio: fd %d > SHRT_MAX", fd);
+-#endif
+-
+   fp->_file = fd;
+   android_fdsan_exchange_owner_tag(fd, 0, __get_file_tag(fp));
+   fp->_flags = flags;
+@@ -1613,16 +1609,3 @@
+   if (mode != 0) _SET_ORIENTATION(fp, mode);
+   return WCIO_GET(fp)->orientation;
+ }
+-
+-namespace {
+-
+-namespace phony {
+-#include <bits/struct_file.h>
+-}
+-
+-static_assert(sizeof(::__sFILE) == sizeof(phony::__sFILE),
+-              "size mismatch between `struct __sFILE` implementation and public stub");
+-static_assert(alignof(::__sFILE) == alignof(phony::__sFILE),
+-              "alignment mismatch between `struct __sFILE` implementation and public stub");
+-
+-}

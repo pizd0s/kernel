@@ -4,7 +4,7 @@
 
 __BEGIN_DECLS
 
-typedef struct _IO_FILE FILE;
+typedef struct __sFILE FILE;
 
 #define MOUNTED "/etc/mtab"
 #define MNTTYPE_IGNORE "ignore"

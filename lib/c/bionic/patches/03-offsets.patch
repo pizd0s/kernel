@@ -1,0 +1,138 @@
+lib/c's off_t and fpos_t have 64 bits, and its ABI no *64 names, which
+are Android's for its 32-bit off_t: fseek and ftell are their own, long's
+range, EOVERFLOW past it; ftello is the 64-bit position; a funopen seek's
+result is not cut to 32 bits; the *64 functions and aliases are gone.
+
+--- a/libc/stdio/stdio.cpp
++++ b/libc/stdio/stdio.cpp
+@@ -414,7 +414,6 @@
+   if ((mode_flags & O_APPEND) != 0) __sseek64(fp, 0, SEEK_END);
+   return fp;
+ }
+-__strong_alias(fopen64, fopen);
+ 
+ FILE* fdopen(int fd, const char* mode) {
+   int mode_flags;
+@@ -547,7 +546,6 @@
+ 
+   return fp;
+ }
+-__strong_alias(freopen64, freopen);
+ 
+ int fclose(FILE* fp) {
+   CHECK_FP(fp);
+@@ -668,7 +666,7 @@
+ 
+ off64_t __sseek64(void* cookie, off64_t offset, int whence) {
+   FILE* fp = reinterpret_cast<FILE*>(cookie);
+-  return TEMP_FAILURE_RETRY(lseek64(fp->_file, offset, whence));
++  return TEMP_FAILURE_RETRY(lseek(fp->_file, offset, whence));
+ }
+ 
+ int __sclose(void* cookie) {
+@@ -681,12 +679,7 @@
+   if (_EXT(fp)->_seek64 != nullptr) {
+     return (*_EXT(fp)->_seek64)(fp->_cookie, offset, whence);
+   } else if (fp->_seek != nullptr) {
+-    off64_t result = (*fp->_seek)(fp->_cookie, offset, whence);
+-#if !defined(__LP64__)
+-    // Avoid sign extension if off64_t is larger than off_t.
+-    if (result != -1) result &= 0xffffffff;
+-#endif
+-    return result;
++    return (*fp->_seek)(fp->_cookie, offset, whence);
+   } else {
+     errno = ESPIPE;
+     return -1;
+@@ -723,7 +716,7 @@
+   // Change any SEEK_CUR to SEEK_SET, and check `whence` argument.
+   // After this, whence is either SEEK_SET or SEEK_END.
+   if (whence == SEEK_CUR) {
+-    fpos64_t current_offset = __ftello64_unlocked(fp);
++    off64_t current_offset = __ftello64_unlocked(fp);
+     if (current_offset == -1) {
+       return -1;
+     }
+@@ -758,14 +751,12 @@
+ 
+ int fseeko(FILE* fp, off_t offset, int whence) {
+   CHECK_FP(fp);
+-  static_assert(sizeof(off_t) == sizeof(long), "sizeof(off_t) != sizeof(long)");
+   return __fseeko64(fp, offset, whence, 8*sizeof(off_t));
+ }
+-__strong_alias(fseek, fseeko);
+-
+-int fseeko64(FILE* fp, off64_t offset, int whence) {
+-  CHECK_FP(fp);
+-  return __fseeko64(fp, offset, whence, 8*sizeof(off64_t));
++
++int fseek(FILE* fp, long offset, int whence) {
++  CHECK_FP(fp);
++  return __fseeko64(fp, offset, whence, 8*sizeof(long));
+ }
+ 
+ int fsetpos(FILE* fp, const fpos_t* pos) {
+@@ -773,38 +764,24 @@
+   return fseeko(fp, *pos, SEEK_SET);
+ }
+ 
+-int fsetpos64(FILE* fp, const fpos64_t* pos) {
+-  CHECK_FP(fp);
+-  return fseeko64(fp, *pos, SEEK_SET);
+-}
+-
+ off_t ftello(FILE* fp) {
+   CHECK_FP(fp);
+-  static_assert(sizeof(off_t) == sizeof(long), "sizeof(off_t) != sizeof(long)");
+-  off64_t result = ftello64(fp);
++  ScopedFileLock sfl(fp);
++  return __ftello64_unlocked(fp);
++}
++
++long ftell(FILE* fp) {
++  off_t result = ftello(fp);
+   if (result > LONG_MAX) {
+     errno = EOVERFLOW;
+     return -1;
+   }
+   return result;
+ }
+-__strong_alias(ftell, ftello);
+-
+-off64_t ftello64(FILE* fp) {
+-  CHECK_FP(fp);
+-  ScopedFileLock sfl(fp);
+-  return __ftello64_unlocked(fp);
+-}
+ 
+ int fgetpos(FILE* fp, fpos_t* pos) {
+   CHECK_FP(fp);
+   *pos = ftello(fp);
+-  return (*pos == -1) ? -1 : 0;
+-}
+-
+-int fgetpos64(FILE* fp, fpos64_t* pos) {
+-  CHECK_FP(fp);
+-  *pos = ftello64(fp);
+   return (*pos == -1) ? -1 : 0;
+ }
+ 
+@@ -845,18 +822,6 @@
+   FILE* fp = __funopen(cookie, read_fn, write_fn, close_fn);
+   if (fp != nullptr) {
+     fp->_seek = seek_fn;
+-  }
+-  return fp;
+-}
+-
+-FILE* funopen64(const void* cookie,
+-                int (*read_fn)(void*, char*, int),
+-                int (*write_fn)(void*, const char*, int),
+-                fpos64_t (*seek_fn)(void*, fpos64_t, int),
+-                int (*close_fn)(void*)) {
+-  FILE* fp = __funopen(cookie, read_fn, write_fn, close_fn);
+-  if (fp != nullptr) {
+-    _EXT(fp)->_seek64 = seek_fn;
+   }
+   return fp;
+ }

@@ -1,0 +1,73 @@
+freopen with no name opens the stream's file again by /proc/self/fd/,
+which lib/c has not: the stream keeps its descriptor, which takes the mode
+as FreeBSD's freopen gives it. The access asked must be the descriptor's,
+or it is open for both (EBADF otherwise, which POSIX lets freopen fail
+with); O_APPEND is set or cleared, "w" truncates, "e" sets FD_CLOEXEC, and
+the offset is the start but in append mode.
+
+--- a/libc/stdio/stdio.cpp
++++ b/libc/stdio/stdio.cpp
+@@ -51,7 +51,6 @@
+ 
+ #include "local.h"
+ #include "private/ErrnoRestorer.h"
+-#include "private/FdPath.h"
+ #include "private/__bionic_get_shell_path.h"
+ #include "private/bionic_fortify.h"
+ 
+@@ -443,6 +442,29 @@
+   return __FILE_init(__sfp(), fd, flags);
+ }
+ 
++// The descriptor of a stream freopen gives no name, with the mode: the
++// access asked must be the descriptor's, or it is open for both (EBADF
++// otherwise); O_APPEND is set or cleared, "w" truncates, "e" sets
++// FD_CLOEXEC, and the offset is the start but in append mode.
++static int __freopen_descriptor(FILE* fp, int mode_flags) {
++  int fd = fp->_file;
++  int fd_flags = fcntl(fd, F_GETFL);
++  if (fd_flags == -1) return -1;
++  int access = fd_flags & O_ACCMODE;
++  if (access != O_RDWR && access != (mode_flags & O_ACCMODE)) {
++    errno = EBADF;
++    return -1;
++  }
++  if (((fd_flags ^ mode_flags) & O_APPEND) != 0 &&
++      fcntl(fd, F_SETFL, (fd_flags & ~O_APPEND) | (mode_flags & O_APPEND)) == -1) {
++    return -1;
++  }
++  if ((mode_flags & O_TRUNC) != 0) ftruncate(fd, 0);
++  if ((mode_flags & O_APPEND) == 0) lseek(fd, 0, SEEK_SET);
++  if ((mode_flags & O_CLOEXEC) != 0) fcntl(fd, F_SETFD, FD_CLOEXEC);
++  return fd;
++}
++
+ FILE* freopen(const char* file, const char* mode, FILE* fp) {
+   CHECK_FP(fp);
+   ScopedFileLock sfl(fp);
+@@ -455,12 +477,8 @@
+   // which changes of mode are permitted (if any), and under what
+   // circumstances."
+   //
+-  // Linux is quite restrictive about what changes you can make with F_SETFL,
+-  // and in particular won't let you touch the access bits. It's easiest and
+-  // most effective to just rely on /proc/self/fd/...
+-  FdPath fd_path(fp->_file);
+-  if (file == nullptr) file = fd_path.c_str();
+-
++  // lib/c has no /proc/self/fd/ to open the file again by: the stream keeps
++  // its descriptor, which takes the mode as FreeBSD's freopen gives it.
+   int mode_flags;
+   int flags = __sflags(mode, &mode_flags);
+   if (flags == 0) {
+@@ -494,8 +512,8 @@
+   }
+ 
+   // Get a new descriptor to refer to the new file.
+-  int fd = open(file, mode_flags, DEFFILEMODE);
+-  if (fd < 0 && isopen) {
++  int fd = file != nullptr ? open(file, mode_flags, DEFFILEMODE) : __freopen_descriptor(fp, mode_flags);
++  if (fd < 0 && isopen && file != nullptr) {
+     // If out of fd's close the old one and try again.
+     if (errno == ENFILE || errno == EMFILE) {
+       (*fp->_close)(fp->_cookie);

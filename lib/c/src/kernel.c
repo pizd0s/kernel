@@ -433,6 +433,10 @@ KERNEL(int, remove, (const char* a), (a))
 KERNEL(int, rename, (const char* a, const char* b), (a, b))
 KERNEL(int, renameat, (int a, const char* b, int c, const char* d), (a, b, c, d))
 KERNEL(char*, ctermid, (char* a), (a))
+KERNEL(char*, __dtoa, (double a, int b, int c, int* d, int* e, char** f), (a, b, c, d, e, f))
+KERNEL(char*, __ldtoa, (long double* a, int b, int c, int* d, int* e, char** f), (a, b, c, d, e, f))
+KERNEL(char*, __hdtoa, (double a, const char* b, int c, int* d, int* e, char** f), (a, b, c, d, e, f))
+KERNEL(char*, __hldtoa, (long double a, const char* b, int c, int* d, int* e, char** f), (a, b, c, d, e, f))
 
 /* stdlib.h */
 KERNEL(void*, reallocarray, (void* a, size_t b, size_t c), (a, b, c))

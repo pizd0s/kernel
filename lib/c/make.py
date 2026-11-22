@@ -34,10 +34,14 @@ mode wasm has, to nearest, and set no errno, as math_errhandling says,
 with none of the names glibc's ABI adds.
 
 Bionic's sources build over our headers with bionic/'s for what they take
-of Bionic's own, sys/cdefs.h included first in each, its private headers
-and its OpenBSD compatibility on the path; those it carries of OpenBSD
-with openbsd-compat.h first, as Bionic builds them. A line of
+of Bionic's own, sys/cdefs.h included first in each, its private headers,
+its stdio's and its OpenBSD compatibility on the path; those it carries of
+OpenBSD with openbsd-compat.h first, of FreeBSD with freebsd-compat.h, as
+Bionic builds them. A line of
 bionic/files.txt is a path from the tree's root and the file's own flags.
+bionic/patches/ are changes of Bionic's sources for lib/c, each saying
+why, applied to the slice first; bionic/*.cpp are lib/c's own, built as
+Bionic's are, over its FILE.
 """
 import os
 import re
@@ -184,6 +188,9 @@ def main():
     optimized = next(unpack(arm_tarball, work / "arm").glob("optimized-routines-*"))
     bionic = unpack(bionic_slice, work / "bionic")
 
+    for change in sorted((ROOT / "bionic" / "patches").glob("*.patch")):
+        subprocess.run(["patch", "-p1", "--batch", "--forward", "-s", "-d", str(bionic), "-i", str(change)], check=True)
+
     includes = [
         "-include", str(ROOT / "musl" / "features.h"),
         "-I", str(ROOT / "src"),
@@ -215,19 +222,31 @@ def main():
                       LLVM_FLAGS + ["-DLIBC_COPT_PUBLIC_PACKAGING", "-I", str(llvm / "libc"), "-isystem", str(ROOT / "include")]))
 
     compat = bionic / "libc" / "upstream-openbsd" / "android" / "include"
+    freebsd_compat = bionic / "libc" / "upstream-freebsd" / "android" / "include"
+    openbsd_libc = bionic / "libc" / "upstream-openbsd" / "lib" / "libc"
     paths = ["-include", str(ROOT / "bionic" / "sys" / "cdefs.h"), "-I", str(ROOT / "bionic"), "-I", str(compat),
-             "-I", str(bionic / "libc"), "-I", str(bionic / "libc" / "private"), "-isystem", str(ROOT / "include")]
+             "-I", str(bionic / "libc"), "-I", str(bionic / "libc" / "private"), "-I", str(bionic / "libc" / "stdio"),
+             "-I", str(openbsd_libc / "include"), "-I", str(openbsd_libc / "stdio"), "-isystem", str(ROOT / "include")]
 
     for line in listed(ROOT / "bionic" / "files.txt"):
         path, *flags = shlex.split(line)
         source = bionic / path
         language = BIONIC_CXX_FLAGS if source.suffix == ".cpp" else BIONIC_C_FLAGS
-        # Bionic's switch for its OpenBSD sources over musl's headers, which
-        # lib/c's are of: explicit_bzero is the libc's.
-        openbsd = ["-DANDROID_HOST_MUSL", "-include", str(compat / "openbsd-compat.h")] if path.startswith("libc/upstream-openbsd/") else []
+        upstream = []
+
+        if path.startswith("libc/upstream-openbsd/"):
+            # Bionic's switch for its OpenBSD sources over musl's headers,
+            # which lib/c's are of: explicit_bzero is the libc's.
+            upstream = ["-DANDROID_HOST_MUSL", "-include", str(compat / "openbsd-compat.h")]
+        elif path.startswith("libc/upstream-freebsd/"):
+            upstream = ["-include", str(freebsd_compat / "freebsd-compat.h"), "-I", str(freebsd_compat)]
+
         # Named by the path, as Bionic's files of one name are of more than one place.
         obj = "-".join(Path(path).with_suffix(".o").parts[1:])
-        units.append((source, work / "obj" / "bionic" / obj, language + paths + openbsd + flags))
+        units.append((source, work / "obj" / "bionic" / obj, language + paths + upstream + flags))
+
+    for source in sorted((ROOT / "bionic").glob("*.cpp")):
+        units.append((source, work / "obj" / "pizdos" / source.with_suffix(".o").name, BIONIC_CXX_FLAGS + paths))
 
     (work / "arm-wrappers").mkdir()
     math = optimized / "math"

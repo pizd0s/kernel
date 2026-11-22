@@ -1,0 +1,118 @@
+%n stores the count of what was written, as C has it, into the object
+of the type its length names; Android's printf aborts. %m is errno's
+message by POSIX's strerror_r, which lib/c's is, not GNU's; '#' changes
+nothing, lib/c having no names of errno's values (strerrorname_np).
+
+--- a/libc/stdio/printf_common.h
++++ b/libc/stdio/printf_common.h
+@@ -523,7 +523,25 @@
+           ADDTYPE(T_DOUBLE);
+         break;
+       case 'n':
+-        __fortify_fatal("%%n not allowed on Android");
++        // A pointer to the object %n's count goes into (vfprintf.cpp);
++        // of a signed char, a pointer as a char's is.
++        if (flags & LLONGINT)
++          ADDTYPE(TP_LLONG);
++        else if (flags & LONGINT)
++          ADDTYPE(TP_LONG);
++        else if (flags & SHORTINT)
++          ADDTYPE(TP_SHORT);
++        else if (flags & CHARINT)
++          ADDTYPE(TP_CHAR);
++        else if (flags & PTRINT)
++          ADDTYPE(TP_PTRINT);
++        else if (flags & SIZEINT)
++          ADDTYPE(TP_SSIZEINT);
++        else if (flags & MAXINT)
++          ADDTYPE(TP_MAXINT);
++        else
++          ADDTYPE(TP_INT);
++        continue; /* no output */
+       case 'O':
+         flags |= LONGINT;
+         [[fallthrough]];
+--- a/libc/stdio/vfprintf.cpp
++++ b/libc/stdio/vfprintf.cpp
+@@ -466,17 +466,30 @@
+         }
+         break;
+       case 'n':
+-        __fortify_fatal("%%n not allowed on Android");
++        // The count of what was written, as C has it, into the object of
++        // the type the length names; Android's printf aborts.
++        if (flags & LLONGINT)
++          *GETARG(long long*) = ret;
++        else if (flags & LONGINT)
++          *GETARG(long*) = ret;
++        else if (flags & SHORTINT)
++          *GETARG(short*) = ret;
++        else if (flags & CHARINT)
++          *GETARG(signed char*) = ret;
++        else if (flags & PTRINT)
++          *GETARG(ptrdiff_t*) = ret;
++        else if (flags & SIZEINT)
++          *GETARG(ssize_t*) = ret;
++        else if (flags & MAXINT)
++          *GETARG(intmax_t*) = ret;
++        else
++          *GETARG(int*) = ret;
++        continue; /* no output */
+       case 'm':
+-        if (flags & ALT) {
+-          cp = const_cast<char*>(strerrorname_np(caller_errno));
+-          if (cp == nullptr) {
+-            _umax = caller_errno;
+-            goto signed_decimal;
+-          }
+-        } else {
+-          cp = strerror_r(caller_errno, buf, sizeof(buf));
+-        }
++        // errno's message, by POSIX's strerror_r; lib/c has no names of
++        // errno's values (strerrorname_np) for '#'.
++        strerror_r(caller_errno, buf, sizeof(buf));
++        cp = buf;
+         goto string;
+       case 'O':
+         flags |= LONGINT;
+--- a/libc/stdio/vfwprintf.cpp
++++ b/libc/stdio/vfwprintf.cpp
+@@ -459,15 +459,30 @@
+         }
+         break;
+       case 'n':
+-        __fortify_fatal("%%n not allowed on Android");
++        // The count of what was written, as C has it, into the object of
++        // the type the length names; Android's printf aborts.
++        if (flags & LLONGINT)
++          *GETARG(long long*) = ret;
++        else if (flags & LONGINT)
++          *GETARG(long*) = ret;
++        else if (flags & SHORTINT)
++          *GETARG(short*) = ret;
++        else if (flags & CHARINT)
++          *GETARG(signed char*) = ret;
++        else if (flags & PTRINT)
++          *GETARG(ptrdiff_t*) = ret;
++        else if (flags & SIZEINT)
++          *GETARG(ssize_t*) = ret;
++        else if (flags & MAXINT)
++          *GETARG(intmax_t*) = ret;
++        else
++          *GETARG(int*) = ret;
++        continue; /* no output */
+       case 'm':
+-        if (flags & ALT) {
+-          const char* name = strerrorname_np(caller_errno);
+-          if (name) print_utf8(name, prec);
+-          _umax = caller_errno;
+-          goto signed_decimal;
+-        }
+-        print_utf8(strerror_r(caller_errno, reinterpret_cast<char*>(buf), sizeof(buf)), prec);
++        // errno's message, by POSIX's strerror_r; lib/c has no names of
++        // errno's values (strerrorname_np) for '#'.
++        strerror_r(caller_errno, reinterpret_cast<char*>(buf), sizeof(buf));
++        print_utf8(reinterpret_cast<char*>(buf), prec);
+       case 'O':
+         flags |= LONGINT;
+         [[fallthrough]];

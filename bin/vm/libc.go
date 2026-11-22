@@ -814,6 +814,22 @@ func libcWcstold(s, end uint32) float64 {
 	return proc().libcWcstod(s, end)
 }
 
+func libc__dtoa(v float64, mode, n, decpt, sign, end uint32) uint32 {
+	return proc().libc__dtoa(v, mode, n, decpt, sign, end)
+}
+
+func libc__ldtoa(v, mode, n, decpt, sign, end uint32) uint32 {
+	return proc().libc__ldtoa(v, mode, n, decpt, sign, end)
+}
+
+func libc__hdtoa(v float64, xdigits, n, decpt, sign, end uint32) uint32 {
+	return proc().libc__hdtoa(v, xdigits, n, decpt, sign, end)
+}
+
+func libc__hldtoa(v float64, xdigits, n, decpt, sign, end uint32) uint32 {
+	return proc().libc__hdtoa(v, xdigits, n, decpt, sign, end)
+}
+
 func libcAbs(n uint32) uint32 {
 	return proc().libcAbs(n)
 }

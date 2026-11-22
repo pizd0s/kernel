@@ -238,6 +238,8 @@ libc = command(
         *build.glob("$(S)/lib/c/arm/*"),
         *build.glob("$(S)/lib/c/bionic/**/*.h"),
         *build.glob("$(S)/lib/c/bionic/*.txt"),
+        *build.glob("$(S)/lib/c/bionic/*.cpp"),
+        *build.glob("$(S)/lib/c/bionic/patches/*"),
         "$(S)/lib/c/make.py",
         "$(S)/dev/wasm.py",
     ],

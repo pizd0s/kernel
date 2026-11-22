@@ -1,0 +1,71 @@
+OpenBSD's open_wmemstream, which Bionic carries, was wrong three ways:
+- its string counted BUFSIZ * 4 wide characters in BUFSIZ * 4 bytes, so a
+  write past the first BUFSIZ characters went out of the allocation;
+- a write's limits were swapped: it took as many bytes as the string had
+  room for, and made at most as many characters as it was given bytes,
+  so it read past what it was given;
+- a write answered the characters it made, not the bytes it took, so the
+  stream wrote again what was left wherever a character had more bytes
+  than one.
+Now the string is counted and allocated in wide characters, and a write
+converts the bytes it is given, a null character among them, and answers
+them all.
+
+--- a/libc/upstream-openbsd/lib/libc/stdio/open_wmemstream.c
++++ b/libc/upstream-openbsd/lib/libc/stdio/open_wmemstream.c
+@@ -42,7 +42,8 @@
+ {
+ 	struct state	*st = v;
+ 	wchar_t		*p;
+-	size_t		 nmc, len, end;
++	size_t		 len, end;
++	const char	*at = b, *stop = b + l;
+ 
+ 	end = (st->pos + l);
+ 
+@@ -59,11 +60,20 @@
+ 		st->size = sz;
+ 	}
+ 
+-	nmc = (st->size - st->pos) * sizeof(wchar_t);
+-	len = mbsnrtowcs(st->string + st->pos, &b, nmc, l, &st->mbs);
+-	if (len == (size_t)-1)
+-		return (-1);
+-	st->pos += len;
++	while (at < stop) {
++		const char *from = at;
++
++		len = mbsnrtowcs(st->string + st->pos, &at, stop - at,
++		    st->size - st->pos, &st->mbs);
++		if (len == (size_t)-1)
++			return (-1);
++		st->pos += len;
++		if (at == NULL) {
++			/* A null character, which it stored. */
++			at = (const char *)memchr(from, '\0', stop - from) + 1;
++			st->pos++;
++		}
++	}
+ 
+ 	if (st->pos > st->len) {
+ 		st->len = st->pos;
+@@ -72,7 +82,7 @@
+ 
+ 	*st->psize = st->pos;
+ 
+-	return (len);
++	return (l);
+ }
+ 
+ static fpos_t
+@@ -138,8 +148,8 @@
+ 		return (NULL);
+ 	}
+ 
+-	st->size = BUFSIZ * sizeof(wchar_t);
+-	if ((st->string = calloc(1, st->size)) == NULL) {
++	st->size = BUFSIZ;
++	if ((st->string = calloc(st->size, sizeof(wchar_t))) == NULL) {
+ 		free(st);
+ 		fp->_flags = 0;
+ 		return (NULL);

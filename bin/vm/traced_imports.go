@@ -43,15 +43,16 @@ var callFormats = func() map[string]string {
 	out := map[string]string{}
 
 	for _, word := range strings.Fields(`
-		_Exit:vd __assert_fail:vssds __pthread_cancelled:dd __pthread_key_take:ppp __pthread_once_begin:dp __pthread_once_end:vp
-		__sched_cpucount:ddp _exit:vd _longjmp:vpdd _setjmp:dpd abort:v abs:dd accept:ddpp accept4:ddppd access:dsd acct:ds adjtime:dpdpd
-		alarm:dd aligned_alloc:pdd alphasort:dpdpd asctime:spd asctime_r:spdp attach:dd basename:sp bcmp:dppd bcopy:vppd bind:ddpd brk:dp
-		bsd_signal:ddd bzero:vpd calloc:pdd canonicalize_file_name:ss cfgetispeed:dpd cfgetospeed:dpd cfmakeraw:vpd cfsetispeed:dpdd
-		cfsetospeed:dpdd cfsetspeed:dpdd chdir:ds chmod:dso chown:dsdd chroot:ds clearenv:d clock:d clock_getcpuclockid:ddp
-		clock_getres:ddpd clock_gettime:ddpd clock_nanosleep:dddpdpd clock_settime:ddpd close:dd closedir:dp closelog:v cnd_broadcast:dpd
-		cnd_destroy:vpd cnd_init:dpd cnd_signal:dpd cnd_timedwait:dpdpdpd cnd_wait:dpdpd confstr:ddpd connect:ddpd copy_file_range:ddpdpdd
-		creat:dso crypt:sss ctermid:sp ctime:sp ctime_r:spp daemon:ddd difftime:fdd dirfd:dp dirname:sp div:ddd dup:dd dup2:ddd dup3:dddd
-		eaccess:dsd encrypt:vpd endgrent:v endhostent:v endpwent:v endusershell:v epoll_create:dd epoll_create1:dd epoll_ctl:ddddpd
+		_Exit:vd __assert_fail:vssds __dtoa:sfddppp __hdtoa:sfsdppp __hldtoa:sfsdppp __ldtoa:spddppp __pthread_cancelled:dd
+		__pthread_key_take:ppp __pthread_once_begin:dp __pthread_once_end:vp __sched_cpucount:ddp _exit:vd _longjmp:vpdd _setjmp:dpd
+		abort:v abs:dd accept:ddpp accept4:ddppd access:dsd acct:ds adjtime:dpdpd alarm:dd aligned_alloc:pdd alphasort:dpdpd asctime:spd
+		asctime_r:spdp attach:dd basename:sp bcmp:dppd bcopy:vppd bind:ddpd brk:dp bsd_signal:ddd bzero:vpd calloc:pdd
+		canonicalize_file_name:ss cfgetispeed:dpd cfgetospeed:dpd cfmakeraw:vpd cfsetispeed:dpdd cfsetospeed:dpdd cfsetspeed:dpdd chdir:ds
+		chmod:dso chown:dsdd chroot:ds clearenv:d clock:d clock_getcpuclockid:ddp clock_getres:ddpd clock_gettime:ddpd
+		clock_nanosleep:dddpdpd clock_settime:ddpd close:dd closedir:dp closelog:v cnd_broadcast:dpd cnd_destroy:vpd cnd_init:dpd
+		cnd_signal:dpd cnd_timedwait:dpdpdpd cnd_wait:dpdpd confstr:ddpd connect:ddpd copy_file_range:ddpdpdd creat:dso crypt:sss
+		ctermid:sp ctime:sp ctime_r:spp daemon:ddd difftime:fdd dirfd:dp dirname:sp div:ddd dup:dd dup2:ddd dup3:dddd eaccess:dsd
+		encrypt:vpd endgrent:v endhostent:v endpwent:v endusershell:v epoll_create:dd epoll_create1:dd epoll_ctl:ddddpd
 		epoll_pwait:ddpdddpd epoll_wait:ddpddd euidaccess:dsd eventfd:ddd eventfd_read:ddp eventfd_write:ddd execl:dssp execle:dssp
 		execlp:dssp execmode:dddd execv:dsp execve:dspp execvp:dsp execvpe:dspp explicit_bzero:vpd faccessat:ddsdd fchdir:dd fchmod:ddo
 		fchmodat:ddsod fchown:dddd fchownat:ddsddd fcntl:dddpd fdatasync:dd fdopendir:pd fexecve:ddpp ffs:dd ffsl:dd ffsll:dd flock:ddd
@@ -136,7 +137,7 @@ var callFormats = func() map[string]string {
 		wcsnlen:dpd wcspbrk:ppp wcsrchr:ppd wcsspn:dpp wcsstr:ppp wcstod:fpp wcstof:fpp wcstok:pppp wcstold:fpp wcswcs:ppp wcswidth:dpd
 		wcsxfrm:dppd wctrans:ds wctrans_l:dsd wctype:ds wcwidth:dd wmemchr:ppdd wmemcmp:dppd wmemcpy:pppd wmemmove:pppd wmemset:ppdd
 		write:ddpd writev:ddpdd
-	`) {
+`) {
 		name, format, _ := strings.Cut(word, ":")
 
 		out[name] = format

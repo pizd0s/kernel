@@ -4,12 +4,10 @@
 
 __BEGIN_DECLS
 
-typedef struct _IO_FILE FILE;
+typedef struct __sFILE FILE;
 
-typedef struct {
-    long long __pos;
-    long long __pad;
-} fpos_t;
+// A position is an offset, as Bionic's stdio keeps it.
+typedef long long fpos_t;
 
 #define EOF (-1)
 #define BUFSIZ 1024
@@ -30,9 +28,9 @@ typedef struct {
 #define SEEK_END 2
 #endif
 
-extern FILE* const stdin;
-extern FILE* const stdout;
-extern FILE* const stderr;
+extern FILE* stdin;
+extern FILE* stdout;
+extern FILE* stderr;
 
 #define stdin (stdin)
 #define stdout (stdout)
@@ -79,6 +77,8 @@ int fgetpos(FILE* __restrict, fpos_t* __restrict);
 int fsetpos(FILE*, const fpos_t*);
 
 void setbuf(FILE* __restrict, char* __restrict);
+// The BSDs' name of stdio_ext.h's __fpurge: what is buffered dropped.
+int fpurge(FILE*);
 int setvbuf(FILE* __restrict, char* __restrict, int, size_t);
 void setbuffer(FILE*, char*, size_t);
 void setlinebuf(FILE*);
@@ -137,6 +137,10 @@ typedef struct {
 } cookie_io_functions_t;
 
 FILE* fopencookie(void*, const char*, cookie_io_functions_t);
+
+// The BSDs' stream of functions: a read or write of an int's size, a
+// seek to an fpos_t; a function not given is EBADF, a seek ESPIPE.
+FILE* funopen(const void*, int (*)(void*, char*, int), int (*)(void*, const char*, int), fpos_t (*)(void*, fpos_t, int), int (*)(void*));
 
 FILE* tmpfile(void);
 char* tmpnam(char*);

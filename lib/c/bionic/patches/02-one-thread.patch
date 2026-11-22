@@ -1,0 +1,60 @@
+A process of lib/c's has one thread, which owns every FILE: flockfile,
+ftrylockfile and funlockfile take no lock, and a FILE has none made
+(PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP is not lib/c's: its mutex is the
+kernel's object). Every getc and putc would otherwise be two calls of the
+kernel. The list of FILEs keeps its mutex.
+
+--- a/libc/stdio/stdio.cpp
++++ b/libc/stdio/stdio.cpp
+@@ -78,16 +78,13 @@
+   }
+ 
+ static struct __sfileext __sFext[3] = {
+-    {._lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP,
+-     ._caller_handles_locking = false,
++    {._caller_handles_locking = false,
+      ._seek64 = __sseek64,
+      ._popen_pid = 0},
+-    {._lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP,
+-     ._caller_handles_locking = false,
++    {._caller_handles_locking = false,
+      ._seek64 = __sseek64,
+      ._popen_pid = 0},
+-    {._lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP,
+-     ._caller_handles_locking = false,
++    {._caller_handles_locking = false,
+      ._seek64 = __sseek64,
+      ._popen_pid = 0},
+ };
+@@ -206,7 +203,6 @@
+   fp->fgetln_buffer = {};
+ 
+   memset(_EXT(fp), 0, sizeof(struct __sfileext));
+-  _EXT(fp)->_lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+   _EXT(fp)->_caller_handles_locking = false;
+ 
+   // Caller sets cookie, _read/_write etc.
+@@ -1586,21 +1582,18 @@
+   return fp;
+ }
+ 
++// lib/c's process has one thread, which always owns every FILE.
+ void flockfile(FILE* fp) {
+   CHECK_FP(fp);
+-  pthread_mutex_lock(&_EXT(fp)->_lock);
+ }
+ 
+ int ftrylockfile(FILE* fp) {
+   CHECK_FP(fp);
+-  // The specification for ftrylockfile() says it returns 0 on success,
+-  // or non-zero on error. We don't bother canonicalizing to 0/-1...
+-  return pthread_mutex_trylock(&_EXT(fp)->_lock);
++  return 0;
+ }
+ 
+ void funlockfile(FILE* fp) {
+   CHECK_FP(fp);
+-  pthread_mutex_unlock(&_EXT(fp)->_lock);
+ }
+ 
+ int fwide(FILE* fp, int mode) {

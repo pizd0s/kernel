@@ -12377,6 +12377,73 @@ func (p *Process) libcWcstof(s, end uint32) float32 {
 	return float32(v)
 }
 
+func (p *Process) digitsOut(text string, point int, negative bool, decpt, sign, end uint32) uint32 {
+	at := p.newString(text)
+
+	if at == 0 {
+		p.setErrno(ENOMEM)
+
+		return 0
+	}
+
+	p.put32(decpt, uint32(int32(point)))
+	p.put32(sign, 0)
+
+	if negative {
+		p.put32(sign, 1)
+	}
+
+	if end != 0 {
+		p.put32(end, at+uint32(len(text)))
+	}
+
+	return at
+}
+
+func (p *Process) libc__dtoa(v float64, mode, n, decpt, sign, end uint32) uint32 {
+	text, point := "NaN", 9999
+
+	switch {
+	case math.IsInf(v, 0):
+		text = "Infinity"
+	case v == 0:
+		text, point = "0", 1
+	case !math.IsNaN(v):
+		text, point = decimalDigits(math.Abs(v), int(int32(mode)), int(int32(n)))
+	}
+
+	return p.digitsOut(text, point, math.Signbit(v), decpt, sign, end)
+}
+
+func (p *Process) libc__ldtoa(v, mode, n, decpt, sign, end uint32) uint32 {
+	return p.libc__dtoa(math.Float64frombits(p.u64(v)), mode, n, decpt, sign, end)
+}
+
+func (p *Process) libc__hdtoa(v float64, xdigits, n, decpt, sign, end uint32) uint32 {
+	text, point := "NaN", math.MaxInt32
+
+	switch {
+	case math.IsInf(v, 0):
+		text = "Infinity"
+	case v == 0:
+		text, point = "0", 1
+	case !math.IsNaN(v):
+		var digits []byte
+
+		digits, point = hexDigits(math.Abs(v), int(int32(n)))
+
+		set := p.span(xdigits, 16)
+
+		for i, d := range digits {
+			digits[i] = set[d]
+		}
+
+		text = string(digits)
+	}
+
+	return p.digitsOut(text, point, math.Signbit(v), decpt, sign, end)
+}
+
 func (p *Process) libcAbs(n uint32) uint32 {
 	if int32(n) < 0 {
 		return uint32(-int32(n))
