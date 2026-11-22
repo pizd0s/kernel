@@ -460,6 +460,21 @@ sub: end
 names: removed e
 names: removed c
 names: removed d
+names: added f
+names: added g
+names: poll 0
+names: added h
+names: added i
+h: idle
+h: end
+names: removed i
+names: removed h
+names: added h
+lone: idle
+lone: end
+names: removed f
+names: removed g
+names: removed h
 names: existing a
 names: idle
 quick: existing a
@@ -479,6 +494,21 @@ sub: end
 names: removed e
 names: removed c
 names: removed d
+names: added f
+names: added g
+names: poll 0
+names: added h
+names: added i
+h: idle
+h: end
+names: removed i
+names: removed h
+names: added h
+lone: idle
+lone: end
+names: removed f
+names: removed g
+names: removed h
 """
 
 EXT_ERRORS = """\

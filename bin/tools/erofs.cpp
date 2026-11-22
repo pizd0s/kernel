@@ -27,9 +27,7 @@
 // in a directory who asks may search. Nothing of it changes: a call that
 // would is EROFS, after what Linux finds first. The locks of flock and
 // fcntl are the kernel's, kept by the dev and ino an open file is made
-// with. A directory is watched as <sys/watchdir.h> says (WATCH): a watcher
-// tells its names, in their order, then watchIdle, and nothing after, as
-// nothing changes; a READ then waits, kept, until its CANCEL.
+// with.
 //
 // Memory. A request is received into one buffer, packet, and answered
 // before the next: its names are read where they are in it. What a reply
@@ -387,135 +385,6 @@ static void openNode(const Node* n, u32 flags, const Header& h, int fd) {
     openFile(fd, flags, const_cast<Node*>(n), image.dev, inoOf(n), true, false);
 }
 
-// ---- watchers -----------------------------------------------------------------
-
-namespace {
-    // A watcher of a directory (WATCH): its open file's endpoint, the
-    // entries of the directory it has told, whether it told watchIdle,
-    // and a READ it keeps, where that is answered, and its memfd.
-    struct Watcher {
-        const Node* dir;
-        Endpoint* end;
-        u32 told;
-        bool idle;
-        Endpoint* kept;
-        int memfd;
-        Watcher* next;
-    };
-}
-
-static Watcher* watchers;
-
-static bool record(u8* to, usize room, usize& size, u8 kind, Name name) {
-    if (room - size < name.length + 2) {
-        return false;
-    }
-    to[size] = kind;
-    memcpy(to + size + 1, name.at, name.length);
-    to[size + 1 + name.length] = 0;
-    size += name.length + 2;
-    return true;
-}
-
-// The records a watcher tells now, as many as room holds: the names it
-// has not told yet, then watchIdle once.
-static usize records(Watcher& w, u8* to, usize room) {
-    usize size = 0;
-    for (; w.told < w.dir->size; ++w.told) {
-        if (!record(to, room, size, watchExisting, nameOf(image.entries[w.dir->data + w.told]))) {
-            return size;
-        }
-    }
-    if (!w.idle && record(to, room, size, watchIdle, {"", 0})) {
-        w.idle = true;
-    }
-    return size;
-}
-
-// Tells the kernel whether a watcher is readable (READY).
-static void ready(const Watcher& w) {
-    reply(w.end->fd, opReady, w.idle ? 0 : POLLIN, nullptr, 0);
-}
-
-static void letKeptGo(Watcher& w) {
-    close(w.memfd);
-    unkeep(w.kept);
-    w.kept = nullptr;
-    w.memfd = -1;
-}
-
-// WATCH of a directory: a watcher, an open file of the flags asked,
-// O_NONBLOCK of them, whose READs give its records.
-static void watchNode(const Node* n, const Header& h, int fd) {
-    if (!isDirNode(n)) {
-        return error(fd, ENOTDIR);
-    }
-    if (!may(n, h, 4)) {
-        return error(fd, EACCES);
-    }
-    auto* w = static_cast<Watcher*>(allocate(sizeof(Watcher)));
-    *w = {n, nullptr, 0, false, nullptr, -1, watchers};
-    w->end = openFile(fd, O_RDONLY | (h.arg & O_NONBLOCK), w, image.dev, 0, true, false);
-    if (!w->end) {
-        free(w);
-        return;
-    }
-    watchers = w;
-}
-
-static Watcher* watcherAt(const Endpoint* ep) {
-    for (Watcher* w = watchers; w; w = w->next) {
-        if (w->end == ep) {
-            return w;
-        }
-    }
-    return nullptr;
-}
-
-// A READ of a watcher's: its records, EINVAL in a buffer too short for
-// the next; with none left, EAGAIN of O_NONBLOCK, else the READ kept,
-// one at a time.
-static void readWatcher(Watcher& w, const Endpoint* ep, const Header& h, Body body, int fd) {
-    Io io;
-    if (memfd() < 0 || !ioOf(body, io)) {
-        return error(fd, EINVAL);
-    }
-    if ((io.flags & ioAt) != 0) {
-        return error(fd, ESPIPE);
-    }
-    if (!w.idle) {
-        const usize size = records(w, out, h.arg < sizeof out ? usize(h.arg) : sizeof out);
-        if (size == 0) {
-            return error(fd, EINVAL);
-        }
-        if (pwrite(memfd(), out, size, 0) != ssize_t(size)) {
-            return error(fd, EIO);
-        }
-        readCount(fd, size);
-        return ready(w);
-    }
-    if (ep->nonblock) {
-        return error(fd, EAGAIN);
-    }
-    if (w.kept) {
-        return error(fd, EBUSY);
-    }
-    w.kept = keep(&w, w.memfd);
-}
-
-static void forgetWatcher(Watcher* w) {
-    if (w->kept) {
-        letKeptGo(*w);
-    }
-    for (Watcher** at = &watchers; *at; at = &(*at)->next) {
-        if (*at == w) {
-            *at = w->next;
-            break;
-        }
-    }
-    free(w);
-}
-
 // A call of rootfs's on its channel, by node, answered on fd.
 static void fsCall(const Header& h, Body body, int fd) {
     if (h.op == fsRoot) {
@@ -601,8 +470,6 @@ static void fsCall(const Header& h, Body body, int fd) {
         }
         case fsPath:
             return pathOf(n, fd);
-        case fsWatch:
-            return watchNode(n, h, fd);
         default:
             return error(fd, ENOSYS);
     }
@@ -611,20 +478,6 @@ static void fsCall(const Header& h, Body body, int fd) {
 // A call on an open file, answered on fd. What the image opens is open
 // to read only, and changes nothing.
 static void fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
-    if (ep->role == Role::Kept) {
-        auto* w = static_cast<Watcher*>(ep->node);
-        if (h.op == opCancel && w->kept == ep) {
-            error(ep->fd, EINTR);
-            letKeptGo(*w);
-        }
-        return;
-    }
-    if (Watcher* w = watcherAt(ep)) {
-        if (h.op == opRead) {
-            return readWatcher(*w, ep, h, body, fd);
-        }
-        return error(fd, unserved(h.op));
-    }
     const auto* node = static_cast<const Node*>(ep->node);
     switch (h.op) {
         case opRead:
@@ -662,21 +515,8 @@ static void fileCall(Endpoint* ep, const Header& h, Body body, int fd) {
     }
 }
 
-// An endpoint that closes: a watcher's goes with it; nothing is kept of
-// an open file.
-static void closing(Endpoint* ep) {
-    if (ep->role == Role::Kept) {
-        auto* w = static_cast<Watcher*>(ep->node);
-        if (w->kept == ep) {
-            close(w->memfd);
-            w->kept = nullptr;
-            w->memfd = -1;
-        }
-        return;
-    }
-    if (Watcher* w = watcherAt(ep)) {
-        forgetWatcher(w);
-    }
+// An endpoint that closes: nothing is kept of it.
+static void closing(Endpoint*) {
 }
 
 // What is before the image's bytes, its header and tables, read from

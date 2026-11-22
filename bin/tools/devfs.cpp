@@ -11,6 +11,8 @@
 // owner, and lets the name go when the service's end of the pair closes,
 // whatever the file is. A name may be in a directory of /dev, pts/0: the
 // directory comes with the first name in it and goes with the last.
+// rootfs sees none of it, so devfs tells it every name that comes or
+// goes and every directory that goes, for its watchers (NOTICE).
 // devfs starts the services of the system's devices, /bin/devices,
 // /bin/pty, /bin/sockmgr, /bin/dns, /bin/inet of the loopback, lo,
 // /bin/blk for each disk vm gave the system and /bin/inet for each card
@@ -66,29 +68,6 @@ namespace {
         Node* next;    // among its directory's entries
     };
 
-    // A name a watcher told of: its inode, which is its identity, as a
-    // name gone and back is another.
-    struct Seen {
-        uint64_t ino;
-        char name[NAME_MAX + 1];
-    };
-
-    // A watcher of a directory (WATCH): its open file's endpoint, the
-    // names it told of, whether it told them all once (watchIdle), and a
-    // READ it keeps, where it is answered, its memfd and length.
-    struct Watcher {
-        Node* dir; // none once the directory is gone
-        Endpoint* end;
-        Seen* seen;
-        size_t count;
-        size_t room;
-        bool idle;
-        Endpoint* kept;
-        int memfd;
-        uint32_t length;
-        int keptTag; // what the kept READ's endpoint is of
-        Watcher* next;
-    };
 }
 
 static Node root;
@@ -101,6 +80,7 @@ static int epoll = -1;
 // device's end is the device's node.
 static int channelTag;
 static int registryTag;
+static int channel = -1; // rootfs's
 
 static uint64_t now() {
     timespec ts;
@@ -200,6 +180,15 @@ static Node* nodeOf(uint64_t ino) {
     return nodeIn(root, ino);
 }
 
+// Tells rootfs a change of a directory's names, which REGISTER and a
+// service's going make and rootfs does not see (NOTICE): a name added or
+// removed, or the directory gone.
+static void notice(uint8_t kind, const Node& dir, const char* name) {
+    const Header h{fsNotice, kind, 0, 0, 0, 0};
+    const iovec parts[] = {{const_cast<Header*>(&h), sizeof h}, {const_cast<uint64_t*>(&dir.ino), sizeof dir.ino}, {const_cast<char*>(name), strlen(name)}};
+    sendPacket(channel, parts, 3, nullptr, 0);
+}
+
 // The nodes under a directory, it not counted.
 static size_t nodesUnder(const Node& dir) {
     size_t count = 0;
@@ -207,233 +196,6 @@ static size_t nodesUnder(const Node& dir) {
         count += 1 + nodesUnder(*n);
     }
     return count;
-}
-
-// ---- watchers -----------------------------------------------------------------
-
-static Watcher* watchers;
-
-static bool knows(const Watcher& w, uint64_t ino) {
-    for (size_t i = 0; i < w.count; ++i) {
-        if (w.seen[i].ino == ino) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool there(const Node& dir, uint64_t ino) {
-    for (const Node* n = dir.entries; n; n = n->next) {
-        if (n->ino == ino) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Whether a watcher has something to tell: its first names, a change
-// since, or that its directory is gone.
-static bool pending(const Watcher& w) {
-    if (!w.dir || !w.idle) {
-        return true;
-    }
-    for (size_t i = 0; i < w.count; ++i) {
-        if (!there(*w.dir, w.seen[i].ino)) {
-            return true;
-        }
-    }
-    for (const Node* n = w.dir->entries; n; n = n->next) {
-        if (!knows(w, n->ino)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool put(unsigned char* out, size_t room, size_t& size, uint8_t kind, const char* name) {
-    const size_t length = strlen(name);
-    if (room - size < length + 2) {
-        return false;
-    }
-    out[size] = kind;
-    memcpy(out + size + 1, name, length + 1);
-    size += length + 2;
-    return true;
-}
-
-// The records a watcher tells now, as many as room holds, which it then
-// knows of: the names there not told yet, as watchExisting and then
-// watchIdle the first time, as watchAdded after it; the names told and
-// gone, watchRemoved, all of them once its directory is gone.
-static size_t records(Watcher& w, unsigned char* out, size_t room) {
-    size_t size = 0;
-    if (!w.dir) {
-        while (w.count > 0 && put(out, room, size, watchRemoved, w.seen[w.count - 1].name)) {
-            --w.count;
-        }
-        return size;
-    }
-    if (w.idle) {
-        for (size_t i = 0; i < w.count;) {
-            if (there(*w.dir, w.seen[i].ino)) {
-                ++i;
-            } else if (put(out, room, size, watchRemoved, w.seen[i].name)) {
-                w.seen[i] = w.seen[--w.count];
-            } else {
-                return size;
-            }
-        }
-    }
-    for (const Node* n = w.dir->entries; n; n = n->next) {
-        if (knows(w, n->ino)) {
-            continue;
-        }
-        if (!put(out, room, size, w.idle ? watchAdded : watchExisting, n->name)) {
-            return size;
-        }
-        if (w.count == w.room) {
-            w.room = w.room ? 2 * w.room : 8;
-            w.seen = static_cast<Seen*>(realloc(w.seen, w.room * sizeof(Seen)));
-            if (!w.seen) {
-                fatal("devfs: out of memory");
-            }
-        }
-        w.seen[w.count].ino = n->ino;
-        memcpy(w.seen[w.count].name, n->name, sizeof n->name);
-        ++w.count;
-    }
-    if (!w.idle && put(out, room, size, watchIdle, "")) {
-        w.idle = true;
-    }
-    return size;
-}
-
-// Tells the kernel whether a watcher is readable.
-static void ready(const Watcher& w) {
-    tell(w.end->fd, pending(w) ? POLLIN | (w.dir ? 0 : POLLHUP) : 0);
-}
-
-// The records of a READ into its memfd, its count answered on fd: 0 of a
-// directory gone, once its names are told gone; none of a READ too short
-// for the next record, EINVAL.
-static void answerRecords(Watcher& w, int memfd, uint32_t length, int fd) {
-    static unsigned char out[65536 - sizeof(Header)];
-    const size_t size = records(w, out, length < sizeof out ? size_t(length) : sizeof out);
-    if (size == 0 && (w.dir || w.count > 0)) {
-        return fail(fd, EINVAL);
-    }
-    if (size > 0 && pwrite(memfd, out, size, 0) != ssize_t(size)) {
-        return fail(fd, EIO);
-    }
-    const uint32_t count = uint32_t(size);
-    answer(fd, opOk, 0, &count, sizeof count);
-}
-
-static void letKeptGo(Watcher& w) {
-    close(w.memfd);
-    unkeep(epoll, w.kept);
-    w.kept = nullptr;
-}
-
-// A watcher's directory changed, or is gone: a READ it keeps is answered.
-static void told(Watcher& w) {
-    if (w.kept && pending(w)) {
-        answerRecords(w, w.memfd, w.length, w.kept->fd);
-        letKeptGo(w);
-    }
-    ready(w);
-}
-
-static void changed(Node& dir) {
-    for (Watcher* w = watchers; w; w = w->next) {
-        if (w->dir == &dir) {
-            told(*w);
-        }
-    }
-}
-
-static void dirGone(Node& dir) {
-    for (Watcher* w = watchers; w; w = w->next) {
-        if (w->dir == &dir) {
-            w->dir = nullptr;
-            told(*w);
-        }
-    }
-}
-
-// WATCH of a directory: a watcher, an open file of the flags asked,
-// O_NONBLOCK of them, whose READs give its records.
-static void watchNode(Node& n, Request& r) {
-    if (n.kind != Kind::Dir) {
-        return fail(r.reply(), ENOTDIR);
-    }
-    if (!may(n, r.h, 4)) {
-        return fail(r.reply(), EACCES);
-    }
-    auto* w = static_cast<Watcher*>(calloc(1, sizeof(Watcher)));
-    if (!w) {
-        fatal("devfs: out of memory");
-    }
-    w->dir = &n;
-    w->memfd = -1;
-    r.h.arg &= O_NONBLOCK;
-    w->end = answerOpen(epoll, r, {openedFile, 0, dev, 0, 0, POLLIN}, w);
-    if (!w->end) {
-        free(w);
-        return;
-    }
-    w->next = watchers;
-    watchers = w;
-}
-
-static Watcher* watcherOf(const void* of, bool& kept) {
-    for (Watcher* w = watchers; w; w = w->next) {
-        if (w == of || &w->keptTag == of) {
-            kept = &w->keptTag == of;
-            return w;
-        }
-    }
-    return nullptr;
-}
-
-// A READ of a watcher's: its records, or, with none, the READ kept until
-// there are, but of O_NONBLOCK; one at a time.
-static void readWatcher(Watcher& w, const Endpoint& e, Request& r) {
-    Io io;
-    if (r.memfd() < 0 || !r.io(io)) {
-        return fail(r.reply(), EINVAL);
-    }
-    if ((io.flags & ioAt) != 0) {
-        return fail(r.reply(), ESPIPE);
-    }
-    if (pending(w)) {
-        answerRecords(w, r.memfd(), r.h.arg, r.reply());
-        return ready(w);
-    }
-    if (e.nonblock) {
-        return fail(r.reply(), EAGAIN);
-    }
-    if (w.kept) {
-        return fail(r.reply(), EBUSY);
-    }
-    w.kept = keep(epoll, r, &w.keptTag);
-    w.memfd = r.memfd();
-    w.length = r.h.arg;
-    r.fds[0] = -1;
-}
-
-static void forgetWatcher(Watcher* w) {
-    if (w->kept) {
-        letKeptGo(*w);
-    }
-    for (Watcher** at = &watchers; *at; at = &(*at)->next) {
-        if (*at == w) {
-            *at = w->next;
-            break;
-        }
-    }
-    free(w->seen);
-    free(w);
 }
 
 // A service's end of its pair closed: the service is gone, and its
@@ -449,10 +211,10 @@ static void unregister(Node* n) {
     }
     dir->mtime = dir->ctime = now();
     if (n->kind == Kind::Dir) {
-        dirGone(*n);
+        notice(noticeGone, *n, "");
     }
+    notice(watchRemoved, *dir, n->name);
     free(n);
-    changed(*dir);
     if (dir != &root && !dir->entries) {
         unregister(dir);
     }
@@ -656,8 +418,6 @@ static void fsCall(Request& r) {
             }
             return answer(r.reply(), opOk, 0, path + start, sizeof path - start);
         }
-        case fsWatch:
-            return watchNode(*n, r);
         default:
             return fail(r.reply(), ENOSYS);
     }
@@ -700,7 +460,7 @@ static void registerName(const Endpoint& e, Request& r) {
         }
         if (!in) {
             in = add(*dir, name, part, Kind::Dir, S_IFDIR | 0755, 0, 0);
-            changed(*dir);
+            notice(watchAdded, *dir, in->name);
         }
         dir = in;
         length -= part + 1;
@@ -713,25 +473,15 @@ static void registerName(const Endpoint& e, Request& r) {
     n->fd = r.fds[0];
     r.fds[0] = -1; // the device's now
     watch(epoll, {n->fd, false, false, false, n});
-    changed(*dir);
+    notice(watchAdded, *dir, n->name);
     answerStat(r.reply(), *n);
 }
 
 static void handle(Endpoint& e, Request& r) {
-    bool kept = false;
     if (e.of == &channelTag) {
         fsCall(r);
     } else if (e.of == &registryTag && r.h.op == opRegister) {
         registerName(e, r);
-    } else if (Watcher* w = watcherOf(e.of, kept); w && kept) {
-        if (r.h.op == opCancel) {
-            fail(w->kept->fd, EINTR);
-            letKeptGo(*w);
-        }
-    } else if (w && r.h.op == opRead) {
-        readWatcher(*w, e, r);
-    } else if (w) {
-        fail(r.reply(), unserved(r.h.op));
     } else {
         fail(r.reply(), EINVAL);
     }
@@ -740,15 +490,8 @@ static void handle(Endpoint& e, Request& r) {
 // An endpoint closed: rootfs's channel, which ends devfs; a device's
 // end, whose name goes.
 static void gone(Endpoint& e) {
-    bool kept = false;
     if (e.of == &channelTag) {
         stopServing();
-    } else if (Watcher* w = watcherOf(e.of, kept); w && kept) {
-        // Who asked went: serve closes the endpoint itself.
-        close(w->memfd);
-        w->kept = nullptr;
-    } else if (w) {
-        forgetWatcher(w);
     } else if (e.of != &registryTag) {
         unregister(static_cast<Node*>(e.of));
     }
@@ -778,7 +521,7 @@ int devfsMain(int argc, char** argv) {
         dprintf(STDERR_FILENO, "usage: devfs [-r fd] <channel> [<disk> <fd>]... [net/<name> <fd>]...\n");
         return 2;
     }
-    const int channel = atoi(argv[at]);
+    channel = atoi(argv[at]);
     dev = deviceNumber();
     root.ino = ++inodes;
     root.kind = Kind::Dir;

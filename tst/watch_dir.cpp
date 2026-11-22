@@ -10,7 +10,11 @@
 // there, on any file system that changes: its names as it starts, a name
 // added, one removed, a rename, a name that came and went between two
 // reads, which is not told, a read that waits until a child's change or
-// a signal, and a watched directory removed, whose watch ends.
+// a signal, and a watched directory removed, whose watch ends; a name
+// opened with O_CREAT again, which is not told, a link, a rename of a
+// name to another of its file, which changes nothing, a rename over a
+// watched directory, whose watch ends, and a watched directory removed
+// from one nobody watches.
 //
 //     watch_dir
 //     watch_dir names <directory>
@@ -136,6 +140,44 @@ namespace {
         unlink(in("c"));
         rmdir(in("d"));
         show("names", w);
+
+        touch("f");
+        show("names", w);
+        touch("f");
+        char other[300];
+        snprintf(other, sizeof other, "%s/g", base);
+        link(in("f"), other);
+        show("names", w);
+        rename(in("f"), other);
+        pollfd p{w, POLLIN, 0};
+        printf("names: poll %d\n", poll(&p, 1, 0));
+        mkdir(in("h"), 0755);
+        mkdir(in("i"), 0755);
+        show("names", w);
+        const int h = open(in("h"), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        const int hw = watchdir(h, O_CLOEXEC);
+        close(h);
+        show("h", hw);
+        char from2[300];
+        snprintf(from2, sizeof from2, "%s/i", base);
+        rename(from2, in("h"));
+        show("h", hw);
+        show("names", w);
+        char lone[300];
+        snprintf(lone, sizeof lone, "%s/lone", path);
+        mkdir(lone, 0755);
+        const int l = open(lone, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        const int lw = watchdir(l, O_CLOEXEC);
+        close(l);
+        show("lone", lw);
+        rmdir(lone);
+        show("lone", lw);
+        unlink(in("f"));
+        unlink(other);
+        rmdir(in("h"));
+        show("names", w);
+        close(lw);
+        close(hw);
         close(sub);
         close(quick);
         close(w);

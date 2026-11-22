@@ -9,7 +9,10 @@
 // /run and /dev, which it starts itself (tmpfs and devfs), and those a
 // MOUNT names. A walk waits for the file systems' answers, as a coroutine,
 // while the loop goes on with other calls, and rootfs keeps what they
-// answer, a cache of names as Linux's dcache, for the walks after.
+// answer, a cache of names as Linux's dcache, for the walks after. The
+// watchers of directories are its too (WATCH): it makes the calls that
+// change the file systems' names, and a file system that changes by
+// itself tells it its changes.
 //
 // It starts erofs first, from the image itself: the image's descriptor,
 // a memfd of erofs's program in it, which it executes (fexecve), and the
@@ -479,11 +482,14 @@ namespace {
     struct Fs;
     struct Mount;
     struct Ask;
+    struct Watcher;
 
     // What an endpoint is to the loop.
     enum class Role : u8 {
-        Handle, // a handle of the VFS's, at a place: its calls come on it, and walk from the place
-        Fs,     // ours of the channel of a file system: the answers to its questions come on it
+        Handle,  // a handle of the VFS's, at a place: its calls come on it, and walk from the place
+        Fs,      // ours of the channel of a file system: the answers to its questions come on it
+        Watcher, // a watcher's open file: its READs come on it
+        Kept,    // where a READ a watcher keeps is answered: its CANCEL comes on it
     };
 
     // A file system of the VFS's, another process's behind the channel
@@ -495,6 +501,7 @@ namespace {
         u64 changes = 0;             // the calls handed on to it that may change it
         Ask* waiting = nullptr;      // the questions asked on its channel, to be answered in order
         Ask* lastWaiting = nullptr;
+        Watcher* watchers = nullptr; // of its directories
     };
 
     // A mount: a directory of a file system, its root, as a directory of
@@ -541,10 +548,32 @@ namespace {
         u64 pos;         // a Handle's: where its READDIR goes on, an entry's pos
         bool append;     // a Handle's O_APPEND and O_NONBLOCK, the open's, then SETFL's
         bool nonblock;
-        Fs* fs;          // a Fs's
-        Endpoint* next;  // among the free ones
-        Endpoint* after; // among the live ones
+        Fs* fs;           // a Fs's
+        Watcher* watcher; // a Watcher's and a Kept's
+        Endpoint* next;   // among the free ones
+        Endpoint* after;  // among the live ones
         Endpoint* before;
+    };
+
+    // A watcher of a directory (WATCH), the VFS's: the directory, a node
+    // of a file system, and its mount, which it holds; its open file's
+    // endpoint, none while it lists the directory; the records it has yet
+    // to tell, kind, name, 0, in their order; whether it told watchIdle;
+    // and a READ it keeps, where that is answered, its memfd and length.
+    struct Watcher {
+        Fs* fs = nullptr;
+        u64 node = 0;
+        Mount* m = nullptr;
+        Endpoint* end = nullptr;
+        Buffer log;
+        Buffer added; // the names added while it lists, records as the log's
+        bool listing = true;
+        bool idle = false;
+        bool gone = false; // the directory
+        Endpoint* kept = nullptr;
+        int memfd = -1;
+        u32 length = 0;
+        Watcher* next = nullptr; // among its file system's
     };
 }
 
@@ -728,9 +757,11 @@ static void bury() {
 }
 
 static void gone(Fs* fs);
+static void forgetWatcher(Watcher* w);
 
 // An endpoint that closes: a handle lets go of its place, a file
-// system's channel of the file system.
+// system's channel of the file system, a watcher's open file of the
+// watcher, and where a watcher's READ is kept of the READ.
 static void forget(Endpoint* ep) {
     ep->dead = true;
     switch (ep->role) {
@@ -741,6 +772,17 @@ static void forget(Endpoint* ep) {
         case Role::Fs:
             if (ep->fs) {
                 gone(ep->fs);
+            }
+            break;
+        case Role::Watcher:
+            ep->watcher->end = nullptr;
+            forgetWatcher(ep->watcher);
+            break;
+        case Role::Kept:
+            if (Watcher* w = ep->watcher; w->kept == ep) {
+                w->kept = nullptr;
+                close(w->memfd);
+                w->memfd = -1;
             }
             break;
     }
@@ -945,12 +987,15 @@ static Mount* mountAt(Fs* fs, const Place& root, const Place& point, const Place
     return m;
 }
 
+static void watchersGone(Fs* fs);
+
 // A file system is gone, its channel closed: it is unmounted wherever
-// it is mounted, the root's too, whose walks are EIO from then on, and
-// nothing of it is kept.
+// it is mounted, the root's too, whose walks are EIO from then on,
+// nothing of it is kept, and its directories' watchers end.
 static void gone(Fs* fs) {
     fs->channel = nullptr;
     forgetAll(fs);
+    watchersGone(fs);
     for (Mount* m = mounts; m;) {
         Mount* next = m->next;
         if (m->fs == fs && !m->gone) {
@@ -959,6 +1004,262 @@ static void gone(Fs* fs) {
         }
         m = next;
     }
+}
+
+// ---- watchers ---------------------------------------------------------------------
+//
+// A directory's watchers are the VFS's (WATCH), as <sys/watchdir.h> says:
+// a watcher tells the names there as it starts, watchIdle, then what was
+// added and removed since its last READ, a name that came and went
+// between two READs not at all; a READ with nothing to tell waits, kept,
+// until there is, or until its CANCEL; its directory gone, its READs give
+// what is left, then 0. rootfs makes the calls that change a file
+// system's names, and asks one of a watched directory where it would
+// hand it on, and every rmdir and rename of a file system it watches a
+// directory of, which may take a watched directory away: the answer says
+// what changed, and rootfs answers with it then. A file system that
+// changes by itself tells it its changes instead (NOTICE), in order with
+// its answers. A watcher starts by listing its directory, READDIR after
+// READDIR, and what changes meanwhile, heard in the order of the answers,
+// makes the names it starts with; then WATCH is answered.
+
+// A record of a log: kind, the name, 0.
+static void put(Buffer& log, u8 kind, Name name) {
+    log.append(&kind, 1);
+    log.append(name.at, name.length);
+    log.append("", 1);
+}
+
+static Name recordName(const Buffer& log, usize at) {
+    const char* name = static_cast<const char*>(log.data()) + at + 1;
+    return {name, strlen(name)};
+}
+
+// Where the last record of a name is in a log, or its size: none.
+static usize lastOf(const Buffer& log, Name name) {
+    usize found = log.size();
+    for (usize at = 0; at < log.size();) {
+        const Name n = recordName(log, at);
+        if (n.length == name.length && memcmp(n.at, name.at, name.length) == 0) {
+            found = at;
+        }
+        at += n.length + 2;
+    }
+    return found;
+}
+
+static void cutRecord(Buffer& log, usize at) {
+    char* bytes = static_cast<char*>(log.data());
+    const usize length = recordName(log, at).length + 2;
+    memmove(bytes + at, bytes + at + length, log.size() - at - length);
+    log.resize(log.size() - length);
+}
+
+// Whether a watcher has something to tell: watchIdle, a change, or that
+// its directory is gone.
+static bool pending(const Watcher& w) {
+    return !w.listing && (!w.idle || w.log.size() > 0 || w.gone);
+}
+
+static bool record(u8* to, usize room, usize& size, u8 kind, Name name) {
+    if (room - size < name.length + 2) {
+        return false;
+    }
+    to[size] = kind;
+    if (name.length > 0) {
+        memcpy(to + size + 1, name.at, name.length);
+    }
+    to[size + 1 + name.length] = 0;
+    size += name.length + 2;
+    return true;
+}
+
+// The records a watcher tells now, as many as room holds, which it then
+// has told: its log in order, watchIdle after the names there as it
+// started.
+static usize records(Watcher& w, u8* to, usize room) {
+    usize size = 0;
+    usize told = 0;
+    while (told < w.log.size()) {
+        const u8 kind = static_cast<const u8*>(w.log.data())[told];
+        const Name name = recordName(w.log, told);
+        if (!w.idle && kind != watchExisting) {
+            if (!record(to, room, size, watchIdle, {})) {
+                break;
+            }
+            w.idle = true;
+        }
+        if (!record(to, room, size, kind, name)) {
+            break;
+        }
+        told += name.length + 2;
+    }
+    if (told == w.log.size() && !w.idle && record(to, room, size, watchIdle, {})) {
+        w.idle = true;
+    }
+    if (told > 0) {
+        char* bytes = static_cast<char*>(w.log.data());
+        memmove(bytes, bytes + told, w.log.size() - told);
+        w.log.resize(w.log.size() - told);
+    }
+    return size;
+}
+
+// The records of a READ into its memfd, its count answered on fd: 0 of a
+// directory gone, once all is told; none of a READ too short for the
+// next record, EINVAL.
+static void answerRecords(Watcher& w, int memfd, u32 length, int fd) {
+    static u8 out[maxPacket - sizeof(Header)];
+    const usize size = records(w, out, MIN(usize(length), sizeof out));
+    if (size == 0 && (w.log.size() > 0 || !w.idle)) {
+        error(fd, EINVAL);
+        return;
+    }
+    if (size > 0 && pwrite(memfd, out, size, 0) != ssize_t(size)) {
+        error(fd, EIO);
+        return;
+    }
+    const u32 count = u32(size);
+    ok(fd, &count, sizeof count);
+}
+
+// Tells the kernel whether a watcher is readable (READY).
+static void ready(const Watcher& w) {
+    if (w.end) {
+        reply(w.end->fd, opReady, pending(w) ? POLLIN | (w.gone ? POLLHUP : 0) : 0, nullptr, 0);
+    }
+}
+
+// What a watcher has to tell changed: a READ it keeps is answered.
+static void told(Watcher& w) {
+    if (w.kept && pending(w)) {
+        answerRecords(w, w.memfd, w.length, w.kept->fd);
+        closed(w.kept);
+    }
+    ready(w);
+}
+
+// A change a watcher hears, a name added or removed. While it lists its
+// directory, what it starts with: what is there in the end, the names a
+// READDIR finds after one was added not found again. Then a record, but
+// for a name that came and went untold, whose record goes.
+static void note(Watcher& w, u8 kind, Name name) {
+    if (name.empty() || name.length > NAME_MAX) {
+        return;
+    }
+    const usize at = lastOf(w.log, name);
+    if (w.listing) {
+        if (kind == watchAdded) {
+            if (at == w.log.size()) {
+                put(w.log, watchExisting, name);
+            }
+            put(w.added, watchAdded, name);
+            return;
+        }
+        if (at < w.log.size()) {
+            cutRecord(w.log, at);
+        }
+        if (const usize was = lastOf(w.added, name); was < w.added.size()) {
+            cutRecord(w.added, was);
+        }
+        return;
+    }
+    if (kind == watchRemoved && at < w.log.size() && static_cast<const u8*>(w.log.data())[at] != watchRemoved) {
+        cutRecord(w.log, at);
+    } else {
+        put(w.log, kind, name);
+    }
+    told(w);
+}
+
+// A name a watcher's listing found.
+static void listed(Watcher& w, Name name) {
+    if (!name.empty() && !name.is(".") && !name.is("..") && lastOf(w.added, name) == w.added.size()) {
+        put(w.log, watchExisting, name);
+    }
+}
+
+// A name of a directory of a file system's added or removed, for the
+// directory's watchers.
+static void heard(Fs* fs, u64 dir, u8 kind, Name name) {
+    for (Watcher* w = fs->watchers; w; w = w->next) {
+        if (w->node == dir && !w->gone) {
+            note(*w, kind, name);
+        }
+    }
+}
+
+// A directory gone: its watchers tell what is left, then their end. One
+// of the number later is another.
+static void dirGone(Fs* fs, u64 node) {
+    for (Watcher* w = fs->watchers; w; w = w->next) {
+        if (w->node == node && !w->gone) {
+            w->gone = true;
+            told(*w);
+        }
+    }
+}
+
+static void watchersGone(Fs* fs) {
+    for (Watcher* w = fs->watchers; w; w = w->next) {
+        if (!w->gone) {
+            w->gone = true;
+            told(*w);
+        }
+    }
+}
+
+// A file system's NOTICE: a change of its names, for its watchers.
+static void noticed(Fs* fs, u32 kind, Body body) {
+    if (body.size() < 8) {
+        return;
+    }
+    const u64 node = body.take<u64>();
+    if (kind == noticeGone) {
+        dirGone(fs, node);
+    } else if (kind == watchAdded || kind == watchRemoved) {
+        heard(fs, node, u8(kind), body.rest());
+    }
+}
+
+// Whether rootfs asks the changes of a file system it watches a
+// directory of, to see their answers: none of one that tells its own.
+static bool watching(const Fs* fs) {
+    for (const Watcher* w = fs->watchers; w && fs->cached; w = w->next) {
+        if (!w->gone) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Whether a directory's changes are asked, for its watchers.
+static bool watched(const Place& dir) {
+    const Fs* fs = dir.m->fs;
+    for (const Watcher* w = fs->watchers; w && fs->cached; w = w->next) {
+        if (w->node == dir.node && !w->gone) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A watcher whose open file closed, or whose WATCH failed, goes, and
+// lets go of its mount.
+static void forgetWatcher(Watcher* w) {
+    if (w->kept) {
+        closed(w->kept);
+    }
+    for (Watcher** at = &w->fs->watchers; *at; at = &(*at)->next) {
+        if (*at == w) {
+            *at = w->next;
+            break;
+        }
+    }
+    Mount* m = w->m;
+    w->~Watcher();
+    free(w);
+    letGo(m);
 }
 
 // ---- the cache --------------------------------------------------------------------
@@ -978,7 +1279,8 @@ static void gone(Fs* fs) {
 // rootfs sees no reply to a call it hands on, only that the call may
 // change something: it forgets what may change before it hands the call
 // on, and keeps no answer to a question asked before a call handed on
-// since, as a file system answers its channel in order. Of errors only
+// since, as a file system answers its channel in order. A change it asks
+// instead, for watchers, it forgets of so too. Of errors only
 // ENOENT is kept: the others are who asks's, and rootfs checks the
 // search of a directory itself. A node's number may be its file
 // system's again for another node once the node is gone, as ext4's are:
@@ -1280,6 +1582,7 @@ namespace {
         int error = 0;
         Body body{nullptr, nullptr};
         bool current = false; // no call that may change the file system was handed on after the question
+        int fd = -1;          // the open file it brings, of a question that takes it: the call's to close
     };
 
     // A question of a call's to a file system, which the call waits for: it
@@ -1294,6 +1597,8 @@ namespace {
         Header head{};
         u8 body[8 + NAME_MAX];
         usize size = 0;
+        Name tail;          // what follows the body, the caller's while the question goes
+        bool takes = false; // the answer's open file is the call's
         Answer answer;
         u64 changes = 0; // the file system's changes when the question went
         std::coroutine_handle<void> call;
@@ -1309,6 +1614,22 @@ static Ask asking(const Place& p, const Header& h, u32 op, Name name) {
     memcpy(a.body, &p.node, 8);
     memcpy(a.body + 8, name.at, MIN(name.length, usize(NAME_MAX)));
     a.size = 8 + MIN(name.length, usize(NAME_MAX));
+    return a;
+}
+
+// A question of a change by node, which rootfs asks to see its answer:
+// what follows the node, args, then names, which stay the caller's until
+// the question goes.
+static Ask changeAsk(const Place& p, const Header& h, u32 op, u32 arg, const void* args, usize size, Name names) {
+    Ask a;
+    a.fs = p.m->fs;
+    a.head = {op, arg, h.uid, h.gid, h.pgrp, h.sid};
+    memcpy(a.body, &p.node, 8);
+    if (size > 0) {
+        memcpy(a.body + 8, args, size);
+    }
+    a.size = 8 + size;
+    a.tail = names;
     return a;
 }
 
@@ -1431,10 +1752,10 @@ bool Ask::await_ready() const noexcept {
 // The question goes out, or it cannot: then the call goes on at once with
 // the error, EIO for a file system that is gone.
 bool Ask::await_suspend(std::coroutine_handle<void> h) {
-    const iovec parts[] = {part(&head, sizeof head), part(body, size)};
+    const iovec parts[] = {part(&head, sizeof head), part(body, size), part(tail.at, tail.length)};
     Endpoint* channel = fs ? fs->channel : nullptr;
     call = h;
-    if (!channel || sendPacket(channel->fd, parts, 2, nullptr, 0, MSG_DONTWAIT) < 0) {
+    if (!channel || sendPacket(channel->fd, parts, 3, nullptr, 0, MSG_DONTWAIT) < 0) {
         answer.error = channel && errno == EAGAIN ? EAGAIN : EIO;
         return false;
     }
@@ -2066,6 +2387,68 @@ namespace {
     };
 }
 
+// The answers of the changes rootfs asks for watchers, which it answers
+// with: what changed, as the answer says, heard by the watchers first.
+
+// CREATE's: the name added when the file system made the file, and the
+// open file on to who asked.
+static void created(const Place& dir, Name name, const Answer& a, int fd) {
+    if (a.error != 0) {
+        error(fd, a.error);
+        return;
+    }
+    Opened what{};
+    if (a.body.size() == sizeof what) {
+        memcpy(&what, a.body.at, sizeof what);
+        if (what.made != 0) {
+            heard(dir.m->fs, dir.node, watchAdded, name);
+        }
+    }
+    const iovec body = part(a.body.at, a.body.size());
+    reply(fd, opOk, 0, &body, 1, a.fd >= 0 ? &a.fd : nullptr, a.fd >= 0 ? 1 : 0);
+    if (a.fd >= 0) {
+        close(a.fd);
+    }
+}
+
+// UNLINK's: the name removed, and a directory it was gone.
+static void unlinked(const Place& dir, Name name, const Answer& a) {
+    if (a.error != 0) {
+        return;
+    }
+    heard(dir.m->fs, dir.node, watchRemoved, name);
+    u64 removed = 0;
+    if (a.body.size() >= sizeof removed) {
+        memcpy(&removed, a.body.at, sizeof removed);
+    }
+    if (removed != 0) {
+        dirGone(dir.m->fs, removed);
+    }
+}
+
+// RENAME's: the old name removed and the new one added, a name it
+// replaced removed first, and a directory it replaced gone; nothing of
+// two names of one node.
+static void renamed(const Place& from, Name old, const Place& to, Name name, const Answer& a) {
+    if (a.error != 0) {
+        return;
+    }
+    u64 nodes[2] = {0, 0};
+    if (a.body.size() >= sizeof nodes) {
+        memcpy(nodes, a.body.at, sizeof nodes);
+    }
+    if (nodes[0] != 0 && nodes[0] == nodes[1]) {
+        return;
+    }
+    Fs* fs = from.m->fs;
+    heard(fs, from.node, watchRemoved, old);
+    if (nodes[1] != 0) {
+        heard(fs, to.node, watchRemoved, name);
+        dirGone(fs, nodes[1]);
+    }
+    heard(fs, to.node, watchAdded, name);
+}
+
 // OPEN: what the path names, opened as open(2) opens it.
 static Task openCall(Header h, int fd, Place root, Place from, u32 mode, Name path) {
     Reply r{fd};
@@ -2099,6 +2482,12 @@ static Task openCall(Header h, int fd, Place root, Place from, u32 mode, Name pa
         changing(w.here);
         forgetName(w.here, w.last);
         forgetStat(knownAt(w.here), false);
+        if (watched(w.here)) {
+            Ask ask = changeAsk(w.here, h, fsCreate, u32(fl), &mode, sizeof mode, w.last);
+            ask.takes = true;
+            created(w.here, w.last, co_await ask, fd);
+            co_return;
+        }
         hand(w.here, h, fsCreate, u32(fl), &mode, sizeof mode, w.last, fd);
         co_return;
     }
@@ -2222,15 +2611,25 @@ static Task makeCall(Header h, int fd, Place root, Place from, Name target, Name
     changing(w.here);
     forgetName(w.here, w.last);
     forgetStat(knownAt(w.here), false);
+    Buffer names;
+    Name made = w.last;
     if (h.op == vfsSymlink) {
-        Buffer names;
         names.append(to.at, to.length);
         names.append("", 1);
         names.append(w.last.at, w.last.length);
-        hand(w.here, h, fsSymlink, 0, nullptr, 0, {static_cast<const char*>(names.data()), names.size()}, fd);
+        made = {static_cast<const char*>(names.data()), names.size()};
+    }
+    const u32 op = h.op == vfsSymlink ? fsSymlink : h.op == vfsMkdir ? fsMkdir : fsMknod;
+    const u32 arg = h.op == vfsSymlink ? 0 : h.arg;
+    if (watched(w.here)) {
+        const Answer a = co_await changeAsk(w.here, h, op, arg, nullptr, 0, made);
+        if (a.error == 0) {
+            heard(w.here.m->fs, w.here.node, watchAdded, w.last);
+        }
+        answer(fd, a.error);
         co_return;
     }
-    hand(w.here, h, h.op == vfsMkdir ? fsMkdir : fsMknod, h.arg, nullptr, 0, w.last, fd);
+    hand(w.here, h, op, arg, nullptr, 0, made, fd);
 }
 
 // UNLINK: the last name taken away, a directory's with AT_REMOVEDIR.
@@ -2276,6 +2675,12 @@ static Task unlinkCall(Header h, int fd, Place root, Place from, Name path) {
     }
     forgetName(w.here, w.last);
     forgetStat(knownAt(w.here), false);
+    if (watched(w.here) || (dir && watching(w.here.m->fs))) {
+        const Answer a = co_await changeAsk(w.here, h, fsUnlink, h.arg, nullptr, 0, w.last);
+        unlinked(w.here, w.last, a);
+        answer(fd, a.error);
+        co_return;
+    }
     hand(w.here, h, fsUnlink, h.arg, nullptr, 0, w.last, fd);
 }
 
@@ -2353,7 +2758,14 @@ static Task renameCall(Header h, int fd, Place root, Place from, Place to, Name 
     names.append(a.last.at, a.last.length);
     names.append("", 1);
     names.append(b.last.at, b.last.length);
-    hand(a.here, h, fsRename, 0, &b.here.node, 8, {static_cast<const char*>(names.data()), names.size()}, fd);
+    const Name both{static_cast<const char*>(names.data()), names.size()};
+    if (watching(a.here.m->fs)) {
+        const Answer got = co_await changeAsk(a.here, h, fsRename, 0, &b.here.node, 8, both);
+        renamed(a.here, a.last, b.here, b.last, got);
+        answer(fd, got.error);
+        co_return;
+    }
+    hand(a.here, h, fsRename, 0, &b.here.node, 8, both, fd);
 }
 
 // LINK: the last name of a new path, from the handle to, made a name of
@@ -2403,6 +2815,14 @@ static Task linkCall(Header h, int fd, Place root, Place from, Place to, Name ol
     forgetName(b.here, b.last);
     forgetStat(knownAt(b.here), false);
     forgetStat(knownAt(a.target), false);
+    if (watched(b.here)) {
+        const Answer got = co_await changeAsk(a.target, h, fsLink, 0, &b.here.node, 8, b.last);
+        if (got.error == 0) {
+            heard(b.here.m->fs, b.here.node, watchAdded, b.last);
+        }
+        answer(fd, got.error);
+        co_return;
+    }
     hand(a.target, h, fsLink, 0, &b.here.node, 8, b.last, fd);
 }
 
@@ -2634,6 +3054,64 @@ static Task readdirCall(Header h, int fd, Place at, u64 id, u64 after) {
     ok(fd, a.body.at, a.body.size());
 }
 
+// WATCH of a handle's directory: a watcher, which lists the directory
+// first, READDIR after READDIR, a change that comes meanwhile heard in
+// the order of the answers, and is then answered: an open file of the
+// flags asked, O_NONBLOCK of them, whose READs give its records. A
+// directory gone while it lists ends it at once.
+static Task watchCall(Header h, int fd, Place at) {
+    Reply r{fd};
+    Fs* fs = at.m->fs;
+    auto* w = new (allocate(sizeof(Watcher))) Watcher();
+    w->fs = fs;
+    w->node = at.node;
+    w->m = at.m;
+    hold(at);
+    w->next = fs->watchers;
+    fs->watchers = w;
+    for (u64 after = 0;;) {
+        Ask ask = asking(at, h, fsReaddir, {reinterpret_cast<const char*>(&after), sizeof after});
+        ask.head.arg = u32(maxPacket);
+        const Answer a = co_await ask;
+        if (a.error != 0 && !w->gone) {
+            forgetWatcher(w);
+            error(fd, a.error);
+            co_return;
+        }
+        bool any = false;
+        for (const u8* entry = a.body.at; a.error == 0 && a.body.end - entry > 17;) {
+            const auto* nul = static_cast<const u8*>(memchr(entry + 17, 0, usize(a.body.end - entry - 17)));
+            if (!nul) {
+                break;
+            }
+            memcpy(&after, entry + 8, sizeof after);
+            listed(*w, {reinterpret_cast<const char*>(entry + 17), usize(nul - entry - 17)});
+            entry = nul + 1;
+            any = true;
+        }
+        if (!any) {
+            break;
+        }
+    }
+    w->listing = false;
+    w->added.clear();
+    int pair[2];
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+        const int e = errno;
+        forgetWatcher(w);
+        error(fd, e);
+        co_return;
+    }
+    w->end = listen(pair[0], Role::Watcher);
+    w->end->watcher = w;
+    w->end->reads = true;
+    w->end->nonblock = (h.arg & O_NONBLOCK) != 0;
+    const Opened what{openedFile, O_RDONLY, at.st.dev, 0, 0, u32(POLLIN | (w->gone ? POLLHUP : 0)), 0};
+    const iovec said = part(&what, sizeof what);
+    reply(fd, opOk, 0, &said, 1, &pair[1], 1);
+    close(pair[1]);
+}
+
 // SEEK of a handle: a directory's position is an entry's, READDIR's; its
 // end the size its stat has. What O_PATH opens has none.
 static bool seekCall(Endpoint* ep, const Header& h, Body body, int fd) {
@@ -2747,8 +3225,8 @@ Name Path::text() const {
 // An open file's call on a handle: FSTAT rootfs answers, with the
 // handle's id, and SEEK, GETFL and SETFL of the position and the flags
 // the handle keeps; READDIR asks the file system for the entries after
-// the position; the others, WATCH among them, whose watcher the file
-// system answers with, are handed on to the file system its place is of. O_PATH's handle reads, changes and locks nothing: EBADF; a
+// the position; WATCH makes a watcher of rootfs's; the others are handed
+// on to the file system its place is of. O_PATH's handle reads, changes and locks nothing: EBADF; a
 // handle locks nothing, EINVAL; a directory reads by READDIR, not READ,
 // EISDIR; a call no handle serves fails as the protocol has it.
 static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
@@ -2776,7 +3254,8 @@ static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
             if (!isDir(at)) {
                 return error(fd, ENOTDIR);
             }
-            return hand(at, h, fsWatch, h.arg, nullptr, 0, {}, fd);
+            watchCall(h, fd, at);
+            return true;
         case opSeek:
             return seekCall(ep, h, body, fd);
         case opGetfl:
@@ -2912,18 +3391,34 @@ static void ended(Endpoint* ep) {
 }
 
 // The answer to a question on a file system's channel, its first, the
-// packet of n bytes a turn took: the call goes on. What nobody asked is
-// dropped.
+// packet of n bytes a turn took: the call goes on, the open file it
+// brings the call's when it takes one. What nobody asked is dropped. A
+// NOTICE answers nothing: its change goes to the watchers.
 static void answeredOn(Endpoint* ep, ssize_t n) {
     Fs* fs = ep->fs;
+    Header h{};
+    if (n >= ssize_t(sizeof h)) {
+        memcpy(&h, packet, sizeof h);
+    }
+    const bool notice = n >= ssize_t(sizeof h) && h.op == fsNotice;
+    Ask* a = fs && n > 0 && !notice ? fs->waiting : nullptr;
+    int taken = -1;
+    if (a && a->takes && h.op == opOk && packetFdCount > 0) {
+        taken = packetFds[0];
+        packetFds[0] = -1;
+    }
     for (usize i = 0; i < packetFdCount; ++i) {
-        close(packetFds[i]);
+        if (packetFds[i] >= 0) {
+            close(packetFds[i]);
+        }
     }
     if (n <= 0) {
         ended(ep);
         return;
     }
-    Ask* a = fs ? fs->waiting : nullptr;
+    if (notice && fs) {
+        noticed(fs, h.arg, {packet + sizeof h, packet + n});
+    }
     if (!a) {
         return;
     }
@@ -2931,10 +3426,7 @@ static void answeredOn(Endpoint* ep, ssize_t n) {
     if (!fs->waiting) {
         fs->lastWaiting = nullptr;
     }
-    Header h{};
-    if (n >= ssize_t(sizeof h)) {
-        memcpy(&h, packet, sizeof h);
-    }
+    a->answer.fd = taken;
     a->answer.current = fs->changes == a->changes;
     if (n < ssize_t(sizeof h) || (h.op != opOk && h.op != opErr)) {
         a->answer.error = EIO;
@@ -2944,6 +3436,70 @@ static void answeredOn(Endpoint* ep, ssize_t n) {
         a->answer.body = {packet + sizeof h, packet + n};
     }
     a->call.resume();
+}
+
+// A request on a watcher's open file, answered on fd: READ, its records,
+// or, with none, the READ kept until there are, but of O_NONBLOCK, one at
+// a time; GETFL and SETFL of its flags; what else an open file takes,
+// as the protocol has it of what is none of it. Whether fd is kept.
+static bool onWatcher(Endpoint* ep, const Header& h, Body body, int fd) {
+    Watcher& w = *ep->watcher;
+    switch (h.op) {
+        case opRead: {
+            Io io;
+            if (packetFdCount < 2 || body.size() != sizeof io) {
+                return error(fd, EINVAL);
+            }
+            memcpy(&io, body.at, sizeof io);
+            if ((io.flags & ioAt) != 0) {
+                return error(fd, ESPIPE);
+            }
+            if (pending(w)) {
+                answerRecords(w, packetFds[0], h.arg, fd);
+                ready(w);
+                return false;
+            }
+            if (ep->nonblock) {
+                return error(fd, EAGAIN);
+            }
+            if (w.kept) {
+                return error(fd, EBUSY);
+            }
+            w.kept = listen(fd, Role::Kept);
+            w.kept->watcher = &w;
+            w.memfd = packetFds[0];
+            packetFds[0] = -1;
+            w.length = h.arg;
+            return true;
+        }
+        case opGetfl: {
+            const u32 flags = O_RDONLY | (ep->nonblock ? O_NONBLOCK : 0);
+            ok(fd, &flags, sizeof flags);
+            return false;
+        }
+        case opSetfl:
+            ep->nonblock = (h.arg & O_NONBLOCK) != 0;
+            ok(fd);
+            return false;
+        default:
+            return error(fd, unserved(h.op));
+    }
+}
+
+// What comes where a watcher's READ is kept: its CANCEL, answered EINTR,
+// or the end of who asked; the READ is done.
+static void keptHeard(Endpoint* ep, ssize_t n) {
+    for (usize i = 0; i < packetFdCount; ++i) {
+        close(packetFds[i]);
+    }
+    Header h{};
+    if (n >= ssize_t(sizeof h)) {
+        memcpy(&h, packet, sizeof h);
+    }
+    if (n >= ssize_t(sizeof h) && h.op == opCancel) {
+        error(ep->fd, EINTR);
+    }
+    closed(ep);
 }
 
 // What a turn took on an endpoint: a packet of n bytes in packet, its
@@ -2957,6 +3513,10 @@ static void handle(Endpoint* ep, ssize_t n) {
     }
     if (ep->role == Role::Fs) {
         answeredOn(ep, n);
+        return;
+    }
+    if (ep->role == Role::Kept) {
+        keptHeard(ep, n);
         return;
     }
     if (n <= 0) {
@@ -2975,7 +3535,8 @@ static void handle(Endpoint* ep, ssize_t n) {
         // it waits for came, and closed then, which ends the answer.
         const Body body{packet + sizeof(Header), packet + n};
         const usize last = packetFdCount - 1;
-        if (onHandle(ep, h, body, packetFds[last])) {
+        const bool kept = ep->role == Role::Watcher ? onWatcher(ep, h, body, packetFds[last]) : onHandle(ep, h, body, packetFds[last]);
+        if (kept) {
             packetFds[last] = -1;
         }
     }

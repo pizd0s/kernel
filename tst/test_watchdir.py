@@ -4,7 +4,8 @@ records of the names of a directory as it starts, then of what changes,
 which tst/watch_dir.cpp, a program the test hands the system, makes by
 registering names at /dev/init/ctl and letting them go; and the directories
 of /dev, which come with the first name registered in them, at any
-depth, and go with the last.
+depth, and go with the last. Then watch_dir's names on /run, tmpfs's, as
+tst/test_mounts.py has them on fuse2fs's.
 
     test_watchdir.py <vm> <rootfs> <watch_dir>
 """
@@ -20,6 +21,7 @@ PROGRAM
 chmod +x /run/watch_dir
 /run/watch_dir
 ls /dev/w 2>&1
+/run/watch_dir names /run
 """
 
 WANT = """\
@@ -47,6 +49,40 @@ a device: -1 Not a directory
 no descriptor: -1 Bad file descriptor
 flags: -1 Invalid argument
 ls: /dev/w: No such file or directory
+names: existing a
+names: idle
+quick: existing a
+quick: idle
+names: added b
+names: removed a
+names: removed b
+names: added c
+quick: removed a
+quick: added c
+quick: Resource temporarily unavailable
+names: added d
+names: Interrupted system call
+names: added e
+sub: idle
+sub: end
+names: removed e
+names: removed c
+names: removed d
+names: added f
+names: added g
+names: poll 0
+names: added h
+names: added i
+h: idle
+h: end
+names: removed i
+names: removed h
+names: added h
+lone: idle
+lone: end
+names: removed f
+names: removed g
+names: removed h
 """
 
 

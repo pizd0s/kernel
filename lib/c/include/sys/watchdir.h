@@ -15,8 +15,8 @@ __BEGIN_DECLS
  * went and came back is another, removed and added. A read that finds
  * nothing to tell waits, or fails EAGAIN with O_NONBLOCK, and poll finds
  * the descriptor readable when there is something; a read of a watch of
- * a directory that is gone is 0. The directory's file system watches it:
- * one that cannot fails watchdir.
+ * a directory that is gone is 0. The VFS watches it, rootfs, which sees
+ * every change of the names, every file system's.
  */
 
 #define WATCH_EXISTING 1

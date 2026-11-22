@@ -114,20 +114,25 @@
 //     READDIR   arg room    node u64, after u64   an open file's READDIR's
 //                                         reply: the entries after the
 //                                         position after that room holds
-//     WATCH     arg flags   node u64          as an open file's
 //     OPEN      arg flags   node u64          OK, fds[0] the open file; a
 //                                         FIFO's OK is its stat alone
 //     CREATE    arg flags   node u64, mode u32, name   OK, fds[0] the open
 //                                         file of the name, made when it is
-//                                         not there; with O_EXCL EEXIST
-//                                         when it is
+//                                         not there, opened's made 1 then;
+//                                         with O_EXCL EEXIST when it is
 //     MKDIR     arg mode    node u64, name
 //     MKNOD     arg mode    node u64, name    a FIFO, a socket or a regular
 //                                         file
 //     SYMLINK               node u64, target 0 name
 //     LINK                  node u64, to u64, name   a name in to for node
-//     UNLINK    arg flags   node u64, name    AT_REMOVEDIR
-//     RENAME                node u64, to u64, old 0 new
+//     UNLINK    arg flags   node u64, name    AT_REMOVEDIR. OK removed u64:
+//                                         the node the name named
+//     RENAME                node u64, to u64, old 0 new   OK moved u64,
+//                                         replaced u64: what the old name
+//                                         named and what the new one named,
+//                                         0 for none; the two the same when
+//                                         they were names of one node,
+//                                         which nothing changes
 //     CHMOD     arg mode    node u64
 //     CHOWN                 node u64, uid u32, gid u32
 //     UTIMES    arg when    node u64, atime u64, mtime u64
@@ -138,6 +143,13 @@
 //     ROOT                                    OK stat: the root's, then
 //                                         flags u32: fsNocache, of a file
 //                                         system that changes by itself
+//   and from a file system that changes by itself, on its channel, every
+//   change of its names as it makes it, in order with its answers, which
+//   rootfs's watchers of its directories hear: no answer.
+//     NOTICE    arg kind    node u64, name    watchAdded or watchRemoved
+//                                         of a name of the directory node;
+//                                         noticeGone, no name: the
+//                                         directory node is gone
 //
 //   An open file's, on a connection to it. The open file keeps its
 //   position and its flags, the OPEN's, as an open file description does:
@@ -170,9 +182,10 @@
 //                                         dirent64 hold, (19 + length + 1
 //                                         + 7) & ~7 each; the position moves
 //                                         to the last one's
-//     WATCH     arg flags                 OK opened, fds[0] the watcher of
-//                                         the directory, an open file of
-//                                         its flags, O_NONBLOCK of them,
+//     WATCH     arg flags                 a handle's: OK opened, fds[0]
+//                                         the watcher of the directory, an
+//                                         open file of rootfs's of its
+//                                         flags, O_NONBLOCK of them,
 //                                         whose READ gives records of its
 //                                         names, kind u8, name, 0, as many
 //                                         as fit: watchExisting of each
@@ -336,12 +349,17 @@
 //   rootfs keeps what a file system answers, a cache of names, as Linux's
 //   dcache is, so a file system changes by the calls rootfs hands on to it
 //   and by its open files, and nothing else, but for one whose ROOT says
-//   fsNocache: rootfs keeps nothing of its answers. Its atime is none of
-//   rootfs's: the system is noatime.
+//   fsNocache: rootfs keeps nothing of its answers, and the file system
+//   tells it every change of its names (NOTICE). Its atime is none of
+//   rootfs's: the system is noatime. A directory's watchers are rootfs's:
+//   it asks a change of a watched directory's names, where it would hand
+//   it on, and sees its answer, which it then answers with; a file system
+//   that changes by itself tells it its changes.
 //
 //   replies: OK, ERR with arg the errno, BACKGROUND with arg the signal
 //   of a call out of the foreground (a terminal's)
-//   opened { kind u32, access u32, dev u64, ino u64, id u64, events u32 }   kind:
+//   opened { kind u32, access u32, dev u64, ino u64, id u64, events u32,
+//            made u32 }   kind:
 //          openedFile, an open file; openedTerminal, a terminal's, which
 //          takes a terminal's calls too; openedDir, a handle of a directory
 //          of the VFS's, which calls with a path go to; openedPath, a handle
@@ -358,7 +376,8 @@
 //          fcntl by them, so the open files given one dev and ino are one
 //          file to lock, and a file of ino 0 has no locks; two opens of a
 //          terminal are one terminal by them. id is a handle's, which calls
-//          with a path name the root by
+//          with a path name the root by. made is CREATE's: 1 when it made
+//          the file
 //   io { off u64, flags u32 }   flags: ioAt, at off as pread and
 //          pwrite ask, ESPIPE from what cannot seek
 //   stat { ino u64, size u64, mtime u64 nanoseconds, mode u32, nlink u32,
@@ -414,7 +433,7 @@ enum : uint32_t {
     fsStatfs,
     fsPath,
     fsRoot,
-    fsWatch,
+    fsNotice,
     // An open file's.
     opRead = 64,
     opWrite,
@@ -489,6 +508,8 @@ constexpr uint8_t watchExisting = 1;
 constexpr uint8_t watchIdle = 2;
 constexpr uint8_t watchAdded = 3;
 constexpr uint8_t watchRemoved = 4;
+// NOTICE's kind of a directory gone, past the records' kinds.
+constexpr uint8_t noticeGone = 5;
 
 // The room an entry of a READDIR's takes of struct dirent64, of a name of
 // length.
@@ -518,6 +539,7 @@ struct Opened {
     uint64_t ino;
     uint64_t id;
     uint32_t events;
+    uint32_t made = 0;
 };
 
 constexpr uint32_t openedFile = 1;

@@ -18,15 +18,6 @@
 // brings. A directory's entries are read from the file system when a
 // reading starts, their positions their places then.
 //
-// A directory is watched as <sys/watchdir.h> says (WATCH): a watcher
-// tells the names a reading of it finds as it starts, watchIdle, then
-// what the calls that come here add to it and take out of it, a name that
-// came and went between two READs not at all, a rename a removal and an
-// addition; a READ with nothing to tell waits, kept, until there is, or
-// until its CANCEL; the directory gone, its watcher's READs give 0. As
-// every change of the file system's names comes as a call of ours, the
-// watchers see them all.
-//
 // When the last channel closes, the file system unmounted, it is destroyed
 // and fuse_main returns, as libfuse's does when its mount point is
 // unmounted.
@@ -76,32 +67,6 @@ namespace {
         Listing* next;
     };
 
-    // A record a watcher has yet to tell: watchExisting, watchAdded or
-    // watchRemoved, of a name.
-    struct Change {
-        uint8_t kind;
-        char* name;
-    };
-
-    // A watcher of a directory (WATCH): the directory's inode, its open
-    // file's endpoint, what it has yet to tell, in order, whether it told
-    // watchIdle, whether the directory is gone, and a READ it keeps, where
-    // that is answered, its memfd and length.
-    struct Watcher {
-        uint64_t dir;
-        Endpoint* end;
-        Change* changes;
-        size_t count;
-        size_t room;
-        bool idle;
-        bool gone;
-        Endpoint* kept;
-        int memfd;
-        uint32_t length;
-        int keptTag; // what the kept READ's endpoint is of
-        Watcher* next;
-    };
-
     // An endpoint's: a channel of rootfs's, or an open file at its path,
     // with the file system's information of the open.
     struct Open {
@@ -123,7 +88,6 @@ static size_t channels;
 static char bytes[128 * 1024];
 static Node* nodes[1024];
 static Listing* listings;
-static Watcher* watchers;
 static Device registered{-1, {}}; // the socket's name in /dev, ours while we are up
 
 static void* allocate(size_t size) {
@@ -320,10 +284,7 @@ static bool nameAt(const Request& r, size_t at, const char*& name, size_t& lengt
 // O_TRUNC, the file system's open of it; made with O_CREAT. A link is
 // ELOOP, a FIFO is its stat, the kernel makes its pipe, a device has no
 // driver here.
-static void added(uint64_t dir, const char* name, size_t length);
-
-// Opens a file at path, a name of dir's when it creates one.
-static void openFile(Request& r, char* path, uint32_t mode, bool creates, uint64_t dir) {
+static void openFile(Request& r, char* path, uint32_t mode, bool creates) {
     const uint32_t flags = r.h.arg;
     const uint32_t access = flags & O_ACCMODE;
     const bool writes = access != O_RDONLY;
@@ -331,6 +292,7 @@ static void openFile(Request& r, char* path, uint32_t mode, bool creates, uint64
     fuse_file_info info{};
     info.flags = int(flags & ~uint32_t(O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC));
     bool opened = false;
+    bool made = false;
     int e = attributes(path, st);
     if (e == ENOENT && creates) {
         if (operations.create) {
@@ -340,9 +302,8 @@ static void openFile(Request& r, char* path, uint32_t mode, bool creates, uint64
         } else if (operations.mknod) {
             e = result(operations.mknod(path, S_IFREG | (mode & 07777), 0));
         }
+        made = e == 0;
         if (e == 0) {
-            const char* name = strrchr(path, '/') + 1;
-            added(dir, name, strlen(name));
             e = attributes(path, st);
         }
     } else if (e == 0 && creates && (flags & O_EXCL) != 0) {
@@ -382,7 +343,7 @@ static void openFile(Request& r, char* path, uint32_t mode, bool creates, uint64
     Open* o = listed(false, path);
     o->opened = opened;
     o->info = info;
-    if (!answerOpen(epoll, r, {openedFile, 0, device, uint64_t(st.st_ino), 0, POLLIN | POLLOUT}, o)) {
+    if (!answerOpen(epoll, r, {openedFile, 0, device, uint64_t(st.st_ino), 0, POLLIN | POLLOUT, made ? 1u : 0u}, o)) {
         unlisted(o);
     }
 }
@@ -578,254 +539,6 @@ static void readDirectory(uint64_t ino, const char* path, const Request& r) {
     answer(r.reply(), opOk, 0, out, size);
 }
 
-// ---- watchers -----------------------------------------------------------------
-
-static void note(Watcher& w, uint8_t kind, const char* name, size_t length) {
-    if (w.count == w.room) {
-        w.room = w.room ? 2 * w.room : 16;
-        w.changes = static_cast<Change*>(realloc(w.changes, w.room * sizeof(Change)));
-        if (!w.changes) {
-            fatal("fuse: out of memory");
-        }
-    }
-    w.changes[w.count++] = {kind, copied(name, length)};
-}
-
-// Whether a watcher has something to tell: watchIdle, a change, or that
-// its directory is gone.
-static bool pending(const Watcher& w) {
-    return !w.idle || w.count > 0 || w.gone;
-}
-
-static bool record(unsigned char* to, size_t room, size_t& size, uint8_t kind, const char* name) {
-    const size_t length = strlen(name);
-    if (room - size < length + 2) {
-        return false;
-    }
-    to[size] = kind;
-    memcpy(to + size + 1, name, length + 1);
-    size += length + 2;
-    return true;
-}
-
-// The records a watcher tells now, as many as room holds, which it then
-// has told: its changes in order, watchIdle after the names there as it
-// started.
-static size_t records(Watcher& w, unsigned char* to, size_t room) {
-    size_t size = 0;
-    size_t told = 0;
-    for (; told < w.count; ++told) {
-        const Change& c = w.changes[told];
-        if (!w.idle && c.kind != watchExisting) {
-            if (!record(to, room, size, watchIdle, "")) {
-                break;
-            }
-            w.idle = true;
-        }
-        if (!record(to, room, size, c.kind, c.name)) {
-            break;
-        }
-    }
-    if (told == w.count && !w.idle && record(to, room, size, watchIdle, "")) {
-        w.idle = true;
-    }
-    for (size_t i = 0; i < told; ++i) {
-        free(w.changes[i].name);
-    }
-    memmove(w.changes, w.changes + told, (w.count - told) * sizeof(Change));
-    w.count -= told;
-    return size;
-}
-
-// The records of a READ into its memfd, its count answered on fd: 0 of a
-// directory gone, once all is told; none of a READ too short for the
-// next record, EINVAL.
-static void answerRecords(Watcher& w, int memfd, uint32_t length, int fd) {
-    static unsigned char out[65536 - sizeof(Header)];
-    const size_t size = records(w, out, length < sizeof out ? size_t(length) : sizeof out);
-    if (size == 0 && (w.count > 0 || !w.idle)) {
-        return fail(fd, EINVAL);
-    }
-    if (size > 0 && pwrite(memfd, out, size, 0) != ssize_t(size)) {
-        return fail(fd, EIO);
-    }
-    const uint32_t count = uint32_t(size);
-    answer(fd, opOk, 0, &count, sizeof count);
-}
-
-// Tells the kernel whether a watcher is readable.
-static void ready(const Watcher& w) {
-    tell(w.end->fd, pending(w) ? POLLIN | (w.gone ? POLLHUP : 0) : 0);
-}
-
-static void letKeptGo(Watcher& w) {
-    close(w.memfd);
-    unkeep(epoll, w.kept);
-    w.kept = nullptr;
-    w.memfd = -1;
-}
-
-// What a watcher has to tell changed: a READ it keeps is answered.
-static void told(Watcher& w) {
-    if (w.kept && pending(w)) {
-        answerRecords(w, w.memfd, w.length, w.kept->fd);
-        letKeptGo(w);
-    }
-    ready(w);
-}
-
-// A name a call added to a directory or took out of it, for its
-// watchers: one taken out before it was told is not told at all.
-static void added(uint64_t dir, const char* name, size_t length) {
-    for (Watcher* w = watchers; w; w = w->next) {
-        if (w->dir == dir && !w->gone) {
-            note(*w, watchAdded, name, length);
-            told(*w);
-        }
-    }
-}
-
-static void removed(uint64_t dir, const char* name, size_t length) {
-    for (Watcher* w = watchers; w; w = w->next) {
-        if (w->dir != dir || w->gone) {
-            continue;
-        }
-        size_t at = w->count;
-        for (size_t i = 0; i < w->count; ++i) {
-            const Change& c = w->changes[i];
-            if (c.kind != watchRemoved && strlen(c.name) == length && memcmp(c.name, name, length) == 0) {
-                at = i;
-            }
-        }
-        if (at < w->count) {
-            free(w->changes[at].name);
-            memmove(w->changes + at, w->changes + at + 1, (w->count - at - 1) * sizeof(Change));
-            --w->count;
-        } else {
-            note(*w, watchRemoved, name, length);
-        }
-        told(*w);
-    }
-}
-
-// A directory gone: its watchers tell what is left, then their end.
-static void dirGone(uint64_t dir) {
-    for (Watcher* w = watchers; w; w = w->next) {
-        if (w->dir == dir && !w->gone) {
-            w->gone = true;
-            told(*w);
-        }
-    }
-}
-
-// WATCH of a directory: a watcher, an open file of the flags asked,
-// O_NONBLOCK of them, whose READs give its records: the names a reading
-// finds, watchIdle, then what changes.
-static void watchDirectory(uint64_t ino, const char* path, const Request& r) {
-    struct stat st;
-    if (const int e = attributes(path, st)) {
-        return fail(r.reply(), e);
-    }
-    if (!S_ISDIR(st.st_mode)) {
-        return fail(r.reply(), ENOTDIR);
-    }
-    if (operations.access) {
-        if (const int e = result(operations.access(path, R_OK))) {
-            return fail(r.reply(), e);
-        }
-    }
-    if (!operations.readdir) {
-        return fail(r.reply(), ENOSYS);
-    }
-    Listing names{};
-    fuse_file_info info{};
-    int e = operations.opendir ? result(operations.opendir(path, &info)) : 0;
-    if (e == 0) {
-        e = result(operations.readdir(path, &names, fill, 0, &info));
-        if (operations.releasedir) {
-            operations.releasedir(path, &info);
-        }
-    }
-    auto* w = static_cast<Watcher*>(allocate(sizeof(Watcher)));
-    w->dir = ino;
-    w->memfd = -1;
-    for (size_t i = 0; i < names.count; ++i) {
-        if (e == 0) {
-            note(*w, watchExisting, names.entries[i].name, strlen(names.entries[i].name));
-        }
-        free(names.entries[i].name);
-    }
-    free(names.entries);
-    if (e == 0) {
-        w->end = answerOpen(epoll, r, {openedFile, 0, device, 0, 0, POLLIN}, w);
-    } else {
-        fail(r.reply(), e);
-    }
-    if (!w->end) {
-        for (size_t i = 0; i < w->count; ++i) {
-            free(w->changes[i].name);
-        }
-        free(w->changes);
-        free(w);
-        return;
-    }
-    w->next = watchers;
-    watchers = w;
-}
-
-static Watcher* watcherOf(const void* of, bool& kept) {
-    for (Watcher* w = watchers; w; w = w->next) {
-        if (w == of || &w->keptTag == of) {
-            kept = &w->keptTag == of;
-            return w;
-        }
-    }
-    return nullptr;
-}
-
-// A READ of a watcher's: its records, or, with none, the READ kept until
-// there are, but of O_NONBLOCK; one at a time.
-static void readWatcher(Watcher& w, const Endpoint& e, Request& r) {
-    Io io;
-    if (r.memfd() < 0 || !r.io(io)) {
-        return fail(r.reply(), EINVAL);
-    }
-    if ((io.flags & ioAt) != 0) {
-        return fail(r.reply(), ESPIPE);
-    }
-    if (pending(w)) {
-        answerRecords(w, r.memfd(), r.h.arg, r.reply());
-        return ready(w);
-    }
-    if (e.nonblock) {
-        return fail(r.reply(), EAGAIN);
-    }
-    if (w.kept) {
-        return fail(r.reply(), EBUSY);
-    }
-    w.kept = keep(epoll, r, &w.keptTag);
-    w.memfd = r.memfd();
-    w.length = r.h.arg;
-    r.fds[0] = -1;
-}
-
-static void forgetWatcher(Watcher* w) {
-    if (w->kept) {
-        letKeptGo(*w);
-    }
-    for (Watcher** at = &watchers; *at; at = &(*at)->next) {
-        if (*at == w) {
-            *at = w->next;
-            break;
-        }
-    }
-    for (size_t i = 0; i < w->count; ++i) {
-        free(w->changes[i].name);
-    }
-    free(w->changes);
-    free(w);
-}
-
 // A call of rootfs's on a channel, by node: the file system's
 // operations on the node's path, or on a name of it.
 static void fsCall(Request& r) {
@@ -880,13 +593,13 @@ static void fsCall(Request& r) {
         case fsReaddir:
             return readDirectory(ino, at, r);
         case fsOpen:
-            return openFile(r, copied(at, strlen(at)), 0, false, 0);
+            return openFile(r, copied(at, strlen(at)), 0, false);
         case fsCreate: {
             uint32_t mode;
             if (!r.at(8, mode) || !nameAt(r, 12, name, length)) {
                 return fail(r.reply(), EINVAL);
             }
-            return openFile(r, joined(at, name, length), mode, true, ino);
+            return openFile(r, joined(at, name, length), mode, true);
         }
         case fsMkdir:
         case fsMknod:
@@ -895,27 +608,24 @@ static void fsCall(Request& r) {
                 return fail(r.reply(), EINVAL);
             }
             char* path = joined(at, name, length);
-            struct stat gone;
-            const bool removesDir = r.h.op == fsUnlink && (r.h.arg & AT_REMOVEDIR) != 0;
-            const bool known = removesDir && attributes(path, gone) == 0;
+            // What an UNLINK takes, which its answer says.
+            uint64_t removed = 0;
+            if (r.h.op == fsUnlink && attributes(path, st) == 0) {
+                removed = uint64_t(st.st_ino);
+            }
             if (r.h.op == fsMkdir) {
                 e = operations.mkdir ? result(operations.mkdir(path, mode_t(r.h.arg & 07777))) : ENOSYS;
             } else if (r.h.op == fsMknod) {
                 e = operations.mknod ? result(operations.mknod(path, mode_t(r.h.arg), 0)) : ENOSYS;
-            } else if (removesDir) {
+            } else if ((r.h.arg & AT_REMOVEDIR) != 0) {
                 e = operations.rmdir ? result(operations.rmdir(path)) : ENOSYS;
             } else {
                 e = operations.unlink ? result(operations.unlink(path)) : ENOSYS;
             }
-            if (e == 0 && r.h.op == fsUnlink) {
-                removed(ino, name, length);
-                if (known) {
-                    dirGone(uint64_t(gone.st_ino));
-                }
-            } else if (e == 0) {
-                added(ino, name, length);
-            }
             free(path);
+            if (e == 0 && r.h.op == fsUnlink) {
+                return answer(r.reply(), opOk, 0, &removed, sizeof removed);
+            }
             break;
         }
         case fsSymlink: {
@@ -926,9 +636,6 @@ static void fsCall(Request& r) {
             }
             char* path = joined(at, name, length);
             e = operations.symlink ? result(operations.symlink(target, path)) : ENOSYS;
-            if (e == 0) {
-                added(ino, name, length);
-            }
             free(path);
             break;
         }
@@ -953,32 +660,35 @@ static void fsCall(Request& r) {
                 return fail(r.reply(), EINVAL);
             }
             char* target = joined(to, name, length);
+            // What a RENAME moves and what it replaces, which its answer
+            // says.
+            uint64_t nodes[2] = {0, 0};
             if (r.h.op == fsLink) {
                 e = operations.link ? result(operations.link(at, target)) : ENOSYS;
-                if (e == 0) {
-                    added(toIno, name, length);
-                }
             } else {
                 char* from = joined(at, old, oldLength);
-                struct stat was;
-                const bool replaces = strcmp(from, target) != 0 && attributes(target, was) == 0;
-                e = operations.rename ? result(operations.rename(from, target)) : ENOSYS;
-                if (e == 0) {
-                    moved(from, target);
+                if (attributes(from, st) == 0) {
+                    nodes[0] = uint64_t(st.st_ino);
                 }
-                if (e == 0 && strcmp(from, target) != 0) {
-                    removed(ino, old, oldLength);
-                    if (replaces) {
-                        removed(toIno, name, length);
-                        if (S_ISDIR(was.st_mode)) {
-                            dirGone(uint64_t(was.st_ino));
-                        }
-                    }
-                    added(toIno, name, length);
+                if (attributes(target, st) == 0) {
+                    nodes[1] = uint64_t(st.st_ino);
+                }
+                // Two names of one file: nothing changes, as POSIX has
+                // it, which Linux's VFS sees before a file system.
+                if (nodes[0] != 0 && nodes[0] == nodes[1]) {
+                    e = 0;
+                } else {
+                    e = operations.rename ? result(operations.rename(from, target)) : ENOSYS;
+                }
+                if (e == 0 && nodes[0] != nodes[1]) {
+                    moved(from, target);
                 }
                 free(from);
             }
             free(target);
+            if (e == 0 && r.h.op == fsRename) {
+                return answer(r.reply(), opOk, 0, nodes, sizeof nodes);
+            }
             break;
         }
         case fsChmod:
@@ -999,8 +709,6 @@ static void fsCall(Request& r) {
             return answerStatfs(r.reply(), "/");
         case fsPath:
             return answer(r.reply(), opOk, 0, at, strlen(at));
-        case fsWatch:
-            return watchDirectory(ino, at, r);
         default:
             e = ENOSYS;
     }
@@ -1080,18 +788,6 @@ static void fileCall(Open& o, Endpoint& e, Request& r) {
 static void handle(Endpoint& e, Request& r) {
     context.uid = uid_t(r.h.uid);
     context.gid = gid_t(r.h.gid);
-    bool kept = false;
-    if (Watcher* w = watcherOf(e.of, kept)) {
-        if (kept && r.h.op == opCancel) {
-            fail(w->kept->fd, EINTR);
-            letKeptGo(*w);
-        } else if (!kept && r.h.op == opRead) {
-            readWatcher(*w, e, r);
-        } else if (!kept) {
-            fail(r.reply(), unserved(r.h.op));
-        }
-        return;
-    }
     Open& o = *static_cast<Open*>(e.of);
     if (o.channel) {
         fsCall(r);
@@ -1110,16 +806,6 @@ static void accepted(Endpoint&, int connection) {
 // An endpoint closed: the file system's release of an open file; the
 // last channel's end is the unmount.
 static void gone(Endpoint& e) {
-    bool kept = false;
-    if (Watcher* w = watcherOf(e.of, kept); w && kept) {
-        // Who asked went: serve closes the endpoint itself.
-        close(w->memfd);
-        w->kept = nullptr;
-        w->memfd = -1;
-        return;
-    } else if (w) {
-        return forgetWatcher(w);
-    }
     auto* o = static_cast<Open*>(e.of);
     if (!o) {
         return;
