@@ -59,50 +59,50 @@ var callFormats = func() map[string]string {
 		ether_ntoa_r:spp ether_ntohost:dpp euidaccess:dsd eventfd:ddd eventfd_read:ddp eventfd_write:ddd execl:dssp execle:dssp
 		execlp:dssp execmode:dddd execv:dsp execve:dspp execvp:dsp execvpe:dspp explicit_bzero:vpd faccessat:ddsdd fchdir:dd fchmod:ddo
 		fchmodat:ddsod fchown:dddd fchownat:ddsddd fcntl:dddpd fdatasync:dd fdopendir:pd fexecve:ddpp ffs:dd ffsl:dd ffsll:dd flock:ddd
-		fmtmsg:ddsdsss fnmatch:dssd fork:d forkpty:dpppdpd fpathconf:ddd free:vp freeaddrinfo:vpd freelocale:vd fstat:ddpd fstatat:ddspdd
-		fstatfs:ddpd fstatvfs:ddpd fsync:dd ftok:dsd ftruncate:ddd futimens:ddpd futimes:ddpd gai_strerror:sd gcvt:sfdp get_avphys_pages:d
-		get_current_dir_name:s get_nprocs:d get_nprocs_conf:d get_phys_pages:d getaddrinfo:dsspdpd getcwd:spd getdomainname:dpd
-		getdtablesize:d getegid:d getentropy:dpd getenv:ss geteuid:d getgid:d getgrent:pd getgrgid:pdd getgrgid_r:ddpdpdpd getgrnam:psd
-		getgrnam_r:dspdpdpd getgrouplist:dsdpp getgroups:ddp gethostbyaddr:ppddd gethostbyaddr_r:dpddpdpdpdp gethostbyname:psd
-		gethostbyname2:psdd gethostbyname2_r:dsdpdpdpdp gethostbyname_r:dspdpdpdp gethostent:pd gethostid:d gethostname:dpd getitimer:ddpd
-		getloadavg:dpd getlocalename_l:sdd getlogin:s getlogin_r:dpd getnameinfo:dpdpdpdd getnetbyaddr:pddd getnetbyname:psd getnetent:pd
-		getpagesize:d getpass:ss getpeername:ddpp getpgid:dd getpgrp:d getpid:d getppid:d getpriority:ddd getprotobyname:psd
-		getprotobynumber:pdd getprotoent:pd getpwent:pd getpwnam:psd getpwnam_r:dspdpdpd getpwuid:pdd getpwuid_r:ddpdpdpd getrandom:dpdd
-		getresgid:dppp getresuid:dppp getrlimit:ddpd getrusage:ddpd getservbyname:pssd getservbyname_r:dsspdpdpd getservbyport:pdsd
-		getservbyport_r:ddspdpdpd getservent:pd getsid:dd getsockname:ddpp getsockopt:ddddpp getsubopt:dppp gettext_l:ssd gettid:d
-		gettimeofday:dpdp getuid:d getusershell:s getutxent:pd getutxid:ppdd getutxline:ppdd glob:dsdppd globfree:vpd gmtime:ppd
-		gmtime_r:pppdd grantpt:dd herror:vs hstrerror:sd iconv:ddpppp iconv_close:dd iconv_open:dss if_freenameindex:vpd
-		if_indextoname:sdp if_nameindex:pd if_nametoindex:ds imaxabs:dd imaxdiv:ddd index:ssd inet_addr:ds inet_aton:dspd inet_lnaof:dd
-		inet_makeaddr:ddd inet_netof:dd inet_network:ds inet_ntoa:sd inet_ntop:sdppd inet_pton:ddsp initgroups:dsd initstate:sdpd
-		inotify_add_watch:ddsd inotify_init:d inotify_init1:dd inotify_rm_watch:ddd ioctl:dddpd isalnum:dd isalpha:dd isascii:dd isatty:dd
-		isblank:dd iscntrl:dd isdigit:dd isgraph:dd islower:dd isprint:dd ispunct:dd issetugid:d isspace:dd isupper:dd iswalnum:dd
-		iswalpha:dd iswblank:dd iswcntrl:dd iswctype:ddd iswdigit:dd iswgraph:dd iswlower:dd iswprint:dd iswpunct:dd iswspace:dd
-		iswupper:dd iswxdigit:dd isxdigit:dd kill:ddd killpg:ddd l64a:sd labs:dd lchmod:dso lchown:dsdd ldiv:ddd link:dss linkat:ddsdsd
-		lio_listio:ddpddpd listen:ddd llabs:dd lldiv:ddd localeconv:pd localtime:ppd localtime_r:pppdd lockf:dddd longjmp:vpdd lseek:dddd
-		lstat:dspd lutimes:dspd madvise:dpdd malloc:pd malloc_trim:dd malloc_usable_size:dp mallopt:ddd memalign:pdd memccpy:pppdd
-		memchr:ppdd memcmp:dppd memcpy:pppd memfd_create:dpdd memmem:ppdpd memmove:pppd mempcpy:pppd memrchr:ppdd memset:ppdd mkdir:dso
-		mkdirat:ddso mkdtemp:sp mkfifo:dso mkfifoat:ddso mknod:dsod mknodat:ddsod mkostemp:dpd mkostemps:dpdd mkstemp:dp mkstemps:dpd
-		mktemp:sp mktime:dpd mlock:dpd mlockall:dd mmap:ppddddd mount:dsssdp mprotect:dpdd mq_close:dd mq_getattr:ddpd mq_notify:ddpd
-		mq_open:dsdpd mq_receive:ddpdp mq_send:ddsdd mq_setattr:ddpdpd mq_timedreceive:ddpdppd mq_timedsend:ddsddpd mq_unlink:ds
-		msgctl:dddpd msgget:ddd msgrcv:ddpddd msgsnd:ddpdd msync:dpdd mtx_destroy:vpd mtx_init:dpdd mtx_lock:dpd mtx_timedlock:dpdpd
-		mtx_trylock:dpd mtx_unlock:dpd munlock:dpd munlockall:d munmap:dpd nanosleep:dpdpd newlocale:ddsd ngettext_l:sssdd nice:dd
-		nl_langinfo:sd open:dsdp openat:ddsdp opendir:ps openlog:vsdd openpty:dppppdpd pathconf:dsd pause:d pipe:dp pipe2:dpd poll:dpddd
-		posix_close:ddd posix_devctl:dddpdp posix_fadvise:ddddd posix_fallocate:dddd posix_getdents:ddpdd posix_madvise:dpdd
-		posix_memalign:dpdd posix_openpt:dd posix_spawn:dpspdpdpp posix_spawn_file_actions_addchdir:dpds
-		posix_spawn_file_actions_addchdir_np:dpds posix_spawn_file_actions_addclose:dpdd posix_spawn_file_actions_adddup2:dpddd
-		posix_spawn_file_actions_addfchdir:dpdd posix_spawn_file_actions_addfchdir_np:dpdd posix_spawn_file_actions_addopen:dpddsdo
-		posix_spawn_file_actions_destroy:dpd posix_spawn_file_actions_init:dpd posix_spawnattr_destroy:dpd posix_spawnattr_getflags:dpdp
-		posix_spawnattr_getpgroup:dpdp posix_spawnattr_getschedparam:dpdpd posix_spawnattr_getschedpolicy:dpdp
-		posix_spawnattr_getsigdefault:dpdpd posix_spawnattr_getsigmask:dpdpd posix_spawnattr_init:dpd posix_spawnattr_setflags:dpdd
-		posix_spawnattr_setpgroup:dpdd posix_spawnattr_setschedparam:dpdpd posix_spawnattr_setschedpolicy:dpdd
-		posix_spawnattr_setsigdefault:dpdpd posix_spawnattr_setsigmask:dpdpd posix_spawnp:dpspdpdpp ppoll:dpddpdpd prctl:ddp pread:ddpdd
-		preadv:ddpddd prlimit:dddpdpd pselect:ddpdpdpdpdpd psiginfo:vpds psignal:vds pthread_attr_destroy:dpd
-		pthread_attr_getdetachstate:dpdp pthread_attr_getguardsize:dpdp pthread_attr_getinheritsched:dpdp pthread_attr_getschedparam:dpdpd
-		pthread_attr_getschedpolicy:dpdp pthread_attr_getscope:dpdp pthread_attr_getstack:dpdpp pthread_attr_getstacksize:dpdp
-		pthread_attr_init:dpd pthread_attr_setdetachstate:dpdd pthread_attr_setguardsize:dpdd pthread_attr_setinheritsched:dpdd
-		pthread_attr_setschedparam:dpdpd pthread_attr_setschedpolicy:dpdd pthread_attr_setscope:dpdd pthread_attr_setstack:dpdpd
-		pthread_attr_setstacksize:dpdd pthread_barrier_destroy:dpd pthread_barrier_init:dpdpdd pthread_barrier_wait:dpd
-		pthread_barrierattr_destroy:dpd pthread_barrierattr_getpshared:dpdp pthread_barrierattr_init:dpd
+		fmtmsg:ddsdsss fnmatch:dssd fork:d forkpty:dpppdpd fpathconf:ddd free:vp freeaddrinfo:vpd freeifaddrs:vp freelocale:vd fstat:ddpd
+		fstatat:ddspdd fstatfs:ddpd fstatvfs:ddpd fsync:dd ftok:dsd ftruncate:ddd futimens:ddpd futimes:ddpd gai_strerror:sd gcvt:sfdp
+		get_avphys_pages:d get_current_dir_name:s get_nprocs:d get_nprocs_conf:d get_phys_pages:d getaddrinfo:dsspdpd getcwd:spd
+		getdomainname:dpd getdtablesize:d getegid:d getentropy:dpd getenv:ss geteuid:d getgid:d getgrent:pd getgrgid:pdd
+		getgrgid_r:ddpdpdpd getgrnam:psd getgrnam_r:dspdpdpd getgrouplist:dsdpp getgroups:ddp gethostbyaddr:ppddd
+		gethostbyaddr_r:dpddpdpdpdp gethostbyname:psd gethostbyname2:psdd gethostbyname2_r:dsdpdpdpdp gethostbyname_r:dspdpdpdp
+		gethostent:pd gethostid:d gethostname:dpd getifaddrs:dpd getitimer:ddpd getloadavg:dpd getlocalename_l:sdd getlogin:s
+		getlogin_r:dpd getnameinfo:dpdpdpdd getnetbyaddr:pddd getnetbyname:psd getnetent:pd getpagesize:d getpass:ss getpeername:ddpp
+		getpgid:dd getpgrp:d getpid:d getppid:d getpriority:ddd getprotobyname:psd getprotobynumber:pdd getprotoent:pd getpwent:pd
+		getpwnam:psd getpwnam_r:dspdpdpd getpwuid:pdd getpwuid_r:ddpdpdpd getrandom:dpdd getresgid:dppp getresuid:dppp getrlimit:ddpd
+		getrusage:ddpd getservbyname:pssd getservbyname_r:dsspdpdpd getservbyport:pdsd getservbyport_r:ddspdpdpd getservent:pd getsid:dd
+		getsockname:ddpp getsockopt:ddddpp getsubopt:dppp gettext_l:ssd gettid:d gettimeofday:dpdp getuid:d getusershell:s getutxent:pd
+		getutxid:ppdd getutxline:ppdd glob:dsdppd globfree:vpd gmtime:ppd gmtime_r:pppdd grantpt:dd herror:vs hstrerror:sd iconv:ddpppp
+		iconv_close:dd iconv_open:dss if_freenameindex:vpd if_indextoname:sdp if_nameindex:pd if_nametoindex:ds imaxabs:dd imaxdiv:ddd
+		index:ssd inet_addr:ds inet_aton:dspd inet_lnaof:dd inet_makeaddr:ddd inet_netof:dd inet_network:ds inet_ntoa:sd inet_ntop:sdppd
+		inet_pton:ddsp initgroups:dsd initstate:sdpd inotify_add_watch:ddsd inotify_init:d inotify_init1:dd inotify_rm_watch:ddd
+		ioctl:dddpd isalnum:dd isalpha:dd isascii:dd isatty:dd isblank:dd iscntrl:dd isdigit:dd isgraph:dd islower:dd isprint:dd
+		ispunct:dd issetugid:d isspace:dd isupper:dd iswalnum:dd iswalpha:dd iswblank:dd iswcntrl:dd iswctype:ddd iswdigit:dd iswgraph:dd
+		iswlower:dd iswprint:dd iswpunct:dd iswspace:dd iswupper:dd iswxdigit:dd isxdigit:dd kill:ddd killpg:ddd l64a:sd labs:dd
+		lchmod:dso lchown:dsdd ldiv:ddd link:dss linkat:ddsdsd lio_listio:ddpddpd listen:ddd llabs:dd lldiv:ddd localeconv:pd
+		localtime:ppd localtime_r:pppdd lockf:dddd longjmp:vpdd lseek:dddd lstat:dspd lutimes:dspd madvise:dpdd malloc:pd malloc_trim:dd
+		malloc_usable_size:dp mallopt:ddd memalign:pdd memccpy:pppdd memchr:ppdd memcmp:dppd memcpy:pppd memfd_create:dpdd memmem:ppdpd
+		memmove:pppd mempcpy:pppd memrchr:ppdd memset:ppdd mkdir:dso mkdirat:ddso mkdtemp:sp mkfifo:dso mkfifoat:ddso mknod:dsod
+		mknodat:ddsod mkostemp:dpd mkostemps:dpdd mkstemp:dp mkstemps:dpd mktemp:sp mktime:dpd mlock:dpd mlockall:dd mmap:ppddddd
+		mount:dsssdp mprotect:dpdd mq_close:dd mq_getattr:ddpd mq_notify:ddpd mq_open:dsdpd mq_receive:ddpdp mq_send:ddsdd
+		mq_setattr:ddpdpd mq_timedreceive:ddpdppd mq_timedsend:ddsddpd mq_unlink:ds msgctl:dddpd msgget:ddd msgrcv:ddpddd msgsnd:ddpdd
+		msync:dpdd mtx_destroy:vpd mtx_init:dpdd mtx_lock:dpd mtx_timedlock:dpdpd mtx_trylock:dpd mtx_unlock:dpd munlock:dpd munlockall:d
+		munmap:dpd nanosleep:dpdpd newlocale:ddsd ngettext_l:sssdd nice:dd nl_langinfo:sd open:dsdp openat:ddsdp opendir:ps openlog:vsdd
+		openpty:dppppdpd pathconf:dsd pause:d pipe:dp pipe2:dpd poll:dpddd posix_close:ddd posix_devctl:dddpdp posix_fadvise:ddddd
+		posix_fallocate:dddd posix_getdents:ddpdd posix_madvise:dpdd posix_memalign:dpdd posix_openpt:dd posix_spawn:dpspdpdpp
+		posix_spawn_file_actions_addchdir:dpds posix_spawn_file_actions_addchdir_np:dpds posix_spawn_file_actions_addclose:dpdd
+		posix_spawn_file_actions_adddup2:dpddd posix_spawn_file_actions_addfchdir:dpdd posix_spawn_file_actions_addfchdir_np:dpdd
+		posix_spawn_file_actions_addopen:dpddsdo posix_spawn_file_actions_destroy:dpd posix_spawn_file_actions_init:dpd
+		posix_spawnattr_destroy:dpd posix_spawnattr_getflags:dpdp posix_spawnattr_getpgroup:dpdp posix_spawnattr_getschedparam:dpdpd
+		posix_spawnattr_getschedpolicy:dpdp posix_spawnattr_getsigdefault:dpdpd posix_spawnattr_getsigmask:dpdpd posix_spawnattr_init:dpd
+		posix_spawnattr_setflags:dpdd posix_spawnattr_setpgroup:dpdd posix_spawnattr_setschedparam:dpdpd
+		posix_spawnattr_setschedpolicy:dpdd posix_spawnattr_setsigdefault:dpdpd posix_spawnattr_setsigmask:dpdpd posix_spawnp:dpspdpdpp
+		ppoll:dpddpdpd prctl:ddp pread:ddpdd preadv:ddpddd prlimit:dddpdpd pselect:ddpdpdpdpdpd psiginfo:vpds psignal:vds
+		pthread_attr_destroy:dpd pthread_attr_getdetachstate:dpdp pthread_attr_getguardsize:dpdp pthread_attr_getinheritsched:dpdp
+		pthread_attr_getschedparam:dpdpd pthread_attr_getschedpolicy:dpdp pthread_attr_getscope:dpdp pthread_attr_getstack:dpdpp
+		pthread_attr_getstacksize:dpdp pthread_attr_init:dpd pthread_attr_setdetachstate:dpdd pthread_attr_setguardsize:dpdd
+		pthread_attr_setinheritsched:dpdd pthread_attr_setschedparam:dpdpd pthread_attr_setschedpolicy:dpdd pthread_attr_setscope:dpdd
+		pthread_attr_setstack:dpdpd pthread_attr_setstacksize:dpdd pthread_barrier_destroy:dpd pthread_barrier_init:dpdpdd
+		pthread_barrier_wait:dpd pthread_barrierattr_destroy:dpd pthread_barrierattr_getpshared:dpdp pthread_barrierattr_init:dpd
 		pthread_barrierattr_setpshared:dpdd pthread_cancel:dd pthread_cond_broadcast:dpd pthread_cond_clockwait:dpdpddpd
 		pthread_cond_destroy:dpd pthread_cond_init:dpdpd pthread_cond_signal:dpd pthread_cond_timedwait:dpdpdpd pthread_cond_wait:dpdpd
 		pthread_condattr_destroy:dpd pthread_condattr_getclock:dpdp pthread_condattr_getpshared:dpdp pthread_condattr_init:dpd
@@ -125,14 +125,14 @@ var callFormats = func() map[string]string {
 		pthread_spin_destroy:dp pthread_spin_init:dpd pthread_spin_lock:dp pthread_spin_trylock:dp pthread_spin_unlock:dp
 		pthread_timedjoin_np:ddppd pthread_tryjoin_np:ddp ptsname:sd ptsname_r:ddpd putenv:dp pututxline:ppdd pwrite:ddpdd pwritev:ddpddd
 		raise:dd rand:d rand_r:dp random:d rawmemchr:ppd read:ddpd readdir:ppd readdir_r:dppdpd readlink:dspd readlinkat:ddspd readv:ddpdd
-		realloc:ppd reallocarray:ppdd realpath:ssp recv:ddpdd recvfrom:ddpddpp recvmsg:ddpddd regcomp:dpdsd regerror:ddpdpd
-		regexec:dpdsdpdd regfree:vpd remove:ds rename:dss renameat:ddsds rewinddir:vp rindex:ssd rmdir:ds sbrk:pd
+		realloc:ppd reallocarray:ppdd realpath:ssp recv:ddpdd recvfrom:ddpddpp recvmmsg:ddpddddpd recvmsg:ddpddd regcomp:dpdsd
+		regerror:ddpdpd regexec:dpdsdpdd regfree:vpd remove:ds rename:dss renameat:ddsds rewinddir:vp rindex:ssd rmdir:ds sbrk:pd
 		sched_get_priority_max:dd sched_get_priority_min:dd sched_getaffinity:dddp sched_getcpu:d sched_getparam:ddpd
 		sched_getscheduler:dd sched_rr_get_interval:ddpd sched_setaffinity:dddp sched_setparam:ddpd sched_setscheduler:dddpd sched_yield:d
 		secure_getenv:ss seekdir:vpd select:ddpdpdpdpd sem_clockwait:dpddpd sem_close:dpd sem_destroy:dpd sem_getvalue:dpdp sem_init:dpddd
 		sem_open:psdpd sem_post:dpd sem_timedwait:dpdpd sem_trywait:dpd sem_unlink:ds sem_wait:dpd semctl:ddddpd semget:dddd semop:ddpdd
-		semtimedop:ddpddpd send:ddpdd sendmsg:ddpddd sendto:ddpddpd setdomainname:dsd setegid:dd setenv:dssd seteuid:dd setgid:dd
-		setgrent:v setgroups:ddp sethostent:vd sethostid:dd sethostname:dsd setitimer:ddpdpd setjmp:dpd setkey:vs setlocale:sds
+		semtimedop:ddpddpd send:ddpdd sendmmsg:ddpdddd sendmsg:ddpddd sendto:ddpddpd setdomainname:dsd setegid:dd setenv:dssd seteuid:dd
+		setgid:dd setgrent:v setgroups:ddp sethostent:vd sethostid:dd sethostname:dsd setitimer:ddpdpd setjmp:dpd setkey:vs setlocale:sds
 		setlogmask:dd setnetent:vd setpgid:ddd setpgrp:d setpriority:dddd setprotoent:vd setpwent:v setregid:ddd setresgid:dddd
 		setresuid:dddd setreuid:ddd setrlimit:ddpd setservent:vd setsid:d setsockopt:ddddpd setstate:sp settimeofday:dpdpd setuid:dd
 		setusershell:v setutxent:v shutdown:ddd sig2str:ddp sigaction:ddpdpdd sigaddset:dpdd sigaltstack:dpdpd sigandset:dpdpdpd

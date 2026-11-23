@@ -1,3 +1,5 @@
+// The system's interfaces, the loopback's and the card's, as if_nameindex
+// and getifaddrs give them: their indexes, flags, links and addresses.
 // The sockets of the network's family in the system, through sockmgr and
 // the card's stack: a TCP connection to a server of the host's, at
 // host.internal, 192.168.127.254, which getaddrinfo finds through dns and
@@ -13,8 +15,11 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netpacket/packet.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,6 +43,53 @@ namespace {
             exit(1);
         }
     }
+
+    // An interface's flags, those it may have, and an address of its entry.
+    void describe(const ifaddrs* a) {
+        static const struct {
+            unsigned flag;
+            const char* name;
+        } flags[] = {{IFF_UP, "up"}, {IFF_BROADCAST, "broadcast"}, {IFF_LOOPBACK, "loopback"}, {IFF_RUNNING, "running"},
+                     {IFF_MULTICAST, "multicast"}};
+        printf("%s", a->ifa_name);
+        for (const auto& f : flags) {
+            if (a->ifa_flags & f.flag) {
+                printf(" %s", f.name);
+            }
+        }
+        char text[INET_ADDRSTRLEN];
+        if (a->ifa_addr->sa_family == AF_PACKET) {
+            const sockaddr* const ats[] = {a->ifa_addr, a->ifa_broadaddr};
+            for (const sockaddr* at : ats) {
+                const auto* l = reinterpret_cast<const sockaddr_ll*>(at);
+                printf(at == a->ifa_addr ? " link %d" : " broadcast", l->sll_ifindex);
+                for (int i = 0; i < l->sll_halen; ++i) {
+                    printf("%c%02x", i == 0 ? ' ' : ':', l->sll_addr[i]);
+                }
+            }
+        } else {
+            printf(" inet %s", inet_ntop(AF_INET, &reinterpret_cast<const sockaddr_in*>(a->ifa_addr)->sin_addr, text, sizeof text));
+            printf(" netmask %s", inet_ntop(AF_INET, &reinterpret_cast<const sockaddr_in*>(a->ifa_netmask)->sin_addr, text, sizeof text));
+            if (a->ifa_broadaddr) {
+                printf(" broadcast %s", inet_ntop(AF_INET, &reinterpret_cast<const sockaddr_in*>(a->ifa_broadaddr)->sin_addr, text, sizeof text));
+            }
+        }
+        printf("\n");
+    }
+
+    void interfaces() {
+        struct if_nameindex* all = if_nameindex();
+        for (const struct if_nameindex* i = all; i && i->if_index != 0; ++i) {
+            printf("interface %u %s\n", i->if_index, i->if_name);
+        }
+        if_freenameindex(all);
+        ifaddrs* list = nullptr;
+        check("getifaddrs", getifaddrs(&list));
+        for (const ifaddrs* a = list; a; a = a->ifa_next) {
+            describe(a);
+        }
+        freeifaddrs(list);
+    }
 }
 
 int main(int argc, char** argv) {
@@ -46,6 +98,7 @@ int main(int argc, char** argv) {
     }
     const int port = atoi(argv[1]);
     setvbuf(stdout, nullptr, _IONBF, 0);
+    interfaces();
 
     addrinfo hints{};
     hints.ai_family = AF_INET;

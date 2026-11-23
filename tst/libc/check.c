@@ -481,8 +481,9 @@ static void network(void) {
     setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     errno = 0;
     printf(" timeout %zd %d\n", recv(conn, buf, 1, 0), errno == EAGAIN);
+    // A root of its own has no /dev, so no interfaces: the list is empty.
     struct if_nameindex* ifs = if_nameindex();
-    printf("if_nameindex %d crypt %s", ifs && ifs[0].if_index > 0, crypt("secret", "$6$salt"));
+    printf("if_nameindex %d crypt %s", ifs && ifs[0].if_index == 0, crypt("secret", "$6$salt"));
     printf(" %s\n", crypt("secret", "xy"));
     if_freenameindex(ifs);
 }

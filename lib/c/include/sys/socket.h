@@ -30,6 +30,15 @@ struct msghdr {
     int msg_flags;
 };
 
+/*
+ * A message of sendmmsg's and recvmmsg's, a vector of them: msg_len is
+ * how many bytes it sent or received.
+ */
+struct mmsghdr {
+    struct msghdr msg_hdr;
+    unsigned int msg_len;
+};
+
 struct cmsghdr {
     socklen_t cmsg_len;
     int cmsg_level;
@@ -108,6 +117,7 @@ struct ucred {
 #define MSG_EOR 0x0080
 #define MSG_WAITALL 0x0100
 #define MSG_NOSIGNAL 0x4000
+#define MSG_WAITFORONE 0x10000
 #define MSG_CMSG_CLOEXEC 0x40000000
 
 #define SHUT_RD 0
@@ -133,6 +143,9 @@ ssize_t sendmsg(int, const struct msghdr*, int);
 ssize_t recv(int, void*, size_t, int);
 ssize_t recvfrom(int, void* __restrict, size_t, int, struct sockaddr* __restrict, socklen_t* __restrict);
 ssize_t recvmsg(int, struct msghdr*, int);
+struct timespec;
+int sendmmsg(int, struct mmsghdr*, unsigned int, int);
+int recvmmsg(int, struct mmsghdr*, unsigned int, int, struct timespec*);
 int shutdown(int, int);
 int sockatmark(int);
 

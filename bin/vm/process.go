@@ -8825,6 +8825,44 @@ func (p *Process) readPath(path string, max int) ([]byte, error) {
 	return data, nil
 }
 
+func (p *Process) dirNames(path string) ([]string, error) {
+	d, err := p.openPath(path, O_RDONLY|O_DIRECTORY, 0)
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer d.unref()
+
+	var names []string
+
+	buf := make([]byte, 4096)
+	file := bytesFile(buf)
+
+	for {
+		n, err := p.fileReaddir(d, file, len(buf))
+
+		if err != nil || n == 0 {
+			return names, err
+		}
+
+		for at := 0; at+19 <= n; {
+			reclen := int(binary.LittleEndian.Uint16(buf[at+16:]))
+			name := buf[at+19 : at+reclen]
+
+			if end := bytes.IndexByte(name, 0); end >= 0 {
+				name = name[:end]
+			}
+
+			if string(name) != "." && string(name) != ".." {
+				names = append(names, string(name))
+			}
+
+			at += reclen
+		}
+	}
+}
+
 func (p *Process) mkdir(dirfd int32, path string, mode uint32) error {
 	return p.onPath(dirfd, path, func(d Object) error {
 		return p.dirMkdir(d, path, mode&0o7777&^p.umask)
@@ -10232,10 +10270,14 @@ func (p *Process) libcRecvfrom(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 }
 
 func (p *Process) libcSendmsg(fd, msg, flags uint32) uint32 {
+	return p.result(p.sendmsg(fd, msg, flags))
+}
+
+func (p *Process) sendmsg(fd, msg, flags uint32) (int, error) {
 	s, err := p.fd(fd)
 
 	if err != nil {
-		return p.result(0, err)
+		return 0, err
 	}
 
 	h := p.span(msg, sizeofMsghdr)
@@ -10244,7 +10286,7 @@ func (p *Process) libcSendmsg(fd, msg, flags uint32) uint32 {
 	files, cred, err := p.rights(pk.files[:0], binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
 
 	if err != nil {
-		return p.result(0, err)
+		return 0, err
 	}
 
 	iov, count := binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:])
@@ -10255,12 +10297,37 @@ func (p *Process) libcSendmsg(fd, msg, flags uint32) uint32 {
 	}
 
 	if err != nil {
-		return p.result(0, err)
+		return 0, err
 	}
 
 	pk.data, pk.files, pk.cred = data, files, cred
 
-	return p.result(p.sockSend(s, pk, to, sendMode(flags)))
+	return p.sockSend(s, pk, to, sendMode(flags))
+}
+
+func (p *Process) libcSendmmsg(fd, vec, vlen, flags uint32) uint32 {
+	if _, err := p.fd(fd); err != nil {
+		return p.result(0, err)
+	}
+
+	vlen = min(vlen, UIO_MAXIOV)
+
+	for i := range vlen {
+		at := vec + i*sizeofMmsghdr
+		n, err := p.sendmsg(fd, at, flags)
+
+		if err != nil {
+			if i == 0 {
+				return p.result(0, err)
+			}
+
+			return i
+		}
+
+		p.put32(at+sizeofMsghdr, uint32(n))
+	}
+
+	return vlen
 }
 
 func (p *Process) packet() *Packet {
@@ -10299,12 +10366,16 @@ func sendMode(flags uint32) IoMode {
 }
 
 func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
+	return p.result(p.recvmsg(fd, msg, flags))
+}
+
+func (p *Process) recvmsg(fd, msg, flags uint32) (int, error) {
 	var few [4][]byte
 
 	s, err := p.fd(fd)
 
 	if err != nil {
-		return p.result(0, err)
+		return 0, err
 	}
 
 	h := p.span(msg, sizeofMsghdr)
@@ -10314,7 +10385,7 @@ func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
 	spans, err := p.ioSpansIn(few[:0], iov, count)
 
 	if err != nil {
-		return p.result(0, err)
+		return 0, err
 	}
 
 	r := p.recvs.get()
@@ -10324,7 +10395,7 @@ func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
 	r.into, r.want, r.flags = Into{p: p, at: iov, n: count, vector: true}, totalLength(spans), flags
 
 	if err := p.request(s, r); err != nil {
-		return p.result(0, err)
+		return 0, err
 	}
 
 	written, cut := p.putControl(r.files, r.cred, control, room, flags&MSG_CMSG_CLOEXEC != 0)
@@ -10343,7 +10414,82 @@ func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
 	binary.LittleEndian.PutUint32(h[24:], r.out|cut|flags&MSG_CMSG_CLOEXEC)
 	p.packetDone(r.pk)
 
-	return p.result(r.n, nil)
+	return r.n, nil
+}
+
+func (p *Process) libcRecvmmsg(fd, vec, vlen, flags, timeout uint32) uint32 {
+	s, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	var end time.Time
+
+	if timeout != 0 {
+		d, err := p.timespec(timeout)
+
+		if err != nil {
+			return p.result(0, err)
+		}
+
+		end = time.Now().Add(d)
+	}
+
+	vlen = min(vlen, UIO_MAXIOV)
+
+	for i := range vlen {
+		at := vec + i*sizeofMmsghdr
+		mode := flags &^ MSG_WAITFORONE
+
+		if i > 0 && flags&MSG_WAITFORONE != 0 {
+			mode |= MSG_DONTWAIT
+		}
+
+		n, received, err := p.recvmsgBy(s, fd, at, mode, end)
+
+		if !received {
+			return i
+		}
+
+		if err != nil {
+			if i == 0 {
+				return p.result(0, err)
+			}
+
+			return i
+		}
+
+		p.put32(at+sizeofMsghdr, uint32(n))
+	}
+
+	return vlen
+}
+
+func (p *Process) recvmsgBy(s Object, fd, msg, flags uint32, end time.Time) (int, bool, error) {
+	if end.IsZero() || flags&MSG_DONTWAIT != 0 {
+		n, err := p.recvmsg(fd, msg, flags)
+
+		return n, true, err
+	}
+
+	for {
+		wait := 0
+
+		if left := time.Until(end); left > 0 {
+			wait = waitMs(left)
+		}
+
+		ready, err := p.waitObjects([]PollEntry{{obj: s, events: POLLIN}}, wait, false)
+
+		if err != nil || ready == 0 {
+			return 0, err != nil, err
+		}
+
+		if n, err := p.recvmsg(fd, msg, flags|MSG_DONTWAIT); err != EAGAIN {
+			return n, true, err
+		}
+	}
 }
 
 func (p *Process) libcShutdown(fd, how uint32) uint32 {
@@ -13725,7 +13871,7 @@ func (p *Process) getaddrinfo(node, service, hints, res uint32) int {
 	} else {
 		name := p.str(node)
 
-		if a, scope, ok := numericHost(name); ok {
+		if a, scope, ok := numericHost(name, p.interfaceIndex); ok {
 			addrs, canonical = []address{{a, scope}}, name
 		} else if flags&AI_NUMERICHOST != 0 {
 			return EAI_NONAME
@@ -14046,7 +14192,7 @@ func (p *Process) hostByName(name string, family int) (*Hostent, int) {
 
 	canonical := name
 
-	if a, _, ok := numericHost(name); ok {
+	if a, _, ok := numericHost(name, p.interfaceIndex); ok {
 		found = []netip.Addr{a}
 	} else {
 		addrs, canon, code := p.resolve(name)
@@ -14546,8 +14692,73 @@ func (p *Process) libcInet_netof(in uint32) uint32 {
 	return in >> 8
 }
 
+func (p *Process) netInterfaces() []NetInterface {
+	names, _ := p.dirNames("/dev/net")
+
+	slices.SortFunc(names, func(a, b string) int {
+		switch {
+		case a == b:
+			return 0
+		case a == "lo":
+			return -1
+		case b == "lo":
+			return 1
+		}
+
+		return strings.Compare(a, b)
+	})
+
+	var out []NetInterface
+
+	for _, name := range names {
+		dir := "/dev/net/" + name + "/"
+		ctl, err := p.readPath(dir+"ctl", 4096)
+
+		if err != nil {
+			continue
+		}
+
+		it := NetInterface{name: name, index: uint32(len(out) + 1), flags: IFF_BROADCAST | IFF_MULTICAST}
+
+		if name == "lo" {
+			it.flags = IFF_LOOPBACK
+		} else if text, err := p.readPath(dir+"addr", 64); err == nil {
+			it.mac, _, _ = etherParse(strings.TrimSpace(string(text)))
+		}
+
+		if fields := strings.Fields(string(ctl)); len(fields) > 1 && fields[0] == "stack" && fields[1] != "off" {
+			it.flags |= IFF_UP | IFF_RUNNING
+		}
+
+		status, _ := p.readPath(dir+"iface/status", 4096)
+
+		for _, line := range strings.Split(string(status), "\n") {
+			text, ok := strings.CutPrefix(line, "inet ")
+
+			if prefix, err := netip.ParsePrefix(text); ok && err == nil && prefix.Addr().Is4() {
+				it.inet, it.addr = true, prefix.Addr().As4()
+				binary.BigEndian.PutUint32(it.mask[:], ^uint32(0)<<(32-prefix.Bits()))
+			}
+		}
+
+		out = append(out, it)
+	}
+
+	return out
+}
+
+func (p *Process) interfaceIndex(name string) uint32 {
+	for _, it := range p.netInterfaces() {
+		if it.name == name {
+			return it.index
+		}
+	}
+
+	return 0
+}
+
 func (p *Process) libcIf_nametoindex(name uint32) uint32 {
-	index := interfaceIndex(p.str(name))
+	index := p.interfaceIndex(p.str(name))
 
 	if index == 0 {
 		p.setErrno(ENXIO)
@@ -14557,22 +14768,25 @@ func (p *Process) libcIf_nametoindex(name uint32) uint32 {
 }
 
 func (p *Process) libcIf_indextoname(index, buf uint32) uint32 {
-	if index == 0 || int(index) > len(interfaces) {
-		p.setErrno(ENXIO)
+	for _, it := range p.netInterfaces() {
+		if it.index == index {
+			p.putString(buf, it.name)
 
-		return 0
+			return buf
+		}
 	}
 
-	p.putString(buf, interfaces[index-1])
+	p.setErrno(ENXIO)
 
-	return buf
+	return 0
 }
 
 func (p *Process) libcIf_nameindex() uint32 {
-	size := 8 * uint32(len(interfaces)+1)
+	list := p.netInterfaces()
+	size := 8 * uint32(len(list)+1)
 
-	for _, name := range interfaces {
-		size += uint32(len(name)) + 1
+	for _, it := range list {
+		size += uint32(len(it.name)) + 1
 	}
 
 	block := p.malloc(size)
@@ -14583,19 +14797,143 @@ func (p *Process) libcIf_nameindex() uint32 {
 		return 0
 	}
 
-	names := block + 8*uint32(len(interfaces)+1)
+	names := block + 8*uint32(len(list)+1)
 
-	for i, name := range interfaces {
-		p.put32(block+8*uint32(i), uint32(i+1))
+	for i, it := range list {
+		p.put32(block+8*uint32(i), it.index)
 		p.put32(block+8*uint32(i)+4, names)
-		p.putString(names, name)
-		names += uint32(len(name)) + 1
+		p.putString(names, it.name)
+		names += uint32(len(it.name)) + 1
 	}
 
-	p.put32(block+8*uint32(len(interfaces)), 0)
-	p.put32(block+8*uint32(len(interfaces))+4, 0)
+	p.put32(block+8*uint32(len(list)), 0)
+	p.put32(block+8*uint32(len(list))+4, 0)
 
 	return block
+}
+
+func (p *Process) libcGetifaddrs(out uint32) uint32 {
+	list := p.netInterfaces()
+	entries, size := uint32(0), uint32(0)
+
+	for _, it := range list {
+		entries++
+		size += 2*sizeofSockaddrLl + (uint32(len(it.name))+4)&^3
+
+		if it.inet {
+			entries++
+			size += 3 * sizeofSockaddrIn
+		}
+	}
+
+	if entries == 0 {
+		p.put32(out, 0)
+
+		return p.result(0, nil)
+	}
+
+	block := p.malloc(entries*sizeofIfaddrs + size)
+
+	if block == 0 {
+		return p.result(0, ENOMEM)
+	}
+
+	entry, data := block, block+entries*sizeofIfaddrs
+	names := make([]uint32, len(list))
+
+	add := func(it NetInterface, addr, mask, broad uint32) {
+		next := entry + sizeofIfaddrs
+
+		if next == block+entries*sizeofIfaddrs {
+			next = 0
+		}
+
+		e := p.span(entry, sizeofIfaddrs)
+		le := binary.LittleEndian
+
+		le.PutUint32(e, next)
+		le.PutUint32(e[4:], names[it.index-1])
+		le.PutUint32(e[8:], it.flags)
+		le.PutUint32(e[12:], addr)
+		le.PutUint32(e[16:], mask)
+		le.PutUint32(e[20:], broad)
+		le.PutUint32(e[24:], 0)
+		entry = next
+	}
+
+	link := func(it NetInterface, mac [ETHER_ADDR_LEN]byte) uint32 {
+		at := data
+		b := p.span(at, sizeofSockaddrLl)
+		le := binary.LittleEndian
+		hatype := uint16(ARPHRD_ETHER)
+
+		if it.flags&IFF_LOOPBACK != 0 {
+			hatype = ARPHRD_LOOPBACK
+		}
+
+		clear(b)
+		le.PutUint16(b, AF_PACKET)
+		le.PutUint32(b[4:], it.index)
+		le.PutUint16(b[8:], hatype)
+		b[11] = ETHER_ADDR_LEN
+		copy(b[12:], mac[:])
+		data += sizeofSockaddrLl
+
+		return at
+	}
+
+	inet := func(a [4]byte) uint32 {
+		at := data
+		b := p.span(at, sizeofSockaddrIn)
+
+		clear(b)
+		binary.LittleEndian.PutUint16(b, AF_INET)
+		copy(b[4:], a[:])
+		data += sizeofSockaddrIn
+
+		return at
+	}
+
+	for i, it := range list {
+		names[i] = data
+		p.putString(data, it.name)
+		data += (uint32(len(it.name)) + 4) &^ 3
+	}
+
+	for _, it := range list {
+		broad := [ETHER_ADDR_LEN]byte{}
+
+		if it.flags&IFF_BROADCAST != 0 {
+			broad = [ETHER_ADDR_LEN]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+		}
+
+		add(it, link(it, it.mac), 0, link(it, broad))
+	}
+
+	for _, it := range list {
+		if !it.inet {
+			continue
+		}
+
+		broad := uint32(0)
+
+		if it.flags&IFF_BROADCAST != 0 {
+			var b [4]byte
+
+			binary.BigEndian.PutUint32(b[:], binary.BigEndian.Uint32(it.addr[:])|^binary.BigEndian.Uint32(it.mask[:]))
+			broad = inet(b)
+		}
+
+		add(it, inet(it.addr), inet(it.mask), broad)
+	}
+
+	p.put32(out, block)
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcFreeifaddrs(list uint32) {
+	p.free(list)
 }
 
 func (p *Process) libcFreeaddrinfo(res uint32) {

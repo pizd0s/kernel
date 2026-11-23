@@ -301,6 +301,16 @@ const (
 	AF_UNIX                           = 1
 	AF_INET                           = 2
 	AF_INET6                          = 10
+	AF_PACKET                         = 17
+	ARPHRD_ETHER                      = 1
+	ARPHRD_LOOPBACK                   = 772
+	IFF_UP                            = 0x1
+	IFF_BROADCAST                     = 0x2
+	IFF_LOOPBACK                      = 0x8
+	IFF_RUNNING                       = 0x40
+	IFF_MULTICAST                     = 0x1000
+	MSG_WAITFORONE                    = 0x10000
+	UIO_MAXIOV                        = 1024
 	SOCK_NONBLOCK                     = 0o4000
 	SOCK_CLOEXEC                      = 0o2000000
 	MSG_DONTWAIT                      = 0x40
@@ -359,6 +369,10 @@ const (
 	sizeofJmpBuf                      = 80
 	sizeofLconv                       = 56
 	sizeofMsghdr                      = 28
+	sizeofMmsghdr                     = 32
+	sizeofIfaddrs                     = 28
+	sizeofSockaddrLl                  = 20
+	sizeofSockaddrIn                  = 16
 	sizeofNetent                      = 16
 	sizeofPasswd                      = 28
 	sizeofPollfd                      = 8

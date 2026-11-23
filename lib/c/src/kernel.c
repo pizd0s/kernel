@@ -29,6 +29,7 @@
 #include <glob.h>
 #include <grp.h>
 #include <iconv.h>
+#include <ifaddrs.h>
 #include <inttypes.h>
 #include <langinfo.h>
 #include <libintl.h>
@@ -242,6 +243,8 @@ KERNEL(unsigned, if_nametoindex, (const char* a), (a))
 KERNEL(char*, if_indextoname, (unsigned a, char* b), (a, b))
 KERNEL_SIZED(struct if_nameindex*, if_nameindex, (void), (size_t size), (sizeof(struct if_nameindex)))
 KERNEL_VOID_SIZED(if_freenameindex, (struct if_nameindex* a), (struct if_nameindex* a, size_t a_size), (a, sizeof(struct if_nameindex)))
+KERNEL_SIZED(int, getifaddrs, (struct ifaddrs** a), (struct ifaddrs** a, size_t size), (a, sizeof(struct ifaddrs)))
+KERNEL_VOID(freeifaddrs, (struct ifaddrs* a), (a))
 /* netdb.h */
 KERNEL_SIZED(int, getaddrinfo, (const char* __restrict a, const char* __restrict b, const struct addrinfo* __restrict c, struct addrinfo** __restrict d), (const char* __restrict a, const char* __restrict b, const struct addrinfo* __restrict c, size_t c_size, struct addrinfo** __restrict d, size_t d_size), (a, b, c, sizeof(struct addrinfo), d, sizeof(struct addrinfo)))
 KERNEL_VOID_SIZED(freeaddrinfo, (struct addrinfo* a), (struct addrinfo* a, size_t a_size), (a, sizeof(struct addrinfo)))
@@ -675,6 +678,8 @@ KERNEL_SIZED(ssize_t, sendmsg, (int a, const struct msghdr* b, int c), (int a, c
 KERNEL(ssize_t, recv, (int a, void* b, size_t c, int d), (a, b, c, d))
 KERNEL(ssize_t, recvfrom, (int a, void* __restrict b, size_t c, int d, struct sockaddr* __restrict e, socklen_t* __restrict f), (a, b, c, d, e, f))
 KERNEL_SIZED(ssize_t, recvmsg, (int a, struct msghdr* b, int c), (int a, struct msghdr* b, size_t b_size, size_t iov_size, int c), (a, b, sizeof(struct msghdr), sizeof(struct iovec), c))
+KERNEL_SIZED(int, sendmmsg, (int a, struct mmsghdr* b, unsigned c, int d), (int a, struct mmsghdr* b, size_t b_size, size_t iov_size, unsigned c, int d), (a, b, sizeof(struct mmsghdr), sizeof(struct iovec), c, d))
+KERNEL_SIZED(int, recvmmsg, (int a, struct mmsghdr* b, unsigned c, int d, struct timespec* e), (int a, struct mmsghdr* b, size_t b_size, size_t iov_size, unsigned c, int d, struct timespec* e, size_t e_size), (a, b, sizeof(struct mmsghdr), sizeof(struct iovec), c, d, e, sizeof(struct timespec)))
 KERNEL(int, shutdown, (int a, int b), (a, b))
 KERNEL(int, sockatmark, (int a), (a))
 

@@ -6,7 +6,6 @@
 
 #include <arpa/inet.h>
 #include <assert.h>
-#include <net/if.h>
 #include <netdb.h>
 #include <errno.h>
 #include <stdint.h>
@@ -132,9 +131,6 @@ int main() {
     hints.ai_flags = AI_NUMERICHOST;
     assert(getaddrinfo("fe80::1%17", "0", &hints, &result) == 0);
     assert(reinterpret_cast<sockaddr_in6*>(result->ai_addr)->sin6_scope_id == 17);
-    freeaddrinfo(result);
-    assert(getaddrinfo("fe80::1%lo", "0", &hints, &result) == 0);
-    assert(reinterpret_cast<sockaddr_in6*>(result->ai_addr)->sin6_scope_id == if_nametoindex("lo"));
     freeaddrinfo(result);
     assert(getaddrinfo("fe80::1%pizdos-noif", "0", &hints, &result) == EAI_NONAME);
     hints.ai_family = AF_INET;

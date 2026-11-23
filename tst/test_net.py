@@ -129,6 +129,12 @@ state bound
 inet 192.168.127.2/24
 leases 3
 stack 0 inet 192.168.127.2/24 gateway 192.168.127.1
+interface 1 lo
+interface 2 0
+lo up loopback running link 1 00:00:00:00:00:00 broadcast 00:00:00:00:00:00
+0 up broadcast running multicast link 2 02:70:7a:64:a8:af broadcast ff:ff:ff:ff:ff:ff
+lo up loopback running inet 127.0.0.1 netmask 255.0.0.0
+0 up broadcast running multicast inet 192.168.127.2 netmask 255.255.255.0 broadcast 192.168.127.255
 host.internal is 192.168.127.254, host.internal
 connected from 192.168.127.2
 read echo: hello

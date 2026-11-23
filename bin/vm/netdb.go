@@ -9,9 +9,7 @@ import (
 	"strings"
 )
 
-var interfaces = []string{"lo"}
-
-func numericHost(s string) (netip.Addr, uint32, bool) {
+func numericHost(s string, indexOf func(string) uint32) (netip.Addr, uint32, bool) {
 	if a, ok := inetAton(s); ok {
 		return netip.AddrFrom4(a), 0, true
 	}
@@ -28,7 +26,7 @@ func numericHost(s string) (netip.Addr, uint32, bool) {
 	if zone != "" {
 		if n, err := strconv.ParseUint(zone, 10, 32); err == nil {
 			scope = uint32(n)
-		} else if index := interfaceIndex(zone); index != 0 {
+		} else if index := indexOf(zone); index != 0 {
 			scope = index
 		} else {
 			return netip.Addr{}, 0, false
@@ -157,14 +155,4 @@ func inetAton(s string) ([4]byte, bool) {
 	}
 
 	return out, true
-}
-
-func interfaceIndex(name string) uint32 {
-	for i, n := range interfaces {
-		if n == name {
-			return uint32(i + 1)
-		}
-	}
-
-	return 0
 }

@@ -3,8 +3,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
 	"slices"
 	"strings"
 )
@@ -81,41 +79,13 @@ func (g *Globber) names(dir string) ([]string, error) {
 		path = "."
 	}
 
-	f, err := g.p.openPath(path, O_RDONLY|O_DIRECTORY, 0)
+	names, err := g.p.dirNames(path)
 
-	if err != nil {
+	if err != nil && names == nil {
 		return nil, err
 	}
 
-	defer f.unref()
-
-	d := f
-	names := []string{".", ".."}
-	buf := make([]byte, 4096)
-	file := bytesFile(buf)
-
-	for {
-		n, err := g.p.fileReaddir(d, file, len(buf))
-
-		if err != nil || n == 0 {
-			return names, err
-		}
-
-		for at := 0; at+19 <= n; {
-			reclen := int(binary.LittleEndian.Uint16(buf[at+16:]))
-			name := buf[at+19 : at+reclen]
-
-			if end := bytes.IndexByte(name, 0); end >= 0 {
-				name = name[:end]
-			}
-
-			if string(name) != "." && string(name) != ".." {
-				names = append(names, string(name))
-			}
-
-			at += reclen
-		}
-	}
+	return append([]string{".", ".."}, names...), err
 }
 
 func (g *Globber) exists(path string) bool {

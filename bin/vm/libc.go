@@ -2586,6 +2586,22 @@ func libcRecvmsg(fd, msg, msgSize, iovSize, flags uint32) uint32 {
 	return p.libcRecvmsg(fd, msg, flags)
 }
 
+func libcSendmmsg(fd, vec, vecSize, iovSize, vlen, flags uint32) uint32 {
+	p := proc()
+
+	p.sized("sendmmsg", vecSize, sizeofMmsghdr, iovSize, sizeofIovec)
+
+	return p.libcSendmmsg(fd, vec, vlen, flags)
+}
+
+func libcRecvmmsg(fd, vec, vecSize, iovSize, vlen, flags, timeout, timeoutSize uint32) uint32 {
+	p := proc()
+
+	p.sized("recvmmsg", vecSize, sizeofMmsghdr, iovSize, sizeofIovec, timeoutSize, sizeofTimespec)
+
+	return p.libcRecvmmsg(fd, vec, vlen, flags, timeout)
+}
+
 func libcShutdown(fd, how uint32) uint32 {
 	return proc().libcShutdown(fd, how)
 }
@@ -2776,6 +2792,18 @@ func libcIf_freenameindex(block, blockSize uint32) {
 	p.sized("if_freenameindex", blockSize, sizeofIfNameindex)
 
 	p.libcIf_freenameindex(block)
+}
+
+func libcGetifaddrs(out, size uint32) uint32 {
+	p := proc()
+
+	p.sized("getifaddrs", size, sizeofIfaddrs)
+
+	return p.libcGetifaddrs(out)
+}
+
+func libcFreeifaddrs(list uint32) {
+	proc().libcFreeifaddrs(list)
 }
 
 func libcCrypt(key, setting uint32) uint32 {
