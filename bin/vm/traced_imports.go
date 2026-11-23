@@ -36,7 +36,7 @@ var libraryCalls = func() map[string]bool {
 
 var untracedCalls = map[string]bool{
 	"setjmp": true, "_setjmp": true, "sigsetjmp": true, "longjmp": true, "_longjmp": true, "siglongjmp": true,
-	"vfork": true, "fork": true, "forkpty": true, "__kernel_start": true, "__kernel_program": true, "__assert_fail": true,
+	"vfork": true, "fork": true, "forkpty": true, "__kernel_start": true, "__errno_location": true, "__kernel_program": true, "__assert_fail": true,
 }
 
 var callFormats = func() map[string]string {
@@ -52,8 +52,7 @@ var callFormats = func() map[string]string {
 		cfsetispeed:dpdd cfsetospeed:dpdd cfsetspeed:dpdd chdir:ds chmod:dso chown:dsdd chroot:ds clearenv:d clock:d
 		clock_getcpuclockid:ddp clock_getres:ddpd clock_gettime:ddpd clock_nanosleep:dddpdpd clock_settime:ddpd close:dd closedir:dp
 		closelog:v cnd_broadcast:dpd cnd_destroy:vpd cnd_init:dpd cnd_signal:dpd cnd_timedwait:dpdpdpd cnd_wait:dpdpd confstr:ddpd
-		connect:ddpd copy_file_range:ddpdpdd creat:dso crypt:sss ctermid:sp ctime:sp ctime_r:spp cuserid:sp daemon:ddd dbm_clearerr:dp
-		dbm_close:vp dbm_delete:dppd dbm_error:dp dbm_fetch:pppdp dbm_firstkey:ppp dbm_nextkey:ppp dbm_open:psdo dbm_store:dppdpdd
+		connect:ddpd copy_file_range:ddpdpdd creat:dso crypt:sss ctermid:sp ctime:sp ctime_r:spp cuserid:sp daemon:ddd
 		dcgettext_l:sssdd dcngettext_l:ssssddd dgettext_l:sssd difftime:fdd dirfd:dp dirname:sp div:ddd dn_comp:dspdpp dn_expand:dppppd
 		dn_skipname:dpp dngettext_l:ssssdd dup:dd dup2:ddd dup3:dddd duplocale:dd eaccess:dsd encrypt:vpd endgrent:v endhostent:v
 		endnetent:v endprotoent:v endpwent:v endservent:v endusershell:v endutxent:v epoll_create:dd epoll_create1:dd epoll_ctl:ddddpd

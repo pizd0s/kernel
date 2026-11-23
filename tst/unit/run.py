@@ -163,7 +163,10 @@ def build(source, prefix, tools):
     native = Path(str(prefix) + ".native.o")
     embedded = Path(str(prefix) + ".embedded.o")
     asan = ["--asan"] if flags == ["--asan"] else []
-    compiled = successful([tools["aot"], *flags], stdin=module.read_bytes(), env=env, timeout=timeout)
+    # The kernel compiles a module with what it uses of libc.wasm linked in.
+    linked = Path(str(prefix) + ".linked.wasm")
+    successful([tools["vm"], "link", "-o", linked, module], env=env, timeout=timeout)
+    compiled = successful([tools["aot"], *flags], stdin=linked.read_bytes(), env=env, timeout=timeout)
     native.write_bytes(compiled.stdout)
     successful([tools["vm"], *asan, "-o", embedded, module], env=env, timeout=timeout)
     if native.read_bytes() != embedded.read_bytes():

@@ -18,9 +18,15 @@ import (
 var (
 	//go:embed aot.aot
 	compilerBlob []byte
-	wasmHeader   = []byte("\x00asm\x01\x00\x00\x00")
-	exeMagic     = []byte("PZD1")
+	//go:embed libc.wasm
+	libcBlob   []byte
+	wasmHeader = []byte("\x00asm\x01\x00\x00\x00")
+	exeMagic   = []byte("PZD1")
 )
+
+var libcObject = sync.OnceValue(func() *WasmObject {
+	return parseWasmObject(libcBlob)
+})
 
 var unpacker = sync.OnceValue(func() *zstd.Decoder {
 	return throw2(zstd.NewReader(nil, zstd.WithDecoderMaxMemory(unpackLimit)))
@@ -78,6 +84,8 @@ func (o CompileOptions) arguments() []string {
 }
 
 func (k *Kernel) compileObject(module []byte, options CompileOptions) ([]byte, error) {
+	module = linkLibc(module, k.functions)
+
 	code := k.compiler()
 	p := k.process(0, nil)
 	out, diagnostic := newCapture(objectSize), newCapture(nil)

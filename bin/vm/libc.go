@@ -2,6 +2,10 @@
 
 package main
 
+func libc__errno_location() uint32 {
+	return proc().libc__errno_location()
+}
+
 func libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt uint32) {
 	proc().libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt)
 }
@@ -2946,42 +2950,6 @@ func libcCatgets(catd, set, msg, s uint32) uint32 {
 
 func libcCatclose(catd uint32) uint32 {
 	return proc().libcCatclose(catd)
-}
-
-func libcDbm_open(file, flags, mode uint32) uint32 {
-	return proc().libcDbm_open(file, flags, mode)
-}
-
-func libcDbm_close(db uint32) {
-	proc().libcDbm_close(db)
-}
-
-func libcDbm_error(db uint32) uint32 {
-	return proc().libcDbm_error(db)
-}
-
-func libcDbm_clearerr(db uint32) uint32 {
-	return proc().libcDbm_clearerr(db)
-}
-
-func libcDbm_store(db, key, klen, content, clen, mode uint32) uint32 {
-	return proc().libcDbm_store(db, key, klen, content, clen, mode)
-}
-
-func libcDbm_delete(db, key, klen uint32) uint32 {
-	return proc().libcDbm_delete(db, key, klen)
-}
-
-func libcDbm_fetch(db, key, klen, lenAt uint32) uint32 {
-	return proc().libcDbm_fetch(db, key, klen, lenAt)
-}
-
-func libcDbm_firstkey(db, lenAt uint32) uint32 {
-	return proc().libcDbm_firstkey(db, lenAt)
-}
-
-func libcDbm_nextkey(db, lenAt uint32) uint32 {
-	return proc().libcDbm_nextkey(db, lenAt)
 }
 
 func libcCrypt(key, setting uint32) uint32 {

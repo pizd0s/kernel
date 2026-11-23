@@ -3167,10 +3167,15 @@ namespace {
         // (lowererAsanAddress) instead of a bounds check.
         bool asan{};
         // codeOffset is where the code section's contents begin in the
-        // module, which DWARF's addresses count from; debugLine, debugLineStr
-        // and debugStr are its DWARF sections, when it has them, and
-        // sourceFiles and lineRows what moduleReadLines made of them.
+        // module, which DWARF's addresses count from, plus codeShift, the
+        // bytes a link moved the code by (the custom section
+        // w2o.code_shift, which the kernel's linker writes when the
+        // function count it gives the code section is longer); debugLine,
+        // debugLineStr and debugStr are its DWARF sections, when it has
+        // them, and sourceFiles and lineRows what moduleReadLines made of
+        // them.
         Int codeOffset{};
+        Int codeShift{};
         Slice<u8> debugLine{};
         Slice<u8> debugLineStr{};
         Slice<u8> debugStr{};
@@ -23887,7 +23892,7 @@ static i32 dataLabel(Int seg) {
 
 static Module* decodeModule(Slice<u8> data) {
     Reader* r = activePool->make<Reader>(Reader{data, {}});
-    Module* m = activePool->make<Module>(Module{{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, i64(-1LL), {}, {}, i64(-1LL), {}, {}});
+    Module* m = activePool->make<Module>(Module{{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, i64(-1LL), {}, {}, i64(-1LL), {}, {}});
     if ((asString(readerBytes(r, 4)) != String("\000asm"))) {
         compilerError(String("magic header not detected"));
     }
@@ -24004,6 +24009,7 @@ static Module* decodeModule(Slice<u8> data) {
     if (codes != length(funcTypes)) {
         compilerError(String("function and code section have inconsistent lengths"));
     }
+    m->codeOffset += m->codeShift;
     if (m->dataCount >= 0 && convert<i64>(m->dataCount) != length(m->datas)) {
         compilerError(String("data count and data section have inconsistent lengths"));
     }
@@ -26869,7 +26875,9 @@ static void moduleCustom(Module* module, Reader* reader) {
         readOptionalNames(module, *reader);
     }
     Slice<u8> rest = subslice(reader->data, reader->pos, length(reader->data));
-    if (name == String(".debug_line")) {
+    if (name == String("w2o.code_shift")) {
+        module->codeShift = convert<i64>(readerU32(reader));
+    } else if (name == String(".debug_line")) {
         module->debugLine = rest;
     } else if (name == String(".debug_line_str")) {
         module->debugLineStr = rest;

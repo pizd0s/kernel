@@ -7,8 +7,9 @@ C type: s a string, const char* and a result of char*; p another pointer,
 a va_list among them; o a mode_t; f a floating number; d any other number;
 v no result.
 
-The kernel's table must be the declarations': the test tells what differs
-and prints the table as it should be.
+The kernel's table must be the declarations' of its Go functions, all
+but those libc.wasm defines (lib/libc, __kernel_ and the name): the test
+tells what differs and prints the table as it should be.
 
     test_call_formats.py <clang> <source root>
 """
@@ -72,9 +73,20 @@ def formats(clang, root):
     return out
 
 
+def libc_wasm(root):
+    """The kernel's functions libc.wasm defines."""
+    names = set()
+
+    for source in (root / "lib/libc").glob("*.c"):
+        names.update(re.findall(r"\b__kernel_(\w+)\s*\([^;{}]*\)\s*\{", source.read_text()))
+
+    return names
+
+
 def main():
     clang, root = sys.argv[1], Path(sys.argv[2])
-    want = formats(clang, root)
+    defined = libc_wasm(root)
+    want = {name: kind for name, kind in formats(clang, root).items() if name not in defined}
     go = (root / "bin/vm/traced_imports.go").read_text()
     block = re.search(r"callFormats\s*=.*?strings\.Fields\(`(.*?)`\)", go, re.S)
     assert block, "traced_imports.go has no table of formats"

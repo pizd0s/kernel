@@ -99,7 +99,7 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 }
 
 func (k *Kernel) process(pid int32, parent *Process) *Process {
-	p := &Process{k: k, pid: pid, umask: 0o022, regexes: map[uint32]*PosixRegex{}, iconvs: map[uint32]*Iconv{}, dbms: map[uint32]*Dbm{}, seed: 0, syncs: map[int32]Object{},
+	p := &Process{k: k, pid: pid, umask: 0o022, regexes: map[uint32]*PosixRegex{}, iconvs: map[uint32]*Iconv{}, seed: 0, syncs: map[int32]Object{},
 		semOpens: map[string]*SemOpen{}, spawnFiles: map[uint32][]SpawnAction{}, locales: map[uint32][LC_ALL]string{}}
 
 	p.own.signal.kind, p.own.continued.kind = eventSignal, eventContinued
@@ -527,6 +527,7 @@ type SystemNames struct {
 
 func (k *Kernel) functionTable() map[string]any {
 	return map[string]any{
+		"__errno_location":                      libc__errno_location,
 		"__kernel_start":                        libc__kernel_start,
 		"__kernel_program":                      libc__kernel_program,
 		"read":                                  libcRead,
@@ -1238,15 +1239,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"catopen":                               libcCatopen,
 		"catgets":                               libcCatgets,
 		"catclose":                              libcCatclose,
-		"dbm_open":                              libcDbm_open,
-		"dbm_close":                             libcDbm_close,
-		"dbm_error":                             libcDbm_error,
-		"dbm_clearerr":                          libcDbm_clearerr,
-		"dbm_store":                             libcDbm_store,
-		"dbm_delete":                            libcDbm_delete,
-		"dbm_fetch":                             libcDbm_fetch,
-		"dbm_firstkey":                          libcDbm_firstkey,
-		"dbm_nextkey":                           libcDbm_nextkey,
 		"crypt":                                 libcCrypt,
 		"pthread_create":                        libcPthread_create,
 		"pthread_join":                          libcPthread_join,

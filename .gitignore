@@ -49,6 +49,8 @@ __pycache__/
 /python_tarball
 /libc_check
 /asan_check
+/libc_link_check
+/libc_wasm
 /libcxx
 /llvm_tarball
 /cxx_check

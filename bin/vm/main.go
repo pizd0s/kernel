@@ -13,7 +13,7 @@ import (
 )
 
 func usage() {
-	throwFmt("usage: vm [-v] [--asan] -o output.o input.wasm\n       vm run [-a argv0] [--asan] [--strace[=class,...]] [--user uid[:gid]] [--memory size] [--disk name=file]... [--net] -- module.wasm [arg...]\n       vm spec test.json\n       vm stand [--repeat N] im|pdf|djvu|svg|magic object.o file...")
+	throwFmt("usage: vm [-v] [--asan] -o output.o input.wasm\n       vm link -o output.wasm input.wasm\n       vm run [-a argv0] [--asan] [--strace[=class,...]] [--user uid[:gid]] [--memory size] [--disk name=file]... [--net] -- module.wasm [arg...]\n       vm spec test.json\n       vm stand [--repeat N] im|pdf|djvu|svg|magic object.o file...")
 }
 
 func main() {
@@ -42,6 +42,12 @@ func main() {
 			return
 		}
 
+		if len(args) > 0 && args[0] == "link" {
+			linkCommand(args[1:])
+
+			return
+		}
+
 		compileCommand(args)
 	}); e != nil {
 		restoreHostTerminal()
@@ -51,6 +57,16 @@ func main() {
 
 	restoreHostTerminal()
 	os.Exit(code)
+}
+
+func linkCommand(args []string) {
+	if len(args) != 3 || args[0] != "-o" {
+		usage()
+	}
+
+	module := throw2(os.ReadFile(args[2]))
+
+	throw(os.WriteFile(args[1], linkLibc(module, newKernel(Cred{}, defaultMemory).functions), 0o644))
 }
 
 func compileCommand(args []string) {

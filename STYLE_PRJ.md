@@ -24,7 +24,10 @@ Per-project settings that the shared [STYLE.md](STYLE.md) delegates here.
   function calling the import, declared `__KERNEL(name)` under the C name
   `__kernel_<name>` (`src/kernel.c`, or `__INLINE` in its header); the
   import name is spelled out so the linker can tell an import from a
-  missing definition. No other declaration has the attribute.
+  missing definition. No other declaration has the attribute, but libc.wasm's
+  own imports of the kernel (`lib/libc/libc.h`). The kernel implements each in
+  Go or in libc.wasm (`lib/libc`), C that defines `__kernel_<name>` and that
+  the kernel links into a program importing it.
 - **Third-party code.** Sources are fetched as release tarballs, a big one
   cut down to what is built (`dev/slice.py`), and never edited in place; what they need from us lives beside their build
   (lib/c's `freebsd/` and `llvm/` headers, and `lib/c/src`). Code

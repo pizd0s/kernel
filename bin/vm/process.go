@@ -279,8 +279,6 @@ type Process struct {
 	nextRegex uint32
 	iconvs    map[uint32]*Iconv
 	nextIconv uint32
-	dbms      map[uint32]*Dbm
-	nextDbm   uint32
 
 	spawnFiles     map[uint32][]SpawnAction
 	nextSpawnFiles uint32
@@ -594,7 +592,6 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0
 		p.regexes, p.constants, p.locale = map[uint32]*PosixRegex{}, map[string]uint32{}, [LC_ALL]string{}
 		p.iconvs, p.spawnFiles, p.locales = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}, map[uint32][LC_ALL]string{}
-		p.dbms = map[uint32]*Dbm{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
 		p.defaultStack, p.defaultGuard, p.desKey = 0, 0, [8]byte{}
 
@@ -808,6 +805,10 @@ func (p *Process) exitWith(status int) {
 	}
 
 	panic(&ProcExit{status})
+}
+
+func (p *Process) libc__errno_location() uint32 {
+	return p.errnoAt
 }
 
 func (p *Process) libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt uint32) {
@@ -4581,7 +4582,6 @@ func (p *Process) startVfork() uint32 {
 	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo
 	c.regexes, c.nextRegex, c.constants, c.jumps, c.stackAt = p.regexes, p.nextRegex, p.constants, p.jumps, p.stackAt
 	c.iconvs, c.nextIconv = p.iconvs, p.nextIconv
-	c.dbms, c.nextDbm = p.dbms, p.nextDbm
 	c.spawnFiles, c.nextSpawnFiles = p.spawnFiles, p.nextSpawnFiles
 	c.locales, c.nextLocale = p.locales, p.nextLocale
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
@@ -4639,7 +4639,6 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 	c.nextRegex, c.stackAt, c.locale, c.tzAt, c.herrnoAt, c.passwordAt = p.nextRegex, p.stackAt, p.locale, p.tzAt, p.herrnoAt, p.passwordAt
 	c.regexes, c.constants, c.jumps = map[uint32]*PosixRegex{}, map[string]uint32{}, map[uint32]*JmpBuf{}
 	c.iconvs, c.nextIconv = map[uint32]*Iconv{}, p.nextIconv
-	c.dbms, c.nextDbm = map[uint32]*Dbm{}, p.nextDbm
 	c.spawnFiles, c.nextSpawnFiles = map[uint32][]SpawnAction{}, p.nextSpawnFiles
 	c.locales, c.nextLocale = maps.Clone(p.locales), p.nextLocale
 
@@ -4651,10 +4650,6 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 
 	for id, cd := range p.iconvs {
 		c.iconvs[id] = cd.copy()
-	}
-
-	for id, d := range p.dbms {
-		c.dbms[id] = d.copy()
 	}
 
 	for id, list := range p.spawnFiles {
@@ -15586,263 +15581,6 @@ func (p *Process) libcCatclose(catd uint32) uint32 {
 	p.free(catd)
 
 	return 0
-}
-
-func (p *Process) dbm(db uint32) (*Dbm, error) {
-	if d, ok := p.dbms[db]; ok {
-		return d, nil
-	}
-
-	return nil, EBADF
-}
-
-func (p *Process) dbmCopy(at, room *uint32, b []byte) uint32 {
-	if *room < uint32(len(b))+1 {
-		p.free(*at)
-		*room = (uint32(len(b)) + 16) &^ 15
-		*at = p.malloc(*room)
-
-		if *at == 0 {
-			*room = 0
-
-			return 0
-		}
-	}
-
-	copy(p.span(*at, uint32(len(b))), b)
-
-	return *at
-}
-
-func (p *Process) libcDbm_open(file, flags, mode uint32) uint32 {
-	path := p.str(file) + ".db"
-
-	if cwd, err := p.cwdPath(); err == nil && !strings.HasPrefix(path, "/") {
-		path = strings.TrimSuffix(cwd, "/") + "/" + path
-	}
-
-	d := &Dbm{path: path, writable: flags&O_ACCMODE != O_RDONLY}
-	open := flags&^O_ACCMODE | O_CLOEXEC
-
-	if d.writable {
-		open |= O_RDWR | O_APPEND
-	}
-
-	fd, err := p.open(AT_FDCWD, path, open, mode)
-
-	if err != nil {
-		return p.result(0, err) + 1
-	}
-
-	d.fd = uint32(fd)
-
-	if err := d.load(p); err != nil {
-		p.closeFd(fd)
-
-		return p.result(0, err) + 1
-	}
-
-	if d.writable {
-		d.compact(p)
-	}
-
-	p.nextDbm++
-	p.dbms[p.nextDbm] = d
-
-	return p.nextDbm
-}
-
-func (p *Process) libcDbm_close(db uint32) {
-	if d, ok := p.dbms[db]; ok {
-		delete(p.dbms, db)
-		p.closeFd(int(d.fd))
-		p.free(d.key)
-		p.free(d.value)
-	}
-}
-
-func (p *Process) libcDbm_error(db uint32) uint32 {
-	d, err := p.dbm(db)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	return bit(d.failed)
-}
-
-func (p *Process) libcDbm_clearerr(db uint32) uint32 {
-	d, err := p.dbm(db)
-
-	if err == nil {
-		d.failed = false
-	}
-
-	return p.result(0, err)
-}
-
-func (p *Process) dbmFailed(d *Dbm, err error) uint32 {
-	d.failed = true
-
-	return p.result(0, err)
-}
-
-func (p *Process) libcDbm_store(db, key, klen, content, clen, mode uint32) uint32 {
-	d, err := p.dbm(db)
-
-	switch {
-	case err != nil:
-		return p.result(0, err)
-	case mode != DBM_INSERT && mode != DBM_REPLACE || klen > dbmLargest || clen > dbmLargest:
-		return p.result(0, EINVAL)
-	case !d.writable:
-		return p.result(0, EPERM)
-	}
-
-	k, c := slices.Clone(p.span(key, klen)), slices.Clone(p.span(content, clen))
-
-	if err := d.sync(p); err != nil {
-		return p.dbmFailed(d, err)
-	}
-
-	if _, ok := d.index[string(k)]; ok && mode == DBM_INSERT {
-		return 1
-	}
-
-	if err := d.append(p, k, c, false); err != nil {
-		return p.dbmFailed(d, err)
-	}
-
-	return 0
-}
-
-func (p *Process) libcDbm_delete(db, key, klen uint32) uint32 {
-	d, err := p.dbm(db)
-
-	switch {
-	case err != nil:
-		return p.result(0, err)
-	case !d.writable:
-		return p.result(0, EPERM)
-	}
-
-	k := slices.Clone(p.span(key, klen))
-
-	if err := d.sync(p); err != nil {
-		return p.dbmFailed(d, err)
-	}
-
-	if _, ok := d.index[string(k)]; !ok {
-		return ^uint32(0)
-	}
-
-	if err := d.append(p, k, nil, true); err != nil {
-		return p.dbmFailed(d, err)
-	}
-
-	return 0
-}
-
-func (p *Process) libcDbm_fetch(db, key, klen, lenAt uint32) uint32 {
-	p.put32(lenAt, 0)
-
-	d, err := p.dbm(db)
-
-	if err != nil {
-		return p.result(0, err) + 1
-	}
-
-	k := string(p.span(key, klen))
-
-	if err := d.sync(p); err != nil {
-		return p.dbmFailed(d, err) + 1
-	}
-
-	v, ok := d.index[k]
-
-	if !ok {
-		return 0
-	}
-
-	b, err := d.read(p, v[0], v[1])
-
-	if err != nil {
-		return p.dbmFailed(d, err) + 1
-	}
-
-	at := p.dbmCopy(&d.value, &d.valueRoom, b)
-
-	if at == 0 {
-		return p.dbmFailed(d, ENOMEM) + 1
-	}
-
-	p.put32(lenAt, uint32(len(b)))
-
-	return at
-}
-
-func (p *Process) dbmNext(d *Dbm, lenAt uint32) uint32 {
-	p.put32(lenAt, 0)
-
-	for d.next < len(d.keys) {
-		key := d.keys[d.next]
-
-		d.next++
-
-		if _, ok := d.index[key]; !ok {
-			continue
-		}
-
-		at := p.dbmCopy(&d.key, &d.keyRoom, []byte(key))
-
-		if at == 0 {
-			return p.dbmFailed(d, ENOMEM) + 1
-		}
-
-		p.put32(lenAt, uint32(len(key)))
-
-		return at
-	}
-
-	return 0
-}
-
-func (p *Process) libcDbm_firstkey(db, lenAt uint32) uint32 {
-	d, err := p.dbm(db)
-
-	if err != nil {
-		p.put32(lenAt, 0)
-
-		return p.result(0, err) + 1
-	}
-
-	if err := d.sync(p); err != nil {
-		p.put32(lenAt, 0)
-
-		return p.dbmFailed(d, err) + 1
-	}
-
-	d.keys, d.next = d.ordered(), 0
-
-	return p.dbmNext(d, lenAt)
-}
-
-func (p *Process) libcDbm_nextkey(db, lenAt uint32) uint32 {
-	d, err := p.dbm(db)
-
-	if err != nil {
-		p.put32(lenAt, 0)
-
-		return p.result(0, err) + 1
-	}
-
-	if err := d.sync(p); err != nil {
-		p.put32(lenAt, 0)
-
-		return p.dbmFailed(d, err) + 1
-	}
-
-	return p.dbmNext(d, lenAt)
 }
 
 func (p *Process) nsSection(handle, section uint32) {

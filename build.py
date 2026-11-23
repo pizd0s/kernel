@@ -405,6 +405,18 @@ python_core = command(
     color="yellow",
 )
 
+# lib/libc: libc.wasm, kernel functions written in C, a relocatable
+# object the kernel links what a program imports of into the program before
+# it compiles it (bin/vm/wasm_linker.go).
+libc_wasm = command(
+    name="libc_wasm",
+    inputs=[*LIBC_HEADERS, *build.glob("$(S)/lib/libc/*"), "$(S)/lib/c/src/kernel.c", "$(S)/lib/c/src/kernel.h", "$(S)/dev/wasm.py"],
+    outputs=["$(B)/lib/libc/libc.wasm"],
+    cmd=["python3", "$(S)/lib/libc/make.py", CLANG, WASM_LD, "$(B)/lib/libc/libc.wasm"],
+    descr="CC",
+    color="green",
+)
+
 # bin/aot is a single C++ translation unit, a command: the module comes on
 # fd 0, the object goes to fd 1, the options are its arguments. Its wasm
 # build is a program of the system on lib/c, the one the kernel runs as its
@@ -553,9 +565,9 @@ vm = command(
     name="vm",
     inputs=[*WASM2O_SOURCES, *GO_RUNTIME],
     outputs=["$(B)/bin/vm/vm"],
-    deps=[aot_aot, libstr, vm_modules],
+    deps=[aot_aot, libstr, libc_wasm, vm_modules],
     cmd=["python3", "$(S)/dev/go.py", "build", GO, "$(S)/bin/vm", "$(B)/bin/vm/vm", "--runtime", "$(S)/lib/goruntime", "--embed", aot_aot.outputs[0],
-         "--embed", libstr.outputs[0], *VM_MODULES],
+         "--embed", libstr.outputs[0], "--embed", libc_wasm.outputs[0], *VM_MODULES],
     descr="GO", color="light-blue",
 )
 
@@ -566,9 +578,9 @@ for mode in ("version", "layout"):
         name=f"vm_runtime_{mode}",
         inputs=[*WASM2O_SOURCES, *GO_RUNTIME, "$(S)/tst/runtime_abi/make.py"],
         outputs=[output],
-        deps=[aot_aot, libstr, vm_modules],
+        deps=[aot_aot, libstr, libc_wasm, vm_modules],
         cmd=["python3", "$(S)/tst/runtime_abi/make.py", GO, "$(S)", mode,
-             aot_aot.outputs[0], libstr.outputs[0], vm_modules.outputs[0], output],
+             aot_aot.outputs[0], libstr.outputs[0], libc_wasm.outputs[0], vm_modules.outputs[0], output],
         descr="GO", color="light-blue",
     ))
 
@@ -576,10 +588,11 @@ vm_coverage = command(
     name="vm_coverage",
     inputs=[*WASM2O_SOURCES, *GO_RUNTIME, "$(S)/dev/coverage_collect.go"],
     outputs=["$(B)/coverage/bin/vm"],
-    deps=[wasm_coverage[0][1], libstr, vm_modules],
+    deps=[wasm_coverage[0][1], libstr, libc_wasm, vm_modules],
     cmd=["python3", "$(S)/dev/go.py", "build", GO, "$(S)/bin/vm", "$(B)/coverage/bin/vm",
          "--cover", "--tags", "pizdoscoverage", "--runtime", "$(S)/lib/goruntime",
-         "--embed", wasm_coverage[0][1].outputs[0], "--embed", libstr.outputs[0], "--embed", "$(S)/dev/coverage_collect.go", *VM_MODULES],
+         "--embed", wasm_coverage[0][1].outputs[0], "--embed", libstr.outputs[0], "--embed", libc_wasm.outputs[0],
+         "--embed", "$(S)/dev/coverage_collect.go", *VM_MODULES],
     descr="GO", color="light-blue",
 )
 
@@ -587,9 +600,10 @@ vm_chaos = command(
     name="vm_chaos",
     inputs=[*WASM2O_SOURCES, *GO_RUNTIME],
     outputs=["$(B)/chaos/bin/vm"],
-    deps=[aot_chaos_aot, libstr, vm_modules],
+    deps=[aot_chaos_aot, libstr, libc_wasm, vm_modules],
     cmd=["python3", "$(S)/dev/go.py", "build", GO, "$(S)/bin/vm", "$(B)/chaos/bin/vm", "--tags", "pizdoschaos",
-         "--runtime", "$(S)/lib/goruntime", "--embed", aot_chaos_aot.outputs[0], "--embed", libstr.outputs[0], *VM_MODULES],
+         "--runtime", "$(S)/lib/goruntime", "--embed", aot_chaos_aot.outputs[0], "--embed", libstr.outputs[0],
+         "--embed", libc_wasm.outputs[0], *VM_MODULES],
     descr="GO", color="light-blue",
 )
 
@@ -597,10 +611,10 @@ vm_chaos_coverage = command(
     name="vm_chaos_coverage",
     inputs=[*WASM2O_SOURCES, *GO_RUNTIME, "$(S)/dev/coverage_collect.go"],
     outputs=["$(B)/coverage/chaos/vm"],
-    deps=[wasm_coverage[1][1], libstr, vm_modules],
+    deps=[wasm_coverage[1][1], libstr, libc_wasm, vm_modules],
     cmd=["python3", "$(S)/dev/go.py", "build", GO, "$(S)/bin/vm", "$(B)/coverage/chaos/vm", "--cover", "--tags", "pizdoschaos,pizdoscoverage",
          "--runtime", "$(S)/lib/goruntime", "--embed", wasm_coverage[1][1].outputs[0], "--embed", libstr.outputs[0],
-         "--embed", "$(S)/dev/coverage_collect.go", *VM_MODULES],
+         "--embed", libc_wasm.outputs[0], "--embed", "$(S)/dev/coverage_collect.go", *VM_MODULES],
     descr="GO", color="light-blue",
 )
 
@@ -913,6 +927,19 @@ asan_check = command(
 )
 asan_check_exe = executable("asan_check_exe", asan_check, "$(B)/tst/asan/check")
 
+# test_libc_link's program: ndbm's, with -g and functions of its own besides,
+# as many as make its count of functions 127.
+libc_link_check = command(
+    name="libc_link_check",
+    inputs=[*LIBC_HEADERS, "$(S)/tst/link/check.c", "$(S)/tst/link/make.py", "$(S)/dev/wasm.py"],
+    outputs=["$(B)/tst/link/check.wasm"],
+    deps=[libc],
+    cmd=["python3", "$(S)/tst/link/make.py", CLANG, WASM_LD, "$(S)/tst/link/check.c", "$(S)/lib/c/include", libc.outputs[0],
+         "$(B)/tst/link/check.wasm"],
+    descr="CC",
+    color="green",
+)
+
 # test_cxx's program: lib/cxx's library over lib/c with deterministic results.
 cxx_check = command(
     name="cxx_check",
@@ -1212,6 +1239,7 @@ E2E_TESTED = {
     "runtime_abi": [vm, aot_native, *runtime_abi_vms],
     "host_signals": [vm, aot_native, wazero],
     "libc": [vm, rootfs, tests_image],
+    "libc_link": [vm, libc_link_check],
     "large_functions": [vm, aot_native, rootfs],
     "large_switches": [vm, aot_native, wazero, rootfs],
     "loop_limits": [vm, aot_native, wazero, rootfs],
@@ -1325,7 +1353,8 @@ e2e_tests.append(libc_consts_test)
 # declarations of the kernel's functions.
 call_formats_test = command(
     name="test_call_formats",
-    inputs=["$(S)/tst/test_call_formats.py", "$(S)/bin/vm/traced_imports.go", "$(S)/lib/c/src/kernel.c", "$(S)/lib/c/src/kernel.h", *LIBC_HEADERS],
+    inputs=["$(S)/tst/test_call_formats.py", "$(S)/bin/vm/traced_imports.go", "$(S)/lib/c/src/kernel.c", "$(S)/lib/c/src/kernel.h",
+            *build.glob("$(S)/lib/libc/*.c"), *LIBC_HEADERS],
     outputs=["$(B)/tst/call_formats.stamp"],
     deps=[],
     cmd=[["python3", "$(S)/tst/test_call_formats.py", CLANG, "$(S)"], touch("$(B)/tst/call_formats.stamp")],
