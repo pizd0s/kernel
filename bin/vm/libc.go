@@ -4594,3 +4594,47 @@ func libcLio_listio(mode, list, listSize, n, sig, sigSize uint32) uint32 {
 
 	return p.libcLio_listio(mode, list, n, sig)
 }
+
+func libcGetrandom(buf, n, flags uint32) uint32 {
+	return proc().libcGetrandom(buf, n, flags)
+}
+
+func libcUlimit(cmd, va uint32) uint32 {
+	return proc().libcUlimit(cmd, va)
+}
+
+func libcPosix_madvise(addr, n, advice uint32) uint32 {
+	return proc().libcPosix_madvise(addr, n, advice)
+}
+
+func libcFmtmsg(classification, label, severity, text, action, tag uint32) uint32 {
+	return proc().libcFmtmsg(classification, label, severity, text, action, tag)
+}
+
+func libcEther_ntoa(addr uint32) uint32 {
+	return proc().libcEther_ntoa(addr)
+}
+
+func libcEther_ntoa_r(addr, buf uint32) uint32 {
+	return proc().libcEther_ntoa_r(addr, buf)
+}
+
+func libcEther_aton(text uint32) uint32 {
+	return proc().libcEther_aton(text)
+}
+
+func libcEther_aton_r(text, addr uint32) uint32 {
+	return proc().libcEther_aton_r(text, addr)
+}
+
+func libcEther_ntohost(host, addr uint32) uint32 {
+	return proc().libcEther_ntohost(host, addr)
+}
+
+func libcEther_hostton(host, addr uint32) uint32 {
+	return proc().libcEther_hostton(host, addr)
+}
+
+func libcEther_line(line, addr, host uint32) uint32 {
+	return proc().libcEther_line(line, addr, host)
+}

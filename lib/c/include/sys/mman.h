@@ -34,11 +34,18 @@ __BEGIN_DECLS
 #define MADV_WILLNEED 3
 #define MADV_DONTNEED 4
 
+#define POSIX_MADV_NORMAL 0
+#define POSIX_MADV_RANDOM 1
+#define POSIX_MADV_SEQUENTIAL 2
+#define POSIX_MADV_WILLNEED 3
+#define POSIX_MADV_DONTNEED 4
+
 void* mmap(void*, size_t, int, int, int, off_t);
 int munmap(void*, size_t);
 int mprotect(void*, size_t, int);
 int msync(void*, size_t, int);
 int madvise(void*, size_t, int);
+int posix_madvise(void*, size_t, int);
 int mlock(const void*, size_t);
 int munlock(const void*, size_t);
 int mlockall(int);

@@ -40,6 +40,7 @@ var (
 	localeVars     = [LC_ALL]string{"LC_CTYPE", "LC_NUMERIC", "LC_TIME", "LC_COLLATE", "LC_MONETARY", "LC_MESSAGES"}
 	wcClassNames   = []string{"alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"}
 	devctlValues   = map[uint32]bool{TCFLSH: true, TCXONC: true, TCSBRK: true}
+	severities     = map[uint32]string{MM_HALT: "HALT", MM_ERROR: "ERROR", MM_WARNING: "WARNING", MM_INFO: "INFO"}
 )
 
 var randomInit = [32]uint32{
@@ -154,7 +155,9 @@ const (
 	staticNetIndex   = 592
 	staticUtmpx      = 596
 	staticUtmpIndex  = 600
-	staticSize       = 604
+	staticEther      = 604
+	staticEtherText  = 612
+	staticSize       = 632
 	niceMin          = -20
 	niceMax          = 19
 	ngroupsMax       = 65536
@@ -3463,6 +3466,245 @@ func (p *Process) libcAio_cancel(fd, cb uint32) uint32 {
 	}
 
 	return AIO_CANCELED
+}
+
+func (p *Process) libcGetrandom(buf, n, flags uint32) uint32 {
+	if flags&^(GRND_NONBLOCK|GRND_RANDOM|GRND_INSECURE) != 0 || flags&(GRND_RANDOM|GRND_INSECURE) == GRND_RANDOM|GRND_INSECURE {
+		return p.result(0, EINVAL)
+	}
+
+	rand.Read(p.span(buf, n))
+
+	return n
+}
+
+func (p *Process) libcUlimit(cmd, va uint32) uint32 {
+	switch cmd {
+	case UL_GETFSIZE:
+		l, _ := p.limit(p, RLIMIT_FSIZE, nil)
+
+		return uint32(min(l.cur/512, math.MaxInt32))
+	case UL_SETFSIZE:
+		n := int32(p.varArg(va, 0))
+		bytes := ^uint64(0)
+
+		if n >= 0 {
+			bytes = uint64(n) * 512
+		} else {
+			n = math.MaxInt32
+		}
+
+		if _, err := p.limit(p, RLIMIT_FSIZE, &Rlimit{bytes, bytes}); err != nil {
+			return p.result(0, err)
+		}
+
+		return uint32(n)
+	}
+
+	return p.result(0, EINVAL)
+}
+
+func (p *Process) libcPosix_madvise(addr, n, advice uint32) uint32 {
+	switch {
+	case advice > POSIX_MADV_DONTNEED:
+		return uint32(EINVAL)
+	case uint64(addr)+uint64(n) > p.inst.memory.pages*pageSize:
+		return uint32(ENOMEM)
+	}
+
+	return 0
+}
+
+func fmtmsgText(parts [5]string, use [5]bool) string {
+	var first []string
+
+	for i := range 3 {
+		if use[i] {
+			first = append(first, parts[i])
+		}
+	}
+
+	second := ""
+
+	if use[3] {
+		second = "TO FIX: " + parts[3]
+	}
+
+	if use[4] {
+		if second != "" {
+			second += " "
+		}
+
+		second += parts[4]
+	}
+
+	line := strings.Join(first, ": ")
+
+	switch {
+	case line != "" && second != "":
+		return line + "\n" + second + "\n"
+	case line != "" || second != "":
+		return line + second + "\n"
+	}
+
+	return ""
+}
+
+func (p *Process) msgverb() [5]bool {
+	all := [5]bool{true, true, true, true, true}
+	env, ok := p.getenv("MSGVERB")
+
+	if !ok || env == "" {
+		return all
+	}
+
+	var use [5]bool
+
+	for _, word := range strings.Split(env, ":") {
+		i := slices.Index([]string{"label", "severity", "text", "action", "tag"}, word)
+
+		if i < 0 {
+			return all
+		}
+
+		use[i] = true
+	}
+
+	return use
+}
+
+func (p *Process) libcFmtmsg(classification, label, severity, text, action, tag uint32) uint32 {
+	var parts [5]string
+	var given [5]bool
+
+	for i, at := range []uint32{label, 0, text, action, tag} {
+		if at != 0 {
+			parts[i], given[i] = p.str(at), true
+		}
+	}
+
+	parts[1], given[1] = severities[severity]
+
+	result := int32(MM_OK)
+
+	if classification&MM_PRINT != 0 {
+		verb := p.msgverb()
+
+		var use [5]bool
+
+		for i := range use {
+			use[i] = given[i] && verb[i]
+		}
+
+		if msg := fmtmsgText(parts, use); msg != "" {
+			t, err := p.fd(2)
+
+			if err == nil {
+				_, err = p.fileWrite(t, bytesFile([]byte(msg)), len(msg), IoMode{})
+			}
+
+			if err != nil {
+				result = MM_NOMSG
+			}
+		}
+	}
+
+	if classification&MM_CONSOLE != 0 {
+		if msg := fmtmsgText(parts, given); msg != "" {
+			p.k.report(msg)
+		}
+	}
+
+	return uint32(result)
+}
+
+func (p *Process) etherAt(at uint32) [ETHER_ADDR_LEN]byte {
+	return [ETHER_ADDR_LEN]byte(p.span(at, ETHER_ADDR_LEN))
+}
+
+func (p *Process) putEther(at uint32, a [ETHER_ADDR_LEN]byte) uint32 {
+	copy(p.span(at, ETHER_ADDR_LEN), a[:])
+
+	return at
+}
+
+func (p *Process) etherEntries() []EtherEntry {
+	lines, _ := p.fileLines("/etc/ethers")
+
+	var out []EtherEntry
+
+	for _, line := range lines {
+		if e, ok := etherLine(line); ok {
+			out = append(out, e)
+		}
+	}
+
+	return out
+}
+
+func (p *Process) libcEther_aton(text uint32) uint32 {
+	return p.libcEther_aton_r(text, p.staticAt(staticEther))
+}
+
+func (p *Process) libcEther_aton_r(text, addr uint32) uint32 {
+	a, _, ok := etherParse(p.str(text))
+
+	if !ok {
+		return 0
+	}
+
+	return p.putEther(addr, a)
+}
+
+func (p *Process) libcEther_ntoa(addr uint32) uint32 {
+	return p.libcEther_ntoa_r(addr, p.staticAt(staticEtherText))
+}
+
+func (p *Process) libcEther_ntoa_r(addr, buf uint32) uint32 {
+	p.putString(buf, etherText(p.etherAt(addr)))
+
+	return buf
+}
+
+func (p *Process) libcEther_ntohost(host, addr uint32) uint32 {
+	a := p.etherAt(addr)
+
+	for _, e := range p.etherEntries() {
+		if e.addr == a {
+			p.putString(host, e.name)
+
+			return 0
+		}
+	}
+
+	return ^uint32(0)
+}
+
+func (p *Process) libcEther_hostton(host, addr uint32) uint32 {
+	name := p.str(host)
+
+	for _, e := range p.etherEntries() {
+		if e.name == name {
+			p.putEther(addr, e.addr)
+
+			return 0
+		}
+	}
+
+	return ^uint32(0)
+}
+
+func (p *Process) libcEther_line(line, addr, host uint32) uint32 {
+	e, ok := etherLine(p.str(line))
+
+	if !ok {
+		return ^uint32(0)
+	}
+
+	p.putEther(addr, e.addr)
+	p.putString(host, e.name)
+
+	return 0
 }
 
 func (p *Process) libcExecl(path, arg0, va uint32) uint32 {
@@ -11736,32 +11978,42 @@ func (p *Process) limitOf(q *Process, res, set, old uint32) error {
 		return EINVAL
 	}
 
+	var l *Rlimit
+
+	if set != 0 {
+		l = &Rlimit{p.u64(set), p.u64(set + 8)}
+	}
+
+	cur, err := p.limit(q, res, l)
+
+	if err == nil && old != 0 {
+		p.put64(old, cur.cur)
+		p.put64(old+8, cur.max)
+	}
+
+	return err
+}
+
+func (p *Process) limit(q *Process, res uint32, set *Rlimit) (Rlimit, error) {
 	p.k.mu.Lock()
 
 	defer p.k.mu.Unlock()
 
 	cur := q.limits[res]
 
-	if set != 0 {
-		l := Rlimit{p.u64(set), p.u64(set + 8)}
-
-		if l.cur > l.max {
-			return EINVAL
+	if set != nil {
+		if set.cur > set.max {
+			return cur, EINVAL
 		}
 
-		if l.max > cur.max && !p.cred.privileged() {
-			return EPERM
+		if set.max > cur.max && !p.cred.privileged() {
+			return cur, EPERM
 		}
 
-		q.limits[res] = l
+		q.limits[res] = *set
 	}
 
-	if old != 0 {
-		p.put64(old, cur.cur)
-		p.put64(old+8, cur.max)
-	}
-
-	return nil
+	return cur, nil
 }
 
 func (p *Process) libcOpenlog(ident, option, facility uint32) {

@@ -24,6 +24,7 @@
 #include <devctl.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <fmtmsg.h>
 #include <fnmatch.h>
 #include <glob.h>
 #include <grp.h>
@@ -32,6 +33,7 @@
 #include <langinfo.h>
 #include <libintl.h>
 #include <mqueue.h>
+#include <net/ethernet.h>
 #include <libgen.h>
 #include <locale.h>
 #include <malloc.h>
@@ -66,6 +68,7 @@
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/random.h>
 #include <sys/resource.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -83,6 +86,7 @@
 #include <threads.h>
 #include <time.h>
 #include <unistd.h>
+#include <ulimit.h>
 #include <utmpx.h>
 #include <utime.h>
 #include <wchar.h>
@@ -836,6 +840,16 @@ KERNEL(int, execvpe, (const char* a, char* const b[], char* const c[]), (a, b, c
 KERNEL(int, fexecve, (int a, char* const b[], char* const c[]), (a, b, c))
 KERNEL(ssize_t, posix_getdents, (int a, void* b, size_t c, int d), (a, b, c, d))
 KERNEL(int, posix_devctl, (int a, int b, void* __restrict c, size_t d, int* __restrict e), (a, b, c, d, e))
+KERNEL(ssize_t, getrandom, (void* a, size_t b, unsigned c), (a, b, c))
+KERNEL(int, posix_madvise, (void* a, size_t b, int c), (a, b, c))
+KERNEL(int, fmtmsg, (long a, const char* b, int c, const char* d, const char* e, const char* f), (a, b, c, d, e, f))
+KERNEL(char*, ether_ntoa, (const struct ether_addr* a), (a))
+KERNEL(char*, ether_ntoa_r, (const struct ether_addr* a, char* b), (a, b))
+KERNEL(struct ether_addr*, ether_aton, (const char* a), (a))
+KERNEL(struct ether_addr*, ether_aton_r, (const char* a, struct ether_addr* b), (a, b))
+KERNEL(int, ether_ntohost, (char* a, const struct ether_addr* b), (a, b))
+KERNEL(int, ether_hostton, (const char* a, struct ether_addr* b), (a, b))
+KERNEL(int, ether_line, (const char* a, struct ether_addr* b, char* c), (a, b, c))
 KERNEL_SIZED(int, aio_read, (struct aiocb* a), (struct aiocb* a, size_t a_size), (a, sizeof(struct aiocb)))
 KERNEL_SIZED(int, aio_write, (struct aiocb* a), (struct aiocb* a, size_t a_size), (a, sizeof(struct aiocb)))
 KERNEL_SIZED(int, aio_fsync, (int a, struct aiocb* b), (int a, struct aiocb* b, size_t b_size), (a, b, sizeof(struct aiocb)))
@@ -1082,6 +1096,7 @@ int __kernel_execle(const char*, const char*, va_list) __KERNEL(execle);
 sem_t* __kernel_sem_open(const char*, int, va_list, size_t) __KERNEL(sem_open);
 mqd_t __kernel_mq_open(const char*, int, va_list, size_t) __KERNEL(mq_open);
 int __kernel_semctl(int, int, int, va_list, size_t) __KERNEL(semctl);
+long __kernel_ulimit(int, va_list) __KERNEL(ulimit);
 
 int open(const char* path, int flags, ...) {
     va_list ap;
@@ -1103,6 +1118,14 @@ mqd_t mq_open(const char* name, int flags, ...) {
     va_list ap;
     va_start(ap, flags);
     mqd_t r = __kernel_mq_open(name, flags, ap, sizeof(struct mq_attr));
+    va_end(ap);
+    return r;
+}
+
+long ulimit(int cmd, ...) {
+    va_list ap;
+    va_start(ap, cmd);
+    long r = __kernel_ulimit(cmd, ap);
     va_end(ap);
     return r;
 }
