@@ -2536,7 +2536,7 @@ func (p *Process) putMqAttr(at uint32, r *MqAttr) {
 		flags = O_NONBLOCK
 	}
 
-	for i, v := range []uint32{flags, uint32(r.maxmsg), uint32(r.msgsize), uint32(r.curmsgs), 0, 0, 0, 0} {
+	for i, v := range []uint32{flags, uint32(r.maxmsg), uint32(r.msgsize), uint32(r.curmsgs)} {
 		p.put32(at+4*uint32(i), v)
 	}
 }
@@ -3124,7 +3124,7 @@ func (p *Process) sigEvent(at uint32) (SigEvent, error) {
 }
 
 func (p *Process) aioSubmit(cb uint32, kind int, list *AioList) error {
-	fd, buf, n, off := p.u32(cb), p.u32(cb+12), p.u32(cb+16), int64(p.u64(cb+88))
+	fd, buf, n, off := p.u32(cb), p.u32(cb+12), p.u32(cb+16), int64(p.u64(cb+40))
 	event, err := p.sigEvent(cb + 20)
 
 	if err != nil {
@@ -8970,7 +8970,7 @@ func (p *Process) putStatvfs(at uint32, st *Statfs) {
 }
 
 func (p *Process) putStatfsOf(at uint32, st *Statfs) {
-	b := p.span(at, 88)
+	b := p.span(at, sizeofStatfs)
 
 	clear(b)
 
@@ -10028,7 +10028,7 @@ func (p *Process) pipe(at, flags uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) libcMemfd_create(at, n, flags uint32) uint32 {
+func (p *Process) libcMemfile(at, n, flags uint32) uint32 {
 	mode := int(flags & O_ACCMODE)
 
 	if flags&^(O_ACCMODE|O_CLOEXEC) != 0 || mode == O_ACCMODE {
@@ -12369,7 +12369,7 @@ func (p *Process) sysinfo(at uint32) error {
 		}
 	}
 
-	b := p.span(at, 312)
+	b := p.span(at, sizeofSysinfo)
 
 	clear(b)
 	p.put32(at, uint32(min(uint64(si.Uptime), math.MaxUint32)))

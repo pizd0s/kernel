@@ -81,7 +81,7 @@ var callFormats = func() map[string]string {
 		iswlower:dd iswprint:dd iswpunct:dd iswspace:dd iswupper:dd iswxdigit:dd isxdigit:dd kill:ddd killpg:ddd l64a:sd labs:dd
 		lchmod:dso lchown:dsdd ldiv:ddd link:dss linkat:ddsdsd lio_listio:ddpddpd listen:ddd llabs:dd lldiv:ddd localeconv:pd
 		localtime:ppd localtime_r:pppdd lockf:dddd longjmp:vpdd lseek:dddd lstat:dspd lutimes:dspd madvise:dpdd malloc:pd malloc_trim:dd
-		malloc_usable_size:dp mallopt:ddd memalign:pdd memccpy:pppdd memchr:ppdd memcmp:dppd memcpy:pppd memfd_create:dpdd memmem:ppdpd
+		malloc_usable_size:dp mallopt:ddd memalign:pdd memccpy:pppdd memchr:ppdd memcmp:dppd memcpy:pppd memfile:dpdd memmem:ppdpd
 		memmove:pppd mempcpy:pppd memrchr:ppdd memset:ppdd mkdir:dso mkdirat:ddso mkdtemp:sp mkfifo:dso mkfifoat:ddso mknod:dsod
 		mknodat:ddsod mkostemp:dpd mkostemps:dpdd mkstemp:dp mkstemps:dpd mktemp:sp mktime:dpd mlock:dpd mlockall:dd mmap:ppddddd
 		mount:dsssdp mprotect:dpdd mq_close:dd mq_getattr:ddpd mq_notify:ddpd mq_open:dsdpd mq_receive:ddpdp mq_send:ddsdd

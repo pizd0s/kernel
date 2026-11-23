@@ -24,15 +24,6 @@ struct if_nameindex {
     char* if_name;
 };
 
-struct ifmap {
-    unsigned long mem_start;
-    unsigned long mem_end;
-    unsigned short base_addr;
-    unsigned char irq;
-    unsigned char dma;
-    unsigned char port;
-};
-
 struct ifreq {
     union {
         char ifrn_name[IFNAMSIZ];
@@ -46,9 +37,6 @@ struct ifreq {
         short ifru_flags;
         int ifru_ivalue;
         int ifru_mtu;
-        struct ifmap ifru_map;
-        char ifru_slave[IFNAMSIZ];
-        char ifru_newname[IFNAMSIZ];
         char* ifru_data;
     } ifr_ifru;
 };
@@ -62,11 +50,8 @@ struct ifreq {
 #define ifr_flags ifr_ifru.ifru_flags
 #define ifr_metric ifr_ifru.ifru_ivalue
 #define ifr_mtu ifr_ifru.ifru_mtu
-#define ifr_map ifr_ifru.ifru_map
-#define ifr_slave ifr_ifru.ifru_slave
 #define ifr_data ifr_ifru.ifru_data
 #define ifr_ifindex ifr_ifru.ifru_ivalue
-#define ifr_newname ifr_ifru.ifru_newname
 
 unsigned if_nametoindex(const char*);
 char* if_indextoname(unsigned, char*);

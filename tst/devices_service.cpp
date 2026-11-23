@@ -264,7 +264,7 @@ static int copy(const char* path, long long off, long long at, long long n) {
     char bytes[16];
     memset(bytes, '.', sizeof bytes);
     const int source = open(path, O_RDONLY);
-    const int memfd = memfd_create(bytes, sizeof bytes, O_RDWR);
+    const int memfd = memfile(bytes, sizeof bytes, O_RDWR);
     off_t from = off;
     off_t to = at;
     const ssize_t got = copy_file_range(source, &from, memfd, &to, size_t(n), 0);
@@ -274,14 +274,14 @@ static int copy(const char* path, long long off, long long at, long long n) {
 
 static int put(const char* path, const char* bytes) {
     const int target = open(path, O_WRONLY);
-    const int memfd = memfd_create(const_cast<char*>(bytes), strlen(bytes), O_RDONLY);
+    const int memfd = memfile(const_cast<char*>(bytes), strlen(bytes), O_RDONLY);
     printf("%zd\n", copy_file_range(memfd, nullptr, target, nullptr, strlen(bytes), 0));
     return 0;
 }
 
 static int pass(const char* path) {
     char bytes[16];
-    const int memfd = memfd_create(bytes, sizeof bytes, O_RDWR);
+    const int memfd = memfile(bytes, sizeof bytes, O_RDWR);
     fflush(stdout);
     const pid_t child = fork();
     if (child == 0) {

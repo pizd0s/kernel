@@ -10,11 +10,11 @@ typedef struct __sFILE FILE;
 
 struct tm;
 
-// As FreeBSD's, whose multibyte functions lib/c's are: room for the state
-// of any of them, a state of char16_t's holding one of char32_t's.
-typedef union {
-    char __mbstate8[128];
-    long long _mbstateL;
+// The state of a conversion of UTF-8, the one encoding of lib/c's locale:
+// room for FreeBSD's state of it, 12 bytes, and for the UTF-16 half that
+// mbrtoc16 and c16rtomb keep beside it.
+typedef struct {
+    int __state[4];
 } mbstate_t;
 
 #define WEOF 0xffffffffU

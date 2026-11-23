@@ -151,34 +151,6 @@ long __kernel_lroundl(long double x) {
     return lround(x);
 }
 
-/*
- * What math.h declares for its classifying macros, musl's names, which
- * the macros themselves no longer call.
- */
-int __kernel___fpclassify(double x) {
-    return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, x);
-}
-
-int __kernel___fpclassifyf(float x) {
-    return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, x);
-}
-
-int __kernel___fpclassifyl(long double x) {
-    return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, x);
-}
-
-int __kernel___signbit(double x) {
-    return __builtin_signbit(x);
-}
-
-int __kernel___signbitf(float x) {
-    return __builtin_signbit(x);
-}
-
-int __kernel___signbitl(long double x) {
-    return __builtin_signbit(x);
-}
-
 // The functions of what complex.h has as macros too.
 double __kernel_creal(double complex z) {
     return __real__ z;

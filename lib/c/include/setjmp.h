@@ -4,10 +4,12 @@
 
 __BEGIN_DECLS
 
+/*
+ * What setjmp saves is the kernel's, under the jmp_buf's address: a
+ * jmp_buf is only a place, which longjmp names the saved state by.
+ */
 typedef struct {
-    unsigned long long __regs[8];
-    int __mask_saved;
-    sigset_t __mask;
+    int __place;
 } jmp_buf[1];
 
 typedef jmp_buf sigjmp_buf;

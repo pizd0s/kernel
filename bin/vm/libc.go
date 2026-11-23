@@ -674,8 +674,8 @@ func libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 	return proc().libcMmap(addr, n, prot, flags, fd, off)
 }
 
-func libcMemfd_create(addr, n, flags uint32) uint32 {
-	return proc().libcMemfd_create(addr, n, flags)
+func libcMemfile(addr, n, flags uint32) uint32 {
+	return proc().libcMemfile(addr, n, flags)
 }
 
 func libcMunmap(addr, n uint32) uint32 {

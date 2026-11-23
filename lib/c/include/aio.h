@@ -22,7 +22,6 @@ struct aiocb {
     size_t aio_nbytes;
     struct sigevent aio_sigevent;
     off_t aio_offset;
-    char __reserved[32];
 };
 
 #define AIO_CANCELED 0

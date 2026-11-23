@@ -128,7 +128,7 @@ static int execNoRoom(void) {
             assert(n > 0);
             at += n;
         }
-        int fd = memfd_create(image, (size_t)st.st_size, O_RDONLY);
+        int fd = memfile(image, (size_t)st.st_size, O_RDONLY);
         assert(fd >= 0);
         hear(go[0]);
         char* args[] = {"busybox", "true", NULL};

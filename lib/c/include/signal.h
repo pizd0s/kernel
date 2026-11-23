@@ -46,7 +46,6 @@ struct sigevent {
     int sigev_signo;
     int sigev_notify;
     union {
-        char __pad[64 - 2 * sizeof(int) - sizeof(union sigval)];
         pid_t sigev_notify_thread_id;
         struct {
             void (*sigev_notify_function)(union sigval);
@@ -71,7 +70,6 @@ struct sigaction {
     } __sa_handler;
     sigset_t sa_mask;
     int sa_flags;
-    void (*sa_restorer)(void);
 };
 
 #define sa_handler __sa_handler.sa_handler
@@ -133,7 +131,6 @@ typedef struct {
 #define SA_NOCLDSTOP 1
 #define SA_NOCLDWAIT 2
 #define SA_SIGINFO 4
-#define SA_RESTORER 0x04000000
 #define SA_ONSTACK 0x08000000
 #define SA_RESTART 0x10000000
 #define SA_NODEFER 0x40000000

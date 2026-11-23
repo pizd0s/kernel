@@ -20,7 +20,6 @@ struct statfs {
     unsigned long f_namelen;
     unsigned long f_frsize;
     unsigned long f_flags;
-    unsigned long f_spare[4];
 };
 
 int statfs(const char*, struct statfs*);

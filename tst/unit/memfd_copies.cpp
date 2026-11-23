@@ -21,7 +21,7 @@
 int main() {
     char memory[32];
     memset(memory, '.', sizeof memory);
-    const int w = memfd_create(memory, sizeof memory, O_RDWR);
+    const int w = memfile(memory, sizeof memory, O_RDWR);
     const int f = open("f", O_RDWR | O_CREAT | O_TRUNC, 0644);
     assert(w >= 0 && f >= 0);
     assert(write(f, "0123456789abcdef", 16) == 16 && lseek(f, 0, SEEK_SET) == 0);
@@ -50,7 +50,7 @@ int main() {
 
     // A memfd's bytes into the file.
     char letters[3] = {'X', 'Y', 'Z'};
-    const int r = memfd_create(letters, sizeof letters, O_RDONLY);
+    const int r = memfile(letters, sizeof letters, O_RDONLY);
     to = 10;
     assert(r >= 0 && copy_file_range(r, nullptr, f, &to, 8, 0) == 3 && to == 13);
     char content[17] = {};
@@ -60,13 +60,13 @@ int main() {
     // no source.
     to = 0;
     assert(copy_file_range(f, nullptr, r, &to, 1, 0) == -1 && errno == EBADF);
-    const int wo = memfd_create(memory, sizeof memory, O_WRONLY);
+    const int wo = memfile(memory, sizeof memory, O_WRONLY);
     from = 0;
     assert(copy_file_range(wo, &from, f, nullptr, 1, 0) == -1 && errno == EBADF);
 
     // A memfd into another moves the bytes.
     char other[8] = {};
-    const int o = memfd_create(other, sizeof other, O_RDWR);
+    const int o = memfile(other, sizeof other, O_RDWR);
     from = 5;
     to = 2;
     assert(copy_file_range(w, &from, o, &to, 4, 0) == 4 && memcmp(other + 2, "2345", 4) == 0 && from == 9 && to == 6);

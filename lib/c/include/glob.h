@@ -8,8 +8,6 @@ typedef struct {
     size_t gl_pathc;
     char** gl_pathv;
     size_t gl_offs;
-    int __flags;
-    void* __reserved[5];
 } glob_t;
 
 #define GLOB_ERR 0x01

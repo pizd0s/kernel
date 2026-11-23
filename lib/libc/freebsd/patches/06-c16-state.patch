@@ -60,13 +60,13 @@ and the half out of its way, which mbsinit sees as well.
 +
 +/*
 + * The state of mbrtoc16 and c16rtomb: the state of char32_t's at its
-+ * start, where mbrtowc's is, and the UTF-16 half the next call gives or
-+ * takes out of its way; mbsinit sees both.
++ * start, where mbrtowc's is, UTF-8's, and the UTF-16 half the next call
++ * gives or takes out of its way; mbsinit sees both.
 + */
 +typedef union {
 +	mbstate_t	c32_mbstate;
 +	struct {
-+		char		c32[64];
++		char		c32[12];
 +		char16_t	surrogate;
 +	} c16;
 +} _Char16State;

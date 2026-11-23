@@ -26,12 +26,6 @@ typedef double double_t;
 #define FP_SUBNORMAL 3
 #define FP_NORMAL 4
 
-int __fpclassify(double);
-int __fpclassifyf(float);
-int __fpclassifyl(long double);
-int __signbit(double);
-int __signbitf(float);
-int __signbitl(long double);
 
 #define fpclassify(x) __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, x)
 #define isinf(x) __builtin_isinf(x)

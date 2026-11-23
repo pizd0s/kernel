@@ -19,7 +19,6 @@ struct mq_attr {
     long mq_maxmsg;
     long mq_msgsize;
     long mq_curmsgs;
-    long __reserved[4];
 };
 
 mqd_t mq_open(const char*, int, ...);

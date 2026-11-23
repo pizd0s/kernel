@@ -141,7 +141,7 @@ static void check() {
     const off_t base = 4096, delta = 512;
     unsigned char* buffer = (unsigned char*)malloc(size);
     memset(buffer, 0xaa, size);
-    int fd = memfd_create(buffer, size, O_RDWR);
+    int fd = memfile(buffer, size, O_RDWR);
     assert(fd >= 0);
     struct stat st;
     assert(fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size == (off_t)size);
@@ -169,14 +169,14 @@ static void check() {
     close(fd);
 
     // The grant is the access mode; a range must be the caller's memory.
-    int readOnly = memfd_create(buffer, 16, O_RDONLY);
+    int readOnly = memfile(buffer, 16, O_RDONLY);
     assert(readOnly >= 0 && write(readOnly, "x", 1) == -1 && errno == EBADF);
-    int writeOnly = memfd_create(buffer, 16, O_WRONLY);
+    int writeOnly = memfile(buffer, 16, O_WRONLY);
     assert(writeOnly >= 0 && read(writeOnly, &byte, 1) == -1 && errno == EBADF);
     close(readOnly);
     close(writeOnly);
-    assert(memfd_create(buffer, (size_t)1 << 31, O_RDWR) == -1 && errno == EFAULT);
-    assert(memfd_create(buffer, 16, O_RDWR | O_APPEND) == -1 && errno == EINVAL);
+    assert(memfile(buffer, (size_t)1 << 31, O_RDWR) == -1 && errno == EFAULT);
+    assert(memfile(buffer, 16, O_RDWR | O_APPEND) == -1 && errno == EINVAL);
 
     // A process's memory stays while a descriptor of it is open.
     int pair[2];
@@ -185,7 +185,7 @@ static void check() {
     assert(owner >= 0);
     if (owner == 0) {
         static char own[64] = "the memory of a process that ended";
-        sendFd(pair[0], memfd_create(own, sizeof own, O_RDWR));
+        sendFd(pair[0], memfile(own, sizeof own, O_RDWR));
         _exit(0);
     }
     int orphan = receiveFd(pair[1]);
@@ -221,7 +221,7 @@ static void bench() {
     memset(buffer, 0, benchLength);
     fflush(stdout);
 
-    int fd = memfd_create(buffer, benchLength, O_RDWR);
+    int fd = memfile(buffer, benchLength, O_RDWR);
     assert(fd >= 0);
     chain(fd, 0, benchBlock);
     assert(memcmp(buffer, benchData, benchLength) == 0);

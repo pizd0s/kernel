@@ -665,7 +665,7 @@ func (k *Kernel) functionTable() map[string]any {
 		"mallopt":                               libcMallopt,
 		"getpagesize":                           libcGetpagesize,
 		"mmap":                                  libcMmap,
-		"memfd_create":                          libcMemfd_create,
+		"memfile":                               libcMemfile,
 		"munmap":                                libcMunmap,
 		"msync":                                 libcMsync,
 		"madvise":                               libcMadvise,

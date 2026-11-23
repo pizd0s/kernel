@@ -13,6 +13,9 @@
 #include "un-namespace.h"
 #include "utf8.c"
 
+// A state of char16_t's begins with the state of char32_t's, UTF-8's.
+_Static_assert(sizeof(_UTF8State) <= sizeof(((_Char16State*)0)->c16.c32), "a state of char16_t's has no room for UTF-8's");
+
 struct xlocale_ctype __xlocale_global_ctype = {
     .__mbrtowc = _UTF8_mbrtowc,
     .__mbsinit = _UTF8_mbsinit,

@@ -3793,9 +3793,9 @@ static int serverIn(int disk) {
     if (pread(disk, bytes, size, off_t(offset)) != ssize_t(size)) {
         fatal("rootfs: the image disk reads not: errno %d", errno);
     }
-    const int program = memfd_create(bytes, size, O_RDONLY | O_CLOEXEC);
+    const int program = memfile(bytes, size, O_RDONLY | O_CLOEXEC);
     if (program < 0) {
-        fatal("rootfs: memfd_create: errno %d", errno);
+        fatal("rootfs: memfile: errno %d", errno);
     }
     return program;
 }

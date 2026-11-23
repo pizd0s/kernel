@@ -76,20 +76,20 @@ def program(imports, body, *, helper=None, stack=True, heap=True, table=False):
 def main():
     vm, native, rootfs = sys.argv[1:]
     cases = []
-    # A jmp_buf comes with its size, 80, after its pointer.
+    # A jmp_buf comes with its size, 4, after its pointer.
     for name in ("longjmp", "_longjmp", "siglongjmp"):
-        cases.append(("unset-" + name, program([(name, 6)], constant(128) + constant(80) + constant(1) + call(0)),
+        cases.append(("unset-" + name, program([(name, 6)], constant(128) + constant(4) + constant(1) + call(0)),
                       "longjmp: the jmp_buf was not set"))
     for name in ("setjmp", "_setjmp"):
-        cases.append(("missing-stack-" + name, program([(name, 4)], constant(128) + constant(80) + call(0) + b"\x1a", stack=False),
+        cases.append(("missing-stack-" + name, program([(name, 4)], constant(128) + constant(4) + call(0) + b"\x1a", stack=False),
                       "setjmp: no __stack_pointer"))
-    cases.append(("indirect-setjmp", program([("setjmp", 4)], constant(128) + constant(80) + constant(0) + b"\x11\4\0\x1a", table=True),
+    cases.append(("indirect-setjmp", program([("setjmp", 4)], constant(128) + constant(4) + constant(0) + b"\x11\4\0\x1a", table=True),
                   "setjmp: called through a pointer"))
     for name in ("fork", "vfork"):
         cases.append(("indirect-" + name, program([(name, 5)], constant(0) + b"\x11\5\0\x1a", table=True),
                       name + ": called through a pointer"))
     cases.append(("returned-setjmp", program([("setjmp", 4), ("longjmp", 6)],
-                  call(3) + constant(128) + constant(80) + constant(1) + call(1), helper=constant(128) + constant(80) + call(0) + b"\x1a"),
+                  call(3) + constant(128) + constant(4) + constant(1) + call(1), helper=constant(128) + constant(4) + call(0) + b"\x1a"),
                   "longjmp: the function that set the jmp_buf has returned"))
     cases.append(("missing-heap", program([("malloc", 1)], constant(16) + call(0) + b"\x1a", heap=False), "no __heap_base"))
     cases.append(("missing-heap-memalign", program([("memalign", 4)], constant(4096) + constant(16) + call(0) + b"\x1a", heap=False), "no __heap_base"))
