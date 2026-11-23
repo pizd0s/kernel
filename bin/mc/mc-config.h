@@ -2,8 +2,9 @@
    of lib/c, wasm32, and the features bin/mc/make.py builds: S-Lang's
    screen, the subshell, the editor, the viewer of differences, operations
    in the background, character sets, GLib's regular expressions, and of
-   the virtual file systems tar, cpio, extfs and sfs. No file(1): busybox
-   has none, so a file's type is told by its name alone. */
+   the virtual file systems tar, cpio, extfs, sfs and FTP's, of the
+   network's. No file(1): busybox has none, so a file's type is told by
+   its name alone. */
 #pragma once
 
 #define _GNU_SOURCE 1
@@ -21,6 +22,8 @@
 #define ENABLE_VFS 1
 #define ENABLE_VFS_CPIO 1
 #define ENABLE_VFS_EXTFS 1
+#define ENABLE_VFS_FTP 1
+#define ENABLE_VFS_NET 1
 #define ENABLE_VFS_SFS 1
 #define ENABLE_VFS_TAR 1
 #define HAVE_CHARSET 1
@@ -54,12 +57,14 @@
 #define HAVE_SETLOCALE 1
 #define HAVE_SETMNTENT 1
 #define HAVE_SIGHANDLER_T 1
+#define HAVE_SOCKLEN_T 1
 #define HAVE_STDINT_H 1
 #define HAVE_STDIO_H 1
 #define HAVE_STDLIB_H 1
 #define HAVE_STRINGS_H 1
 #define HAVE_STRING_H 1
 #define HAVE_STRNCASECMP 1
+#define HAVE_STRUCT_LINGER_L_LINGER 1
 #define HAVE_STRUCT_STAT_ST_BLKSIZE 1
 #define HAVE_STRUCT_STAT_ST_BLOCKS 1
 #define HAVE_STRUCT_STAT_ST_MTIM 1

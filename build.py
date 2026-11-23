@@ -273,16 +273,17 @@ libcxx = command(
     color="green",
 )
 
-# lib/z, lib/bz2, lib/lzma, lib/zstd and lib/sqlite3: the libraries of their
-# release tarballs, for lib/c, each its archive and include.tar, the
-# headers a program of it includes.
-def library(name, tarball, archive):
+# lib/z, lib/bz2, lib/lzma, lib/zstd, lib/sqlite3, lib/pcre2, lib/glib and
+# lib/slang: the libraries of their release tarballs, for lib/c, each its
+# archive and include.tar, the headers a program of it includes; extra,
+# its make.py's arguments after lib/c's headers.
+def library(name, tarball, archive, extra=(), deps=(), inputs=()):
     return command(
         name="lib" + name,
-        inputs=[*LIBC_HEADERS, f"$(S)/lib/{name}/make.py", "$(S)/dev/wasm.py"],
+        inputs=[*LIBC_HEADERS, f"$(S)/lib/{name}/make.py", "$(S)/dev/wasm.py", *inputs],
         outputs=[f"$(B)/lib/{name}/{archive}", f"$(B)/lib/{name}/include.tar"],
-        deps=[tarball],
-        cmd=["python3", f"$(S)/lib/{name}/make.py", CLANG, LLVM_AR, tarball.outputs[0], "$(S)/lib/c/include",
+        deps=[tarball, *deps],
+        cmd=["python3", f"$(S)/lib/{name}/make.py", CLANG, LLVM_AR, tarball.outputs[0], "$(S)/lib/c/include", *extra,
              f"$(B)/lib/{name}/{archive}", f"$(B)/lib/{name}/include.tar"],
         descr="CC",
         color="green",
@@ -905,23 +906,31 @@ terminfo = command(
 )
 terminfo_pkg = package("aux/terminfo", ["--tar", "share/terminfo", terminfo.outputs[0], "terminfo"], deps=[terminfo])
 
-# mc: Midnight Commander on GLib and S-Lang, both with bin/mc's patches,
+# mc's libraries: PCRE2's, under GLib's regular expressions; GLib, with
+# lib/glib's patch; S-Lang's screen, which reads the terminals'
+# descriptions in terminfo's package.
+libpcre2 = library("pcre2", pcre2_tarball, "libpcre2.a")
+libglib = library("glib", glib_tarball, "libglib.a", extra=[libpcre2.outputs[1]], deps=[libpcre2],
+                  inputs=["$(S)/lib/glib/glib-config.h", *build.glob("$(S)/lib/glib/*.patch")])
+libslang = library("slang", slang_tarball, "libslang.a", extra=[terminfo_pkg.outputs[-1]], deps=[terminfo_pkg],
+                   inputs=["$(S)/lib/slang/slang-config.h", "$(S)/dev/pkg.py"])
+
+# mc: Midnight Commander on GLib and S-Lang, with bin/mc's patches,
 # mc.wasm, and mc.tar, what it reads as it runs: its configuration, skins,
-# syntax rules and scripts, in its package, and the terminals'
-# descriptions in terminfo's; mcedit, mcview and mcdiff are mc by another
-# name.
+# syntax rules, scripts and help, in its package; mcedit, mcview and
+# mcdiff are mc by another name.
 mc = package(
     "bin/mc",
     ["--file", "bin/mc", "$(B)/bin/mc/mc", *(arg for name in ("mcedit", "mcview", "mcdiff") for arg in ("--link", "bin/" + name, "mc")),
      *(arg for member in ("etc/mc", "share/mc", "libexec/mc") for arg in ("--tar", member, "$(B)/bin/mc/mc.tar", member))],
-    inputs=[*LIBC_HEADERS, "$(S)/bin/mc/make.py", "$(S)/bin/mc/mc-config.h", "$(S)/bin/mc/glib-config.h", "$(S)/bin/mc/slang-config.h",
-            *build.glob("$(S)/bin/mc/*.patch"), "$(S)/dev/wasm.py", "$(S)/dev/exe.py"],
+    inputs=[*LIBC_HEADERS, "$(S)/bin/mc/make.py", "$(S)/bin/mc/man2hlp.py", "$(S)/bin/mc/mc-config.h", *build.glob("$(S)/bin/mc/*.patch"),
+            "$(S)/dev/wasm.py", "$(S)/dev/exe.py"],
     outputs=["$(B)/bin/mc/mc.wasm", "$(B)/bin/mc/mc.tar", "$(B)/bin/mc/mc"],
-    deps=[mc_tarball, glib_tarball, slang_tarball, pcre2_tarball, libc, terminfo_pkg],
+    deps=[mc_tarball, libc, libglib, libpcre2, libslang],
     recipe=[
         ["python3", "$(S)/bin/mc/make.py", CLANG, WASM_LD, "$(S)/lib/c/include", libc.outputs[0], mc_tarball.outputs[0],
-         glib_tarball.outputs[0], slang_tarball.outputs[0], pcre2_tarball.outputs[0], "$(B)/bin/mc/mc.wasm", "$(B)/bin/mc/mc.tar",
-         store("bin/mc"), terminfo_pkg.outputs[-1]],
+         libglib.outputs[1], libglib.outputs[0], libpcre2.outputs[0], libslang.outputs[1], libslang.outputs[0],
+         "$(B)/bin/mc/mc.wasm", "$(B)/bin/mc/mc.tar", store("bin/mc")],
         packing("$(B)/bin/mc/mc.wasm", "$(B)/bin/mc/mc"),
     ],
     descr="CC",

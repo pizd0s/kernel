@@ -6,19 +6,22 @@ and takes the terminal's keys and mouse, and keeps what it keeps in the
 shell's HOME. The test is a terminal: it keeps the screen mc draws, as a
 VT100 with xterm's additions would show it, and types.
 
-On an xterm: the panels list two directories; the arrows move the bar; F3
-views a file and F4 edits it, F2 saving what was typed; F5 copies to the
-other panel and F7 makes a directory; Enter on a tar archive lists it as a
-directory; F9 pulls a menu down; a click of the mouse moves the bar; a
-command typed in mc's line runs in the subshell, and ^O shows the
-subshell itself, mc's own child on a pseudoterminal it made; a window of
-another size is redrawn; F10 leaves, the screen the shell's again. mcedit
-and mcview are mc by other names. On a VT100, by its other name, which
-the database has as a link, there are no colours and the keys are the
-few it has: mc draws and moves all the same. And under the kernel's checks of memory (vm run
---asan) a tree in a panel forgets the directory under its bar after
-another tree was open and closed: the panel's tree is still told of the
-entry removed, and draws no freed one (bin/mc/mc-tree-hook.patch).
+On an xterm: the panels list two directories; F1 shows the help of mc's
+manual and its index; the arrows move the bar; F3 views a file and F4
+edits it, F2 saving what was typed; F5 copies to the other panel and F7
+makes a directory; Enter on a tar archive lists it as a directory; F9
+pulls a menu down; a click of the mouse moves the bar; a command typed in
+mc's line runs in the subshell; cd to ftp:// lists the directory of an FTP
+server, busybox's ftpd on the loopback, and F3 views a file of it; ^O
+shows the subshell itself, mc's own child on a pseudoterminal it made; a
+window of another size is redrawn; F10 leaves, the screen the shell's
+again. mcedit and mcview are mc by other names. On a VT100, by its other
+name, which the database has as a link, there are no colours and the keys
+are the few it has: mc draws and moves all the same. And under the
+kernel's checks of memory (vm run --asan) a tree in a panel forgets the
+directory under its bar after another tree was open and closed: the
+panel's tree is still told of the entry removed, and draws no freed one
+(bin/mc/mc-tree-hook.patch).
 
     test_mc.py <vm> <rootfs> <tests.img>
 """
@@ -274,7 +277,7 @@ class Terminal:
     with the system on it, its shell at the prompt."""
 
     # xterm's keys: the arrows are the application's while mc asks for them.
-    KEYS = {"f2": "\x1bOQ", "f3": "\x1bOR", "f4": "\x1bOS", "f5": "\x1b[15~", "f7": "\x1b[18~", "f9": "\x1b[20~", "f10": "\x1b[21~"}
+    KEYS = {"f1": "\x1bOP", "f2": "\x1bOQ", "f3": "\x1bOR", "f4": "\x1bOS", "f5": "\x1b[15~", "f7": "\x1b[18~", "f9": "\x1b[20~", "f10": "\x1b[21~"}
     ARROWS = {"up": "A", "down": "B", "right": "C", "left": "D"}
 
     def __init__(self, vm, rootfs, image, rows=24, cols=80, flags=(), kind="xterm-256color"):
@@ -355,8 +358,9 @@ class Terminal:
         raise AssertionError(f"the system did not end: the screen is\n{self.screen.text()}")
 
 
-SETUP = ("cd /run && mkdir -p work/sub other && cd work && printf 'hello mc\\nsecond line\\n' > a.txt && "
-         "printf 'inside\\n' > sub/in.txt && tar cf t.tar a.txt sub && cd /run && clear\r")
+SETUP = ("cd /run && mkdir -p work/sub other ftp && cd work && printf 'hello mc\\nsecond line\\n' > a.txt && "
+         "printf 'inside\\n' > sub/in.txt && tar cf t.tar a.txt sub && printf 'over ftp\\n' > ../ftp/remote.txt && "
+         "(cd ../ftp && tcpsvd 127.0.0.1 2121 ftpd -w -a root > /dev/null 2>&1 &) && cd /run && clear\r")
 
 
 def status(term, name, what, side=0):
@@ -385,6 +389,15 @@ def xterm(vm, rootfs, image):
     assert [line[1:17].strip() for line in text.splitlines()[3:8]] == ["/..", "/sub", "a.txt", "t.tar", ""], text
     assert term.row(23).split() == ["1Help", "2Menu", "3View", "4Edit", "5Copy", "6RenMov", "7Mkdir", "8Delete", "9PullDn10Quit"], text
     assert {1049, 1002, 1006} <= term.screen.modes, f"the alternate screen and the mouse: {sorted(term.screen.modes)}"
+
+    # F1 shows the help, of mc's manual: its main node, then its index; F10
+    # leaves it
+    term.key("f1")
+    term.until("This is the main help screen for GNU Midnight Commander.", "the help's main node")
+    term.key("f2")
+    term.until(lambda text: "Topics:" in text and "Mouse Support" in text, "the help's index")
+    term.key("f10")
+    term.until(lambda text: term.row(23).split()[:2] == ["1Help", "2Menu"] and "Topics:" not in text, "the panels after the help")
 
     # the arrows move the bar
     term.key("down")
@@ -453,6 +466,20 @@ def xterm(vm, rootfs, image):
     # a command in mc's line runs in the subshell, in the panel's directory
     term.send("echo from-mc > typed; echo done\r")
     term.until(lambda text: any(line[1:17].strip() == "typed" for line in text.splitlines()[3:10]), "the command's file")
+
+    # cd to ftp:// lists a directory of busybox's ftpd on the loopback, of
+    # mc's file system of FTP's, and F3 views a file of it: the server's
+    # root is the system's, as a chroot's process has no sockets
+    term.send("cd ftp://127.0.0.1:2121/run/ftp\r")
+    term.until(lambda text: any(line[1:17].strip() == "remote.txt" for line in text.splitlines()[3:10]), "the FTP server's directory")
+    term.key("down")
+    status(term, "remote.txt", "the bar on the file of the FTP server")
+    term.key("f3")
+    term.until(lambda text: "3Quit" in text and term.row(1) == "over ftp", "the file of the FTP server in the viewer")
+    term.key("f10")
+    term.until("10Quit", "the panels after the viewer of the FTP server's file")
+    term.send("cd /run/work\r")
+    term.until(lambda text: "~/work #" in text and "<─ ~/work ─" in term.row(1), "the first panel's directory again")
 
     # ^O shows the subshell: a shell of mc's on a terminal of its own
     term.send("\x0f")
@@ -583,7 +610,7 @@ def main():
     xterm(vm, rootfs, image)
     vt100(vm, rootfs, image)
     trees(vm, rootfs, image)
-    print("mc: panels, keys, mouse, viewer, editor, copy, archive, menu, subshell and resize on an xterm; a VT100's keys on one; "
+    print("mc: panels, keys, mouse, help, viewer, editor, copy, archive, menu, subshell, FTP and resize on an xterm; a VT100's keys on one; "
           "a tree's forgotten directory under the checks of memory")
 
 

@@ -8,6 +8,7 @@ reach the linker without their kernel import attribute.
 import concurrent.futures
 import io
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -114,3 +115,42 @@ def headers(output, include, files):
         target.write_bytes(Path(source).read_bytes())
 
     write_tar(output, Path(include).parent, include)
+
+
+def patched(tree, patch):
+    """Applies a unified diff to a tree: every hunk's old lines are the
+    file's at the place the hunk names, or it is an error. What comes
+    before the first file's header is the patch's explanation."""
+    name = None
+    files = {}
+
+    for line in patch.read_text().split("\n"):
+        if line.startswith("--- a/"):
+            name = None
+        elif line.startswith("+++ b/"):
+            name = line[len("+++ b/"):]
+            files[name] = []
+        elif name is not None and line.startswith("@@"):
+            start = int(re.match(r"@@ -(\d+)", line)[1])
+            files[name].append((start, [], []))
+        elif name is not None and files[name] and line[:1] in (" ", "-", "+"):
+            _, old, new = files[name][-1]
+
+            if line[0] != "+":
+                old.append(line[1:])
+
+            if line[0] != "-":
+                new.append(line[1:])
+
+    for name, hunks in files.items():
+        path = tree / name
+        lines = path.read_text().split("\n")
+
+        # from the last hunk to the first, so that the lines before keep their numbers
+        for start, old, new in reversed(hunks):
+            if lines[start - 1:start - 1 + len(old)] != old:
+                raise SystemExit(f"{patch.name}: {name}: the lines at {start} are not the patch's")
+
+            lines[start - 1:start - 1 + len(old)] = new
+
+        path.write_text("\n".join(lines))
