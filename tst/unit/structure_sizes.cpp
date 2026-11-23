@@ -1,6 +1,7 @@
 //@ host: false
 //@ compile-flags: -O2 -D_GNU_SOURCE
 //@ stdout: "structure sizes: ok\n"
+//@ stderr-pattern: "(?s)(?:.*?a structure of \\d+ bytes, which this kernel knows of \\d+){8}.*"
 
 // Every structure lib/c hands the kernel comes with its size, its version,
 // which the kernel checks against the layouts it knows. A call with

@@ -120,16 +120,14 @@ def main():
             result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0, (name, result.stderr)
             assert compiled.read_bytes() == embedded.read_bytes(), name
-        # The message is the program's standard error's, as glibc writes its
-        # own before abort; the trace of faults has it again with the stack.
-        results = system.run(vm, rootfs, [("runtime-error", module, [], b"") for _, module, _ in cases], env=env, faults=True)
+        results = system.run(vm, rootfs, [("runtime-error", module, [], b"") for _, module, _ in cases], env=env)
         for (name, _, diagnostic), result in zip(cases, results):
             status, stdout, stderr = result
             assert status == 134 and stdout == b"", (name, result)
             lines = stderr.decode().splitlines()
-            assert lines and re.match(r"runtime-error\[\d+\]: ", lines[0]) and diagnostic in lines[0], (name, stderr)
-            assert len(lines) > 2 and diagnostic in lines[1], (name, "missing guest stack trace")
-            assert all(re.match(r"\[\d+\] ", line) for line in lines[1:]), (name, stderr)
+            assert lines and diagnostic in lines[0], (name, stderr)
+            assert all(re.match(r"runtime-error\[\d+\]: ", line) for line in lines), (name, stderr)
+            assert len(lines) > 1, (name, "missing guest stack trace")
     print(f"runtime errors: {len(cases)} controlled allocator and nonlocal-jump failures passed with both AOTs")
 
 

@@ -4538,14 +4538,14 @@ func (v *VforkFrame) resume(pid int32) {
 	p.raiseInterrupt()
 	binary.LittleEndian.PutUint32(p.inst.block[p.stackPointer():], v.stack)
 	p.inst.longjmp(&v.jump, uint32(pid))
-	p.fatal("vfork: the function that called vfork has returned")
+	p.crash("vfork: the function that called vfork has returned", SIGABRT)
 }
 
 func (p *Process) startVfork() uint32 {
 	v := &VforkFrame{parent: p}
 
 	if !p.inst.setjmp(&v.jump) {
-		p.fatal("vfork: called through a pointer")
+		p.crash("vfork: called through a pointer", SIGABRT)
 	}
 
 	v.stack = binary.LittleEndian.Uint32(p.inst.block[p.stackPointer():])
@@ -4582,7 +4582,7 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 	j := new(Jump)
 
 	if !p.inst.setjmp(j) {
-		p.fatal("fork: called through a pointer")
+		p.crash("fork: called through a pointer", SIGABRT)
 	}
 
 	frames, ok := p.inst.frames(j, "_start")
@@ -6076,7 +6076,7 @@ func (p *Process) stackPointer() uint32 {
 		at, ok := p.inst.globalAt("__stack_pointer")
 
 		if !ok {
-			p.fatal("setjmp: no __stack_pointer")
+			p.crash("setjmp: no __stack_pointer", SIGABRT)
 		}
 
 		p.stackAt = at
@@ -6093,7 +6093,7 @@ func (p *Process) setjmp(buf uint32, saveMask bool) uint32 {
 	}
 
 	if !p.inst.setjmp(&j.Jump) {
-		p.fatal("setjmp: called through a pointer")
+		p.crash("setjmp: called through a pointer", SIGABRT)
 	}
 
 	j.stack = binary.LittleEndian.Uint32(p.inst.block[p.stackPointer():])
@@ -6108,7 +6108,7 @@ func (p *Process) longjmp(buf, val uint32) {
 	j := p.jumps[buf]
 
 	if j == nil {
-		p.fatal("longjmp: the jmp_buf was not set")
+		p.crash("longjmp: the jmp_buf was not set", SIGABRT)
 	}
 
 	if val == 0 {
@@ -6129,7 +6129,7 @@ func (p *Process) longjmp(buf, val uint32) {
 	}
 
 	p.inst.longjmp(&j.Jump, val)
-	p.fatal("longjmp: the function that set the jmp_buf has returned")
+	p.crash("longjmp: the function that set the jmp_buf has returned", SIGABRT)
 }
 
 func (p *Process) libcSetjmp(buf uint32) uint32 {
@@ -6328,7 +6328,7 @@ func (p *Process) heapInit() *Heap {
 	base, ok := p.inst.globalExport("__heap_base")
 
 	if !ok {
-		p.fatal("no __heap_base")
+		p.crash("no __heap_base", SIGABRT)
 	}
 
 	p.heap = newHeap(base)
@@ -6610,7 +6610,7 @@ func (p *Process) block(ptr uint32, what string) (int32, uint32, uint32) {
 }
 
 func (p *Process) invalidPointer(what string, ptr uint32) {
-	p.fatal(fmt.Sprintf("%s(): invalid pointer %#x", what, ptr))
+	p.crash(fmt.Sprintf("%s(): invalid pointer %#x", what, ptr), SIGABRT)
 }
 
 func (p *Process) free(ptr uint32) {
@@ -6769,10 +6769,12 @@ func (p *Process) realloc(ptr, n uint32) uint32 {
 	return moved
 }
 
-func (p *Process) fatal(msg string) {
-	p.stderrReport(msg, nil)
-	p.traceStack(TRACE_FAULTS, msg, callers(1))
-	p.exitWith(SIGABRT)
+func (p *Process) crash(msg string, status int) {
+	stack := callers(1)
+
+	p.stderrReport(msg, stack)
+	p.traceStack(TRACE_FAULTS, msg, stack)
+	p.exitWith(status)
 }
 
 func (p *Process) stderrReport(msg string, stack []uintptr) {
@@ -7397,11 +7399,7 @@ func (p *Process) asanCheck(at, n uint32) {
 	ok := okBytes(sh[uint64(at) : uint64(at)+uint64(n)])
 
 	if ok != int(n) {
-		msg, stack := p.asanReport(&Trap{code: trapAsan, addr: uint64(at) + uint64(ok), kind: asanRange}), callers(0)
-
-		p.stderrReport(msg, stack)
-		p.traceStack(TRACE_FAULTS, msg, stack)
-		p.exitWith(SIGABRT)
+		p.crash(p.asanReport(&Trap{code: trapAsan, addr: uint64(at) + uint64(ok), kind: asanRange}), SIGABRT)
 	}
 }
 
@@ -16499,8 +16497,7 @@ func (p *Process) libcCrypt(key, setting uint32) uint32 {
 func (p *Process) sized(call string, sizes ...uint32) {
 	for k := 0; k+1 < len(sizes); k += 2 {
 		if sizes[k] != sizes[k+1] {
-			p.traceStack(TRACE_FAULTS, fmt.Sprintf("%s: a structure of %d bytes, which this kernel knows of %d", call, sizes[k], sizes[k+1]), callers(1))
-			p.exitWith(SIGSYS)
+			p.crash(fmt.Sprintf("%s: a structure of %d bytes, which this kernel knows of %d", call, sizes[k], sizes[k+1]), SIGSYS)
 		}
 	}
 }
