@@ -1770,8 +1770,8 @@ func libcVfork() uint32 {
 	return proc().libcVfork()
 }
 
-func libcFork() uint32 {
-	return proc().libcFork()
+func libc_Fork() uint32 {
+	return proc().libc_Fork()
 }
 
 func libcWaitpid(pid, status, options uint32) uint32 {
@@ -2360,14 +2360,6 @@ func libcOpenpty(amaster, aslave, name, termp, termpSize, winp, winpSize uint32)
 	p.sized("openpty", termpSize, sizeofTermios, winpSize, sizeofWinsize)
 
 	return p.libcOpenpty(amaster, aslave, name, termp, winp)
-}
-
-func libcForkpty(amaster, name, termp, termpSize, winp, winpSize uint32) uint32 {
-	p := proc()
-
-	p.sized("forkpty", termpSize, sizeofTermios, winpSize, sizeofWinsize)
-
-	return p.libcForkpty(amaster, name, termp, winp)
 }
 
 func libcGlob(pattern, flags, errfunc, out, outSize uint32) uint32 {

@@ -121,8 +121,10 @@ int ftruncate(int, off_t);
 int truncate(const char*, off_t);
 int lockf(int, int, off_t);
 
-pid_t fork(void) __RETURNS_TWICE;
-pid_t _Fork(void) __RETURNS_TWICE;
+// fork runs pthread_atfork's handlers around _Fork, the kernel's fork
+// without them (lib/libc's pthread.c).
+pid_t fork(void);
+pid_t _Fork(void);
 pid_t vfork(void) __RETURNS_TWICE;
 int execve(const char*, char* const[], char* const[]);
 int execv(const char*, char* const[]);
@@ -229,28 +231,14 @@ int getdtablesize(void);
 void swab(const void* __restrict, void* __restrict, ssize_t);
 
 /*
- * Inline only: the import's call is in the caller's frame, which a
- * later return lands in. There is no definition to point to. fork runs
- * pthread_atfork's handlers around it (lib/libc's pthread.c); vfork none.
+ * Inline only: vfork's child runs in its parent's memory, in the caller's
+ * frame, which the parent's later return lands in. There is no definition
+ * to point to.
  */
-pid_t __kernel_fork(void) __RETURNS_TWICE __KERNEL(fork);
 pid_t __kernel_vfork(void) __RETURNS_TWICE __KERNEL(vfork);
-void __fork_prepare(void);
-void __fork_done(pid_t);
-
-__INLINE pid_t fork(void) {
-    __fork_prepare();
-    pid_t __pid = __kernel_fork();
-    __fork_done(__pid);
-    return __pid;
-}
 
 __INLINE pid_t vfork(void) {
     return __kernel_vfork();
-}
-
-__INLINE pid_t _Fork(void) {
-    return __kernel_fork();
 }
 
 __END_DECLS

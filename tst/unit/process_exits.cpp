@@ -1,10 +1,11 @@
 //@ compile-flags: -g -D_GNU_SOURCE
-//@ stdout: "quick: 3 2 1\nfork: prepare parent child\n_Fork: none\nprocess exits: ok\n"
+//@ stdout: "quick: 3 2 1\nfork: prepare parent child\nfork through a pointer: prepare parent child\n_Fork: none\nprocess exits: ok\n"
 
 // The ways out and their neighbours: quick_exit (C11) runs the
 // at_quick_exit functions, the last registered first, and _Exits with
-// its status, no atexit function and no stdio flush; _Fork (POSIX.1-2024)
-// is fork without pthread_atfork's handlers; brk always fails ENOMEM and
+// its status, no atexit function and no stdio flush; fork, a function as
+// any other, runs pthread_atfork's handlers called through a pointer too;
+// _Fork (POSIX.1-2024) is fork without them; brk always fails ENOMEM and
 // sbrk changes nothing (Linux and musl's), sbrk(0) the break; issetugid
 // is 0 for a process that changed no ids; posix_close closes as close
 // and is EBADF for no descriptor; timespec_get (C11) is TIME_UTC's
@@ -81,6 +82,15 @@ int main() {
     }
     assert(wait(pid) == 0 && strcmp(handlers, " prepare parent") == 0);
     printf("fork: prepare parent child\n");
+    handlers[0] = 0;
+    fflush(stdout);
+    pid_t (*volatile through)(void) = fork;
+    pid = through();
+    if (pid == 0) {
+        _exit(strcmp(handlers, " prepare child") == 0 ? 0 : 1);
+    }
+    assert(wait(pid) == 0 && strcmp(handlers, " prepare parent") == 0);
+    printf("fork through a pointer: prepare parent child\n");
     handlers[0] = 0;
     fflush(stdout);
     pid = _Fork();

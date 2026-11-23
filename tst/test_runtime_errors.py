@@ -85,9 +85,10 @@ def main():
                       "setjmp: no __stack_pointer"))
     cases.append(("indirect-setjmp", program([("setjmp", 4)], constant(128) + constant(4) + constant(0) + b"\x11\4\0\x1a", table=True),
                   "setjmp: called through a pointer"))
-    for name in ("fork", "vfork"):
+    # The kernel's fork is _Fork; fork is libc.wasm's, which calls it.
+    for name, called in (("_Fork", "fork"), ("vfork", "vfork")):
         cases.append(("indirect-" + name, program([(name, 5)], constant(0) + b"\x11\5\0\x1a", table=True),
-                      name + ": called through a pointer"))
+                      called + ": called through a pointer"))
     cases.append(("returned-setjmp", program([("setjmp", 4), ("longjmp", 6)],
                   call(3) + constant(128) + constant(4) + constant(1) + call(1), helper=constant(128) + constant(4) + call(0) + b"\x1a"),
                   "longjmp: the function that set the jmp_buf has returned"))

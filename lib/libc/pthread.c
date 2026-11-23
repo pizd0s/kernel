@@ -92,8 +92,8 @@ void __kernel_pthread_testcancel(void) {
 
 /*
  * fork's handlers, in the order registered: the prepare handlers run
- * last registered first, before the fork; the parent's and the child's
- * first registered first, after it.
+ * last registered first, before the kernel's fork, _Fork; the parent's,
+ * even where it failed, and the child's first registered first, after it.
  */
 typedef struct {
     void (*prepare)(void);
@@ -123,15 +123,15 @@ int __kernel_pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*
     return 0;
 }
 
-void __kernel___fork_prepare(void) {
+pid_t __kernel_fork(void) {
     for (int i = forkCount - 1; i >= 0; i--) {
         if (forks[i].prepare) {
             forks[i].prepare();
         }
     }
-}
 
-void __kernel___fork_done(pid_t pid) {
+    pid_t pid = _Fork();
+
     for (int i = 0; i < forkCount; i++) {
         void (*handler)(void) = pid == 0 ? forks[i].child : forks[i].parent;
 
@@ -139,4 +139,6 @@ void __kernel___fork_done(pid_t pid) {
             handler();
         }
     }
+
+    return pid;
 }

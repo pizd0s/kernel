@@ -919,6 +919,7 @@ KERNEL_VOID(pthread_testcancel, (void), ())
 
 /* pty.h */
 KERNEL_SIZED(int, openpty, (int* a, int* b, char* c, const struct termios* d, const struct winsize* e), (int* a, int* b, char* c, const struct termios* d, size_t d_size, const struct winsize* e, size_t e_size), (a, b, c, d, sizeof(struct termios), e, sizeof(struct winsize)))
+KERNEL_SIZED(pid_t, forkpty, (int* a, char* b, const struct termios* c, const struct winsize* d), (int* a, char* b, const struct termios* c, size_t c_size, const struct winsize* d, size_t d_size), (a, b, c, sizeof(struct termios), d, sizeof(struct winsize)))
 
 /* pwd.h */
 KERNEL_SIZED(struct passwd*, getpwnam, (const char* a), (const char* a, size_t size), (a, sizeof(struct passwd)))
@@ -1562,6 +1563,15 @@ KERNEL_SIZED(int, posix_spawnattr_setschedpolicy, (posix_spawnattr_t* a, int b),
 KERNEL_SIZED(int, posix_spawnattr_getschedparam, (const posix_spawnattr_t* __restrict a, struct sched_param* __restrict b), (const posix_spawnattr_t* __restrict a, size_t a_size, struct sched_param* __restrict b, size_t b_size), (a, sizeof(posix_spawnattr_t), b, sizeof(struct sched_param)))
 KERNEL_SIZED(int, posix_spawnattr_setschedparam, (posix_spawnattr_t* __restrict a, const struct sched_param* __restrict b), (posix_spawnattr_t* __restrict a, size_t a_size, const struct sched_param* __restrict b, size_t b_size), (a, sizeof(posix_spawnattr_t), b, sizeof(struct sched_param)))
 KERNEL_NORETURN(_exit, (int a), (a))
+KERNEL(pid_t, fork, (void), ())
+
+/* _Fork, the kernel's fork, returns in the child as well. */
+pid_t __kernel__Fork(void) __RETURNS_TWICE __KERNEL(_Fork);
+
+WEAK pid_t _Fork(void) {
+    return __kernel__Fork();
+}
+
 KERNEL(pid_t, getpid, (void), ())
 KERNEL(pid_t, getppid, (void), ())
 KERNEL(pid_t, getpgrp, (void), ())
@@ -1650,8 +1660,6 @@ KERNEL(int, getpagesize, (void), ())
 KERNEL(int, getdtablesize, (void), ())
 KERNEL_VOID(swab, (const void* __restrict a, void* __restrict b, ssize_t c), (a, b, c))
 KERNEL(pid_t, gettid, (void), ())
-KERNEL_VOID(__fork_done, (pid_t a), (a))
-KERNEL_VOID(__fork_prepare, (void), ())
 
 /* utime.h */
 KERNEL_SIZED(int, utime, (const char* a, const struct utimbuf* b), (const char* a, const struct utimbuf* b, size_t b_size), (a, b, sizeof(struct utimbuf)))

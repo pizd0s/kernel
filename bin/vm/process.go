@@ -4593,7 +4593,7 @@ func (p *Process) startVfork() uint32 {
 	return c.result(0, nil)
 }
 
-func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
+func (p *Process) fork() (int32, error) {
 	if p.chaosFail("fork") {
 		return 0, EAGAIN
 	}
@@ -4691,19 +4691,10 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 
 	c.inherit(p)
 
-	if setup != nil {
-		setup(c)
-	}
-
 	parent := p.pid
 
 	go c.runFrom(p.image, inst, func() {
 		c.trace(TRACE_PROCESS, fmt.Sprintf("child of %d", parent))
-
-		if begin != nil {
-			begin(c)
-		}
-
 		inst.resume(frames)
 	})
 
@@ -4999,8 +4990,8 @@ func (p *Process) waitEvent(ready func() bool) error {
 	return err
 }
 
-func (p *Process) libcFork() uint32 {
-	pid, err := p.fork(nil, nil)
+func (p *Process) libc_Fork() uint32 {
+	pid, err := p.fork()
 
 	return p.result(int(pid), err)
 }
@@ -11516,56 +11507,6 @@ func (p *Process) libcOpenpty(amaster, aslave, name, termp, winp uint32) uint32 
 	}
 
 	return 0
-}
-
-func (p *Process) libcForkpty(amaster, name, termp, winp uint32) uint32 {
-	master, slave, path, err := p.openPty(termp, winp)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	t, err := p.fd(uint32(slave))
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	pid, err := p.fork(func(c *Process) {
-		c.k.mu.Lock()
-		c.sid.Store(c.pid)
-		c.pgid.Store(c.pid)
-		c.k.mu.Unlock()
-
-		for fd := range 3 {
-			c.closeFd(fd)
-			t.ref()
-			c.files.put(fd, t, false)
-		}
-
-		c.closeFd(master)
-		c.closeFd(slave)
-	}, func(c *Process) {
-		c.controls(t)
-	})
-
-	p.closeFd(slave)
-
-	if err != nil {
-		p.closeFd(master)
-
-		return p.result(0, err)
-	}
-
-	if amaster != 0 {
-		p.put32(amaster, uint32(master))
-	}
-
-	if name != 0 {
-		p.putString(name, path)
-	}
-
-	return uint32(pid)
 }
 
 func (p *Process) libcGetpass(prompt uint32) uint32 {

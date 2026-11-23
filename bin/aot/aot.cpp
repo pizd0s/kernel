@@ -25688,7 +25688,7 @@ static bool intrinsicTyped(FuncType* t, String text) {
 // compilers do.
 static bool returnsTwice(String name) {
     auto switch1608 = name;
-    if (switch1608 == String("setjmp") || switch1608 == String("_setjmp") || switch1608 == String("sigsetjmp") || switch1608 == String("vfork") || switch1608 == String("fork") || switch1608 == String("forkpty")) {
+    if (switch1608 == String("setjmp") || switch1608 == String("_setjmp") || switch1608 == String("sigsetjmp") || switch1608 == String("vfork") || switch1608 == String("_Fork")) {
         return true;
     }
     return false;

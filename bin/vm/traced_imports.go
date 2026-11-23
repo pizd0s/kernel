@@ -36,14 +36,14 @@ var libraryCalls = func() map[string]bool {
 
 var untracedCalls = map[string]bool{
 	"setjmp": true, "_setjmp": true, "sigsetjmp": true, "longjmp": true, "_longjmp": true, "siglongjmp": true,
-	"vfork": true, "fork": true, "forkpty": true, "__kernel_begin": true, "__errno_location": true, "__kernel_program": true, "__kernel_name": true, "__assert_fail": true,
+	"vfork": true, "_Fork": true, "__kernel_begin": true, "__errno_location": true, "__kernel_program": true, "__kernel_name": true, "__assert_fail": true,
 }
 
 var callFormats = func() map[string]string {
 	out := map[string]string{}
 
 	for _, word := range strings.Fields(`
-		_Exit:vd __assert_fail:vssds __dtoa:sfddppp __errno_location:p __hdtoa:sfsdppp __hldtoa:sfsdppp __ldtoa:spddppp __pthread_cancelled:dd
+		_Exit:vd _Fork:d __assert_fail:vssds __dtoa:sfddppp __errno_location:p __hdtoa:sfsdppp __hldtoa:sfsdppp __ldtoa:spddppp __pthread_cancelled:dd
 		__pthread_key_take:ppp __pthread_once_begin:dp __pthread_once_end:vp __res_state:pd __sched_cpucount:ddp _exit:vd _longjmp:vpdd
 		_setjmp:dpd a64l:ds abort:v abs:dd accept:ddpp accept4:ddppd access:dsd acct:ds adjtime:dpdpd aio_cancel:ddpd aio_error:dpd
 		aio_fsync:ddpd aio_read:dpd aio_return:dpd aio_suspend:dpddpd aio_write:dpd alarm:dd aligned_alloc:pdd alphasort:dpdpd asctime:spd
@@ -60,7 +60,7 @@ var callFormats = func() map[string]string {
 		ether_ntoa_r:spp ether_ntohost:dpp euidaccess:dsd eventfd:ddd eventfd_read:ddp eventfd_write:ddd execl:dssp execle:dssp
 		execlp:dssp execmode:dddd execv:dsp execve:dspp execvp:dsp execvpe:dspp explicit_bzero:vpd faccessat:ddsdd fchdir:dd fchmod:ddo
 		fchmodat:ddsod fchown:dddd fchownat:ddsddd fcntl:dddpd fdatasync:dd fdopendir:pd fexecve:ddpp ffs:dd ffsl:dd ffsll:dd flock:ddd
-		fmtmsg:ddsdsss fnmatch:dssd fork:d forkpty:dpppdpd fpathconf:ddd free:vp freeaddrinfo:vpd freeifaddrs:vp freelocale:vd fstat:ddpd
+		fmtmsg:ddsdsss fnmatch:dssd fpathconf:ddd free:vp freeaddrinfo:vpd freeifaddrs:vp freelocale:vd fstat:ddpd
 		fstatat:ddspdd fstatfs:ddpd fstatvfs:ddpd fsync:dd ftok:dsd ftruncate:ddd futimens:ddpd futimes:ddpd gai_strerror:sd gcvt:sfdp
 		get_avphys_pages:d get_current_dir_name:s get_nprocs:d get_nprocs_conf:d get_phys_pages:d getaddrinfo:dsspdpd getcwd:spd
 		getdomainname:dpd getdtablesize:d getegid:d getentropy:dpd getenv:ss geteuid:d getgid:d getgrent:pd getgrgid:pdd

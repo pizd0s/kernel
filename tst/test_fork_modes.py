@@ -56,7 +56,7 @@ def program():
     code += constant(0) + b"\x10\1\0\x0b"
     types = [b"\x60\0\1\x7f", b"\x60\1\x7f\0", b"\x60\3\x7f\x7f\x7f\1\x7f", b"\x60\0\0", b"\x60\1\x7f\1\x7f"]
     module = b"\0asm\1\0\0\0" + section(1, leb(len(types)) + b"".join(types))
-    imports = [("fork", 0), ("_exit", 1), ("waitpid", 2)]
+    imports = [("_Fork", 0), ("_exit", 1), ("waitpid", 2)]
     module += section(2, leb(len(imports)) + b"".join(text("kernel") + text(name) + b"\0" + leb(typ) for name, typ in imports))
     module += section(3, b"\2\3\4") + section(5, b"\1\1\1\2")
     module += section(6, b"\2\x7f\1" + constant(32768) + b"\x0b\x7f\0" + constant(65536) + b"\x0b")
