@@ -116,7 +116,7 @@ def main():
                         result = subprocess.run([vm, "run", "--", str(source)], env=dict(env, W2O_TAIL_PROFILE=str(profile)),
                                                 capture_output=True, timeout=30)
                         assert result.returncode == (139 if trapped else 0) and result.stdout == b"", (compare_bits, select_bits, mode, result)
-                        assert (b"out of bounds memory access" in result.stderr) if trapped else result.stderr == b"", result
+                        assert result.stderr == b"", result
                         functions = [function for row in profile.read_text().splitlines() for function in json.loads(row)["functions"]]
                         for counter in ("guards", "omitted_checks", *(("fallbacks",) if trapped else ())):
                             assert sum(function[counter] for function in functions) > 0, (counter, functions)
@@ -129,7 +129,7 @@ def main():
             for ((compare_bits, select_bits, trapped), _), result in zip(runs, results):
                 status, stdout, stderr = result
                 assert status == (139 if trapped else 0) and stdout == b"", (compare_bits, select_bits, mode, result)
-                assert (b"out of bounds memory access" in stderr) if trapped else stderr == b"", result
+                assert stderr == b"", result
             assert not profile.exists(), mode
     print("interleaved floats: selection bits, wrapping loads and traps agree with a model, wazero and both AOTs in four modes")
 

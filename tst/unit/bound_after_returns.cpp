@@ -1,7 +1,6 @@
 //@ host: false
 //@ compile-flags: -O2 -D_GNU_SOURCE
 //@ stdout: "bound after returns: ok\n"
-//@ stderr-pattern: "(?s)(?:.*?out of bounds memory access){7}.*"
 
 // Where the code comes back with the memory grown, an access past the
 // memory's accessible end still traps: the bound the code has there is not

@@ -20,6 +20,8 @@ import sys
 import termios
 import time
 
+import system
+
 COMMAND = "cd /run && exec env DG_HEADLESS=1 doom -nosound -timedemo demo1"
 TERMINAL = "cd /run && exec env TERM=xterm-256color DG_COLS=80 DG_ROWS=50 doom -nosound"
 
@@ -29,7 +31,7 @@ def timedemo(vm, rootfs, image):
     hashes = []
 
     for _ in range(2):
-        r = subprocess.run([vm, "run", "--disk", f"image={image}", "--", rootfs, "-c", COMMAND], capture_output=True, timeout=300)
+        r = system.shell(vm, rootfs, COMMAND, ("--disk", f"image={image}"), timeout=300)
         out = r.stdout.decode(errors="replace")
         err = r.stderr.decode(errors="replace")
 

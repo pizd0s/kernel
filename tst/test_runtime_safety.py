@@ -118,7 +118,7 @@ def main():
             if status:
                 lines = err.decode().splitlines()
                 assert diagnostic in lines[0] and len(lines) > 1, (label, lines)
-                assert all(re.match(r"runtime-safety\[\d+\]: ", line) for line in lines), (label, lines)
+                assert all(re.match(r"\[\d+\] ", line) for line in lines), (label, lines)
             else:
                 assert err == b"", (label, err)
 
@@ -134,12 +134,13 @@ def main():
             result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (label, result)
             if label in direct:
-                result = subprocess.run([vm, "run", "-a", "runtime-safety", "--", str(executable)], capture_output=True, env=env, timeout=30)
+                result = subprocess.run([vm, "run", "--strace=faults", "-a", "runtime-safety", "--", str(executable)], capture_output=True, env=env,
+                                        timeout=30)
                 check(label, status, diagnostic, result.returncode, result.stdout, result.stderr)
             else:
                 runs.append(((label, status, diagnostic), executable.read_bytes()))
         # The rest run in one boot of the system.
-        results = system.run(vm, rootfs, [("runtime-safety", program, [], b"") for _, program in runs], env=env)
+        results = system.run(vm, rootfs, [("runtime-safety", program, [], b"") for _, program in runs], env=env, faults=True)
         for ((label, status, diagnostic), _), result in zip(runs, results):
             check(label, status, diagnostic, *result)
     print(f"runtime safety: {len(cases)} public memory/math calls trap safely or respect empty/early-match bounds with both AOTs")

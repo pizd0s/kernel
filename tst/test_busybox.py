@@ -25,6 +25,8 @@ import sys
 import termios
 import time
 
+import system
+
 DATA = "banana\napple\ncherry\napple\n10\n9\n"
 
 # argv, standard input, expected standard output, expected exit code
@@ -93,11 +95,14 @@ CASES = [
 ]
 
 # An interactive shell gets SIGINT while it reads a line, and while a loop
-# of builtins blocks writing to a full pipe: there the handler longjmps out
-# of the write. Each time it takes the next line after a new prompt.
+# of builtins blocks writing to the terminal, which console does not
+# empty while vm's standard output is full: there the handler longjmps out
+# of the write. Each time it takes the next line after a new prompt, which
+# the terminal shows as it is edited; the loop's output and the terminal's
+# echo of the line typed while it ran come in no order.
 INTERRUPTS = [
-    ("", "$ ^C\n$ after\n"),
-    ("while :; do echo 0123456789; done", "0123456789\n$ after\n"),
+    ("", "$ ^C\n\n$ echo after; exit 5\nafter\n"),
+    ("while :; do echo 0123456789; done", "\n$ echo after; exit 5\nafter\n"),
 ]
 
 
@@ -111,10 +116,16 @@ def boot(vm, rootfs, image, script):
 
 
 def run(vm, rootfs, image, argv, stdin, env=None):
+    """argv in the system, its standard input stdin's lines by a
+    here-document, not the terminal's."""
     environment = {"TZ": "UTC", **(env or {})}
     script = shlex.join(["exec", "env", *(f"{k}={v}" for k, v in environment.items()), *argv])
+    assert not stdin or stdin.endswith("\n"), stdin
 
-    return subprocess.run(boot(vm, rootfs, image, script), input=stdin.encode(), capture_output=True, timeout=60)
+    if stdin:
+        script += " <<'INPUT_EOF'\n" + stdin + "INPUT_EOF"
+
+    return system.shell(vm, rootfs, f"{SETUP} && {script}", ("--disk", f"image={image}"), timeout=60)
 
 
 def until(fd, marker, seconds):
@@ -136,8 +147,10 @@ def until(fd, marker, seconds):
 
 def interrupt(vm, rootfs, image, first):
     """An interactive shell gets the host's SIGINT of vm, which the
-    console's foreground group, the shell's, takes: after first, while its
-    standard output is a pipe nobody reads, then the line that ends it."""
+    console's foreground group, console, types on the system's terminal as
+    ^C, the shell's: after first, while vm's standard output is a pipe
+    nobody reads, then the line that ends it. The terminal's CR before
+    each newline is taken off."""
     p = subprocess.Popen(boot(vm, rootfs, image, "exec env PS1='$ ' sh -i"), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE)
     prompt = until(p.stdout.fileno(), b"$ ", 60)
@@ -158,7 +171,7 @@ def interrupt(vm, rootfs, image, first):
         p.kill()
         out, _ = p.communicate()
 
-    return (prompt + out).decode(errors="replace"), p.returncode
+    return (prompt + out).decode(errors="replace").replace("\r\n", "\n"), p.returncode
 
 
 def job_control(vm, rootfs, image):
@@ -218,7 +231,7 @@ def main():
         if got != want or r.returncode != code:
             failed.append(f"{argv}: exit {r.returncode}, stdout {got!r}, stderr {r.stderr.decode(errors='replace')!r}; want exit {code}, stdout {want!r}")
 
-    r = subprocess.run(boot(vm, rootfs, image, FILES), capture_output=True, timeout=60)
+    r = system.shell(vm, rootfs, f"{SETUP} && {FILES}", ("--disk", f"image={image}"), timeout=60)
 
     if (r.returncode, r.stdout) != (0, b"e/copy\n#!/bin/echo from\n/run/d/e/copy\n"):
         failed.append(f"files: exit {r.returncode}, stdout {r.stdout!r}, stderr {r.stderr!r}")

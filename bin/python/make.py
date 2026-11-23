@@ -401,9 +401,10 @@ def python(cc, ld, vm, rootfs, tarball, pyconfig, libc_include, libc, libpython,
     modules = list(frozen_modules(tree))
 
     # The modules freeze in the system: rootfs, whose image has busybox and
-    # the tools, takes a tar of the freezer and the sources on its standard
-    # input, freezes each, side by side, in a directory of /run, and gives
-    # a tar of the headers back on its standard output.
+    # the tools, takes a tar of the freezer and the sources on the disk in,
+    # freezes each, side by side, in a directory of /run, and writes a tar
+    # of the headers to the disk out. The system's standard streams are a
+    # terminal's, which carries no binary data.
     payload = io.BytesIO()
 
     with tarfile.open(fileobj=payload, mode="w") as archive:
@@ -416,11 +417,19 @@ def python(cc, ld, vm, rootfs, tarball, pyconfig, libc_include, libc, libpython,
             archive.add(tree / source, source)
 
     jobs = " ".join(f"./freeze {name} {source} frozen/{header} & pids=\"$pids $!\";" for name, source, header in modules)
-    script = (f"mkdir -p /run/t/frozen && cd /run/t && tar xf - || exit 1; pids=; {jobs} "
-              "for p in $pids; do wait $p || exit 1; done; tar cf - frozen")
-    frozen_tar = subprocess.run([vm, "run", "--", rootfs, "-c", script], input=payload.getvalue(), stdout=subprocess.PIPE, check=True)
+    script = (f"mkdir -p /run/t/frozen && cd /run/t && tar xf /dev/blk/in/data || exit 1; pids=; {jobs} "
+              "for p in $pids; do wait $p || exit 1; done; tar cf /dev/blk/out/data frozen")
+    disks = work / "disks"
+    disks.mkdir()
+    (disks / "in.tar").write_bytes(payload.getvalue())
 
-    with tarfile.open(fileobj=io.BytesIO(frozen_tar.stdout)) as archive:
+    with open(disks / "out.tar", "wb") as f:
+        f.truncate(256 << 20)
+
+    subprocess.run([vm, "run", "--disk", f"in={disks / 'in.tar'}", "--disk", f"out={disks / 'out.tar'}", "--", rootfs, "-c", script],
+                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, check=True)
+
+    with tarfile.open(disks / "out.tar") as archive:
         archive.extractall(tree, filter="data")
 
     for name, source, header in modules:

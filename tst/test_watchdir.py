@@ -10,9 +10,10 @@ tst/test_mounts.py has them on fuse2fs's.
     test_watchdir.py <vm> <rootfs> <watch_dir>
 """
 import base64
-import subprocess
 import sys
 import tempfile
+
+import system
 
 SCRIPT = """\
 python3 -c 'import base64, sys; open("/run/watch_dir", "wb").write(base64.b64decode(sys.stdin.read()))' <<'PROGRAM'
@@ -91,8 +92,7 @@ def main():
     script = SCRIPT.replace("{program}", base64.encodebytes(open(program, "rb").read()).decode().strip())
 
     with tempfile.TemporaryDirectory(prefix="pizdos-watchdir-") as empty:
-        r = subprocess.run([vm, "run", "--", rootfs], input=(script + "exit 3\n").encode(), capture_output=True, cwd=empty,
-                           timeout=180)
+        r = system.shell(vm, rootfs, script + "exit 3\n", cwd=empty, timeout=180)
 
     if (r.returncode, r.stdout.decode(), r.stderr) != (3, WANT, b""):
         print(f"FAIL watchdir: exit {r.returncode}\n{r.stdout.decode()}\nwant\n{WANT}\n{r.stderr.decode()[-2000:]}")

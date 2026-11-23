@@ -15,9 +15,10 @@ bind.
     test_unix_sockets.py <vm> <rootfs> <unix_sockets>
 """
 import base64
-import subprocess
 import sys
 import tempfile
+
+import system
 
 SCRIPT = """\
 python3 -c 'import base64, sys; open("/run/sockets", "wb").write(base64.b64decode(sys.stdin.read()))' <<'EOF'
@@ -59,8 +60,7 @@ def main():
     script = SCRIPT.replace("{program}", base64.encodebytes(open(program, "rb").read()).decode().strip())
     with tempfile.TemporaryDirectory(prefix="pizdos-sockets-") as empty:
         env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
-        result = subprocess.run([vm, "run", "--", rootfs], input=(script + "exit 3\n").encode(), capture_output=True, cwd=empty, env=env,
-                                timeout=180)
+        result = system.shell(vm, rootfs, script + "exit 3\n", cwd=empty, env=env, timeout=180)
         assert (result.returncode, result.stdout.decode(), result.stderr.decode()) == (3, WANT, ""), result
     print("unix sockets: the system's are the kernel's, bound to socket nodes of the VFS's, in /run and registered ones of /dev, "
           "connected to and accepted through them")

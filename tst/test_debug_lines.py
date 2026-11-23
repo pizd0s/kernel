@@ -229,7 +229,7 @@ def main():
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (name, result)
             runs.append((name, lines, data))
         # The modules run in one boot of the system.
-        results = system.run(vm, rootfs, [("input", data, [], b"") for _, _, data in runs], env=env)
+        results = system.run(vm, rootfs, [("input", data, [], b"") for _, _, data in runs], env=env, faults=True)
         for (name, lines, _), result in zip(runs, results):
             status, stdout, stderr = result
             assert status == 132 and stdout == b"" and b"wasm trap: unreachable" in stderr, (name, result)
@@ -243,7 +243,7 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(source)], env=env, capture_output=True, timeout=30)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (name, result)
-            child = subprocess.Popen([vm, "run", "--", str(source)], env=dict(env, W2O_PERFMAP=str(work)),
+            child = subprocess.Popen([vm, "run", "--strace=faults", "--", str(source)], env=dict(env, W2O_PERFMAP=str(work)),
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             out, err = child.communicate(timeout=30)
             assert child.returncode == 139 and out == b"" and b"out of bounds memory access" in err, (name, child.returncode, err)

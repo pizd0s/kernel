@@ -551,7 +551,7 @@ func (p *Process) runFrom(img *ExecImage, i *Instance, enter func()) int {
 			}
 		}
 	}); err != nil {
-		p.crash(err.error(), nil)
+		p.trace(TRACE_FAULTS, err.error())
 		status = 1 << 8
 	}
 
@@ -618,9 +618,10 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 
 			if t.code == trapAsan {
 				msg = who.asanReport(t)
+				who.stderrReport(msg, t.stack)
 			}
 
-			who.crash(msg, t.stack)
+			who.traceStack(TRACE_FAULTS, msg, t.stack)
 		}
 
 		p.endBorrowers(i, e)
@@ -3610,8 +3611,12 @@ func (p *Process) libcFmtmsg(classification, label, severity, text, action, tag 
 	}
 
 	if classification&MM_CONSOLE != 0 {
-		if msg := fmtmsgText(parts, given); msg != "" {
-			p.k.report(msg)
+		if msg := fmtmsgText(parts, given); msg != "" && p.consoleWrite(msg) != nil {
+			if result == MM_NOMSG {
+				result = MM_NOTOK
+			} else {
+				result = MM_NOCON
+			}
 		}
 	}
 
@@ -6765,11 +6770,12 @@ func (p *Process) realloc(ptr, n uint32) uint32 {
 }
 
 func (p *Process) fatal(msg string) {
-	p.crash(msg, callers(1))
+	p.stderrReport(msg, nil)
+	p.traceStack(TRACE_FAULTS, msg, callers(1))
 	p.exitWith(SIGABRT)
 }
 
-func (p *Process) crash(msg string, stack []uintptr) {
+func (p *Process) stderrReport(msg string, stack []uintptr) {
 	name := "?"
 
 	if p.image != nil && len(p.image.argv) > 0 {
@@ -6783,21 +6789,21 @@ func (p *Process) crash(msg string, stack []uintptr) {
 		fmt.Fprintf(&b, "%s[%d]:     %s\n", name, p.pid, line)
 	}
 
-	if p.traces(TRACE_FAULTS) {
-		p.sinkWrite([]byte(b.String()))
-
-		if p.sink != nil {
-			return
-		}
-	}
-
 	if t, err := p.fd(2); err == nil {
-		if _, err := p.fileWrite(t, bytesFile([]byte(b.String())), b.Len(), IoMode{quiet: true}); err == nil {
-			return
-		}
+		p.fileWrite(t, bytesFile([]byte(b.String())), b.Len(), IoMode{quiet: true})
+	}
+}
+
+func (p *Process) traceStack(class uint32, msg string, stack []uintptr) {
+	if !p.traces(class) {
+		return
 	}
 
-	p.k.report(b.String())
+	p.trace(class, msg)
+
+	for _, line := range traceLines(stack) {
+		p.trace(class, "    "+line)
+	}
 }
 
 func (p *Process) memalign(align, n uint32) uint32 {
@@ -7391,7 +7397,11 @@ func (p *Process) asanCheck(at, n uint32) {
 	ok := okBytes(sh[uint64(at) : uint64(at)+uint64(n)])
 
 	if ok != int(n) {
-		p.fatal(p.asanReport(&Trap{code: trapAsan, addr: uint64(at) + uint64(ok), kind: asanRange}))
+		msg, stack := p.asanReport(&Trap{code: trapAsan, addr: uint64(at) + uint64(ok), kind: asanRange}), callers(0)
+
+		p.stderrReport(msg, stack)
+		p.traceStack(TRACE_FAULTS, msg, stack)
+		p.exitWith(SIGABRT)
 	}
 }
 
@@ -12143,11 +12153,6 @@ func (p *Process) syslog(priority, message uint32) {
 	}
 
 	option := p.u32(p.staticAt(staticLogOption))
-
-	if option&LOG_PERROR == 0 {
-		return
-	}
-
 	line := p.str(p.staticAt(staticLogIdent))
 
 	if option&LOG_PID != 0 {
@@ -12160,9 +12165,25 @@ func (p *Process) syslog(priority, message uint32) {
 		line += "\n"
 	}
 
-	if t, err := p.fd(2); err == nil {
+	p.consoleWrite(line)
+
+	if t, err := p.fd(2); err == nil && option&LOG_PERROR != 0 {
 		p.fileWrite(t, bytesFile([]byte(line)), len(line), IoMode{})
 	}
+}
+
+func (p *Process) consoleWrite(text string) error {
+	f, err := p.openPath("/dev/console", O_WRONLY|O_NOCTTY, 0)
+
+	if err != nil {
+		return err
+	}
+
+	defer f.unref()
+
+	_, err = p.fileWrite(f, bytesFile([]byte(text)), len(text), IoMode{})
+
+	return err
 }
 
 func (p *Process) pathconf(name uint32) uint32 {
@@ -16478,7 +16499,7 @@ func (p *Process) libcCrypt(key, setting uint32) uint32 {
 func (p *Process) sized(call string, sizes ...uint32) {
 	for k := 0; k+1 < len(sizes); k += 2 {
 		if sizes[k] != sizes[k+1] {
-			p.crash(fmt.Sprintf("%s: a structure of %d bytes, which this kernel knows of %d", call, sizes[k], sizes[k+1]), callers(1))
+			p.traceStack(TRACE_FAULTS, fmt.Sprintf("%s: a structure of %d bytes, which this kernel knows of %d", call, sizes[k], sizes[k+1]), callers(1))
 			p.exitWith(SIGSYS)
 		}
 	}

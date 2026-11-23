@@ -76,10 +76,10 @@ def main():
             result = subprocess.run([vm, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (label, result)
         # The modules run in one boot of the system.
-        results = system.run(vm, rootfs, [("input", data, [], b"") for _, data, _ in cases], env=env)
+        results = system.run(vm, rootfs, [("input", data, [], b"") for _, data, _ in cases], env=env, faults=True)
         for (label, _, name), result in zip(cases, results):
             status, stdout, stderr = result
-            assert status == 132 and stdout == b"" and re.match(rb"input\[\d+\]: wasm trap: unreachable\n", stderr), (label, result)
+            assert status == 132 and stdout == b"" and re.match(rb"\[\d+\] wasm trap: unreachable\n", stderr), (label, result)
             assert name.encode() + b"+0x" in stderr and b"panic:" not in stderr, (label, result)
     print(f"debug names: {len(cases)} malformed, partial and Unicode sections preserve traps and expected names with both AOTs")
 

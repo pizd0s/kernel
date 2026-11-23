@@ -37,11 +37,12 @@ features fuse2fs does not know is refused.
 import base64
 import os
 import struct
-import subprocess
 import sys
 import tempfile
 import uuid
 import zlib
+
+import system
 
 DIR, REG, LNK = 0o040755, 0o100644, 0o120777
 
@@ -286,7 +287,7 @@ def tree(image):
 
 BIND = """\
 mkdir /run/where /run/what && echo inside > /run/what/f && mkdir /run/what/d
-mount /run/where /run/what && ls /run/where && cat /run/where/f && ls -d /run/where/d
+mount /run/where /run/what && ls -1 /run/where && cat /run/where/f && ls -d /run/where/d
 stat -c %i /run/where /run/what | uniq | wc -l
 echo more > /run/where/g && cat /run/what/g
 find /run/where | sort
@@ -325,9 +326,9 @@ mount: /run/what on /run: Device or resource busy
 """
 
 EXT = """\
-ls /dev/blk/sda/*/fs
+ls -1 /dev/blk/sda/*/fs
 mkdir /run/two /run/four
-mount /run/two /dev/blk/sda/1/fs && mount /run/four /dev/blk/sda/2/fs && ls /run/four
+mount /run/two /dev/blk/sda/1/fs && mount /run/four /dev/blk/sda/2/fs && ls -1 /run/four
 cat /run/two/hello.txt /run/four/sub/deep.txt /run/two/link /run/four/long /run/two/long
 readlink /run/two/abs; head -1 /run/four/abs
 python3 -c '
@@ -342,10 +343,10 @@ for root in ("/run/two", "/run/four"):
 print(open("/run/four/unwritten", "rb").read() == b"\\x11" * 4096 + bytes(4096) + b"\\x11" * 4096)
 '
 cd /run/two/sub && pwd -P && ls .. | head -2 && cd /
-ls /run/four/sub/../..
+ls -1 /run/four/sub/../..
 stat -c '%F %s %h' /run/two/sub /run/four/big /run/two/link
 python3 -c 'import os; s = os.statvfs("/run/four"); print(s.f_bsize, s.f_flag & 1, s.f_blocks)'
-for root in /run/two /run/four; do echo new > $root/new.txt && mkdir $root/dir && mv $root/new.txt $root/dir/moved.txt && ln -s hello.txt $root/sym && chmod 600 $root/hello.txt && touch -d @1500000000 $root/hello.txt && rm $root/filler && ls $root/dir; done
+for root in /run/two /run/four; do echo new > $root/new.txt && mkdir $root/dir && mv $root/new.txt $root/dir/moved.txt && ln -s hello.txt $root/sym && chmod 600 $root/hello.txt && touch -d @1500000000 $root/hello.txt && rm $root/filler && ls -1 $root/dir; done
 rmdir /run/two/dir
 for root in /run/two /run/four; do mkdir $root/up $root/up/gone && touch $root/up/gone/x && a=$(stat -c %i $root/up/gone) && stat -c %i $root/up/gone/.. > /dev/null && rm $root/up/gone/x && rmdir $root/up/gone && mkdir $root/back && [ "$(stat -c %i $root/back)" = "$a" ] && test ! -e $root/back/x && [ "$(stat -c %i $root/back/..)" = "$(stat -c %i $root)" ] && echo nothing of gone in back; done
 python3 -c '
@@ -553,8 +554,7 @@ FUSE2FS (data): Warning: Mounting unchecked fs, running e2fsck is recommended.
 
 def run(vm, rootfs, flags, script, cwd):
     env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
-    return subprocess.run([vm, "run", *flags, "--", rootfs], input=(script + "exit 3\n").encode(), capture_output=True, cwd=cwd, env=env,
-                          timeout=180)
+    return system.shell(vm, rootfs, script + "exit 3\n", flags, cwd=cwd, env=env, timeout=180)
 
 
 def main():

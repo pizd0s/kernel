@@ -487,10 +487,6 @@ func (k *Kernel) newConsole() []Object {
 			continue
 		}
 
-		if fd == 2 {
-			c.err = pp
-		}
-
 		pipes[fd] = writer
 		m.pipe = pp
 		c.out.Add(1)
@@ -514,12 +510,6 @@ func (k *Kernel) newConsole() []Object {
 	}
 
 	return files
-}
-
-func (k *Kernel) report(text string) {
-	if k.console == nil || k.console.err == nil || !newMover().put(k.console.err, []byte(text)) {
-		syscall.Write(2, []byte(text))
-	}
 }
 
 func (k *Kernel) foreground() int32 {

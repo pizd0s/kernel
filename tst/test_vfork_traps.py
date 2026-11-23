@@ -67,11 +67,11 @@ def main():
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), result
                 runs.append(((children, status, diagnostic), pack(data)))
         # The programs run in one boot of the system; the trap is the
-        # innermost borrower's, whose report its program and pid mark.
-        results = system.run(vm, rootfs, [("vfork-trap", program, [], b"") for _, program in runs], env=env)
+        # innermost borrower's, whose trace its pid marks.
+        results = system.run(vm, rootfs, [("vfork-trap", program, [], b"") for _, program in runs], env=env, faults=True)
         for ((children, status, diagnostic), _), (code, out, err) in zip(runs, results):
             assert code == status and out == b"" and diagnostic in err, (children, status, code, out, err)
-            assert re.match(rb"vfork-trap\[\d+\]: ", err) and b"panic:" not in err, (children, err)
+            assert re.match(rb"\[\d+\] ", err) and b"panic:" not in err, (children, err)
     print("vfork traps: unreachable, memory and arithmetic faults in nested borrowers unwind safely with both AOTs")
 
 

@@ -125,7 +125,7 @@ def main():
                     assert result == (0, b"", b""), (strict, result)
                 else:
                     status, stdout, stderr = result
-                    assert status == 139 and stdout == b"" and b"out of bounds memory access" in stderr, (label, strict, module.name, result)
+                    assert status == 139 and stdout == b"" and stderr == b"", (label, strict, module.name, result)
     print(f"WAT branch addresses: {count} modeled comparisons preserve results/memory/sentinels and {traps} eager loads trap, with wazero and both AOTs")
 
 

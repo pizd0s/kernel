@@ -1,7 +1,8 @@
 //@ host: false
 //@ compile-flags: -g -gdwarf-5 -fno-optimize-sibling-calls
 //@ exit-code: 132
-//@ stderr-pattern: "(?s)(?=.*unreachable)(?=.*dwarf_5\\.cpp:12)(?=.*dwarf_5\\.cpp:17).*"
+//@ run-flags: --strace=faults
+//@ stderr-pattern: "(?s)(?=.*unreachable)(?=.*dwarf_5\\.cpp:13)(?=.*dwarf_5\\.cpp:18).*"
 
 #include <stdint.h>
 

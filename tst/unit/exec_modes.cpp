@@ -1,6 +1,6 @@
 //@ host: false
 //@ compile-flags: -D_GNU_SOURCE
-//@ stdout: "bad modes, classes and sinks are refused\na trace: the image's calls with their errors, its child, its signal, till it ends the trace\nthe mode goes through a fork and an exec\na full sink stops the process, a read lets it go on, no line lost\na sink whose reader is gone ends the trace\nthe sanitizer of a mode reports to the standard error, through a shell\nthe sanitizer's report of a traced process goes to its sink\n"
+//@ stdout: "bad modes, classes and sinks are refused\na trace: the image's calls with their errors, its child, its signal, till it ends the trace\nthe mode goes through a fork and an exec\na full sink stops the process, a read lets it go on, no line lost\na sink whose reader is gone ends the trace\nthe sanitizer of a mode reports to the standard error, through a shell\nthe sanitizer's report of a traced process goes to its sink and to its standard error\n"
 
 // The modes of a process's images (lib/c's sys/execmode.h): a process sets
 // them for the images it execs from then on and for its children's. A
@@ -266,8 +266,8 @@ int main(int argc, char** argv) {
         const char* where = "past the end of the 20-byte block at ";
         if (traced) {
             assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV);
-            assert(strstr(text, report) && strstr(text, where) && errors[0] == 0);
-            printf("the sanitizer's report of a traced process goes to its sink\n");
+            assert(strstr(text, report) && strstr(text, where) && strstr(errors, report) && strstr(errors, where));
+            printf("the sanitizer's report of a traced process goes to its sink and to its standard error\n");
         } else {
             assert(WIFEXITED(status) && WEXITSTATUS(status) == 128 + SIGSEGV);
             assert(strstr(errors, report) && strstr(errors, where) && text[0] == 0);

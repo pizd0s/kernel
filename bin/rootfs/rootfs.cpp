@@ -3966,30 +3966,26 @@ static char** command;
 static int commandCount;
 
 // The services are up: the shell starts, with the command vm gave us, the
-// leader of a session of its own. On a console with a window, a host's
-// terminal, it runs on a pseudoterminal joined to the console
-// (bin/tools/console.cpp), whose discipline is the system's.
+// leader of a session of its own, on a pseudoterminal joined to the
+// console (bin/tools/console.cpp), whose discipline is the system's,
+// whatever the console is, a host's terminal or pipes.
 static void booted() {
     epoll_ctl(watcher, EPOLL_CTL_DEL, bootEnd, nullptr);
     close(bootEnd);
     bootEnd = -1;
-    winsize size;
-    const bool window = ioctl(STDIN_FILENO, TIOCGWINSZ, &size) == 0;
     char console[] = "console";
     char path[] = "/bin/sh";
     char sh[] = "sh";
     char** argv = static_cast<char**>(allocate(sizeof(char*) * (commandCount + 4)));
     int at = 0;
-    if (window) {
-        argv[at++] = console;
-        argv[at++] = path;
-    }
+    argv[at++] = console;
+    argv[at++] = path;
     argv[at++] = sh;
     for (int i = 0; i < commandCount; ++i) {
         argv[at++] = command[i];
     }
     argv[at] = nullptr;
-    shellPid = spawn(window ? "/bin/console" : "/bin/sh", argv, environment, rootEnd, nullptr, 0, -1, true);
+    shellPid = spawn("/bin/console", argv, environment, rootEnd, nullptr, 0, -1, true);
     free(argv);
     close(rootEnd);
     rootEnd = -1;

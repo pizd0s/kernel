@@ -12,11 +12,12 @@ disk with no partition table is a disk alone.
 """
 import os
 import struct
-import subprocess
 import sys
 import tempfile
 import uuid
 import zlib
+
+import system
 
 MIB = 1 << 20
 
@@ -43,8 +44,8 @@ def gpt_image(path, sectors, partitions):
 
 
 SCRIPT = """\
-ls /dev
-ls -R /dev/blk
+ls -1 /dev
+ls -1R /dev/blk
 stat -c '%F %a' /dev/blk/sda/data /dev/blk/sda/1/data /dev/blk/vd0/1/data
 head -c 13 /dev/blk/sda/1/data; echo; head -c 13 /dev/blk/sda/2/data; echo; head -c 5 /dev/blk/vd0/1/data; echo
 python3 -c '
@@ -68,12 +69,14 @@ os.fsync(p)
 
 WANT = """\
 blk
+console
 dns
 full
 init
 net
 null
 ptmx
+pts
 random
 sockmgr
 tty
@@ -131,8 +134,8 @@ def main():
         empty = os.path.join(work, "empty")
         os.mkdir(empty)
         env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
-        result = subprocess.run([vm, "run", "--disk", f"sda={sda}", "--disk", f"vd0={vd0}", "--disk", f"raw={raw}", "--", rootfs],
-                                input=(SCRIPT + "exit 3\n").encode(), capture_output=True, cwd=empty, env=env, timeout=180)
+        result = system.shell(vm, rootfs, SCRIPT + "exit 3\n", ("--disk", f"sda={sda}", "--disk", f"vd0={vd0}", "--disk", f"raw={raw}"), cwd=empty,
+                              env=env, timeout=180)
         assert (result.returncode, result.stdout.decode(), result.stderr) == (3, WANT, b""), result
         with open(sda, "rb") as f:
             disk = f.read()

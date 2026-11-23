@@ -87,7 +87,7 @@ def main():
             env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
             results = system.run(vm, rootfs, [("input", program(body), [], b"") for _, body in valid], env=env)
             for (name, _), result in zip(valid, results):
-                assert result[0] == ILL and result[1] == b"" and b"wasm trap: unreachable" in result[2], (name, result)
+                assert result[0] == ILL and result[1] == b"" and result[2] == b"", (name, result)
         for name, body, diagnostic in malformed:
             source.write_bytes(program(body))
             result = subprocess.run([wazero, "-compile", str(source)], capture_output=True, timeout=60)

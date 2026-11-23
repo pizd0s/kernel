@@ -1,6 +1,7 @@
 //@ host: false
 //@ compile-flags: -g -gdwarf-5 -fno-optimize-sibling-calls
 //@ exit-code: 139
+//@ run-flags: --strace=faults
 //@ stderr-pattern: "(?s)(?=.*out of bounds memory access)(?=.*dwarf_5_bounds\\.cpp:102)(?=.*dwarf_5_bounds\\.cpp:201).*"
 
 #include <stdint.h>

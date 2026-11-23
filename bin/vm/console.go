@@ -18,7 +18,6 @@ var hostTerminal struct {
 
 type Console struct {
 	out sync.WaitGroup
-	err *Pipe
 
 	stop   atomic.Bool
 	movers []*Mover

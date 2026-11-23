@@ -98,7 +98,9 @@ def main():
         assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), result
         rows = [json.loads(line) for line in profile.read_text().splitlines()]
         assert len(rows) == 1 and rows[0]["module"] == str(source), rows
-        result = subprocess.run([vm, "run", "--", str(source)], env=dict(counting, W2O_TAIL_PROFILE=str(work)),
+        # The profile's error ends the process; the kernel writes it to no
+        # descriptor of the process's, only to the trace of its faults.
+        result = subprocess.run([vm, "run", "--strace=faults", "--", str(source)], env=dict(counting, W2O_TAIL_PROFILE=str(work)),
                                 capture_output=True, timeout=30)
         assert result.returncode != 0 and b"is a directory" in result.stderr, result
     print("profiles: CPU gzip data, perf symbols, tail JSON and output failures behave as expected")

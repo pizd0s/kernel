@@ -5,7 +5,6 @@
 """
 import os
 from pathlib import Path
-import re
 import signal
 import subprocess
 import sys
@@ -82,7 +81,7 @@ def main():
                 else:
                     status, out, err = result
                     assert status == 128 + signal.SIGSEGV and out == b"", (trap_depth, strict, result)
-                    assert re.match(rb"input\[\d+\]: wasm trap: out of bounds memory access\n", err) and b"panic:" not in err, (trap_depth, strict, result)
+                    assert err == b"", (trap_depth, strict, result)
     print(f"WAT address rotation: {count} address checks and short/long out-of-bounds chains agree with a rotation model, wazero and both AOTs")
 
 

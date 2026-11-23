@@ -1,7 +1,7 @@
 //@ host: false
 //@ compile-flags: -g
 //@ stdout: "system information: ok\n"
-//@ stderr-pattern: "system: visible 7\nsystem: newline\nsystem\\[[0-9]+\\]: pid\n"
+//@ stderr-pattern: "system: visible 7\nsystem: visible 7\nsystem: newline\nsystem: newline\nsystem\\[([0-9]+)\\]: pid\nsystem\\[\\1\\]: pid\n: no stderr without LOG_PERROR\n"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -86,9 +86,14 @@ int main() {
     check(strcmp(ctermid(nullptr), terminal) == 0);
     check(ttyname(-1) == nullptr && errno == EBADF);
     check(ttyname_r(-1, terminal, sizeof(terminal)) == EBADF);
-    check(ttyname(1) == nullptr && errno == ENOTTY);
-    check(ttyname_r(1, terminal, sizeof(terminal)) == ENOTTY);
+    int pipes[2];
+    check(pipe(pipes) == 0);
+    check(ttyname(pipes[0]) == nullptr && errno == ENOTTY);
+    check(ttyname_r(pipes[0], terminal, sizeof(terminal)) == ENOTTY);
+    check(close(pipes[0]) == 0 && close(pipes[1]) == 0);
 
+    // syslog writes a message to /dev/console, and with LOG_PERROR to
+    // standard error as well: here both are vm's standard error.
     openlog("system", LOG_PERROR, LOG_USER);
     int previous = setlogmask(LOG_UPTO(LOG_WARNING));
     check(setlogmask(0) == LOG_UPTO(LOG_WARNING));

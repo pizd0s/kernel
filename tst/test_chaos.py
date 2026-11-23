@@ -19,15 +19,22 @@ import subprocess
 import sys
 import tempfile
 
+import system
+
 EMPTY = b"\0asm\1\0\0\0"
 
 
+def environment(**variables):
+    """The environment with none of the chaos builds' rules but variables."""
+    result = dict(os.environ)
+    result.pop("PIZDOS_AOT_CHAOS", None)
+    result.pop("PIZDOS_VM_CHAOS", None)
+    result.update(variables)
+    return result
+
+
 def call(command, *, data=None, **variables):
-    environment = dict(os.environ)
-    environment.pop("PIZDOS_AOT_CHAOS", None)
-    environment.pop("PIZDOS_VM_CHAOS", None)
-    environment.update(variables)
-    return subprocess.run(command, input=data, capture_output=True, env=environment, timeout=60)
+    return subprocess.run(command, input=data, capture_output=True, env=environment(**variables), timeout=60)
 
 
 def main():
@@ -91,10 +98,11 @@ def main():
         assert result.returncode == 0 and embedded.read_bytes() == compiled.stdout, result.stderr
 
         # The check's output goes through cat, which waits for its end: what
-        # daemon detaches writes it too.
+        # daemon detaches writes it too. Its input is a pipe of x's, which
+        # the terminal would echo and hold to the end of a line.
         def run_guest(binary, operation, failures, rule=""):
-            script = f"cd /run && env PIZDOS_CHAOS={rule} /tests/chaos/check {operation} | cat"
-            result = call([binary, "run", "--disk", f"image={image}", "--", rootfs, "-c", script], data=b"x" * 32)
+            script = f"cd /run && printf %s {'x' * 32} | env PIZDOS_CHAOS={rule} /tests/chaos/check {operation} | cat"
+            result = system.shell(binary, rootfs, script, ("--disk", f"image={image}"), env=environment(), timeout=60)
             expected = f"{operation}: failures={failures}\n".encode()
             assert (result.returncode, result.stdout, result.stderr) == (0, expected, b""), (operation, rule, result)
 

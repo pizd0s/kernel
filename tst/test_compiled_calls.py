@@ -953,7 +953,7 @@ def main():
 
         for ((name, path, sequence, results, want), _), (status, out, err) in zip(ran, outcomes):
             if results is None:
-                assert status == 139 and out == b"" and b"out of bounds memory access" in err, (mode, name, path, sequence, want, status, out[:64], err)
+                assert status == 139 and out == b"" and err == b"", (mode, name, path, sequence, want, status, out[:64], err)
             else:
                 assert status == 0 and err == b"", (mode, name, path, status, err)
                 assert out == want, (mode, name, path, differing(name, sequence, results, want, out))

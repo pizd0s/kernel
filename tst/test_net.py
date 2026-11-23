@@ -32,6 +32,8 @@ import subprocess
 import sys
 import threading
 
+import system
+
 WANT = """\
 arp: 192.168.127.1 is at 5a:94:ef:e4:0c:dd
 dhcp: offered 192.168.127.2 by 192.168.127.1
@@ -50,7 +52,7 @@ def echo(server):
 
 SYSTEM = """\
 for i in $(seq 100); do grep -q '^stack 0 ' /dev/sockmgr/ctl && grep -q '^stack lo ' /dev/sockmgr/ctl && break; sleep 0.1; done
-ls /dev/net /dev/net/0 /dev/net/lo
+ls -1 /dev/net /dev/net/0 /dev/net/lo
 cat /dev/net/0/ctl /dev/net/0/addr /dev/net/0/iface/status /dev/net/lo/ctl /dev/net/lo/iface/status
 sort /dev/sockmgr/ctl
 grep -c frames /dev/net/0/stats
@@ -175,7 +177,8 @@ def main():
         print(f"FAIL net: inet probe: exit {r.returncode}, stdout {r.stdout!r}, want {want!r}\n{r.stderr[-2000:]}")
         sys.exit(1)
 
-    r = subprocess.run([vm, "run", "--net", "--", rootfs, "-c", SYSTEM], capture_output=True, text=True, timeout=120)
+    r = system.shell(vm, rootfs, SYSTEM, ("--net",), timeout=120)
+    r.stdout, r.stderr = r.stdout.decode(errors="replace"), r.stderr.decode(errors="replace")
 
     if r.returncode != 0 or r.stdout != SYSTEM_WANT or r.stderr != SYSTEM_ERRORS:
         print(f"FAIL net: the card in the system: exit {r.returncode}\n{r.stdout}\nwant\n{SYSTEM_WANT}\n{r.stderr[-2000:]}")
@@ -189,7 +192,8 @@ def main():
         program = base64.b64encode(f.read()).decode()
 
     script = SOCKETS.format(program=program, port=server.getsockname()[1])
-    r = subprocess.run([vm, "run", "--net", "--", rootfs, "-c", script], capture_output=True, text=True, timeout=120)
+    r = system.shell(vm, rootfs, script, ("--net",), timeout=120)
+    r.stdout, r.stderr = r.stdout.decode(errors="replace"), r.stderr.decode(errors="replace")
 
     if r.returncode != 0 or r.stdout != SOCKETS_WANT or r.stderr != SOCKETS_ERRORS:
         print(f"FAIL net: sockets: exit {r.returncode}\n{r.stdout}\nwant\n{SOCKETS_WANT}\n{r.stderr[-2000:]}")

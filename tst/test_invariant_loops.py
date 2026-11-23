@@ -138,7 +138,7 @@ def main():
             for (case, _, trapping), result in zip(runs, results):
                 status, stdout, stderr = result
                 assert status == (139 if trapping else 0) and stdout == b"", (case, strict, result)
-                assert b"out of bounds memory access" in stderr if trapping else stderr == b"", (case, strict, result)
+                assert stderr == b"", (case, strict, result)
                 checked += 1
     print(f"invariant loops: {checked} indirect/aliased reads and repeated switches agree with the sequential model, wazero and both AOTs")
 

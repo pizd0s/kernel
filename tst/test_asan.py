@@ -13,6 +13,8 @@ import re
 import subprocess
 import sys
 
+import system
+
 SEGV, ABRT = 128 + 11, 128 + 6
 HEX = r"0x[0-9a-f]+"
 CASES = {
@@ -35,10 +37,10 @@ CASES = {
 
 
 def run(vm, rootfs, image, args, asan=True):
-    command = [vm, "run", *(["--asan"] if asan else []), "--disk", f"image={image}", "--", rootfs, "-c",
-               "cd /run && exec /tests/asan/check " + " ".join(args)]
+    flags = [*(["--asan"] if asan else []), "--disk", f"image={image}"]
+    r = system.shell(vm, rootfs, "cd /run && exec /tests/asan/check " + " ".join(args), flags, timeout=120)
 
-    return subprocess.run(command, capture_output=True, text=True, timeout=120)
+    return subprocess.CompletedProcess(r.args, r.returncode, r.stdout.decode(), r.stderr.decode())
 
 
 def main():

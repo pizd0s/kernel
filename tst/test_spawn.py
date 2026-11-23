@@ -10,8 +10,9 @@ spawn; and spawn's usage.
     test_spawn.py <vm> <rootfs> <tests.img>
 """
 import re
-import subprocess
 import sys
+
+import system
 
 HEX = r"0x[0-9a-f]+"
 # A case: the shell's script, its exit status, and the patterns its
@@ -34,7 +35,7 @@ CASES = {
         [rf".*: asan: 1-byte store at {HEX}: past the end of the 20-byte block at {HEX}", r".*: +overflow\+0x[0-9a-f]+ +check\.c:51"]),
     "the sanitizer's report in a trace": (
         "cd /run && spawn --asan --strace=faults --out /run/f --wait -- /tests/asan/check after_free; echo $?; cat /run/f", 0,
-        [r"139", rf".*: asan: 1-byte load at {HEX}: in the freed 32-byte block at {HEX}", r".*: +after_free\+0x[0-9a-f]+ +check\.c:60"], []),
+        [r"139", rf"\[\d+\] asan: 1-byte load at {HEX}: in the freed 32-byte block at {HEX}", r"\[\d+\] +after_free\+0x[0-9a-f]+ +check\.c:60"], []),
     "unchecked without spawn": ("cd /run && /tests/asan/check overflow > /dev/null; echo $?", 0, [r"\d+"], []),
     "no command": ("spawn --strace --", 2, [], [r"usage: spawn .*"]),
     "an unknown class": ("spawn --strace=calls -- true", 2, [], [r"usage: spawn .*", r"classes: system library process signals faults"]),
@@ -65,11 +66,12 @@ def main():
     failed = 0
 
     for name, (script, status, out, err) in CASES.items():
-        r = subprocess.run([vm, "run", "--disk", f"image={image}", "--", rootfs, "-c", script], capture_output=True, text=True, timeout=120)
-        missing = ordered(out, r.stdout) or ordered(err, r.stderr)
+        r = system.shell(vm, rootfs, script, ("--disk", f"image={image}"), timeout=120)
+        stdout, stderr = r.stdout.decode(), r.stderr.decode()
+        missing = ordered(out, stdout) or ordered(err, stderr)
 
         if r.returncode != status or missing:
-            print(f"FAIL {name}: exit {r.returncode}, want {status}; missing {missing!r}\n{r.stdout}{r.stderr}")
+            print(f"FAIL {name}: exit {r.returncode}, want {status}; missing {missing!r}\n{stdout}{stderr}")
             failed += 1
 
     if failed:

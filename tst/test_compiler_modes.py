@@ -61,7 +61,7 @@ def program(trapped=False):
 def check(mode, trapped, result):
     status, stdout, stderr = result
     assert status == (SEGV if trapped else 0) and stdout == b"", (mode, result)
-    assert (b"out of bounds memory access" in stderr) if trapped else stderr == b"", result
+    assert stderr == b"", result
 
 
 def main():

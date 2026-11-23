@@ -26,10 +26,11 @@ is not root gets no more than the modes give.
 import os
 import re
 import struct
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+import system
 
 SCRIPT = """\
 echo hello from $0
@@ -37,10 +38,10 @@ echo "$PATH $HOME $TMPDIR ${TERM-of no type}"; cd && pwd && cd /
 for i in 1 2 3; do ls /run > /dev/null; done; echo fresh > /run/fresh && cat /run/fresh && rm /run/fresh
 cat /etc/motd
 ls /bin | grep -x -e ash -e cat -e sh
-ls -d /dev/null /dev/tty /dev/zero
+ls -1d /dev/null /dev/tty /dev/zero
 echo dropped > /dev/null
 head -c 4 /dev/zero | wc -c
-readlink /usr && ls /usr && ls /usr/usr/bin/sh && ls -d /sbin /lib 2>&1
+readlink /usr && ls -1 /usr && ls /usr/usr/bin/sh && ls -d /sbin /lib 2>&1
 readlink -f /usr/bin && readlink -f /usr/bin/../etc/motd && cd /usr/bin && pwd -P && cd /run && ln -s .. up && readlink -f up/usr/bin && rm up && cd /
 printf '#!/usr/bin/env sh\\necho through env\\n' > /run/e.sh && chmod +x /run/e.sh && /run/e.sh && rm /run/e.sh
 readlink /bin/sh
@@ -236,17 +237,15 @@ def main():
     with tempfile.TemporaryDirectory(prefix="pizdos-rootfs-") as empty:
         env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
         for user, script, want in ((), SCRIPT, WANT), (("--user", "1000:1000"), PERMISSIONS, PERMITTED):
-            result = subprocess.run([vm, "run", *user, "--", rootfs], input=(script + "exit 3\n").encode(), capture_output=True, cwd=empty,
-                                    env=env, timeout=180)
+            result = system.shell(vm, rootfs, script + "exit 3\n", user, cwd=empty, env=env, timeout=180)
             assert (result.returncode, stored(result.stdout).decode(), result.stderr) == (3, want, b""), result
         assert not os.listdir(empty), os.listdir(empty)
-        result = subprocess.run([vm, "run", "--", rootfs], input=b"ls /missing\n", capture_output=True, cwd=empty, env=env, timeout=120)
+        result = system.shell(vm, rootfs, "ls /missing", cwd=empty, env=env, timeout=120)
         assert result.returncode == 1 and b"No such file" in result.stderr and result.stdout == b"", result
         # The console's type is the host's to name: here another name of
         # FreeBSD's console, whose description is under its first.
-        script = b"cd /pzd/store/*-aux-terminfo/share/terminfo && echo $TERM && readlink a/$TERM && cmp a/$TERM c/cons25 && head -c 2 a/$TERM | od -An -tx1\n"
-        result = subprocess.run([vm, "run", "--", rootfs], input=script, capture_output=True, cwd=empty, env=dict(env, TERM="ansis"),
-                                timeout=120)
+        script = "cd /pzd/store/*-aux-terminfo/share/terminfo && echo $TERM && readlink a/$TERM && cmp a/$TERM c/cons25 && head -c 2 a/$TERM | od -An -tx1"
+        result = system.shell(vm, rootfs, script, cwd=empty, env=dict(env, TERM="ansis"), timeout=120)
         assert (result.returncode, result.stdout, result.stderr) == (0, b"ansis\n../c/cons25\n 1a 01\n", b""), result
     # The file is rootfs's executable, to the length its header tells, and
     # the image: the two apart are the program and a disk.
@@ -257,10 +256,9 @@ def main():
         program, image = Path(work) / "rootfs", Path(work) / "image"
         program.write_bytes(whole[:length])
         image.write_bytes(whole[length:])
-        result = subprocess.run([vm, "run", "--", program], input=b"cat /etc/motd\n", capture_output=True, env=env, timeout=120)
+        result = system.shell(vm, program, "cat /etc/motd", env=env, timeout=120)
         assert result.returncode != 0 and b"rootfs: no image" in result.stderr and result.stdout == b"", result
-        result = subprocess.run([vm, "run", "--disk", f"image={image}", "--", program], input=b"cat /etc/motd\n", capture_output=True,
-                                env=env, timeout=120)
+        result = system.shell(vm, program, "cat /etc/motd", ("--disk", f"image={image}"), env=env, timeout=120)
         assert (result.returncode, result.stdout, result.stderr) == (0, b"pizdos\n", b""), result
     print("rootfs: busybox's shell runs from the image erofs serves, without the host's files")
 

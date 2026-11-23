@@ -107,7 +107,7 @@ def main():
     for ((count, start, trap, boundary), _), result in zip(runs, results):
         expected = SEGV if trap else 0
         assert result[0] == expected and result[1] == b"", (count, start, trap, boundary, result)
-        assert (b"out of bounds memory access" in result[2]) if trap else result[2] == b"", result
+        assert result[2] == b"", result
     print(f"data segments: {len(runs)} programs agree through native/Wasm AOT and execute as expected")
 
 

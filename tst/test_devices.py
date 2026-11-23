@@ -21,12 +21,13 @@ goes with the devices in it.
 """
 import base64
 import os
-import subprocess
 import sys
 import tempfile
 
+import system
+
 SCRIPT = """\
-ls /dev
+ls -1 /dev
 stat -c '%F %a' /dev/init/ctl /dev/null
 echo dropped > /dev/null && cat /dev/null | wc -c
 head -c 5 /dev/zero | od -An -tx1
@@ -74,11 +75,11 @@ except OSError as e: print(e.strerror)
 '
 ls /dev/hello 2>&1
 /run/service hello 020644 'hello again' && cat /dev/hello; echo
-/run/service pts/x 020644 'in a dir'
-ls /dev/pts && cat /dev/pts/x; echo
-stat -c '%F %a' /dev/pts
-kill -9 $(cat /run/pts_x.pid); for i in 1 2 3 4 5 6 7 8 9 10; do [ -e /dev/pts ] || break; sleep 0.1; done
-ls /dev/pts 2>&1
+/run/service box/x 020644 'in a dir'
+ls /dev/box && cat /dev/box/x; echo
+stat -c '%F %a' /dev/box
+kill -9 $(cat /run/box_x.pid); for i in 1 2 3 4 5 6 7 8 9 10; do [ -e /dev/box ] || break; sleep 0.1; done
+ls /dev/box 2>&1
 /run/service mbox 020666 '' wait
 /run/service wait /dev/mbox 0
 (sleep 2; printf ping > /dev/mbox) & /run/service wait /dev/mbox 1; wait
@@ -104,12 +105,14 @@ print(p.poll(1000) == [(f, select.POLLIN)], os.read(f, 16))
 """
 
 WANT = """\
+console
 dns
 full
 init
 net
 null
 ptmx
+pts
 random
 sockmgr
 tty
@@ -144,11 +147,11 @@ Input/output error
 ls: /dev/hello: No such file or directory
 registered hello
 hello again
-registered pts/x
+registered box/x
 x
 in a dir
 directory 755
-ls: /dev/pts: No such file or directory
+ls: /dev/box: No such file or directory
 registered mbox
 Interrupted system call 1
 ping 1
@@ -168,8 +171,7 @@ def main():
     script = SCRIPT.replace("{service}", base64.encodebytes(open(service, "rb").read()).decode().strip())
     with tempfile.TemporaryDirectory(prefix="pizdos-devices-") as empty:
         env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
-        result = subprocess.run([vm, "run", "--", rootfs], input=(script + "exit 3\n").encode(), capture_output=True, cwd=empty,
-                                env=env, timeout=180)
+        result = system.shell(vm, rootfs, script + "exit 3\n", cwd=empty, env=env, timeout=180)
         assert (result.returncode, result.stdout.decode(), result.stderr) == (3, WANT, b""), result
     print("devices: services register the devices of /dev at /dev/init/ctl, serve their opens, and take them along when they go")
 

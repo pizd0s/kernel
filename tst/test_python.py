@@ -14,6 +14,8 @@ import shlex
 import subprocess
 import sys
 
+import system
+
 # CPython's tests that need nothing the build leaves out: no sockets, no
 # threads, no test modules of the C API.
 TESTS = [
@@ -145,10 +147,18 @@ clock True True
 
 
 def python(vm, rootfs, image, args, timeout, stdin=None):
-    command = [vm, "run", "--disk", f"image={image}", "--", rootfs, "-c",
-               "cd /run && exec env TZ=UTC PYTHONPATH=/tests/python python3 " + " ".join(args)]
+    """python3 of args in /run, its standard input stdin's lines by a
+    here-document; its standard output is the terminal, where NO_COLOR
+    keeps regrtest's words plain."""
+    script = "cd /run && exec env TZ=UTC NO_COLOR=1 PYTHONPATH=/tests/python python3 " + " ".join(args)
 
-    return subprocess.run(command, input=stdin, capture_output=True, text=True, timeout=timeout)
+    if stdin is not None:
+        assert stdin.endswith("\n") and "\nPYTHON_EOF\n" not in stdin
+        script += " <<'PYTHON_EOF'\n" + stdin + "PYTHON_EOF"
+
+    r = system.shell(vm, rootfs, script, ("--disk", f"image={image}"), timeout=timeout)
+
+    return subprocess.CompletedProcess(r.args, r.returncode, r.stdout.decode(errors="replace"), r.stderr.decode(errors="replace"))
 
 
 def main():

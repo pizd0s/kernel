@@ -11,7 +11,7 @@ import (
 
 const imageDisk = "image"
 
-func runModule(path string, argv []string, asan, network bool, disks []Disk, user Cred, memory uint64) int {
+func runModule(path string, argv []string, asan, network bool, disks []Disk, user Cred, memory uint64, traced uint32) int {
 	data, exe, tail, err := hostProgram(path)
 
 	if err != nil {
@@ -53,7 +53,7 @@ func runModule(path string, argv []string, asan, network bool, disks []Disk, use
 		disks = append([]Disk{{name: imageDisk, mem: tail}}, disks...)
 	}
 
-	return runKernel(k, path, argv, asan, network, data, obj, disks)
+	return runKernel(k, path, argv, asan, network, data, obj, disks, traced)
 }
 
 func hostProgram(path string) (data []byte, exe bool, tail []byte, err error) {
@@ -117,7 +117,7 @@ func importsKernel(obj *ElfObject) bool {
 	return false
 }
 
-func runKernel(k *Kernel, path string, argv []string, asan, network bool, data []byte, obj *ElfObject, disks []Disk) int {
+func runKernel(k *Kernel, path string, argv []string, asan, network bool, data []byte, obj *ElfObject, disks []Disk, traced uint32) int {
 	syscall.Umask(0)
 	k.routeSignals()
 
@@ -147,6 +147,13 @@ func runKernel(k *Kernel, path string, argv []string, asan, network bool, data [
 		if f != nil {
 			p.files.put(fd, f, false)
 		}
+	}
+
+	if t, err := p.fd(2); err == nil && traced != 0 {
+		t.ref()
+		p.setSink(t)
+		p.modes |= EXEC_TRACE
+		p.classes = traced
 	}
 
 	if len(disks) > 0 {

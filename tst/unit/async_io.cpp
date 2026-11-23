@@ -99,7 +99,11 @@ int main() {
 
     p = control(pipes[0], data, sizeof data, 0);
     assert(aio_read(&p) == 0 && aio_error(&p) == EINPROGRESS);
-    assert(aio_cancel(pipes[0], &p) == AIO_CANCELED && aio_error(&p) == ECANCELED && aio_return(&p) == -1);
+    assert(aio_cancel(pipes[0], &p) == AIO_CANCELED);
+    // musl's aio_cancel may return before the operation's error is set:
+    // its worker wakes it first, so the canceled read is waited for.
+    const aiocb* canceled[] = {&p};
+    assert(aio_suspend(canceled, 1, nullptr) == 0 && aio_error(&p) == ECANCELED && aio_return(&p) == -1);
     assert(aio_cancel(pipes[0], nullptr) == AIO_ALLDONE && aio_cancel(-1, nullptr) == -1 && errno == EBADF);
 
     sigset_t usr1;

@@ -10,6 +10,10 @@ build compiles the case to <prefix>.wasm, checks that aot and vm -o make
 the same object of it and that the native reference behaves as expected,
 and packs <prefix>.exe, the image of the tests' /tests/unit/<name>. run
 boots rootfs from that image (--disk image=) and runs the program there,
+on the system's terminal, a pseudoterminal: its standard output is the
+terminal's, vm's standard output; its standard error /dev/console, vm's
+standard error; its input ends at once. What the terminals' output
+processing adds, a CR before each newline, is taken off both. It runs
 in /run, its environment rootfs's with the env directives; with root:
 own, in a root of its own under /run instead, chroot's, which has /bin/check,
 the program, and /run, its working directory the root, for a program
@@ -19,7 +23,9 @@ run, as coverage runs a case with its own vm and aot.
 Directives use trustme's //@ spelling. stdout/stderr are JSON strings;
 compile-flags, aot-flags, run-flags and args use shell quoting. host: false
 disables the native reference for programs that depend on this kernel.
-run-flags are --asan, --user and --disk <name>=<path>: --user is the
+run-flags are --asan, --strace, --user and --disk <name>=<path>: --strace
+is vm's, a trace of every process of the system on vm's standard error, as
+the trace of faults has a trap's kind and stack; --user is the
 system's, everyone's in it, as vm's; a disk is /dev/blk/<name>/data in
 the system, which the program gets open to read and write as its
 descriptors after 2, in order, their names in DISKS, as the first process
@@ -86,6 +92,11 @@ def successful(command, **options):
         raise RuntimeError(f"{shlex.join(list(map(str, command)))}: exit {result.returncode}\n"
                            + result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace"))
     return result
+
+
+def lines(result):
+    """What the system's terminals gave, its standard output's and its console's: their lines' ends as the program wrote them, the CR before each newline that the terminals' output processing adds taken off."""
+    return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.replace(b"\r\n", b"\n"), result.stderr.replace(b"\r\n", b"\n"))
 
 
 def check(result, case, phase):
@@ -169,12 +180,14 @@ def disks(case):
         match flags:
             case ["--asan", *rest]:
                 asan.append("--asan")
+            case [flag, *rest] if flag == "--strace" or flag.startswith("--strace="):
+                asan.append(flag)
             case ["--user", user, *rest]:
                 asan += ["--user", user]
             case ["--disk", disk, *rest] if re.fullmatch(r"[A-Za-z0-9_.-]+=.+", disk):
                 named.append(tuple(disk.split("=", 1)))
             case _:
-                raise ValueError(f"run-flags: {shlex.join(flags)}: --asan, --user and --disk <name>=<path> only")
+                raise ValueError(f"run-flags: {shlex.join(flags)}: --asan, --strace, --user and --disk <name>=<path> only")
         flags = rest
     return asan, named
 
@@ -201,10 +214,10 @@ def run(source, prefix, name, tools):
             program = ["chroot", "/run/root", "/bin/check"]
         else:
             setup, program = "cd /run", ["/tests/unit/" + name]
-        script = f"{setup} && " + (f"exec {opened} && " if opened else "") + shlex.join(["exec", "env", *variables, *program, *args])
+        script = f"{setup} && " + (f"exec {opened} && " if opened else "") + shlex.join(["exec", "env", *variables, *program, *args]) + " 2>/dev/console"
         result = invoke([tools["vm"], "run", *flags, "--disk", f"image={tools['image']}", "--", tools["rootfs"], "-c", script],
-                        env=env, timeout=timeout)
-        check(result, case, "kernel")
+                        env=env, timeout=timeout, stdin=b"")
+        check(lines(result), case, "kernel")
 
     Path(str(prefix) + ".stamp").write_text("native reference, native and Wasm AOT objects, kernel: passed\n")
     print(f"{source.stem}: native/Wasm AOT behaviour agrees", flush=True)

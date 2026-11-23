@@ -28,6 +28,8 @@ import subprocess
 import sys
 import tempfile
 
+import system
+
 PROBE = r'''import errno, os, stat, sys
 
 CASES = []
@@ -496,7 +498,7 @@ def main():
     vm, rootfs = sys.argv[1:3]
     env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
     script = "python3 - <<'PROBE_EOF'\n" + PROBE + "PROBE_EOF\nexit 0\n"
-    result = subprocess.run([vm, "run", "--", rootfs], input=script.encode(), capture_output=True, env=env, timeout=600)
+    result = system.shell(vm, rootfs, script, env=env, timeout=600)
     assert result.returncode == 0 and result.stderr == b"", result
     compare(stored(result.stdout.decode()), LINUX, "rootfs")
     print(f"vfs: {len(LINUX.splitlines())} cases of the walk answer as Linux's in rootfs")

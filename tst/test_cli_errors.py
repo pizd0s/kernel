@@ -118,12 +118,13 @@ def main():
             embedded = work / "embedded.o"
             result = run(["-o", embedded, source])
             assert result.returncode == 0 and embedded.read_bytes() == output.read_bytes(), result
-            # The module runs as the first process: the trap is its SIGILL,
-            # its report each line marked with its argv[0] and pid.
-            result = run(["run", "--", source])
+            # The module runs as the first process: the trap is its SIGILL;
+            # the trace of its faults has the trap and its stack, each line
+            # marked with its pid.
+            result = run(["run", "--strace=faults", "--", source])
             assert result.returncode == 128 + 4 and result.stdout == b"", (depth, result)
             lines = result.stderr.decode().splitlines()
-            mark = f"{source}[1]: "
+            mark = "[1] "
             assert lines[0] == mark + "wasm trap: unreachable" and b"panic:" not in result.stderr, result
             assert all(line.startswith(mark) for line in lines), lines
             frames = [line[len(mark):] for line in lines[1:]]

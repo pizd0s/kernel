@@ -320,9 +320,15 @@
 //
 //   A device's service's, on the channel devfs has of it, and on
 //   /dev/init/ctl:
-//     OPEN      arg flags   mode u32      OK, fds[0] the open file
+//     OPEN      arg flags   mode u32      OK, fds[0] the open file; an
+//                                         OK of no body, fds[0] an open file
+//                                         as it is, another server's, which
+//                                         the opener gets so
 //     OPEN of /dev/tty, pty's, is another open of the slave of the
 //     terminal that controls the session the header says, ENXIO when none.
+//     OPEN of /dev/console, console's, is another open of the slave of its
+//     second pseudoterminal, handed on as it is; what that terminal's
+//     master reads console writes to its descriptor 2.
 //   /dev/init/ctl's open is a plain socket, an end of a pair devfs keeps the
 //   other end of, which its opener speaks the protocol on itself: a
 //   request on it is answered on it.
