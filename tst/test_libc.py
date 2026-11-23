@@ -14,7 +14,7 @@ import sys
 EXPECTED = """\
 strtok 3 a b c
 strlcpy 11 overflo 10
-memrchr 4 memmem 4 rawmemchr 2
+memrchr 4 memmem 4
 basename lib file.txt
 strerror_r 0 No such file or directory 34 No 
 div -3 -1 142857142857 1 ffs 5 41
@@ -43,8 +43,8 @@ memalign 0 1 1 1 usable 1 reallocarray 1 1 mmap 0 0 0 0
 openat 1 pwrite 6 pread cde copy_file_range 4 5 bcde fstatat 0 6 faccessat 0 renameat 0 linkat 0 symlinkat 0 readlinkat 1 g truncate 0 2 unlinkat 0 0
 mkfifo 0 1 statvfs 0 1 flock 0 lockf 0 0
 dir 4 2 1 scandir 4 . .. g p glob 0 /run/d/g /run/d/p 1
-mkstemps 1 suffix tmpfile temporary tmpnam 1 tempnam 1
-getpwnam user 1000 /home/user getpwuid_r 0 root 34 getpwent 2 getgrnam wheel 10 root user getgrouplist 3 100 10 50 fgetpwent root fgetgrent wheel root
+mkstemps 1 suffix tmpfile temporary tmpnam 1
+getpwnam user 1000 /home/user getpwuid_r 0 root 34 getpwent 2 getgrnam wheel 10 root user getgrouplist 3 100 10 50
 mntent / ext4 rw,noatime 1 noatime
 sigset 1 0 -1 pending 1 sigwait 0 10 sigtimedwait -1 1 alarm 1 setitimer 1 sigaltstack 0 1
 waitid 0 1 5 wait4 1 5

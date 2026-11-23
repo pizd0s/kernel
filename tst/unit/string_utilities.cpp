@@ -56,10 +56,6 @@ int main() {
     assert(memccpy(result, "abcdef", 'c', 6) == result + 3 && memcmp(result, "abc", 3) == 0);
     assert(memccpy(result, "abcdef", 'x', 6) == nullptr && memcmp(result, "abcdef", 6) == 0);
     assert(memrchr(text, 'b', 6) == text + 4 && memrchr(text, 'x', 6) == nullptr);
-#ifdef __wasm__
-    // The host musl does not provide this GNU extension.
-    assert(rawmemchr(text, 'c') == text + 2 && rawmemchr(text, 0) == text + 6);
-#endif
     assert(memmem(text, 6, "ca", 2) == text + 2 && memmem(text, 6, "", 0) == text);
     assert(memmem(text, 6, "abcd", 4) == nullptr);
     bcopy("abcdef", result, 7);

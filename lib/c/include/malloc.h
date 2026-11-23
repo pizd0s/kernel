@@ -13,6 +13,5 @@ __BEGIN_DECLS
 void* memalign(size_t, size_t);
 size_t malloc_usable_size(void*);
 int mallopt(int, int);
-int malloc_trim(size_t);
 
 __END_DECLS

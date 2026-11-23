@@ -125,8 +125,6 @@ void pthread_testcancel(void);
 int pthread_getschedparam(pthread_t, int* __restrict, struct sched_param* __restrict);
 int pthread_setschedparam(pthread_t, int, const struct sched_param*);
 int pthread_setschedprio(pthread_t, int);
-int pthread_getconcurrency(void);
-int pthread_setconcurrency(int);
 int pthread_getcpuclockid(pthread_t, clockid_t*);
 
 int pthread_attr_init(pthread_attr_t*);
@@ -246,8 +244,6 @@ void _pthread_cleanup_pop(struct __ptcb*, int);
 int pthread_getaffinity_np(pthread_t, size_t, cpu_set_t*);
 int pthread_setaffinity_np(pthread_t, size_t, const cpu_set_t*);
 int pthread_getattr_np(pthread_t, pthread_attr_t*);
-int pthread_getattr_default_np(pthread_attr_t*);
-int pthread_setattr_default_np(const pthread_attr_t*);
 int pthread_getname_np(pthread_t, char*, size_t);
 int pthread_setname_np(pthread_t, const char*);
 int pthread_tryjoin_np(pthread_t, void**);

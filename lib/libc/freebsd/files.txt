@@ -26,8 +26,6 @@ lib/msun/src/e_lgammaf.c
 lib/msun/src/e_lgammaf_r.c
 lib/msun/src/e_remainder.c
 lib/msun/src/e_remainderf.c
-lib/msun/src/e_scalb.c
-lib/msun/src/e_scalbf.c
 lib/msun/src/e_sinh.c
 lib/msun/src/k_cos.c
 lib/msun/src/k_cosf.c
@@ -43,8 +41,6 @@ lib/msun/src/s_cospi.c -Dsinpi=__freebsd_sinpi -Dsinpil=__freebsd_sinpil -Dcospi
 lib/msun/src/s_erf.c
 lib/msun/src/s_erff.c -Derff=__freebsd_erff  # its erfcf; erff is LLVM's
 lib/msun/src/s_exp2.c
-lib/msun/src/s_finite.c
-lib/msun/src/s_finitef.c
 lib/msun/src/s_fma.c
 lib/msun/src/s_lround.c
 lib/msun/src/s_nextafterf.c
@@ -55,13 +51,9 @@ lib/msun/src/s_scalbln.c
 lib/msun/src/s_scalbn.c
 lib/msun/src/s_scalbnf.c
 lib/msun/src/s_signgam.c
-lib/msun/src/s_significand.c
-lib/msun/src/s_significandf.c
 lib/msun/src/s_sinpi.c -Dsinpi=__freebsd_sinpi -Dsinpil=__freebsd_sinpil -Dcospi=__freebsd_cospi -Dcospil=__freebsd_cospil
 lib/msun/src/s_tanh.c
 lib/msun/src/s_tgammaf.c
-lib/msun/src/w_drem.c
-lib/msun/src/w_dremf.c
 lib/msun/src/catrig.c
 lib/msun/src/catrigf.c
 lib/msun/src/s_carg.c
@@ -92,9 +84,10 @@ lib/msun/src/w_cabsf.c
 
 # Its libc's, with its stdio's and multibyte functions' headers and lib/c's
 # (make.py), and freebsd/patches/: the stdio, but for what lib/c has
-# elsewhere or not (remove and mktemp are the kernel's Go, tmpfile, tmpnam
-# and tempnam tmp.c's; gets, gets_s, fcloseall, fgetwln and the extensible
-# printf are not lib/c's; flockfile and its kind are freebsd/streams.c's);
+# elsewhere or not (remove and mktemp are the kernel's Go, tmpfile and
+# tmpnam tmp.c's; gets, gets_s, fcloseall, fgetwln, getw, putw, tempnam and
+# the extensible printf are not lib/c's; flockfile and its kind are
+# freebsd/streams.c's);
 # the multibyte functions, whose ctype is utf8.c's (freebsd/xlocale.c); the
 # trees, getopt, the drand48 family, quick_exit and popen.
 lib/libc/stdio/asprintf.c
@@ -140,7 +133,6 @@ lib/libc/stdio/getc.c
 lib/libc/stdio/getchar.c
 lib/libc/stdio/getdelim.c
 lib/libc/stdio/getline.c
-lib/libc/stdio/getw.c
 lib/libc/stdio/getwc.c
 lib/libc/stdio/getwchar.c
 lib/libc/stdio/makebuf.c
@@ -152,7 +144,6 @@ lib/libc/stdio/printf.c
 lib/libc/stdio/putc.c
 lib/libc/stdio/putchar.c
 lib/libc/stdio/puts.c
-lib/libc/stdio/putw.c
 lib/libc/stdio/putwc.c
 lib/libc/stdio/putwchar.c
 lib/libc/stdio/refill.c

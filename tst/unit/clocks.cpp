@@ -10,6 +10,13 @@
 #include <time.h>
 #include <unistd.h>
 
+// The real-time timer: its first SIGALRM after first microseconds, the next
+// ones each interval after, none at 0.
+static void alarmIn(long first, long interval) {
+    itimerval timer{{0, interval}, {0, first}};
+    assert(setitimer(ITIMER_REAL, &timer, nullptr) == 0);
+}
+
 static volatile sig_atomic_t alarms;
 
 static void alarmed(int) {
@@ -38,7 +45,6 @@ int main() {
     assert(clock_settime(CLOCK_REALTIME, &current) == -1 && errno == EPERM);
     assert(settimeofday(&wall, nullptr) == -1 && errno == EPERM);
     assert(adjtime(&wall, nullptr) == -1 && errno == EPERM);
-    assert(stime(&now) == -1 && errno == EPERM);
     timespec zero{}, remaining{};
     assert(nanosleep(&zero, &remaining) == 0 && usleep(0) == 0 && sleep(0) == 0);
     assert(clock_nanosleep(CLOCK_REALTIME, 0, &zero, nullptr) == 0);
@@ -73,15 +79,12 @@ int main() {
     assert(alarm(30) == 0);
     unsigned left = alarm(0);
     assert(left > 0 && left <= 30);
-    assert(ualarm(30000000, 0) == 0);
-    left = ualarm(0, 0);
-    assert(left > 0 && left <= 30000000);
 
     struct sigaction action{};
     action.sa_handler = alarmed;
     sigemptyset(&action.sa_mask);
     assert(sigaction(SIGALRM, &action, nullptr) == 0);
-    assert(ualarm(10000, 10000) == 0);
+    alarmIn(10000, 10000);
     assert(clock_gettime(CLOCK_MONOTONIC, &current) == 0);
     time_t deadline = current.tv_sec + 5;
     while (alarms < 3) {
@@ -103,7 +106,7 @@ int main() {
     remaining = {7, 8};
     assert(clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &delay, &remaining) == EINTR);
     assert(remaining.tv_sec == 7 && remaining.tv_nsec == 8);
-    ualarm(0, 0);
+    alarmIn(0, 0);
     assert(alarms >= 3);
     sig_atomic_t before = alarms;
     assert(signal(SIGUSR1, SIG_IGN) == SIG_DFL);

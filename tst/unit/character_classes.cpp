@@ -62,12 +62,11 @@ int main() {
             }
         }
         assert(bool(isascii(c)) == (c >= 0 && c < 128));
-        assert(toascii(c) == (c & 127));
         assert(tolower(c) == (c >= 'A' && c <= 'Z' ? c + 32 : c));
         assert(toupper(c) == (c >= 'a' && c <= 'z' ? c - 32 : c));
         assert(tolower_l(c, locale) == tolower(c) && toupper_l(c, locale) == toupper(c));
-        int (*cases[])(int) = {tolower, toupper, toascii, isascii};
-        assert(cases[0](c) == tolower(c) && cases[1](c) == toupper(c) && cases[2](c) == toascii(c) && cases[3](c) == isascii(c));
+        int (*cases[])(int) = {tolower, toupper, isascii};
+        assert(cases[0](c) == tolower(c) && cases[1](c) == toupper(c) && cases[2](c) == isascii(c));
     }
     // Any int is a character to them: one past a byte is in no class and
     // has no case.

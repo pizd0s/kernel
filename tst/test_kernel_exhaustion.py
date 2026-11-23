@@ -70,7 +70,7 @@ def main():
     cases = [("startup-array", *startup, False, None), ("startup-string", *startup, True, None),
              # localeconv takes the size of its struct lconv.
              ("locale-structure", "localeconv", [56], True, False, None), ("constant-string", "nl_langinfo", [14], True, False, None),
-             ("working-directory", "get_current_dir_name", [], True, False, 12),
+             ("working-directory", "getcwd", [0, 0], True, False, 12),
              ("large-allocation", "malloc", [4194304], True, False, 12),
              ("growing-allocation", "realloc", [0, 4194304], True, False, 12)]
     env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")

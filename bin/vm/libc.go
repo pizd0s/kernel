@@ -454,24 +454,12 @@ func libcReadlinkat(dirfd, path, buf, size uint32) uint32 {
 	return proc().libcReadlinkat(dirfd, path, buf, size)
 }
 
-func libcCanonicalize_file_name(path uint32) uint32 {
-	return proc().libcCanonicalize_file_name(path)
-}
-
-func libcGet_current_dir_name() uint32 {
-	return proc().libcGet_current_dir_name()
-}
-
 func libcCreat(path, mode uint32) uint32 {
 	return proc().libcCreat(path, mode)
 }
 
 func libcEaccess(path, mode uint32) uint32 {
 	return proc().libcEaccess(path, mode)
-}
-
-func libcEuidaccess(path, mode uint32) uint32 {
-	return proc().libcEuidaccess(path, mode)
 }
 
 func libcStatfs(path, at, atSize uint32) uint32 {
@@ -718,20 +706,12 @@ func libcAligned_alloc(align, n uint32) uint32 {
 	return proc().libcAligned_alloc(align, n)
 }
 
-func libcValloc(n uint32) uint32 {
-	return proc().libcValloc(n)
-}
-
 func libcPosix_memalign(out, align, n uint32) uint32 {
 	return proc().libcPosix_memalign(out, align, n)
 }
 
 func libcMalloc_usable_size(ptr uint32) uint32 {
 	return proc().libcMalloc_usable_size(ptr)
-}
-
-func libcMalloc_trim(pad uint32) uint32 {
-	return proc().libcMalloc_trim(pad)
 }
 
 func libcReallocarray(ptr, n, size uint32) uint32 {
@@ -828,34 +808,6 @@ func libcA64l(s uint32) uint32 {
 
 func libcL64a(v uint32) uint32 {
 	return proc().libcL64a(v)
-}
-
-func libcGcvt(v float64, n, buf uint32) uint32 {
-	return proc().libcGcvt(v, n, buf)
-}
-
-func libcCuserid(s uint32) uint32 {
-	return proc().libcCuserid(s)
-}
-
-func libcSighold(sig uint32) uint32 {
-	return proc().libcSighold(sig)
-}
-
-func libcSigrelse(sig uint32) uint32 {
-	return proc().libcSigrelse(sig)
-}
-
-func libcSigignore(sig uint32) uint32 {
-	return proc().libcSigignore(sig)
-}
-
-func libcSigpause(sig uint32) uint32 {
-	return proc().libcSigpause(sig)
-}
-
-func libcSigset(sig, disp uint32) uint32 {
-	return proc().libcSigset(sig, disp)
 }
 
 func libcIconv_open(to, from uint32) uint32 {
@@ -968,10 +920,6 @@ func libcFnmatch(pattern, s, flags uint32) uint32 {
 
 func libcMemrchr(s, c, n uint32) uint32 {
 	return proc().libcMemrchr(s, c, n)
-}
-
-func libcRawmemchr(s, c uint32) uint32 {
-	return proc().libcRawmemchr(s, c)
 }
 
 func libcMemccpy(d, s, c, n uint32) uint32 {
@@ -1110,10 +1058,6 @@ func libcSettimeofday(tv, tvSize, tz, tzSize uint32) uint32 {
 	return p.libcSettimeofday(tv, tz)
 }
 
-func libcStime(t uint32) uint32 {
-	return proc().libcStime(t)
-}
-
 func libcAdjtime(delta, deltaSize, old, oldSize uint32) uint32 {
 	p := proc()
 
@@ -1124,10 +1068,6 @@ func libcAdjtime(delta, deltaSize, old, oldSize uint32) uint32 {
 
 func libcUsleep(us uint32) uint32 {
 	return proc().libcUsleep(us)
-}
-
-func libcUalarm(value, interval uint32) uint32 {
-	return proc().libcUalarm(value, interval)
 }
 
 func libcGmtime(t, size uint32) uint32 {
@@ -1372,10 +1312,6 @@ func libcSigaltstack(ss, ssSize, old, oldSize uint32) uint32 {
 	p.sized("sigaltstack", ssSize, sizeofStack, oldSize, sizeofStack)
 
 	return p.libcSigaltstack(ss, old)
-}
-
-func libcSiginterrupt(sig, flag uint32) uint32 {
-	return proc().libcSiginterrupt(sig, flag)
 }
 
 func libcPause() uint32 {
@@ -2418,10 +2354,6 @@ func libcGetpass(prompt uint32) uint32 {
 	return proc().libcGetpass(prompt)
 }
 
-func libcVhangup() uint32 {
-	return proc().libcVhangup()
-}
-
 func libcGetusershell() uint32 {
 	return proc().libcGetusershell()
 }
@@ -2456,10 +2388,6 @@ func libcSetdomainname(name, n uint32) uint32 {
 
 func libcGethostid() uint32 {
 	return proc().libcGethostid()
-}
-
-func libcSethostid(id uint32) uint32 {
-	return proc().libcSethostid(id)
 }
 
 func libcPsignal(sig, s uint32) {
@@ -3008,10 +2936,6 @@ func libcToupper(c uint32) uint32 {
 	return proc().libcToupper(c)
 }
 
-func libcToascii(c uint32) uint32 {
-	return proc().libcToascii(c)
-}
-
 func libcMemmem(h, hn, n, nn uint32) uint32 {
 	return proc().libcMemmem(h, hn, n, nn)
 }
@@ -3171,14 +3095,6 @@ func libcPthread_setschedparam(thread, value, param, paramSize uint32) uint32 {
 
 func libcPthread_setschedprio(thread, value uint32) uint32 {
 	return proc().libcPthread_setschedprio(thread, value)
-}
-
-func libcPthread_getconcurrency() uint32 {
-	return proc().libcPthread_getconcurrency()
-}
-
-func libcPthread_setconcurrency(value uint32) uint32 {
-	return proc().libcPthread_setconcurrency(value)
 }
 
 func libcPthread_getcpuclockid(thread, out uint32) uint32 {
@@ -3805,22 +3721,6 @@ func libcPthread_getattr_np(thread, attr, attrSize uint32) uint32 {
 	return p.libcPthread_getattr_np(thread, attr)
 }
 
-func libcPthread_getattr_default_np(attr, attrSize uint32) uint32 {
-	p := proc()
-
-	p.sized("pthread_getattr_default_np", attrSize, sizeofPthreadAttr)
-
-	return p.libcPthread_getattr_default_np(attr)
-}
-
-func libcPthread_setattr_default_np(attr, attrSize uint32) uint32 {
-	p := proc()
-
-	p.sized("pthread_setattr_default_np", attrSize, sizeofPthreadAttr)
-
-	return p.libcPthread_setattr_default_np(attr)
-}
-
 func libcPthread_getname_np(thread, b, value uint32) uint32 {
 	return proc().libcPthread_getname_np(thread, b, value)
 }
@@ -4137,14 +4037,6 @@ func libcPosix_close(fd, flags uint32) uint32 {
 	return proc().libcPosix_close(fd, flags)
 }
 
-func libcBrk(end uint32) uint32 {
-	return proc().libcBrk(end)
-}
-
-func libcSbrk(increment uint32) uint32 {
-	return proc().libcSbrk(increment)
-}
-
 func libcIssetugid() uint32 {
 	return proc().libcIssetugid()
 }
@@ -4175,10 +4067,6 @@ func libcWcscasecmp_l(a, b, locale uint32) uint32 {
 
 func libcWcsncasecmp_l(a, b, n, locale uint32) uint32 {
 	return proc().libcWcsncasecmp_l(a, b, n, locale)
-}
-
-func libcWcswcs(h, n uint32) uint32 {
-	return proc().libcWcswcs(h, n)
 }
 
 func libcWcsftime_l(s, max, format, tm, tmSize, locale uint32) uint32 {
@@ -4731,10 +4619,6 @@ func libcLio_listio(mode, list, listSize, n, sig, sigSize uint32) uint32 {
 
 func libcGetrandom(buf, n, flags uint32) uint32 {
 	return proc().libcGetrandom(buf, n, flags)
-}
-
-func libcUlimit(cmd, va uint32) uint32 {
-	return proc().libcUlimit(cmd, va)
 }
 
 func libcPosix_madvise(addr, n, advice uint32) uint32 {

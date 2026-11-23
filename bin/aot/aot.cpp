@@ -4867,39 +4867,37 @@ static constexpr Int intrinsicTolower = 28;
 
 static constexpr Int intrinsicToupper = 29;
 
-static constexpr Int intrinsicToascii = 30;
+static constexpr Int intrinsicAbs = 30;
 
-static constexpr Int intrinsicAbs = 31;
+static constexpr Int intrinsicLlabs = 31;
 
-static constexpr Int intrinsicLlabs = 32;
+static constexpr Int intrinsicMempcpy = 32;
 
-static constexpr Int intrinsicMempcpy = 33;
+static constexpr Int intrinsicBcopy = 33;
 
-static constexpr Int intrinsicBcopy = 34;
+static constexpr Int intrinsicBzero = 34;
 
-static constexpr Int intrinsicBzero = 35;
+static constexpr Int intrinsicStrpbrk = 35;
 
-static constexpr Int intrinsicStrpbrk = 36;
+static constexpr Int intrinsicStrchr = 36;
 
-static constexpr Int intrinsicStrchr = 37;
+static constexpr Int intrinsicStrchrnul = 37;
 
-static constexpr Int intrinsicStrchrnul = 38;
+static constexpr Int intrinsicStrncmp = 38;
 
-static constexpr Int intrinsicStrncmp = 39;
+static constexpr Int intrinsicStpcpy = 39;
 
-static constexpr Int intrinsicStpcpy = 40;
+static constexpr Int intrinsicStrncpy = 40;
 
-static constexpr Int intrinsicStrncpy = 41;
+static constexpr Int intrinsicStpncpy = 41;
 
-static constexpr Int intrinsicStpncpy = 42;
+static constexpr Int intrinsicStrdup = 42;
 
-static constexpr Int intrinsicStrdup = 43;
+static constexpr Int intrinsicStrncat = 43;
 
-static constexpr Int intrinsicStrncat = 44;
+static constexpr Int intrinsicStrlcpy = 44;
 
-static constexpr Int intrinsicStrlcpy = 45;
-
-static constexpr Int intrinsicStrlcat = 46;
+static constexpr Int intrinsicStrlcat = 45;
 
 static constexpr Int constF32Sign = 0;
 
@@ -17321,8 +17319,7 @@ static bool lowererIntrinsic(Lowerer* l, i32 v, Int intrinsic, Span<const i32> a
         case intrinsicIsupper:
         case intrinsicIsxdigit:
         case intrinsicTolower:
-        case intrinsicToupper:
-        case intrinsicToascii: {
+        case intrinsicToupper: {
             if (v >= 0 && l->uses[v] > 0) {
                 lowererCharacter(l, v, intrinsic, lowererUse(l, args[0]));
             }
@@ -18106,16 +18103,6 @@ static void lowererCharacter(Lowerer* l, i32 v, Int intrinsic, VReg x) {
         case intrinsicIsspace: {
             r = lowererInRange(l, x, '\t', 5);
             lowererAluTo(l, r, aluOr, lowererIsValue(l, x, ' '), 4);
-            break;
-        }
-        case intrinsicToascii: {
-            r = lowererCopy(l, x, 4);
-            MInst low = inst(mAluImm);
-            low.dst = r;
-            low.imm = 0x7f;
-            low.size = 4;
-            low.aux = convert<u8>(aluAnd);
-            lowererEmit(l, low);
             break;
         }
         default: {
@@ -25633,7 +25620,6 @@ static Int intrinsicOf(Import imp, FuncType* t) {
         {String("isxdigit"), String("i>i"), intrinsicIsxdigit},
         {String("tolower"), String("i>i"), intrinsicTolower},
         {String("toupper"), String("i>i"), intrinsicToupper},
-        {String("toascii"), String("i>i"), intrinsicToascii},
         {String("abs"), String("i>i"), intrinsicAbs},
         {String("labs"), String("i>i"), intrinsicAbs},
         {String("llabs"), String("l>l"), intrinsicLlabs},

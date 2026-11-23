@@ -16,7 +16,7 @@ float cosf(float);
 float coshf(float);
 float erff(float);
 double exp(double); expl
-float exp10f(float); pow10f
+float exp10f(float);
 double expm1(double); expm1l
 float expm1f(float);
 double fdim(double, double); fdiml

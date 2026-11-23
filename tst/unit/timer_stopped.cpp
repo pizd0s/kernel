@@ -10,8 +10,16 @@
 #include <assert.h>
 #include <signal.h>
 #include <stdio.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+
+// The real-time timer: its first SIGALRM after first microseconds, the next
+// ones each interval after, none at 0.
+static void alarmIn(long first, long interval) {
+    itimerval timer{{0, interval}, {0, first}};
+    assert(setitimer(ITIMER_REAL, &timer, nullptr) == 0);
+}
 
 static volatile sig_atomic_t ran;
 
@@ -39,9 +47,9 @@ int main() {
     const int times = 10000;
     for (int i = 0; i < times; ++i) {
         assert(sigaction(SIGALRM, &caught, nullptr) == 0);
-        ualarm(50, 50);
+        alarmIn(50, 50);
         wait(30000 + i % 40 * 1000);
-        ualarm(0, 0);
+        alarmIn(0, 0);
         assert(sigaction(SIGALRM, &plain, nullptr) == 0);
         wait(20000);
     }

@@ -82,7 +82,6 @@ typedef struct {
 } stack_t;
 
 #define SIG_ERR ((void (*)(int)) - 1)
-#define SIG_HOLD ((void (*)(int))2)
 #define SIG_DFL ((void (*)(int))0)
 /* Table index 1 can name a real Wasm function. */
 #define SIG_IGN ((void (*)(int)) - 2)
@@ -161,7 +160,6 @@ typedef struct {
 #define CLD_CONTINUED 6
 
 sighandler_t signal(int, sighandler_t);
-sighandler_t bsd_signal(int, sighandler_t);
 int sigaction(int, const struct sigaction* __restrict, struct sigaction* __restrict);
 int sigprocmask(int, const sigset_t* __restrict, sigset_t* __restrict);
 int pthread_sigmask(int, const sigset_t* __restrict, sigset_t* __restrict);
@@ -174,12 +172,6 @@ int sigtimedwait(const sigset_t* __restrict, siginfo_t* __restrict, const struct
 int sigqueue(pid_t, int, union sigval);
 int sig2str(int, char*);
 int str2sig(const char* __restrict, int* __restrict);
-int siginterrupt(int, int);
-int sighold(int);
-int sigrelse(int);
-int sigignore(int);
-int sigpause(int);
-void (*sigset(int, void (*)(int)))(int);
 int sigaltstack(const stack_t* __restrict, stack_t* __restrict);
 int sigemptyset(sigset_t*);
 int sigfillset(sigset_t*);

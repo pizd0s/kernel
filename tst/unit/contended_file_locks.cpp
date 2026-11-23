@@ -6,9 +6,17 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
+#include <sys/time.h>
 #include <sys/file.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+// The real-time timer: its first SIGALRM after first microseconds, the next
+// ones each interval after, none at 0.
+static void alarmIn(long first, long interval) {
+    itimerval timer{{0, interval}, {0, first}};
+    assert(setitimer(ITIMER_REAL, &timer, nullptr) == 0);
+}
 
 static volatile sig_atomic_t alarms;
 
@@ -44,7 +52,7 @@ int main() {
         assert(sigemptyset(&action.sa_mask) == 0 && sigaction(SIGALRM, &action, nullptr) == 0);
         for (unsigned operation = 0; operation < 3; ++operation) {
             sig_atomic_t before = alarms;
-            ualarm(20000, 0);
+            alarmIn(20000, 0);
             int result;
             if (operation == 0) {
                 result = fcntl(other, F_SETLKW, &lock);
@@ -54,7 +62,7 @@ int main() {
                 result = flock(other, LOCK_EX);
             }
             assert(result == -1 && errno == EINTR && alarms == before + 1);
-            ualarm(0, 0);
+            alarmIn(0, 0);
         }
         assert(write(ready[1], "r", 1) == 1);
         char byte;

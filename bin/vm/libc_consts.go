@@ -85,8 +85,6 @@ const (
 	SIG_DFL                           = 0
 	SIG_IGN                           = 0xfffffffe
 	SIG_ERR                           = 0xffffffff
-	SIG_HOLD                          = 2
-	L_cuserid                         = 20
 	SA_NOCLDSTOP                      = 1
 	SA_NOCLDWAIT                      = 2
 	SA_SIGINFO                        = 4
@@ -151,8 +149,6 @@ const (
 	GRND_NONBLOCK                     = 0x0001
 	GRND_RANDOM                       = 0x0002
 	GRND_INSECURE                     = 0x0004
-	UL_GETFSIZE                       = 1
-	UL_SETFSIZE                       = 2
 	POSIX_MADV_NORMAL                 = 0
 	POSIX_MADV_RANDOM                 = 1
 	POSIX_MADV_SEQUENTIAL             = 2

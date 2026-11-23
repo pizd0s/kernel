@@ -13,6 +13,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+// The real-time timer: its first SIGALRM after first microseconds, the next
+// ones each interval after, none at 0.
+static void alarmIn(long first, long interval) {
+    itimerval timer{{0, interval}, {0, first}};
+    assert(setitimer(ITIMER_REAL, &timer, nullptr) == 0);
+}
+
 static volatile sig_atomic_t interrupts;
 
 static void interrupted(int) {
@@ -47,9 +54,9 @@ int main() {
     assert(sigemptyset(&action.sa_mask) == 0 && sigaction(SIGALRM, &action, &saved) == 0);
     timeout = {0, 0};
     assert(setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) == 0);
-    ualarm(20000, 20000);
+    alarmIn(20000, 20000);
     assert(connect(client, reinterpret_cast<sockaddr*>(&address), length) == -1 && errno == EINTR);
-    ualarm(0, 0);
+    alarmIn(0, 0);
     assert(interrupts > 0);
 
     // Linux socket timeouts disable SA_RESTART for connect and receive.
@@ -57,16 +64,16 @@ int main() {
     assert(sigaction(SIGALRM, &action, nullptr) == 0);
     timeout = {1, 0};
     assert(setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) == 0);
-    ualarm(20000, 20000);
+    alarmIn(20000, 20000);
     assert(connect(client, reinterpret_cast<sockaddr*>(&address), length) == -1 && errno == EINTR);
-    ualarm(0, 0);
+    alarmIn(0, 0);
     int pair[2];
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
     assert(setsockopt(pair[0], SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
     char received;
-    ualarm(20000, 20000);
+    alarmIn(20000, 20000);
     assert(recv(pair[0], &received, 1, 0) == -1 && errno == EINTR);
-    ualarm(0, 0);
+    alarmIn(0, 0);
     assert(close(pair[0]) == 0 && close(pair[1]) == 0);
 
     // The same socket can connect once accept frees a place in the queue.
@@ -90,9 +97,9 @@ int main() {
         assert(send(next, "y", 1, 0) == 1 && close(next) == 0 && close(listener) == 0);
         _exit(17);
     }
-    ualarm(20000, 20000);
+    alarmIn(20000, 20000);
     assert(connect(client, reinterpret_cast<sockaddr*>(&address), length) == 0);
-    ualarm(0, 0);
+    alarmIn(0, 0);
     assert(interrupts > 0 && sigaction(SIGALRM, &saved, nullptr) == 0);
     assert(send(client, "x", 1, 0) == 1);
     char byte;

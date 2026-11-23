@@ -4,8 +4,6 @@
 
 __BEGIN_DECLS
 
-typedef struct __sFILE FILE;
-
 struct group {
     char* gr_name;
     char* gr_passwd;
@@ -20,7 +18,6 @@ int getgrgid_r(gid_t, struct group*, char*, size_t, struct group**);
 struct group* getgrent(void);
 void setgrent(void);
 void endgrent(void);
-struct group* fgetgrent(FILE*);
 int getgrouplist(const char*, gid_t, gid_t*, int*);
 int initgroups(const char*, gid_t);
 int setgroups(size_t, const gid_t*);

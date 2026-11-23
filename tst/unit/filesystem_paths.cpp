@@ -30,17 +30,6 @@ int main() {
     char* allocated = getcwd(nullptr, 0);
     assert(allocated && strcmp(allocated, current) == 0);
     free(allocated);
-    allocated = get_current_dir_name();
-    assert(allocated && strcmp(allocated, current) == 0);
-    free(allocated);
-    assert(setenv("PWD", current, 1) == 0);
-    allocated = get_current_dir_name();
-    assert(allocated && strcmp(allocated, current) == 0);
-    free(allocated);
-    assert(setenv("PWD", "/missing", 1) == 0);
-    allocated = get_current_dir_name();
-    assert(allocated && strcmp(allocated, current) == 0);
-    free(allocated);
     int directory = open(".", O_RDONLY | O_DIRECTORY);
     assert(directory >= 0 && mkdirat(directory, "sub", 0700) == 0);
     touch("file");
@@ -82,7 +71,7 @@ int main() {
     assert(lchown("sub/link", uid_t(-1), gid_t(-1)) == 0);
     assert(renameat(subdirectory, "hard", directory, "renamed") == 0);
     assert(faccessat(directory, "renamed", F_OK, 0) == 0);
-    assert(eaccess("renamed", R_OK) == 0 && euidaccess("renamed", R_OK) == 0);
+    assert(eaccess("renamed", R_OK) == 0);
     assert(faccessat(directory, "missing", F_OK, 0) == -1 && errno == ENOENT);
     char expected[1100];
     snprintf(expected, sizeof(expected), "%s/file", current);
@@ -90,11 +79,6 @@ int main() {
     allocated = realpath("sub/../file", nullptr);
     assert(allocated && strcmp(allocated, expected) == 0);
     free(allocated);
-#ifdef __wasm__
-    allocated = canonicalize_file_name("sub/link");
-    assert(allocated && strcmp(allocated, expected) == 0);
-    free(allocated);
-#endif
     assert(realpath("missing", buffer) == nullptr && errno == ENOENT);
     assert(symlink("loop", "loop") == 0);
     assert(realpath("loop", buffer) == nullptr && errno == ELOOP);

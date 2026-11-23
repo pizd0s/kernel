@@ -1,11 +1,9 @@
 //@ compile-flags: -g -D_GNU_SOURCE
 //@ stdout: "wide streams: ok\n"
 
-// Streams of wide characters and of words: the _unlocked kinds of
-// fgetwc, getwc, fgetws, fputwc, putwc and fputws as the locked ones, in
-// UTF-8; open_wmemstream's wide buffer and its length in wide characters,
-// NUL after them, at each fflush and at fclose; getw and putw's ints,
-// EOF at the end; fgetln's line with its newline and length, not ended
+// Streams of wide characters: fgetwc, getwc, fgetws, fputwc, putwc and
+// fputws in UTF-8; open_wmemstream's wide buffer and its length in wide
+// characters, NUL after them, at each fflush and at fclose; fgetln's line with its newline and length, not ended
 // by NUL, the last line without one, NULL at the end.
 
 #include <assert.h>
@@ -20,14 +18,14 @@ int main() {
 
     FILE* f = fopen("wide", "w+");
     assert(f);
-    assert(fputwc_unlocked(L'é', f) == L'é' && putwc_unlocked(L'x', f) == L'x');
-    assert(fputws_unlocked(L"ab€\n", f) >= 0 && fputws(L"line two\n", f) >= 0);
+    assert(fputwc(L'é', f) == L'é' && putwc(L'x', f) == L'x');
+    assert(fputws(L"ab€\n", f) >= 0 && fputws(L"line two\n", f) >= 0);
     rewind(f);
-    assert(fgetwc_unlocked(f) == L'é' && getwc_unlocked(f) == L'x');
+    assert(fgetwc(f) == L'é' && getwc(f) == L'x');
     wchar_t line[16];
-    assert(fgetws_unlocked(line, 16, f) == line && wcscmp(line, L"ab€\n") == 0);
+    assert(fgetws(line, 16, f) == line && wcscmp(line, L"ab€\n") == 0);
     assert(fgetws(line, 16, f) == line && wcscmp(line, L"line two\n") == 0);
-    assert(fgetwc_unlocked(f) == WEOF && feof(f));
+    assert(fgetwc(f) == WEOF && feof(f));
     fclose(f);
     f = fopen("wide", "r");
     char bytes[32];
@@ -45,18 +43,6 @@ int main() {
     assert(fclose(m) == 0 && size == 10 && buffer[10] == 0);
     free(buffer);
 
-    f = fopen("words", "w+");
-    assert(f);
-    const int words[] = {0, 1, -1, 0x12345678, -0x7fffffff};
-    for (int w : words) {
-        assert(putw(w, f) == 0);
-    }
-    rewind(f);
-    for (int w : words) {
-        assert(getw(f) == w);
-    }
-    assert(getw(f) == EOF && feof(f));
-    fclose(f);
 
     f = fopen("lines", "w+");
     assert(f && fputs("first\nsecond line\nlast", f) >= 0);

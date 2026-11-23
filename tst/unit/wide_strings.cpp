@@ -87,6 +87,5 @@ int main() {
     assert(wcsncasecmp_l(L"ÉA", L"éb", 2, utf8) < 0);
     assert(wcsftime_l(result, 32, L"%Y-%m-%d", &value, utf8) == 10 && wcscmp(result, L"1970-01-01") == 0);
     freelocale(utf8);
-    assert(wcswcs(source, L"éa") == source + 2 && wcswcs(source, L"zz") == nullptr);
     puts("wide strings: ok");
 }

@@ -6,7 +6,7 @@
 
 /*
  * Temporary files and names in P_tmpdir, made by the kernel's mkstemp and
- * mktemp: a name of tmpnam or tempnam was free when made, as POSIX allows.
+ * mktemp: a name of tmpnam was free when made, as POSIX allows.
  */
 
 FILE* __kernel_tmpfile(void) {
@@ -37,35 +37,4 @@ char* __kernel_tmpnam(char* buf) {
     }
 
     return strcpy(buf ? buf : internal, path);
-}
-
-char* __kernel_tempnam(const char* dir, const char* prefix) {
-    if (!dir) {
-        dir = P_tmpdir;
-    }
-
-    if (!prefix) {
-        prefix = "temp";
-    }
-
-    size_t dirLength = strlen(dir);
-    size_t prefixLength = strlen(prefix);
-    char* path = malloc(dirLength + prefixLength + 9);
-
-    if (!path) {
-        return 0;
-    }
-
-    memcpy(path, dir, dirLength);
-    path[dirLength] = '/';
-    memcpy(path + dirLength + 1, prefix, prefixLength);
-    memcpy(path + dirLength + 1 + prefixLength, "_XXXXXX", 8);
-
-    if (!*mktemp(path)) {
-        free(path);
-
-        return 0;
-    }
-
-    return path;
 }

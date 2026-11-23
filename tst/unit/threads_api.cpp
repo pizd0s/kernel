@@ -200,7 +200,6 @@ namespace {
         sched_param param{};
         assert(pthread_getschedparam(me, &policy, &param) == 0 && policy == SCHED_OTHER && param.sched_priority == 0);
         assert(pthread_setschedprio(me, 0) == 0);
-        assert(pthread_getconcurrency() == 0 && pthread_setconcurrency(-1) == EINVAL && pthread_setconcurrency(0) == 0);
         clockid_t clock;
         timespec spent;
         assert(pthread_getcpuclockid(me, &clock) == 0 && clock != CLOCK_THREAD_CPUTIME_ID && clock_gettime(clock, &spent) == 0);

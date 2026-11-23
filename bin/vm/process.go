@@ -3497,32 +3497,6 @@ func (p *Process) libcGetrandom(buf, n, flags uint32) uint32 {
 	return n
 }
 
-func (p *Process) libcUlimit(cmd, va uint32) uint32 {
-	switch cmd {
-	case UL_GETFSIZE:
-		l, _ := p.limit(p, RLIMIT_FSIZE, nil)
-
-		return uint32(min(l.cur/512, math.MaxInt32))
-	case UL_SETFSIZE:
-		n := int32(p.varArg(va, 0))
-		bytes := ^uint64(0)
-
-		if n >= 0 {
-			bytes = uint64(n) * 512
-		} else {
-			n = math.MaxInt32
-		}
-
-		if _, err := p.limit(p, RLIMIT_FSIZE, &Rlimit{bytes, bytes}); err != nil {
-			return p.result(0, err)
-		}
-
-		return uint32(n)
-	}
-
-	return p.result(0, EINVAL)
-}
-
 func (p *Process) libcPosix_madvise(addr, n, advice uint32) uint32 {
 	switch {
 	case advice > POSIX_MADV_DONTNEED:
@@ -5910,24 +5884,6 @@ func (p *Process) libcSigaltstack(ss, old uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) libcSiginterrupt(sig, flag uint32) uint32 {
-	if !validSignal(sig) {
-		return p.result(0, EINVAL)
-	}
-
-	p.sig.mu.Lock()
-
-	if flag != 0 {
-		p.sig.actions[sig].flags &^= SA_RESTART
-	} else {
-		p.sig.actions[sig].flags |= SA_RESTART
-	}
-
-	p.sig.mu.Unlock()
-
-	return p.result(0, nil)
-}
-
 func (p *Process) libcPause() uint32 {
 	for {
 		if p.idle(-1, false) != nil {
@@ -5955,74 +5911,6 @@ func (p *Process) suspendWith(mask uint64) uint32 {
 
 func (p *Process) libcSigsuspend(set uint32) uint32 {
 	return p.suspendWith(p.u64(set))
-}
-
-func (p *Process) libcSighold(sig uint32) uint32 {
-	if !validSignal(sig) {
-		return p.result(0, EINVAL)
-	}
-
-	p.setMask(p.mask() | sigBit(int(sig)))
-
-	return p.result(0, nil)
-}
-
-func (p *Process) libcSigrelse(sig uint32) uint32 {
-	if !validSignal(sig) {
-		return p.result(0, EINVAL)
-	}
-
-	p.setMask(p.mask() &^ sigBit(int(sig)))
-
-	return p.result(0, nil)
-}
-
-func (p *Process) libcSigignore(sig uint32) uint32 {
-	if !validSignal(sig) || sig == uint32(SIGKILL) || sig == uint32(SIGSTOP) {
-		return p.result(0, EINVAL)
-	}
-
-	p.setAction(int(sig), SigAction{handler: SIG_IGN})
-
-	return p.result(0, nil)
-}
-
-func (p *Process) libcSigpause(sig uint32) uint32 {
-	if !validSignal(sig) {
-		return p.result(0, EINVAL)
-	}
-
-	return p.suspendWith(p.mask() &^ sigBit(int(sig)))
-}
-
-func (p *Process) libcSigset(sig, disp uint32) uint32 {
-	if !validSignal(sig) || disp != SIG_HOLD && (sig == uint32(SIGKILL) || sig == uint32(SIGSTOP)) {
-		p.setErrno(EINVAL)
-
-		return SIG_ERR
-	}
-
-	bit := sigBit(int(sig))
-	held := p.mask()&bit != 0
-
-	p.sig.mu.Lock()
-
-	prev := p.sig.actions[sig]
-
-	p.sig.mu.Unlock()
-
-	if disp == SIG_HOLD {
-		p.setMask(p.mask() | bit)
-	} else {
-		prev = p.setAction(int(sig), SigAction{handler: disp})
-		p.setMask(p.mask() &^ bit)
-	}
-
-	if held {
-		return SIG_HOLD
-	}
-
-	return prev.handler
 }
 
 func (p *Process) libcRaise(sig uint32) uint32 {
@@ -7238,16 +7126,6 @@ func (p *Process) libcAligned_alloc(align, n uint32) uint32 {
 	return at
 }
 
-func (p *Process) libcValloc(n uint32) uint32 {
-	at := p.memalign(4096, n)
-
-	if at == 0 {
-		p.setErrno(ENOMEM)
-	}
-
-	return at
-}
-
 func (p *Process) libcPosix_memalign(out, align, n uint32) uint32 {
 	if !alignment(align, true) {
 		return uint32(EINVAL)
@@ -7272,10 +7150,6 @@ func (p *Process) libcMalloc_usable_size(ptr uint32) uint32 {
 	_, _, size := p.block(ptr, "malloc_usable_size")
 
 	return p.blockAsked(ptr, size)
-}
-
-func (p *Process) libcMalloc_trim(pad uint32) uint32 {
-	return 0
 }
 
 func (p *Process) libcReallocarray(ptr, n, size uint32) uint32 {
@@ -9380,38 +9254,6 @@ func (p *Process) realpath(path string) (string, error) {
 	return out, err
 }
 
-func (p *Process) libcCanonicalize_file_name(path uint32) uint32 {
-	guest, err := p.realpath(p.str(path))
-
-	if err != nil {
-		return p.pointer(0, err)
-	}
-
-	at := p.newString(guest)
-
-	if at == 0 {
-		return p.pointer(0, ENOMEM)
-	}
-
-	return p.pointer(at, nil)
-}
-
-func (p *Process) libcGet_current_dir_name() uint32 {
-	cwd, err := p.cwdPath()
-
-	if err != nil {
-		return p.pointer(0, err)
-	}
-
-	at := p.newString(cwd)
-
-	if at == 0 {
-		return p.pointer(0, ENOMEM)
-	}
-
-	return p.pointer(at, nil)
-}
-
 func (p *Process) libcCreat(path, mode uint32) uint32 {
 	f, err := p.openPath(p.str(path), O_WRONLY|O_CREAT|O_TRUNC, mode&0o7777&^p.umask)
 
@@ -9423,10 +9265,6 @@ func (p *Process) libcCreat(path, mode uint32) uint32 {
 }
 
 func (p *Process) libcEaccess(path, mode uint32) uint32 {
-	return p.result(0, p.accessAt(AT_FDCWD, p.str(path), mode, AT_EACCESS))
-}
-
-func (p *Process) libcEuidaccess(path, mode uint32) uint32 {
 	return p.result(0, p.accessAt(AT_FDCWD, p.str(path), mode, AT_EACCESS))
 }
 
@@ -11927,12 +11765,6 @@ func (p *Process) libcUsleep(us uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) libcUalarm(value, interval uint32) uint32 {
-	left, _ := p.setTimer(ITIMER_REAL, time.Duration(value)*time.Microsecond, time.Duration(interval)*time.Microsecond)
-
-	return uint32(min(left/time.Microsecond, math.MaxUint32))
-}
-
 func (p *Process) libcGmtime(t uint32) uint32 {
 	return p.gmtime(t, p.staticAt(staticTm))
 }
@@ -12231,10 +12063,6 @@ func (p *Process) libcTzset() {
 }
 
 func (p *Process) libcSettimeofday(tv, tz uint32) uint32 {
-	return p.result(0, EPERM)
-}
-
-func (p *Process) libcStime(t uint32) uint32 {
 	return p.result(0, EPERM)
 }
 
@@ -13023,14 +12851,6 @@ func (p *Process) libcDaemon(nochdir, noclose uint32) uint32 {
 
 func (p *Process) libcPrctl(option, va uint32) uint32 {
 	return p.prctl(option, va)
-}
-
-func (p *Process) libcVhangup() uint32 {
-	return p.result(0, EPERM)
-}
-
-func (p *Process) libcSethostid(id uint32) uint32 {
-	return p.result(0, EPERM)
 }
 
 func (p *Process) libcUname(at uint32) uint32 {
@@ -15906,10 +15726,6 @@ func (p *Process) libcIsxdigit(c uint32) uint32 {
 	return ctype("xdigit", c)
 }
 
-func (p *Process) libcToascii(c uint32) uint32 {
-	return c & 0x7f
-}
-
 func (p *Process) bounded(at, n uint32) []byte {
 	m := p.mem()
 
@@ -16377,32 +16193,6 @@ func (p *Process) libcL64a(v uint32) uint32 {
 	return at
 }
 
-func (p *Process) libcGcvt(v float64, n, buf uint32) uint32 {
-	p.putString(buf, shortFloatText(v, int(int32(n))))
-
-	return buf
-}
-
-func (p *Process) libcCuserid(s uint32) uint32 {
-	if s != 0 {
-		p.span(s, 1)[0] = 0
-	}
-
-	e := p.passwdBy(byUid(p.cred.euid()))
-
-	if e == nil || len(e.name) >= L_cuserid {
-		return s
-	}
-
-	if s == 0 {
-		s = p.staticAt(staticCuserid)
-	}
-
-	p.putString(s, e.name)
-
-	return s
-}
-
 func (p *Process) libcAbs(n uint32) uint32 {
 	if int32(n) < 0 {
 		return uint32(-int32(n))
@@ -16472,12 +16262,6 @@ func (p *Process) libcMemrchr(s, c, n uint32) uint32 {
 	}
 
 	return 0
-}
-
-func (p *Process) libcRawmemchr(s, c uint32) uint32 {
-	at, _ := p.search(s, math.MaxUint32, byte(c))
-
-	return at
 }
 
 func (p *Process) libcMemccpy(d, s, c, n uint32) uint32 {
@@ -18328,21 +18112,6 @@ func (p *Process) libcPthread_setschedprio(thread, value uint32) uint32 {
 	return 0
 }
 
-func (p *Process) libcPthread_getconcurrency() uint32 {
-	return 0
-}
-
-func (p *Process) libcPthread_setconcurrency(value uint32) uint32 {
-	switch {
-	case int32(value) < 0:
-		return uint32(EINVAL)
-	case value > 0:
-		return uint32(EAGAIN)
-	}
-
-	return 0
-}
-
 func (p *Process) libcPthread_getcpuclockid(thread, out uint32) uint32 {
 	if !p.self(thread) {
 		return uint32(ESRCH)
@@ -18634,27 +18403,6 @@ func (p *Process) libcPthread_getattr_np(thread, attr uint32) uint32 {
 	p.k.mu.Lock()
 	p.put32(attr+8, uint32(p.policy))
 	p.k.mu.Unlock()
-
-	return 0
-}
-
-func (p *Process) libcPthread_getattr_default_np(attr uint32) uint32 {
-	return p.libcPthread_attr_init(attr)
-}
-
-func (p *Process) libcPthread_setattr_default_np(attr uint32) uint32 {
-	b := p.span(attr, sizeofPthreadAttr)
-
-	for i, c := range b {
-		if c != 0 && (i < 20 || i >= 28) {
-			return uint32(EINVAL)
-		}
-	}
-
-	stack, guard := p.threadDefaults()
-
-	p.defaultStack = max(stack, min(p.u32(attr+20), defaultThreadStackMax))
-	p.defaultGuard = max(guard, min(p.u32(attr+24), defaultThreadGuardMax))
 
 	return 0
 }
@@ -19466,20 +19214,6 @@ func (p *Process) libcPosix_close(fd, flags uint32) uint32 {
 	return p.libcClose(fd)
 }
 
-func (p *Process) libcBrk(end uint32) uint32 {
-	return p.result(0, ENOMEM)
-}
-
-func (p *Process) libcSbrk(increment uint32) uint32 {
-	if increment != 0 {
-		p.setErrno(ENOMEM)
-
-		return math.MaxUint32
-	}
-
-	return uint32(min(p.inst.memory.pages*pageSize, math.MaxUint32))
-}
-
 func (p *Process) libcIssetugid() uint32 {
 	return 0
 }
@@ -19535,10 +19269,6 @@ func (p *Process) libcWcscasecmp_l(a, b, locale uint32) uint32 {
 
 func (p *Process) libcWcsncasecmp_l(a, b, n, locale uint32) uint32 {
 	return p.wcscasecmp(a, b, n)
-}
-
-func (p *Process) libcWcswcs(h, n uint32) uint32 {
-	return p.libcWcsstr(h, n)
 }
 
 func (p *Process) libcWcsftime_l(s, max, format, tm, locale uint32) uint32 {

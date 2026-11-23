@@ -32,7 +32,6 @@ void* reallocarray(void*, size_t, size_t);
 void free(void*);
 void* aligned_alloc(size_t, size_t);
 int posix_memalign(void**, size_t, size_t);
-void* valloc(size_t);
 
 int atoi(const char*);
 long atol(const char*);
@@ -74,7 +73,6 @@ int putenv(char*);
 int clearenv(void);
 int system(const char*);
 char* realpath(const char* __restrict, char* __restrict);
-char* canonicalize_file_name(const char*);
 
 char* mktemp(char*);
 int mkstemp(char*);
@@ -103,9 +101,6 @@ void lcong48(unsigned short[7]);
 long a64l(const char*);
 char* l64a(long);
 
-char* ecvt(double, int, int*, int*);
-char* fcvt(double, int, int*, int*);
-char* gcvt(double, int, char*);
 
 void setkey(const char*);
 

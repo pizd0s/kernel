@@ -64,10 +64,6 @@ size_t fread(void* __restrict, size_t, size_t, FILE* __restrict);
 size_t fwrite(const void* __restrict, size_t, size_t, FILE* __restrict);
 ssize_t getline(char** __restrict, size_t* __restrict, FILE* __restrict);
 char* fgetln(FILE*, size_t*);
-int getw(FILE*);
-int putw(int, FILE*);
-#define L_cuserid 20
-char* cuserid(char*);
 ssize_t getdelim(char** __restrict, size_t* __restrict, int, FILE* __restrict);
 
 int fseek(FILE*, long, int);
@@ -146,7 +142,6 @@ FILE* funopen(const void*, int (*)(void*, char*, int), int (*)(void*, const char
 
 FILE* tmpfile(void);
 char* tmpnam(char*);
-char* tempnam(const char*, const char*);
 FILE* popen(const char*, const char*);
 int pclose(FILE*);
 

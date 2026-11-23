@@ -55,8 +55,8 @@ static void strings(void) {
     char buf[8];
     size_t l = strlcpy(buf, "overflowing", sizeof buf);
     printf("strlcpy %zu %s %zu\n", l, buf, strlcat(buf, "xyz", sizeof buf));
-    printf("memrchr %td memmem %td rawmemchr %td\n", (char*)memrchr("abcabc", 'b', 6) - "abcabc",
-           (char*)memmem("hello world", 11, "o w", 3) - "hello world", (char*)rawmemchr("find", 'n') - "find");
+    printf("memrchr %td memmem %td\n", (char*)memrchr("abcabc", 'b', 6) - "abcabc",
+           (char*)memmem("hello world", 11, "o w", 3) - "hello world");
     char path1[] = "/usr/lib/";
     char path2[] = "file.txt";
     printf("basename %s %s\n", basename(path1), basename(path2));
@@ -313,10 +313,7 @@ static void files(void) {
     printf(" tmpfile %s", back);
     fclose(tmp);
     char name[L_tmpnam];
-    char* other = tempnam("/run", "pre");
-    printf(" tmpnam %d tempnam %d\n", tmpnam(name) == name && strncmp(name, "/run/tmpnam_", 12) == 0,
-           strncmp(other, "/run/pre_", 9) == 0);
-    free(other);
+    printf(" tmpnam %d\n", tmpnam(name) == name && strncmp(name, "/run/tmpnam_", 12) == 0);
 }
 
 static void users(void) {
@@ -344,17 +341,9 @@ static void users(void) {
     for (int i = 0; i < ngroups; i++) {
         printf(" %u", groups[i]);
     }
+    printf("\n");
 
-    FILE* f = fopen("/etc/passwd", "r");
-    struct passwd* fp = fgetpwent(f);
-    printf(" fgetpwent %s", fp->pw_name);
-    fclose(f);
-    f = fopen("/etc/group", "r");
-    fgetgrent(f);
-    struct group* fg = fgetgrent(f);
-    printf(" fgetgrent %s %s\n", fg->gr_name, fg->gr_mem[0]);
-    fclose(f);
-    f = fopen("/run/mtab", "w+");
+    FILE* f = fopen("/run/mtab", "w+");
     struct mntent m = {"/dev/root", "/", "ext4", "rw,noatime", 0, 1};
     addmntent(f, &m);
     rewind(f);

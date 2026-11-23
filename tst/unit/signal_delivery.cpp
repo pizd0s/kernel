@@ -98,11 +98,6 @@ int main() {
     install.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
     assert(sigaddset(&install.sa_mask, SIGUSR2) == 0);
     assert(sigaction(SIGUSR1, &install, &previous) == 0);
-    assert(siginterrupt(SIGUSR1, 1) == 0);
-    assert(sigaction(SIGUSR1, nullptr, &current) == 0 && !(current.sa_flags & SA_RESTART));
-    assert(siginterrupt(SIGUSR1, 0) == 0);
-    assert(sigaction(SIGUSR1, nullptr, &current) == 0 && (current.sa_flags & SA_RESTART));
-    assert(siginterrupt(0, 1) == -1 && errno == EINVAL);
     errno = E2BIG;
     assert(kill(getpid(), SIGUSR1) == 0 && handled == 1 && errno == E2BIG);
     assert(kill(getpid(), SIGUSR1) == 0 && handled == 2 && errno == E2BIG);

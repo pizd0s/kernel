@@ -3,8 +3,8 @@
  * (stdio.h, local.h):
  * - flockfile, ftrylockfile and funlockfile: a process of lib/c's has one
  *   thread, which owns every stream;
- * - fgetc_unlocked and fgets_unlocked, and the _unlocked forms of the wide
- *   functions, glibc's: the functions, whose lock is nothing;
+ * - fgetc_unlocked and fgets_unlocked, glibc's: the functions, whose lock
+ *   is nothing;
  * - stdio_ext.h's functions, Solaris' and glibc's, gnulib's way into a
  *   FILE it cannot see into among them (__freadahead, __freadptr).
  */
@@ -55,38 +55,6 @@ int __kernel_fgetc_unlocked(FILE* fp) {
 
 char* __kernel_fgets_unlocked(char* s, int n, FILE* fp) {
     return fgets(s, n, fp);
-}
-
-wint_t __kernel_fgetwc_unlocked(FILE* fp) {
-    return fgetwc(fp);
-}
-
-wint_t __kernel_getwc_unlocked(FILE* fp) {
-    return fgetwc(fp);
-}
-
-wint_t __kernel_getwchar_unlocked(void) {
-    return fgetwc(stdin);
-}
-
-wint_t __kernel_fputwc_unlocked(wchar_t wc, FILE* fp) {
-    return fputwc(wc, fp);
-}
-
-wint_t __kernel_putwc_unlocked(wchar_t wc, FILE* fp) {
-    return fputwc(wc, fp);
-}
-
-wint_t __kernel_putwchar_unlocked(wchar_t wc) {
-    return fputwc(wc, stdout);
-}
-
-wchar_t* __kernel_fgetws_unlocked(wchar_t* restrict s, int n, FILE* restrict fp) {
-    return fgetws(s, n, fp);
-}
-
-int __kernel_fputws_unlocked(const wchar_t* restrict s, FILE* restrict fp) {
-    return fputws(s, fp);
 }
 
 static int flushLineBuffered(FILE* fp) {

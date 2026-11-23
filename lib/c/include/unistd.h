@@ -104,8 +104,6 @@ off_t lseek(int, off_t, int);
 int close(int);
 #define POSIX_CLOSE_RESTART 0
 int posix_close(int, int);
-int brk(void*);
-void* sbrk(intptr_t);
 int issetugid(void);
 void encrypt(char*, int);
 int dup(int);
@@ -166,7 +164,6 @@ int getgroups(int, gid_t[]);
 
 int access(const char*, int);
 int faccessat(int, const char*, int, int);
-int euidaccess(const char*, int);
 int eaccess(const char*, int);
 int chdir(const char*);
 int fchdir(int);
@@ -179,7 +176,6 @@ int chroot(const char*);
  */
 int attach(int);
 char* getcwd(char*, size_t);
-char* get_current_dir_name(void);
 int unlink(const char*);
 int unlinkat(int, const char*, int);
 int rmdir(const char*);
@@ -205,20 +201,17 @@ int getentropy(void*, size_t);
 int getdomainname(char*, size_t);
 int setdomainname(const char*, size_t);
 long gethostid(void);
-int sethostid(long);
 char* getusershell(void);
 void setusershell(void);
 void endusershell(void);
 char* crypt(const char*, const char*);
 char* getpass(const char*);
 int daemon(int, int);
-int vhangup(void);
 int acct(const char*);
 
 unsigned sleep(unsigned);
 int usleep(useconds_t);
 unsigned alarm(unsigned);
-useconds_t ualarm(useconds_t, useconds_t);
 int pause(void);
 int nice(int);
 

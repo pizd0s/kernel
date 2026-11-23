@@ -222,9 +222,6 @@ void sincosl(long double, long double*, long double*);
 double exp10(double);
 float exp10f(float);
 long double exp10l(long double);
-double pow10(double);
-float pow10f(float);
-long double pow10l(long double);
 double j0(double);
 double j1(double);
 double jn(int, double);
@@ -237,14 +234,6 @@ float jnf(int, float);
 float y0f(float);
 float y1f(float);
 float ynf(int, float);
-double drem(double, double);
-float dremf(float, float);
-int finite(double);
-int finitef(float);
-double scalb(double, double);
-float scalbf(float, float);
-double significand(double);
-float significandf(float);
 
 #define M_E 2.7182818284590452354
 #define M_LOG2E 1.4426950408889634074

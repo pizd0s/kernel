@@ -5,9 +5,8 @@
 // at_quick_exit functions, the last registered first, and _Exits with
 // its status, no atexit function and no stdio flush; fork, a function as
 // any other, runs pthread_atfork's handlers called through a pointer too;
-// _Fork (POSIX.1-2024) is fork without them; brk always fails ENOMEM and
-// sbrk changes nothing (Linux and musl's), sbrk(0) the break; issetugid
-// is 0 for a process that changed no ids; posix_close closes as close
+// _Fork (POSIX.1-2024) is fork without them; issetugid is 0 for a process
+// that changed no ids; posix_close closes as close
 // and is EBADF for no descriptor; timespec_get (C11) is TIME_UTC's
 // time, 0 for another base.
 
@@ -100,12 +99,6 @@ int main() {
     assert(wait(pid) == 0 && handlers[0] == 0);
     printf("_Fork: none\n");
 
-    void* end = sbrk(0);
-    assert(end != (void*)-1);
-    errno = 0;
-    assert(sbrk(4096) == (void*)-1 && errno == ENOMEM && sbrk(0) == end);
-    errno = 0;
-    assert(brk(end) == -1 && errno == ENOMEM);
     assert(issetugid() == 0);
 
     int fd = open(".", O_RDONLY);

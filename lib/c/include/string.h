@@ -13,7 +13,6 @@ void* memrchr(const void*, int, size_t);
 void* memmem(const void*, size_t, const void*, size_t);
 void* mempcpy(void* __restrict, const void* __restrict, size_t);
 void* memccpy(void* __restrict, const void* __restrict, int, size_t);
-void* rawmemchr(const void*, int);
 
 size_t strlen(const char*);
 size_t strnlen(const char*, size_t);

@@ -70,8 +70,6 @@ def main():
     cases = [("span-overflow", "write", [1, 65535, 2], {}, 139, "out of bounds memory access"),
              ("string-address", "getenv", [65536], {}, 139, "out of bounds memory access"),
              ("unterminated-string", "getenv", [65520], {}, 139, "out of bounds memory access"),
-             ("bounded-address", "rawmemchr", [65537, 0], {}, 139, "out of bounds memory access"),
-             ("bounded-search", "rawmemchr", [65520, 0], {}, 139, "out of bounds memory access"),
              ("bounded-length", "strnlen", [65520, 17], {}, 139, "out of bounds memory access"),
              ("bounded-length-address", "strnlen", [65537, 0], {}, 139, "out of bounds memory access"),
              ("search-unterminated-haystack", "strstr", [65520, 4096], {}, 139, "out of bounds memory access"),
@@ -93,7 +91,6 @@ def main():
               ("search-empty-strings", "strstr", [4096, 8192], {"expected": 4096}, 0, ""),
               ("search-at-end", "memmem", [65520, 16, 65524, 12], {"expected": 65520}, 0, ""),
               ("search-empty-ranges", "memmem", [65536, 0, 65536, 0], {"expected": 65536}, 0, ""),
-              ("bounded-early-match", "rawmemchr", [65520, 65], {"expected": 65520}, 0, ""),
               ("wide-empty-span", "wmemchr", [65536, 0, 0], {"expected": 0}, 0, ""),
               ("wide-early-match", "wmemchr", [65520, 0x41414141, 4], {"expected": 65520}, 0, ""),
               ("empty-write-bound", "write", [1, 65536, 0], {"expected": 0}, 0, "")]

@@ -7,11 +7,19 @@
 #include <regex.h>
 #include <signal.h>
 #include <stdio.h>
+#include <sys/time.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+// The real-time timer: its first SIGALRM after first microseconds, the next
+// ones each interval after, none at 0.
+static void alarmIn(long first, long interval) {
+    itimerval timer{{0, interval}, {0, first}};
+    assert(setitimer(ITIMER_REAL, &timer, nullptr) == 0);
+}
 
 static volatile sig_atomic_t alarms;
 
@@ -110,7 +118,7 @@ int main() {
     struct sigaction action{};
     action.sa_handler = alarmHandler;
     assert(sigemptyset(&action.sa_mask) == 0 && sigaction(SIGALRM, &action, nullptr) == 0);
-    ualarm(40000, 0);
+    alarmIn(40000, 0);
     assert(waitpid(child, &status, 0) == -1 && errno == EINTR && alarms == 1);
     assert(write(release[1], "x", 1) == 1);
     assert(wait4(child, &status, 0, &usage) == child && WIFEXITED(status) && WEXITSTATUS(status) == 23);

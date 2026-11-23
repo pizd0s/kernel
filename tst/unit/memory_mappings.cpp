@@ -97,7 +97,6 @@ int main() {
     // The VM's memory needs no page locking and keeps its heap allocation.
     assert(mlock(block, sizeof(block)) == 0 && munlock(block, sizeof(block)) == 0);
     assert(mlockall(MCL_CURRENT | MCL_FUTURE) == 0 && munlockall() == 0);
-    assert(malloc_trim(0) == 0);
 #endif
     puts("memory mappings: ok");
 }

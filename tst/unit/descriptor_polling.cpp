@@ -7,10 +7,18 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
+#include <sys/time.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
+
+// The real-time timer: its first SIGALRM after first microseconds, the next
+// ones each interval after, none at 0.
+static void alarmIn(long first, long interval) {
+    itimerval timer{{0, interval}, {0, first}};
+    assert(setitimer(ITIMER_REAL, &timer, nullptr) == 0);
+}
 
 static volatile sig_atomic_t signals;
 
@@ -77,11 +85,11 @@ int main() {
     struct sigaction action{};
     action.sa_handler = alarmed;
     assert(sigemptyset(&action.sa_mask) == 0 && sigaction(SIGALRM, &action, nullptr) == 0);
-    assert(ualarm(10000, 10000) == 0);
+    alarmIn(10000, 10000);
     timespec delay{1, 0};
     assert(pselect(0, nullptr, nullptr, nullptr, &delay, &empty) == -1 && errno == EINTR);
     assert(ppoll(nullptr, 0, &delay, &empty) == -1 && errno == EINTR);
-    ualarm(0, 0);
+    alarmIn(0, 0);
     assert(signals >= 2 && delay.tv_sec == 1 && delay.tv_nsec == 0);
     assert(sigprocmask(SIG_SETMASK, nullptr, &observed) == 0 && sigismember(&observed, SIGUSR2) == 1);
     assert(sigprocmask(SIG_SETMASK, &saved, nullptr) == 0);

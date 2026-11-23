@@ -4,8 +4,6 @@
 
 __BEGIN_DECLS
 
-typedef struct __sFILE FILE;
-
 struct passwd {
     char* pw_name;
     char* pw_passwd;
@@ -23,7 +21,5 @@ int getpwuid_r(uid_t, struct passwd*, char*, size_t, struct passwd**);
 struct passwd* getpwent(void);
 void setpwent(void);
 void endpwent(void);
-struct passwd* fgetpwent(FILE*);
-int putpwent(const struct passwd*, FILE*);
 
 __END_DECLS

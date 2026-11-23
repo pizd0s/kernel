@@ -19,7 +19,6 @@ int isupper(int);
 int isxdigit(int);
 int tolower(int);
 int toupper(int);
-int toascii(int);
 
 int isalnum_l(int, locale_t);
 int isalpha_l(int, locale_t);

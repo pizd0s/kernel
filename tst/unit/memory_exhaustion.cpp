@@ -74,15 +74,12 @@ int main() {
     }
     assert(aligned_alloc(131072, 131072) == nullptr && errno == ENOMEM);
     assert(memalign(131072, 1) == nullptr && errno == ENOMEM);
-    assert(valloc(65536) == nullptr && errno == ENOMEM);
     void* aligned = preserved;
     assert(posix_memalign(&aligned, 131072, 131072) == ENOMEM && aligned == preserved);
     assert(mmap(nullptr, 65536, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED && errno == ENOMEM);
     assert(mmap(nullptr, SIZE_MAX, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED && errno == ENOMEM);
     assert(strdup("x") == nullptr && errno == ENOMEM);
     assert(getcwd(nullptr, 0) == nullptr && errno == ENOMEM);
-    assert(get_current_dir_name() == nullptr && errno == ENOMEM);
-    assert(canonicalize_file_name("/") == nullptr && errno == ENOMEM);
     assert(realpath("/", nullptr) == nullptr && errno == ENOMEM);
     assert(wcsdup(L"wide") == nullptr && errno == ENOMEM);
     assert(opendir("/") == nullptr && errno == ENOMEM);

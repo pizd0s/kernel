@@ -69,8 +69,6 @@ int main() {
     check(setdomainname("changed", 7) == 0 && getdomainname(domain, sizeof(domain)) == 0 && strcmp(domain, "changed") == 0);
     check(sethostname(host, 65) == -1 && errno == EINVAL);
     check(uname(&names) == 0 && strcmp(names.nodename, "changed") == 0);
-    check(sethostid(1) == -1 && errno == EPERM);
-    check(vhangup() == -1 && errno == EPERM);
     tms timesUsed{};
     check(times(&timesUsed) != clock_t(-1));
 

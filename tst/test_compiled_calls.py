@@ -398,7 +398,7 @@ FUNCTIONS = {
     "strstr": ("ii>i", "ss", strstr), "strchr": ("ii>i", "sc", strchr), "index": ("ii>i", "sc", strchr),
     "strchrnul": ("ii>i", "sc", strchrnul), "strdup": ("i>i", "s", strdup),
     "tolower": ("i>i", "x", lambda k, c: c + 32 if upper(c) else c), "toupper": ("i>i", "x", lambda k, c: c - 32 if lower(c) else c),
-    "toascii": ("i>i", "x", lambda k, c: c & 0x7f), "abs": ("i>i", "x", magnitude(32)), "labs": ("i>i", "x", magnitude(32)),
+    "abs": ("i>i", "x", magnitude(32)), "labs": ("i>i", "x", magnitude(32)),
     "llabs": ("l>l", "X", magnitude(64)),
     **{name: ("i>i", "x", lambda k, c, test=test: int(c < 0x80 and bool(test(c)))) for name, test in CLASSES.items()},
     "strrchr": ("ii>i", "sc", strrchr),

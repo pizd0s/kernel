@@ -5,8 +5,16 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+// The real-time timer: its first SIGALRM after first microseconds, the next
+// ones each interval after, none at 0.
+static void alarmIn(long first, long interval) {
+    itimerval timer{{0, interval}, {0, first}};
+    assert(setitimer(ITIMER_REAL, &timer, nullptr) == 0);
+}
 
 static volatile sig_atomic_t alarms;
 
@@ -53,7 +61,7 @@ int main() {
         assert(usleep(100000) == 0);
         _exit(23);
     }
-    ualarm(10000, 0);
+    alarmIn(10000, 0);
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 23);
     assert(alarms == 1 && sigaction(SIGALRM, &saved, nullptr) == 0);
     assert(close(release[0]) == 0 && close(release[1]) == 0);

@@ -65,10 +65,6 @@ int main() {
     assert(block && uintptr_t(block) % 65536 == 0);
     memset(block, 3, 129);
     free(block);
-    block = valloc(17);
-    assert(block && uintptr_t(block) % size_t(sysconf(_SC_PAGESIZE)) == 0);
-    memset(block, 4, 17);
-    free(block);
     int sentinel;
     block = &sentinel;
     assert(posix_memalign(&block, 3, 16) == EINVAL && block == &sentinel);

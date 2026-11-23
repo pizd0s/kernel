@@ -145,7 +145,6 @@ int main() {
     assert(stat(absolute, &metadata) == 0 && S_ISREG(metadata.st_mode));
     assert(stat(temporary, &metadata) == -1 && errno == ENOENT);
     assert(acct(nullptr) == -1 && errno == EPERM);
-    assert(canonicalize_file_name("missing") == nullptr && errno == ENOENT);
 #endif
     umask(previous);
     puts("path operations: ok");
