@@ -144,7 +144,8 @@ print("clock", time.process_time() > t, time.monotonic() > 0)
 
 # sockets on the loopback: a TCP server of port 0, whose name has its port
 # from the bind on, and a connection to it; a datagram, and a socket of its
-# descriptor's; a pair; a new socket's options; the names of the resolver
+# descriptor's; a pair; a new socket's options; the names of the resolver,
+# of AI_ADDRCONFIG's family the loopback's too
 srv = socket.socket()
 srv.bind(("127.0.0.1", 0))
 port = srv.getsockname()[1]
@@ -162,7 +163,8 @@ a, b = socket.socketpair()
 a.sendall(b"pair")
 n = socket.socket()
 print("pair", b.recv(4), n.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR), n.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE))
-print("names", socket.getaddrinfo("localhost", 80, socket.AF_INET, socket.SOCK_STREAM)[0][4], socket.gethostbyname("localhost"))
+configured = socket.getaddrinfo("127.0.0.1", 80, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_ADDRCONFIG)
+print("names", socket.getaddrinfo("localhost", 80, socket.AF_INET, socket.SOCK_STREAM)[0][4], socket.gethostbyname("localhost"), len(configured))
 
 # the libraries' modules: compression, SQLite of a journal of WAL's, XML,
 # decimal, CJK's codecs, ndbm
@@ -204,7 +206,7 @@ clock True True
 tcp True True b'tcp' 127.0.0.1
 udp b'udp' True True
 pair b'pair' 0 1
-names ('127.0.0.1', 80) 127.0.0.1
+names ('127.0.0.1', 80) 127.0.0.1 1
 compress [True, True, True, True] 1.3.2
 sqlite 3.54.1 a,b wal
 xml t 0.1428571428571428571428571429 93fa967b

@@ -13556,6 +13556,18 @@ type SocketKind struct {
 	socktype, protocol int
 }
 
+func (p *Process) configured(family uint32) bool {
+	obj, err := p.dirOpen(p.root, sockmgrSocket, O_RDWR, 0)
+
+	if err != nil {
+		return false
+	}
+
+	defer obj.unref()
+
+	return p.request(obj, &SockCreate{domain: family, kind: SOCK_DGRAM}) == nil
+}
+
 func (p *Process) getaddrinfo(node, service, hints, res uint32) int {
 	flags, family, socktype, protocol := 0, 0, 0, 0
 
@@ -13673,8 +13685,11 @@ func (p *Process) getaddrinfo(node, service, hints, res uint32) int {
 		have6 = have6 || a.addr.Is6()
 	}
 
-	usable := flags&AI_ADDRCONFIG == 0
-	usable4, usable6 := usable, usable
+	usable4, usable6 := true, true
+
+	if flags&AI_ADDRCONFIG != 0 {
+		usable4, usable6 = p.configured(AF_INET), p.configured(AF_INET6)
+	}
 
 	for _, a := range addrs {
 		switch {
