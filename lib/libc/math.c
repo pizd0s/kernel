@@ -1,3 +1,5 @@
+#include "kernel.h"
+
 #include <complex.h>
 #include <math.h>
 
@@ -130,18 +132,18 @@ long long __kernel_llrintl(long double x) {
     return (long long)__builtin_rintl(x);
 }
 
-// lgamma's sign goes to signgam, the program's, whose place a call comes
-// with.
-double __kernel_lgamma(double x, int* sign) {
-    return lgamma_r(x, sign);
+// lgamma's sign goes to signgam, the program's, whose place libc.wasm has
+// from its start (kernel.h).
+double __kernel_lgamma(double x) {
+    return lgamma_r(x, __program->signgamAt);
 }
 
-float __kernel_lgammaf(float x, int* sign) {
-    return lgammaf_r(x, sign);
+float __kernel_lgammaf(float x) {
+    return lgammaf_r(x, __program->signgamAt);
 }
 
-long double __kernel_lgammal(long double x, int* sign) {
-    return lgammal_r(x, sign);
+long double __kernel_lgammal(long double x) {
+    return lgammal_r(x, __program->signgamAt);
 }
 
 // FreeBSD's lround has no long double name.

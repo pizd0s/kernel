@@ -28,6 +28,7 @@ const (
 	wasmSymbolTag          = 4
 	wasmSymbolTable        = 5
 	wasmSymbolLocal        = 0x2
+	wasmSymbolExported     = 0x20
 	wasmSymbolUndefined    = 0x10
 	wasmSymbolExplicitName = 0x40
 )
@@ -43,6 +44,7 @@ type WasmObject struct {
 	symbols       []WasmSymbol
 	names         map[uint32]string
 	kernel        map[string]uint32
+	exported      map[string]uint32
 }
 
 func parseWasmObject(data []byte) *WasmObject {
@@ -50,7 +52,7 @@ func parseWasmObject(data []byte) *WasmObject {
 		throwFmt("libc.wasm: no wasm module")
 	}
 
-	o := &WasmObject{names: map[uint32]string{}, kernel: map[string]uint32{}}
+	o := &WasmObject{names: map[uint32]string{}, kernel: map[string]uint32{}, exported: map[string]uint32{}}
 	relocs := map[int][]WasmReloc{}
 	codeAt, dataAt := -1, -1
 
@@ -277,7 +279,15 @@ func (o *WasmObject) exports() {
 			o.names[sym.index] = sym.name
 		}
 
-		if sym.flags&(wasmSymbolUndefined|wasmSymbolLocal) != 0 || !strings.HasPrefix(sym.name, "__kernel_") {
+		if sym.flags&(wasmSymbolUndefined|wasmSymbolLocal) != 0 {
+			continue
+		}
+
+		if sym.flags&wasmSymbolExported != 0 {
+			o.exported[sym.name] = sym.index
+		}
+
+		if !strings.HasPrefix(sym.name, "__kernel_") {
 			continue
 		}
 

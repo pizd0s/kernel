@@ -79,12 +79,28 @@ static void writeAll(int fd, const void* data, usize length) {
 }
 
 #if defined(__wasm__) || defined(wasm)
-// The system's exit is libc.wasm's, which the kernel links into a program
+// The system's start is libc.wasm's, which the kernel links into a program
 // before it compiles it. The compiler is compiled for the kernel by its
-// native build, with no kernel to link it: its exit is its own, with
-// nothing to run or flush.
-extern "C" void exit(int code) {
-    _exit(code);
+// native build, with no kernel to link it: its start is its own, over the
+// kernel's Go alone, which gets the places it keeps current and gives the
+// arguments; main's end is the process's, with nothing to run or flush.
+extern "C" void __kernel_begin(int*, char***, int*, char***, char**, long*, int*)
+    __attribute__((__import_module__("kernel"), __import_name__("__kernel_begin")));
+extern "C" int __main_argc_argv(int, char**);
+
+namespace {
+    int errorValue;
+    char** environment;
+    char* zoneNames[2];
+    long zoneOffset;
+    int zoneDaylight;
+}
+
+extern "C" __attribute__((__export_name__("_start"))) void _start() {
+    int count = 0;
+    char** arguments = nullptr;
+    __kernel_begin(&errorValue, &environment, &count, &arguments, zoneNames, &zoneOffset, &zoneDaylight);
+    _exit(__main_argc_argv(count, arguments));
 }
 #endif
 

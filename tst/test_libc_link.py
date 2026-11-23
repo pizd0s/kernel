@@ -3,8 +3,9 @@
 (bin/vm/wasm_linker.go), by `vm link`: tst/link/check.c, 127 functions
 of its own, which libc.wasm's make a count a byte longer. The linked
 module imports none of the kernel functions libc.wasm defines, holds only
-what the program reaches of them and says how far its code moved, so that
-its trap names the program's line.
+what the program reaches of them, exports libc.wasm's functions the kernel
+calls the program's through, and says how far its code moved, so that its
+trap names the program's line.
 
     test_libc_link.py <vm> <check.wasm>
 """
@@ -19,6 +20,7 @@ import exe  # noqa: E402
 
 SOURCE = Path(__file__).resolve().parent / "link" / "check.c"
 REACHED = {"__kernel_dbm_open", "__kernel_dbm_close"}
+CALLS = {"__call_signal_handler", "__call_signal_action", "__call_glob_error"}
 UNREACHED = {"__kernel_dbm_store", "__kernel_dbm_delete", "__kernel_dbm_fetch", "__kernel_dbm_firstkey", "__kernel_dbm_nextkey"}
 
 
@@ -74,6 +76,19 @@ def imports(body):
     return out
 
 
+def exports(body):
+    count, at = leb(body, 0)
+    out = {}
+
+    for _ in range(count):
+        name, at = text(body, at)
+        kind = body[at]
+        index, at = leb(body, at + 1)
+        out[name] = (kind, index)
+
+    return out
+
+
 def function_names(body):
     at = 0
 
@@ -115,6 +130,9 @@ def main():
     assert not kernel & {"dbm_open", "dbm_close"}, kernel
     names = function_names(merged["name"])
     assert REACHED <= names and not names & UNREACHED, names & (REACHED | UNREACHED)
+    assert not CALLS & set(exports(original[7])), exports(original[7])
+    calls = {name: entry for name, entry in exports(merged[7]).items() if name in CALLS}
+    assert set(calls) == CALLS and all(kind == 0 and index >= count - own for kind, index in calls.values()), calls
     shift = leb(merged["w2o.code_shift"], 0)[0]
     assert shift == 1 and count > own, (shift, count)
     trap = next(i for i, line in enumerate(SOURCE.read_text().splitlines(), 1) if "__builtin_trap" in line)

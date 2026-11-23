@@ -11,9 +11,8 @@
  * variable arguments that the import took when the function was the
  * import.
  *
- * A variable of POSIX's is the program's (crt.c): a function that reads
- * or writes one passes its place to the import after its own arguments,
- * as getopt and lgamma do.
+ * A variable of POSIX's is the program's (crt.c), whose place the kernel
+ * gets at the program's start (kernel.h).
  *
  * A structure the kernel reads or writes comes with its size, which is
  * its version: the import has the size after each pointer to one, and the
@@ -336,25 +335,10 @@ KERNEL(int, fnmatch, (const char* a, const char* b, int c), (a, b, c))
 KERNEL(int, ftw, (const char* a, int (*b)(const char*, const struct stat*, int), int c), (a, b, c))
 KERNEL(int, nftw, (const char* a, int (*b)(const char*, const struct stat*, int, struct FTW*), int c, int d), (a, b, c, d))
 
-/*
- * getopt.h, unistd.h: getopt's variables are the program's (crt.c), and
- * the kernel's functions take their places after their own arguments.
- */
-int __kernel_getopt(int, char* const*, const char*, char**, int*, int*, int*) __KERNEL(getopt);
-int __kernel_getopt_long(int, char* const*, const char*, const struct option*, size_t, int*, char**, int*, int*, int*) __KERNEL(getopt_long);
-int __kernel_getopt_long_only(int, char* const*, const char*, const struct option*, size_t, int*, char**, int*, int*, int*) __KERNEL(getopt_long_only);
-
-WEAK int getopt(int argc, char* const argv[], const char* options) {
-    return __kernel_getopt(argc, argv, options, &optarg, &optind, &opterr, &optopt);
-}
-
-WEAK int getopt_long(int argc, char* const* argv, const char* options, const struct option* longs, int* index) {
-    return __kernel_getopt_long(argc, argv, options, longs, sizeof(struct option), index, &optarg, &optind, &opterr, &optopt);
-}
-
-WEAK int getopt_long_only(int argc, char* const* argv, const char* options, const struct option* longs, int* index) {
-    return __kernel_getopt_long_only(argc, argv, options, longs, sizeof(struct option), index, &optarg, &optind, &opterr, &optopt);
-}
+/* getopt.h, unistd.h */
+KERNEL(int, getopt, (int a, char* const b[], const char* c), (a, b, c))
+KERNEL_SIZED(int, getopt_long, (int a, char* const* b, const char* c, const struct option* d, int* e), (int a, char* const* b, const char* c, const struct option* d, size_t d_size, int* e), (a, b, c, d, sizeof(struct option), e))
+KERNEL_SIZED(int, getopt_long_only, (int a, char* const* b, const char* c, const struct option* d, int* e), (int a, char* const* b, const char* c, const struct option* d, size_t d_size, int* e), (a, b, c, d, sizeof(struct option), e))
 
 /* glob.h */
 KERNEL_SIZED(int, glob, (const char* __restrict a, int b, int (*c)(const char*, int), glob_t* __restrict d), (const char* __restrict a, int b, int (*c)(const char*, int), glob_t* __restrict d, size_t d_size), (a, b, c, d, sizeof(glob_t)))
@@ -633,23 +617,9 @@ KERNEL(double, y1, (double a), (a))
 KERNEL(float, y1f, (float a), (a))
 KERNEL(double, yn, (int a, double b), (a, b))
 KERNEL(float, ynf, (int a, float b), (a, b))
-
-/* signgam is the program's (crt.c), and the kernel's lgamma takes its place. */
-double __kernel_lgamma(double, int*) __KERNEL(lgamma);
-float __kernel_lgammaf(float, int*) __KERNEL(lgammaf);
-long double __kernel_lgammal(long double, int*) __KERNEL(lgammal);
-
-WEAK double lgamma(double x) {
-    return __kernel_lgamma(x, &signgam);
-}
-
-WEAK float lgammaf(float x) {
-    return __kernel_lgammaf(x, &signgam);
-}
-
-WEAK long double lgammal(long double x) {
-    return __kernel_lgammal(x, &signgam);
-}
+KERNEL(double, lgamma, (double a), (a))
+KERNEL(float, lgammaf, (float a), (a))
+KERNEL(long double, lgammal, (long double a), (a))
 
 /* mntent.h */
 KERNEL_SIZED(int, addmntent, (FILE* a, const struct mntent* b), (FILE* a, const struct mntent* b, size_t b_size), (a, b, sizeof(struct mntent)))
@@ -1490,13 +1460,7 @@ KERNEL_SIZED(int, clock_nanosleep, (clockid_t a, int b, const struct timespec* c
 KERNEL(int, stime, (const time_t* a), (a))
 KERNEL_SIZED(size_t, strftime_l, (char* __restrict a, size_t b, const char* __restrict c, const struct tm* __restrict d, locale_t e), (char* __restrict a, size_t b, const char* __restrict c, const struct tm* __restrict d, size_t d_size, locale_t e), (a, b, c, d, sizeof(struct tm), e))
 KERNEL(int*, __getdate_err, (void), ())
-
-/* getdate reads tzname, the program's (crt.c), by its place. */
-struct tm* __kernel_getdate(const char*, char**, size_t) __KERNEL(getdate);
-
-WEAK struct tm* getdate(const char* string) {
-    return __kernel_getdate(string, tzname, sizeof(struct tm));
-}
+KERNEL_SIZED(struct tm*, getdate, (const char* a), (const char* a, size_t size), (a, sizeof(struct tm)))
 
 /* uchar.h */
 KERNEL_SIZED(size_t, c16rtomb, (char* __restrict a, char16_t b, mbstate_t* __restrict c), (char* __restrict a, char16_t b, mbstate_t* __restrict c, size_t c_size), (a, b, c, sizeof(mbstate_t)))

@@ -6,8 +6,8 @@ func libc__errno_location() uint32 {
 	return proc().libc__errno_location()
 }
 
-func libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt uint32) {
-	proc().libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt)
+func libc__kernel_begin(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt uint32) {
+	proc().libc__kernel_begin(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt)
 }
 
 func libc__kernel_name() uint32 {

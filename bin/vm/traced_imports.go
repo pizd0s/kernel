@@ -36,7 +36,7 @@ var libraryCalls = func() map[string]bool {
 
 var untracedCalls = map[string]bool{
 	"setjmp": true, "_setjmp": true, "sigsetjmp": true, "longjmp": true, "_longjmp": true, "siglongjmp": true,
-	"vfork": true, "fork": true, "forkpty": true, "__kernel_start": true, "__errno_location": true, "__kernel_program": true, "__kernel_name": true, "__assert_fail": true,
+	"vfork": true, "fork": true, "forkpty": true, "__kernel_begin": true, "__errno_location": true, "__kernel_program": true, "__kernel_name": true, "__assert_fail": true,
 }
 
 var callFormats = func() map[string]string {

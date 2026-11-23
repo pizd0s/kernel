@@ -1,3 +1,5 @@
+#include "kernel.h"
+
 #include <ctype.h>
 #include <errno.h>
 #include <langinfo.h>
@@ -18,11 +20,11 @@
  * DATEMSK, 2 no file to open, 3 no status of it, 4 not a regular file, 5
  * a read failed, 6 no memory, 7 no line matched, 8 the date does not
  * exist, its zone is not the one in effect then, or time_t has no room.
- * The zone's names are tzname, the program's, whose place the call comes
- * with, as the size of its struct tm, the one layout it has had.
+ * The zone's names are tzname, the program's, whose place libc.wasm has
+ * from its start (kernel.h). The call comes with the size of its struct
+ * tm, the one layout it has had.
  */
 static int reason;
-static char** zones;
 
 int* __kernel___getdate_err(void) {
     return &reason;
@@ -98,7 +100,9 @@ static const char* zone(const char* s, Fields* f) {
     f->value[ZONE] = 0;
 
     for (int i = 0; i < 2; i++) {
-        if (zones[i] && strlen(zones[i]) == n && strncasecmp(s, zones[i], n) == 0) {
+        const char* zone = __program->tznameAt[i];
+
+        if (zone && strlen(zone) == n && strncasecmp(s, zone, n) == 0) {
             f->value[ZONE] |= 1 << i;
         }
     }
@@ -326,11 +330,9 @@ static int resolve(const Fields* f, struct tm* t) {
     return 0;
 }
 
-struct tm* __kernel_getdate(const char* string, char** names, size_t returned) {
+struct tm* __kernel_getdate(const char* string, size_t returned) {
     static struct tm result;
     const char* mask = getenv("DATEMSK");
-
-    zones = names;
 
     if (!mask || !*mask) {
         reason = 1;

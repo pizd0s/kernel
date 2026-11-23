@@ -800,7 +800,7 @@ func (p *Process) libc__errno_location() uint32 {
 	return p.errnoAt
 }
 
-func (p *Process) libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt uint32) {
+func (p *Process) libc__kernel_begin(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt uint32) {
 	p.errnoAt, p.environAt = errnoAt, environAt
 	p.tzAt = [3]uint32{tznameAt, timezoneAt, daylightAt}
 

@@ -66,7 +66,7 @@ def program(name, args, returns, reserve, error=None):
 
 def main():
     vm, native, wazero = sys.argv[1:]
-    startup = ("__kernel_start", list(range(1024, 1052, 4)), False)
+    startup = ("__kernel_begin", list(range(1024, 1052, 4)), False)
     cases = [("startup-array", *startup, False, None), ("startup-string", *startup, True, None),
              # localeconv takes the size of its struct lconv.
              ("locale-structure", "localeconv", [56], True, False, None), ("constant-string", "nl_langinfo", [14], True, False, None),

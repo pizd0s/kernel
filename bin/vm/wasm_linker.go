@@ -323,6 +323,10 @@ func (l *WasmLinker) mark() {
 		visit(int(fi))
 	}
 
+	for _, fi := range o.exported {
+		visit(int(fi))
+	}
+
 	for len(funcs) > 0 || len(segs) > 0 {
 		var relocs []WasmReloc
 
@@ -728,27 +732,40 @@ func (l *WasmLinker) globalSection() []byte {
 }
 
 func (l *WasmLinker) exportSection() []byte {
-	s := l.section(7)
+	var out []byte
 
-	if s == nil {
+	count, have := 0, map[string]bool{}
+
+	if s := l.section(7); s != nil {
+		r := WasmReader{data: s.body}
+
+		for n := r.count(3); n > 0; n-- {
+			name, kind, index := r.name(), r.byte(), r.u32()
+
+			if kind == 0 {
+				index = wasmFunction(l.funcMap, uint64(index))
+			}
+
+			out = appendLeb(append(appendWasmName(out, name), kind), uint64(index))
+			have[name] = true
+			count++
+		}
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(l.o.exported)) {
+		if have[name] {
+			throwFmt("wasm: %s is the module's export and libc.wasm's", name)
+		}
+
+		out = appendLeb(append(appendWasmName(out, name), 0), uint64(l.objMap[l.o.exported[name]]))
+		count++
+	}
+
+	if count == 0 {
 		return nil
 	}
 
-	r := WasmReader{data: s.body}
-	n := r.count(3)
-	out := appendLeb(nil, uint64(n))
-
-	for ; n > 0; n-- {
-		name, kind, index := r.name(), r.byte(), r.u32()
-
-		if kind == 0 {
-			index = wasmFunction(l.funcMap, uint64(index))
-		}
-
-		out = appendLeb(append(appendWasmName(out, name), kind), uint64(index))
-	}
-
-	return out
+	return append(appendLeb(nil, uint64(count)), out...)
 }
 
 func (l *WasmLinker) startSection() []byte {

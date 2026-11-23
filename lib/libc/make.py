@@ -19,7 +19,10 @@ names each __kernel_X beside, where the import is of the function's type.
 libc.wasm is a relocatable object (wasm-ld -r) of all of them with lib/c's
 forwarders, kernel.c, through which they call the kernel as a program does,
 and its compiler's runtime, builtins.c. The forwarders are weak, so the
-function of a forwarder's name that libc.wasm has is the one it calls.
+function of a forwarder's name that libc.wasm has is the one it calls. A
+function a source here exports (export_name) the kernel links into every
+program and exports from it by its name: the kernel calls the program's
+functions through them (start.c).
 
 The FreeBSD and LLVM slices are what freebsd/slice.txt and llvm/slice.txt
 cut out of their release tarballs (dev/slice.py). FreeBSD's sources build

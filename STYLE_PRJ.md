@@ -37,11 +37,13 @@ Per-project settings that the shared [STYLE.md](STYLE.md) delegates here.
   forwarders. A function that takes a structure takes its size after it,
   and serves each size it has known.
 - **POSIX's variables.** What POSIX has as a variable is the program's
-  variable (`src/crt.c`), and a kernel function that uses one gets its
-  place: at the program's start (`environ`, `tzname`), or after its own
-  arguments at each call (`optarg`, `signgam`). What POSIX has as a macro
-  is a macro over a kernel function (`errno`, `stdin`). A variable POSIX
-  has not is not in lib/c.
+  variable (`src/crt.c`). The program's entry gives the kernel all their
+  places in one structure, `struct __start` (`src/kernel.h`), and does
+  nothing else: libc.wasm's start keeps it, tells the kernel's Go its
+  places, runs the constructors and main, and libc.wasm's exports are the
+  functions the kernel calls the program's through (`lib/libc/start.c`).
+  What POSIX has as a macro is a macro over a kernel function (`errno`,
+  `stdin`). A variable POSIX has not is not in lib/c.
 - **Third-party code.** Sources are fetched as release tarballs, a big one
   cut down to what is built (`dev/slice.py`), and never edited in place; what they need from us lives beside their build
   (lib/libc's `freebsd/` and `llvm/` headers). Code
