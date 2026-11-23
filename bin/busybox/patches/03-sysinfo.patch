@@ -1,0 +1,14 @@
+sysinfo, Linux's, is not Linux's alone: the header that has it is the
+sign of it, which uptime reads the time up and the load by.
+
+--- a/procps/uptime.c
++++ b/procps/uptime.c
+@@ -40,7 +40,7 @@
+ //usage:       "  1:55pm  up  2:30, load average: 0.09, 0.04, 0.00\n"
+ 
+ #include "libbb.h"
+-#ifdef __linux__
++#if defined __linux__ || __has_include(<sys/sysinfo.h>)
+ # include <sys/sysinfo.h>
+ #endif
+ 

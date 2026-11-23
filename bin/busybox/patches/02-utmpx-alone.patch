@@ -1,0 +1,23 @@
+A libc of utmpx.h alone, as POSIX has it, names its file UTMPX_FILE: that
+is the file of the accounting, and utmp.h, which it has not, is not
+needed.
+
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -106,12 +106,14 @@
+ #  define updwtmpx updwtmp
+ #  define _PATH_UTMPX _PATH_UTMP
+ # else
+-#  if !defined(__FreeBSD__)
++#  include <utmpx.h>
++#  if defined UTMPX_FILE && !defined _PATH_UTMPX
++#   define _PATH_UTMPX UTMPX_FILE
++#  elif !defined(__FreeBSD__)
+ #   include <utmp.h>
+ #  else
+ #   define _PATH_UTMPX "/var/run/utx.active"
+ #  endif
+-#  include <utmpx.h>
+ #  if defined _PATH_UTMP && !defined _PATH_UTMPX
+ #   define _PATH_UTMPX _PATH_UTMP
+ #  endif

@@ -1,0 +1,21 @@
+A system of no /etc/resolv.conf has its resolver's servers and search
+list, res_init's, which nslookup asks then.
+
+--- a/networking/nslookup.c
++++ b/networking/nslookup.c
+@@ -754,6 +754,15 @@
+ 		}
+ 
+ 		fclose(resolv);
++	} else if (res_init() == 0) {
++		/* No resolv.conf: the servers and the search list are the
++		 * resolver's, res_init's */
++		int i;
++
++		for (i = 0; i < _res.nscount; i++)
++			add_ns(xstrdup(inet_ntoa(_res.nsaddr_list[i].sin_addr)));
++		for (i = 0; _res.dnsrch[i]; i++)
++			G.search = G.search ? xasprintf("%s %s", G.search, _res.dnsrch[i]) : xstrdup(_res.dnsrch[i]);
+ 	}
+ 
+ 	if (!G.search) {

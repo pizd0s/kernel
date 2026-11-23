@@ -6,9 +6,11 @@ its applets, each case a boot of rootfs from the image of the tests, in
 errors, exit and SIGINT are longjmps, one of them out of a signal handler;
 its commands, pipes, substitutions and jobs are forks; xargs, find -exec
 and awk's pipes are vforks; a loop without system calls is interrupted for
-its signals. On a host's terminal the shell's jobs are the system's
-pseudoterminal's (bin/tools/console.cpp): ^Z stops one, a read out of the
-foreground stops another, fg continues them and ^C ends them.
+its signals. The applets of archives, an editor, passwords, mail and
+runit's services run, and the network's servers and clients, TCP's and
+UDP's, on the loopback. On a host's terminal the shell's jobs are the
+system's pseudoterminal's (bin/tools/console.cpp): ^Z stops one, a read
+out of the foreground stops another, fg continues them and ^C ends them.
 
     test_busybox.py <vm> <rootfs> <tests.img>
 """
@@ -28,6 +30,11 @@ import time
 import system
 
 DATA = "banana\napple\ncherry\napple\n10\n9\n"
+# A server's port, up before its client asks it: nc -z's connect. A
+# server of SMTP's, sh's under tcpsvd, which writes what it is sent.
+UP = "up() { until nc -z 127.0.0.1 $1; do sleep 1; done; }; "
+SMTP = ("echo 220 hi; while read l; do echo \"$l\" >> /run/smtp.log; case \"$l\" in DATA*) echo 354 go;; .*) echo 250 ok;; "
+        "QUIT*) echo 221 bye; exit;; EHLO*|MAIL*|RCPT*) echo 250 ok;; esac; done")
 
 # argv, standard input, expected standard output, expected exit code
 CASES = [
@@ -92,6 +99,62 @@ CASES = [
     (["find", "/run", "-maxdepth", "1", "-name", "shell.sh", "-exec", "echo", "found", "{}", ";"], "", "found /run/shell.sh\n", 0),
     (["awk", "{ print $0 | \"sort -r\" }"], "a\nc\nb\n", "c\nb\na\n", 0),
     (["awk", "BEGIN { while ((\"echo x; echo y\" | getline l) > 0) print \"l=\" l }"], "", "l=x\nl=y\n", 0),
+    # archives: ar's, lzop's, compress's .Z, a .deb of ar's of tars
+    (["sh", "-c", "echo hi > f; echo there > g; ar rc a.ar f g; ar t a.ar; ar p a.ar g; "
+      "seq 1000 > n; lzop n && rm n && lzop -d n.lzo && seq 1000 | cmp - n && echo lzop; "
+      "printf '\\037\\235\\220\\150\\322\\050\\000' | uncompress; "
+      "echo 2.0 > debian-binary; mkdir c d; printf 'Package: x\\nVersion: 1\\n' > c/control; echo deb > d/f; "
+      "tar czf control.tar.gz -C c ./control; tar czf data.tar.gz -C d ./f; "
+      "ar rc x.deb debian-binary control.tar.gz data.tar.gz; dpkg-deb -f x.deb; dpkg-deb -x x.deb out; cat out/f"],
+     "", "f\ng\nthere\nlzop\nhi\nPackage: x\nVersion: 1\ndeb\n", 0),
+    # ed, files, run-parts, diff of a pipe, in TMPDIR
+    (["sh", "-c", "printf 'a\\nhello ed\\n.\\nw e.txt\\nq\\n' | ed; cat e.txt; "
+      "mknod q p && [ -p q ] && echo fifo; echo s > g; shred -u g; [ -e g ] || echo shredded; "
+      "mkdir parts; printf '#!/bin/sh\\necho part $1\\n' > parts/a; chmod +x parts/a; run-parts -a x parts; "
+      "echo data | pipe_progress 2> /dev/null; fallocate -l 4096 fa; wc -c < fa; "
+      "echo a > f; echo b | diff - f | tail -2; mountpoint -q /run && echo mountpoint"],
+     "", "9\nhello ed\nfifo\nshredded\npart x\ndata\n4096\n-b\n+a\nmountpoint\n", 0),
+    # a password's hash, Drepper's example of SHA-crypt; su; mail's MIME;
+    # services' and terminals' applets
+    (["sh", "-c", "cryptpw -m sha512 'Hello world!' saltstring; su -c 'id -u' root; "
+      "echo hello > t.txt; makemime -c text/plain t.txt | reformime -X cat; "
+      "ipcalc -npb 10.1.2.3 255.255.0.0; hush -c 'x=3; echo $((x * 2))'; "
+      "uptime | grep -c 'load average'; arch; chrt -p $$ | sed -n 's/.*policy: //p'; "
+      "mkdir crontabs; echo '* * * * * echo cron' > ct; crontab -c /run/crontabs ct && crontab -c /run/crontabs -l; "
+      "script -q -t -c 'echo in script' ty 2> tm > /dev/null; tr -d '\\r' < ty; scriptreplay tm ty | tr -d '\\r'"],
+     "", "$6$saltstring$svn8UoSVapNtMuq1ukKS4tPQd8iKwSMHWjl/O817G3uBnIFNjnQJuesI68u4OTLiBFdcbYEdFCoEOfaS35inz1\n0\nhello\n"
+         "BROADCAST=10.1.255.255\nNETWORK=10.1.0.0\nPREFIX=16\n6\n1\nwasm32\nSCHED_OTHER\n* * * * * echo cron\nin script\nin script\n", 0),
+    # runit's: a service supervised, its log; a daemon's pidfile
+    (["sh", "-c", "mkdir e; echo 1 > e/A; envdir e sh -c 'echo A=$A'; chpst -e e sh -c 'echo $A'; "
+      "softlimit -o 5 sh -c 'ulimit -n'; mkdir lg; echo hello log | svlogd lg; cat lg/current; "
+      "mkdir -p svc/x; printf '#!/bin/sh\\nexec sleep 100\\n' > svc/x/run; chmod +x svc/x/run; runsv svc/x & p=$!; "
+      "until sv status ./svc/x | grep -q ^run; do sleep 1; done; echo running; sv exit ./svc/x; wait $p; echo runsv $?; "
+      "start-stop-daemon -S -b -m -p /run/pid -x /bin/sleep -- 100; start-stop-daemon -K -q -p /run/pid && echo stopped"],
+     "", "A=1\n1\n5\nhello log\nrunning\nrunsv 0\nstopped\n", 0),
+    # TCP's servers and clients on the loopback: httpd's CGI, ftpd,
+    # telnetd, inetd's, the time protocol's (RFC 868), lpd, SMTP's
+    (["sh", "-c", UP + "mkdir -p www/cgi-bin; printf '#!/bin/sh\\necho Content-Type: text/plain\\necho\\necho cgi $QUERY_STRING\\n' > www/cgi-bin/t; "
+      "chmod +x www/cgi-bin/t; httpd -p 8081 -h /run/www; up 8081; wget -q -O - 'http://127.0.0.1:8081/cgi-bin/t?x=1'; "
+      "mkdir ftp; echo ftpdata > ftp/g; (cd ftp && exec tcpsvd 127.0.0.1 2121 ftpd -w -a root) & up 2121; "
+      "ftpget -P 2121 127.0.0.1 got g; cat got; echo put > p; ftpput -P 2121 127.0.0.1 p2 p; cat ftp/p2; "
+      "telnetd -p 2323 -l /bin/sh; up 2323; (sleep 1; echo 'echo via telnet; exit'; sleep 1) | telnet 127.0.0.1 2323 | tr -d '\\r' | grep '^via'; "
+      "echo '8888 stream tcp nowait root /bin/echo echo from inetd' > ic; inetd ic; up 8888; nc 127.0.0.1 8888; "
+      "tcpsvd 127.0.0.1 37 printf '\\203\\252\\176\\200' & up 37; rdate -p 127.0.0.1; "
+      "mkdir -p spool/lp; tcpsvd 127.0.0.1 5515 lpd /run/spool & up 5515; echo document | lpr -P lp@127.0.0.1:5515; cat spool/lp/dfA*; "
+      "tcpsvd 127.0.0.1 2525 sh -c '" + SMTP.replace("'", "'\\''") + "' & up 2525; "
+      "printf 'Subject: s\\n\\nbody\\n' | sendmail -S 127.0.0.1:2525 -f a@b.c d@e.f; tr -d '\\r' < smtp.log | grep -v ^EHLO"],
+     "", "cgi x=1\nftpdata\nput\nvia telnet\nfrom inetd\nThu Jan  1 00:00:00 1970\ndocument\n"
+     "MAIL FROM:<a@b.c>\nRCPT TO:<d@e.f>\nDATA\nSubject: s\nTo: d@e.f\n\nbody\n.\nQUIT\n", 0),
+    # UDP's: inetd's tftpd, dnsd, nc's, udpsvd's; a server's receive of no
+    # bytes waits for its first datagram, the sender's address its answer
+    (["sh", "-c", "mkdir tf; echo tftpdata > tf/g; echo '6970 dgram udp wait root /bin/tftpd tftpd -c' > ic; (cd tf && exec inetd /run/ic); "
+      "tftp -g -r g -l tg 127.0.0.1 6970; cat tg; echo put > tp; tftp -p -l tp -r tp2 127.0.0.1 6970; cat tf/tp2; "
+      "echo 'x.test 10.1.2.3' > dc; dnsd -c dc -p 5353 & "
+      "for i in 1 2 3 4 5; do nslookup -port=5353 x.test 127.0.0.1 > ns 2>&1; grep -q 10.1.2.3 ns && break; sleep 1; done; "
+      "grep ^Address: ns | tail -1; "
+      "nc -u -l -p 7000 > ug & for i in 1 2 3 4 5; do echo udp | nc -u -w1 127.0.0.1 7000; [ -s ug ] && break; done; cat ug; "
+      "udpsvd -E 127.0.0.1 7001 head -c 4 & for i in 1 2 3 4 5; do r=$(echo back | nc -u -w1 127.0.0.1 7001); [ -n \"$r\" ] && break; done; echo $r"],
+     "", "tftpdata\nput\nAddress: 10.1.2.3\nudp\nback\n", 0),
 ]
 
 # An interactive shell gets SIGINT while it reads a line, and while a loop

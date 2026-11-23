@@ -50,6 +50,12 @@ struct ipv6_mreq {
     unsigned ipv6mr_interface;
 };
 
+// IPV6_PKTINFO's, RFC 3542's: a datagram's address and interface.
+struct in6_pktinfo {
+    struct in6_addr ipi6_addr;
+    unsigned ipi6_ifindex;
+};
+
 extern const struct in6_addr in6addr_any;
 extern const struct in6_addr in6addr_loopback;
 
@@ -77,16 +83,11 @@ extern const struct in6_addr in6addr_loopback;
 #define IP_TTL 2
 #define IP_HDRINCL 3
 #define IP_OPTIONS 4
-#define IP_RECVOPTS 6
-#define IP_PKTINFO 8
-#define IP_MTU_DISCOVER 10
-#define IP_RECVERR 11
 #define IP_MULTICAST_IF 32
 #define IP_MULTICAST_TTL 33
 #define IP_MULTICAST_LOOP 34
 #define IP_ADD_MEMBERSHIP 35
 #define IP_DROP_MEMBERSHIP 36
-#define IPV6_UNICAST_HOPS 16
 #define IPV6_V6ONLY 26
 #define IPV6_RECVPKTINFO 49
 #define IPV6_PKTINFO 50
