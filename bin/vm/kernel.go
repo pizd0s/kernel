@@ -528,7 +528,6 @@ type SystemNames struct {
 func (k *Kernel) functionTable() map[string]any {
 	return map[string]any{
 		"__errno_location":                      libc__errno_location,
-		"__sized":                               libc__sized,
 		"__kernel_start":                        libc__kernel_start,
 		"__kernel_program":                      libc__kernel_program,
 		"read":                                  libcRead,

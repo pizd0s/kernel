@@ -28,6 +28,29 @@ struct Rejected {
     int code;
 };
 
+// A program of the lib/c before FreeBSD's regex.h calls the kernel's regex
+// with a regex_t of 32 bytes, re_nsub first, a regmatch_t of two longs, and
+// REG_NEWLINE 4 and REG_NOSUB 8: the kernel's functions take them still.
+struct EarlierRegex {
+    size_t re_nsub;
+    void* opaque;
+    void* padding[4];
+    size_t nsub;
+    char last;
+};
+
+struct EarlierMatch {
+    long rm_so;
+    long rm_eo;
+};
+
+static_assert(sizeof(EarlierRegex) == 32 && sizeof(EarlierMatch) == 8);
+
+extern "C" int earlierRegcomp(EarlierRegex*, size_t, const char*, int) __attribute__((import_module("kernel"), import_name("regcomp")));
+extern "C" int earlierRegexec(const EarlierRegex*, size_t, const char*, size_t, EarlierMatch*, size_t, int)
+    __attribute__((import_module("kernel"), import_name("regexec")));
+extern "C" void earlierRegfree(EarlierRegex*, size_t) __attribute__((import_module("kernel"), import_name("regfree")));
+
 int main() {
     const Case cases[] = {
         {R"(a\|bc)", "xbc", 0, 1, 3},
@@ -92,5 +115,15 @@ int main() {
     char message[32];
     size_t size = regerror(999, &expression, message, sizeof(message));
     assert(size == strlen(message) + 1 && message[0] != 0);
+
+    EarlierRegex earlier{};
+    assert(earlierRegcomp(&earlier, sizeof earlier, "^(b)c", 1 | 4) == 0 && earlier.re_nsub == 1);
+    EarlierMatch found[2] = {};
+    assert(earlierRegexec(&earlier, sizeof earlier, "a\nbc", 2, found, sizeof found[0], 0) == 0);
+    assert(found[0].rm_so == 2 && found[0].rm_eo == 4 && found[1].rm_so == 2 && found[1].rm_eo == 3);
+    found[0] = {2, 4};
+    assert(earlierRegexec(&earlier, sizeof earlier, "a\nbcd", 1, found, sizeof found[0], REG_STARTEND) == 0 && found[0].rm_eo == 4);
+    earlierRegfree(&earlier, sizeof earlier);
+    assert(earlierRegcomp(&earlier, 24, "a", 0) == REG_INVARG);
     puts("regex extensions: ok");
 }

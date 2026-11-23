@@ -2,10 +2,6 @@
 
 package main
 
-func libc__sized(call, have, want uint32) {
-	proc().libc__sized(call, have, want)
-}
-
 func libc__errno_location() uint32 {
 	return proc().libc__errno_location()
 }

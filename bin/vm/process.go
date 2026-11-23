@@ -796,10 +796,6 @@ func (p *Process) exitWith(status int) {
 	panic(&ProcExit{status})
 }
 
-func (p *Process) libc__sized(call, have, want uint32) {
-	p.sized(p.str(call), have, want)
-}
-
 func (p *Process) libc__errno_location() uint32 {
 	return p.errnoAt
 }
