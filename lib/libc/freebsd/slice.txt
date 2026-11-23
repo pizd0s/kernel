@@ -2,8 +2,8 @@
 # src.txz once after the download (dev/slice.py): msun, its math and
 # complex functions; of its libc the stdio, the multibyte functions, the
 # trees, getopt, the drand48 family, quick_exit and popen, the
-# declarations of their functions of a locale, and the regex; and the
-# copyright.
+# declarations of their functions of a locale, and the regex with its
+# header; and the copyright.
 COPYRIGHT
 lib/libc/regex
 lib/msun/src
@@ -51,6 +51,7 @@ lib/libc/gen/nrand48.c
 lib/libc/gen/seed48.c
 lib/libc/gen/srand48.c
 lib/libc/gen/popen.c
+include/regex.h
 include/xlocale/_stdio.h
 include/xlocale/_uchar.h
 include/xlocale/_wchar.h

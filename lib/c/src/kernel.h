@@ -5,13 +5,12 @@
 /*
  * Imports private to lib/c. __kernel_start hands the kernel the addresses it
  * keeps current for the process (errno's, which __errno_location gives;
- * environ, tzname, timezone and daylight, which tzset sets; and one of the
- * host functions' of netdb.h, h_errno of an earlier lib/c, none of this
- * one) and receives the argument vector, which the kernel has already
- * placed in the process heap.
+ * environ, tzname, timezone and daylight, which tzset sets) and receives
+ * the argument vector, which the kernel has already placed in the process
+ * heap.
  */
 void __kernel_start(int* errnoAt, char*** environAt, int* argc, char*** argv, char** tznameAt, long* timezoneAt,
-                    int* daylightAt, int* herrnoAt) __KERNEL(__kernel_start);
+                    int* daylightAt) __KERNEL(__kernel_start);
 
 // __kernel_log_message is the kernel's log of a message syslog has made;
 // its import's name is of the time syslog was a program's own.

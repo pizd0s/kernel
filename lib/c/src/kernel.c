@@ -2154,11 +2154,3 @@ WEAK int wscanf(const wchar_t* __restrict a, ...) {
     va_end(ap);
     return r;
 }
-
-/*
- * What an earlier lib/c called of the kernel and this one does not: the
- * kernel keeps it for the programs built with that one, and nothing here
- * calls it. herror wrote out what netdb.h's h_errno said, a variable of
- * no POSIX and none of this lib/c.
- */
-void __kernel_herror(const char*) __KERNEL(herror);

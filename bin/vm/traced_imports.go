@@ -72,7 +72,7 @@ var callFormats = func() map[string]string {
 		getpwnam:psd getpwnam_r:dspdpdpd getpwuid:pdd getpwuid_r:ddpdpdpd getrandom:dpdd getresgid:dppp getresuid:dppp getrlimit:ddpd
 		getrusage:ddpd getservbyname:pssd getservbyname_r:dsspdpdpd getservbyport:pdsd getservbyport_r:ddspdpdpd getservent:pd getsid:dd
 		getsockname:ddpp getsockopt:ddddpp getsubopt:dppp gettext_l:ssd gettid:d gettimeofday:dpdp getuid:d getusershell:s getutxent:pd
-		getutxid:ppdd getutxline:ppdd glob:dsdppd globfree:vpd gmtime:ppd gmtime_r:pppdd grantpt:dd herror:vs hstrerror:sd iconv:ddpppp
+		getutxid:ppdd getutxline:ppdd glob:dsdppd globfree:vpd gmtime:ppd gmtime_r:pppdd grantpt:dd hstrerror:sd iconv:ddpppp
 		iconv_close:dd iconv_open:dss if_freenameindex:vpd if_indextoname:sdp if_nameindex:pd if_nametoindex:ds imaxabs:dd imaxdiv:ddd
 		index:ssd inet_addr:ds inet_aton:dspd inet_lnaof:dd inet_makeaddr:ddd inet_netof:dd inet_network:ds inet_ntoa:sd inet_ntop:sdppd
 		inet_pton:ddsp initgroups:dsd initstate:sdpd inotify_add_watch:ddsd inotify_init:d inotify_init1:dd inotify_rm_watch:ddd

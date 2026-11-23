@@ -250,7 +250,6 @@ type Process struct {
 	errnoAt    uint32
 	environAt  uint32
 	tzAt       [3]uint32
-	herrnoAt   uint32
 	nameAt     uint32
 	passwordAt uint32
 
@@ -579,7 +578,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 
 		i.attach(p)
 		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
-		p.tzAt, p.herrnoAt, p.nameAt, p.passwordAt = [3]uint32{}, 0, 0, 0
+		p.tzAt, p.nameAt, p.passwordAt = [3]uint32{}, 0, 0
 		p.constants, p.locale = map[string]uint32{}, [LC_ALL]string{}
 		p.iconvs, p.spawnFiles, p.locales = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}, map[uint32][LC_ALL]string{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
@@ -801,9 +800,9 @@ func (p *Process) libc__errno_location() uint32 {
 	return p.errnoAt
 }
 
-func (p *Process) libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt uint32) {
+func (p *Process) libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt uint32) {
 	p.errnoAt, p.environAt = errnoAt, environAt
-	p.tzAt, p.herrnoAt = [3]uint32{tznameAt, timezoneAt, daylightAt}, herrnoAt
+	p.tzAt = [3]uint32{tznameAt, timezoneAt, daylightAt}
 
 	argv := p.stringArray(p.image.argv)
 
@@ -4584,7 +4583,7 @@ func (p *Process) startVfork() uint32 {
 	c.locales, c.nextLocale = p.locales, p.nextLocale
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
 	c.defaultStack, c.defaultGuard, c.desKey = p.defaultStack, p.defaultGuard, p.desKey
-	c.locale, c.envStrings, c.mappings, c.tzAt, c.herrnoAt, c.passwordAt = p.locale, p.envStrings, p.mappings, p.tzAt, p.herrnoAt, p.passwordAt
+	c.locale, c.envStrings, c.mappings, c.tzAt, c.passwordAt = p.locale, p.envStrings, p.mappings, p.tzAt, p.passwordAt
 	c.nameAt = p.nameAt
 	c.token.Store(p.token.Load())
 	c.inherit(p)
@@ -4635,7 +4634,7 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 	inst.attach(c)
 	c.image = p.image
 	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap.clone(), p.stack.clone(), p.static, p.env, p.errnoAt, p.environAt, p.siginfo
-	c.stackAt, c.locale, c.tzAt, c.herrnoAt, c.passwordAt = p.stackAt, p.locale, p.tzAt, p.herrnoAt, p.passwordAt
+	c.stackAt, c.locale, c.tzAt, c.passwordAt = p.stackAt, p.locale, p.tzAt, p.passwordAt
 	c.nameAt = p.nameAt
 	c.constants, c.jumps = map[string]uint32{}, map[uint32]*JmpBuf{}
 	c.iconvs, c.nextIconv = map[uint32]*Iconv{}, p.nextIconv
@@ -14083,22 +14082,10 @@ func (p *Process) getnameinfo(sa, salen, host, hostlen, serv, servlen, flags uin
 	return 0
 }
 
-func (p *Process) setHerrno(code int) {
-	if p.herrnoAt != 0 {
-		p.put32(p.herrnoAt, uint32(code))
-	}
-}
-
 func (p *Process) hostent(h *Hostent) uint32 {
-	block := p.staticEntry(staticHostent, sizeofHostent, h.size(sizeofHostent), func(at, buf uint32) {
+	return p.staticEntry(staticHostent, sizeofHostent, h.size(sizeofHostent), func(at, buf uint32) {
 		p.putHostent(at, buf, h)
 	})
-
-	if block == 0 {
-		p.setHerrno(NO_RECOVERY)
-	}
-
-	return block
 }
 
 func (p *Process) staticEntry(slot, size, rest uint32, put func(at, buf uint32)) uint32 {
@@ -14261,10 +14248,8 @@ func (p *Process) hostByAddr(addr, n, family uint32) (*Hostent, int) {
 	return &Hostent{name: name, family: int(family), addrs: []netip.Addr{a}}, 0
 }
 
-func (p *Process) staticHost(h *Hostent, herr int) uint32 {
+func (p *Process) staticHost(h *Hostent, _ int) uint32 {
 	if h == nil {
-		p.setHerrno(herr)
-
 		return 0
 	}
 
@@ -14553,18 +14538,6 @@ func (p *Process) libcHstrerror(code uint32) uint32 {
 	}
 
 	return p.constant(msg)
-}
-
-func (p *Process) libcHerror(s uint32) {
-	msg := "Unknown error"
-
-	if p.herrnoAt != 0 {
-		if c := int(int32(p.u32(p.herrnoAt))); c >= 1 && c <= len(hostMessages) {
-			msg = hostMessages[c-1]
-		}
-	}
-
-	p.complain(s, msg)
 }
 
 func (p *Process) libcInet_aton(s, at uint32) uint32 {
@@ -15060,7 +15033,6 @@ func (p *Process) resReady(state uint32) {
 }
 
 func (p *Process) resHerrno(state uint32, code int) {
-	p.setHerrno(code)
 	p.put32(state+resHerrno, uint32(code))
 }
 

@@ -28,28 +28,10 @@ struct Rejected {
     int code;
 };
 
-// A program of the lib/c before FreeBSD's regex.h calls the kernel's regex
-// with a regex_t of 32 bytes, re_nsub first, a regmatch_t of two longs, and
-// REG_NEWLINE 4 and REG_NOSUB 8: the kernel's functions take them still.
-struct EarlierRegex {
-    size_t re_nsub;
-    void* opaque;
-    void* padding[4];
-    size_t nsub;
-    char last;
-};
-
-struct EarlierMatch {
-    long rm_so;
-    long rm_eo;
-};
-
-static_assert(sizeof(EarlierRegex) == 32 && sizeof(EarlierMatch) == 8);
-
-extern "C" int earlierRegcomp(EarlierRegex*, size_t, const char*, int) __attribute__((import_module("kernel"), import_name("regcomp")));
-extern "C" int earlierRegexec(const EarlierRegex*, size_t, const char*, size_t, EarlierMatch*, size_t, int)
-    __attribute__((import_module("kernel"), import_name("regexec")));
-extern "C" void earlierRegfree(EarlierRegex*, size_t) __attribute__((import_module("kernel"), import_name("regfree")));
+// A regex_t is the groups' count and the kernel's place, and an offset a
+// ssize_t; a flag the header has not is REG_INVARG, and more matches than
+// the kernel converts in its frame come back as well.
+static_assert(sizeof(regex_t) == 2 * sizeof(void*) && sizeof(regoff_t) == sizeof(ssize_t));
 
 int main() {
     const Case cases[] = {
@@ -116,14 +98,19 @@ int main() {
     size_t size = regerror(999, &expression, message, sizeof(message));
     assert(size == strlen(message) + 1 && message[0] != 0);
 
-    EarlierRegex earlier{};
-    assert(earlierRegcomp(&earlier, sizeof earlier, "^(b)c", 1 | 4) == 0 && earlier.re_nsub == 1);
-    EarlierMatch found[2] = {};
-    assert(earlierRegexec(&earlier, sizeof earlier, "a\nbc", 2, found, sizeof found[0], 0) == 0);
-    assert(found[0].rm_so == 2 && found[0].rm_eo == 4 && found[1].rm_so == 2 && found[1].rm_eo == 3);
-    found[0] = {2, 4};
-    assert(earlierRegexec(&earlier, sizeof earlier, "a\nbcd", 1, found, sizeof found[0], REG_STARTEND) == 0 && found[0].rm_eo == 4);
-    earlierRegfree(&earlier, sizeof earlier);
-    assert(earlierRegcomp(&earlier, 24, "a", 0) == REG_INVARG);
+
+    assert(regcomp(&expression, "a", 0x20) == REG_INVARG && regcomp(&expression, "a", 0x400) == REG_INVARG);
+    assert(regcomp(&expression, "(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)", REG_EXTENDED) == 0 && expression.re_nsub == 18);
+    assert(regexec(&expression, "abcdefghijklmnopqr", 0, nullptr, 0x100) == REG_INVARG);
+    regmatch_t groups[20];
+    assert(regexec(&expression, "-abcdefghijklmnopqr", 20, groups, 0) == 0);
+    assert(groups[0].rm_so == 1 && groups[0].rm_eo == 19 && groups[18].rm_so == 18 && groups[18].rm_eo == 19 && groups[19].rm_so == -1);
+    // With REG_NOSUB the matches are left as they were, and need not be there.
+    regfree(&expression);
+    assert(regcomp(&expression, "b", REG_NOSUB) == 0);
+    groups[0] = {7, 8};
+    assert(regexec(&expression, "abc", 1, groups, 0) == 0 && groups[0].rm_so == 7 && groups[0].rm_eo == 8);
+    assert(regexec(&expression, "abc", 3, nullptr, 0) == 0 && regexec(&expression, "xyz", 0, nullptr, 0) == REG_NOMATCH);
+    regfree(&expression);
     puts("regex extensions: ok");
 }

@@ -1196,7 +1196,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"getservbyname_r":                       libcGetservbyname_r,
 		"getservbyport_r":                       libcGetservbyport_r,
 		"hstrerror":                             libcHstrerror,
-		"herror":                                libcHerror,
 		"inet_aton":                             libcInet_aton,
 		"inet_addr":                             libcInet_addr,
 		"inet_network":                          libcInet_network,

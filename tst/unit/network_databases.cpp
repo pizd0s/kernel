@@ -2,7 +2,6 @@
 //@ host: false
 //@ compile-flags: -g
 //@ stdout: "network databases: ok\n"
-//@ stderr: "netdb: Host not found\nUnknown error\n"
 
 #include <arpa/inet.h>
 #include <assert.h>
@@ -12,8 +11,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <time.h>
-#include <unistd.h>
 
 // The databases of the files in /etc: hosts, services, protocols and
 // networks, an entry a line with its aliases; their enumerations; the
@@ -21,16 +18,6 @@
 // write an entry's strings and lists into the buffer given, aligned, and
 // return ERANGE where it is too small and a null result where there is no
 // entry; getaddrinfo and getnameinfo over them.
-//
-// h_errno and herror are an earlier lib/c's: the place of the host
-// functions' error, which the program's start gave the kernel, and the
-// kernel's herror, which reads it. The program starts once more as that
-// lib/c did, with such a place of its own.
-extern "C" void earlierStart(int*, char***, int*, char***, char**, long*, int*, int*)
-    __attribute__((import_module("kernel"), import_name("__kernel_start")));
-extern "C" void herror(const char*) __attribute__((import_module("kernel"), import_name("herror")));
-
-static int h_errno;
 
 static void fixture(const char* path, const char* text) {
     FILE* file = fopen(path, "w");
@@ -38,10 +25,6 @@ static void fixture(const char* path, const char* text) {
 }
 
 int main() {
-    int count = 0;
-    char** arguments = nullptr;
-    earlierStart(&errno, &environ, &count, &arguments, tzname, &timezone, &daylight, &h_errno);
-    assert(count == 1 && arguments[0]);
     assert(mkdir("/etc", 0700) == 0);
     fixture("/etc/hosts", "# isolated test database\nbad\nnot-an-ip invalid\n192.0.2.10 alpha.test alias\n2001:db8::10 beta.test beta6\n");
     fixture("/etc/services", "# isolated services\nbad\ninvalid x/tcp\npizdos-stream 4101/tcp stream-alias\npizdos-dgram 4102/udp dgram-alias\n");
@@ -69,10 +52,10 @@ int main() {
     assert(host && strcmp(host->h_name, "alpha.test") == 0);
     host = gethostbyaddr(&address6, 16, AF_INET6);
     assert(host && strcmp(host->h_name, "beta.test") == 0);
-    assert(gethostbyaddr(&address, 1, AF_INET) == nullptr && h_errno == NO_RECOVERY);
-    assert(gethostbyaddr(&address, 4, 999) == nullptr && h_errno == NO_RECOVERY);
-    assert(gethostbyname2("alpha.test", AF_INET6) == nullptr && h_errno == HOST_NOT_FOUND);
-    assert(gethostbyname2("::1", AF_INET) == nullptr && h_errno == HOST_NOT_FOUND);
+    assert(gethostbyaddr(&address, 1, AF_INET) == nullptr);
+    assert(gethostbyaddr(&address, 4, 999) == nullptr);
+    assert(gethostbyname2("alpha.test", AF_INET6) == nullptr);
+    assert(gethostbyname2("::1", AF_INET) == nullptr);
     servent* service = getservbyname("pizdos-stream", "tcp");
     assert(service && strcmp(service->s_name, "pizdos-stream") == 0 && ntohs(service->s_port) == 4101);
     service = getservbyname("stream-alias", nullptr);
@@ -90,10 +73,6 @@ int main() {
     assert(getnetbyname("missing-network") == nullptr && getnetbyaddr(0, AF_INET) == nullptr);
     assert(hstrerror(HOST_NOT_FOUND)[0] && hstrerror(NO_DATA)[0] && hstrerror(999)[0]);
     assert(gai_strerror(EAI_BADFLAGS)[0] && gai_strerror(EAI_NONAME)[0] && gai_strerror(999)[0]);
-    h_errno = HOST_NOT_FOUND;
-    herror("netdb");
-    h_errno = 99;
-    herror(nullptr);
 
     addrinfo hints{}, *result = nullptr;
     hints.ai_family = AF_INET;

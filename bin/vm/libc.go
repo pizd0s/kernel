@@ -6,8 +6,8 @@ func libc__errno_location() uint32 {
 	return proc().libc__errno_location()
 }
 
-func libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt uint32) {
-	proc().libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt)
+func libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt uint32) {
+	proc().libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt)
 }
 
 func libc__kernel_name() uint32 {
@@ -2700,10 +2700,6 @@ func libcGetnetbyaddr(net, family, size uint32) uint32 {
 
 func libcHstrerror(code uint32) uint32 {
 	return proc().libcHstrerror(code)
-}
-
-func libcHerror(s uint32) {
-	proc().libcHerror(s)
 }
 
 func libcInet_aton(s, at, atSize uint32) uint32 {

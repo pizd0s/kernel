@@ -227,8 +227,8 @@ lib/libc/gen/seed48.c
 lib/libc/gen/srand48.c
 lib/libc/gen/popen.c
 
-# Its regex, as its libregex builds it: POSIX's expressions with GNU's
-# escapes beside (regex.c).
+# Its regex, as its libregex builds it, with its own regex.h: POSIX's
+# expressions with GNU's escapes beside (freebsd/regex.c).
 lib/libc/regex/regcomp.c -DLIBREGEX -include runetype.h  # the encoding it asks of the rune locale
 lib/libc/regex/regexec.c -DLIBREGEX
 lib/libc/regex/regerror.c -DLIBREGEX

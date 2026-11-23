@@ -40,7 +40,7 @@ __attribute__((__export_name__("_start"))) void _start(void) {
     int argc = 0;
     char** argv = 0;
 
-    __kernel_start(&errnoValue, &environ, &argc, &argv, tzname, &timezone, &daylight, 0);
+    __kernel_start(&errnoValue, &environ, &argc, &argv, tzname, &timezone, &daylight);
     __wasm_call_ctors();
     exit(__main_argc_argv(argc, argv));
 }
