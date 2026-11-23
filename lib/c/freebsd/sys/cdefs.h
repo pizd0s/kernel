@@ -41,6 +41,10 @@ typedef __builtin_va_list __va_list;
 #define __locale_struct _xlocale
 #define __mbstate_t mbstate_t
 
+// What FreeBSD's getopt has beside POSIX's variables, none of lib/c's
+// headers'.
+extern int optreset;
+
 // FreeBSD's names of the standard streams, and its functions that are none
 // of lib/c's ABI, made reserved names: a static archive's names are all
 // global, and a program may have its own of these.

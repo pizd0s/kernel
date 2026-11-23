@@ -7,8 +7,6 @@
  * REG_NEWLINE and REG_NOSUB of each other's values. Another size is
  * REG_INVARG.
  */
-#include "libc.h"
-
 #include <regex.h>
 #include <stdlib.h>
 

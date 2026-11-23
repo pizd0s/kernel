@@ -4,9 +4,11 @@
 
 __BEGIN_DECLS
 
-extern int errno;
-extern char* program_invocation_name;
-extern char* program_invocation_short_name;
+// errno is a macro, as POSIX has it: the int the kernel keeps for the
+// process, which __errno_location is the address of.
+int* __errno_location(void) __attribute__((__const__));
+
+#define errno (*__errno_location())
 
 __END_DECLS
 

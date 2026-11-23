@@ -320,6 +320,7 @@ busybox = command(
         "$(S)/bin/busybox/config",
         "$(S)/bin/busybox/gen.py",
         "$(S)/bin/busybox/make.py",
+        *build.glob("$(S)/bin/busybox/patches/*"),
         "$(S)/dev/wasm.py",
     ],
     outputs=["$(B)/bin/busybox/busybox.wasm", "$(B)/bin/busybox/busybox.links"],

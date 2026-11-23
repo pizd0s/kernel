@@ -5,15 +5,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kernel.h"
+
 /*
  * BSD's messages, on stderr: the program's name, the message, and for
  * warn and err ": " and what errno named at the call; err and errx then
- * exit. The name is the one crt.c keeps.
+ * exit. The name is the kernel's (__kernel_name).
  */
 void vwarn(const char* format, va_list ap) {
     int error = errno;
 
-    fprintf(stderr, "%s: ", program_invocation_short_name);
+    fprintf(stderr, "%s: ", __kernel_name());
     if (format) {
         vfprintf(stderr, format, ap);
         fputs(": ", stderr);
@@ -22,7 +24,7 @@ void vwarn(const char* format, va_list ap) {
 }
 
 void vwarnx(const char* format, va_list ap) {
-    fprintf(stderr, "%s: ", program_invocation_short_name);
+    fprintf(stderr, "%s: ", __kernel_name());
     if (format) {
         vfprintf(stderr, format, ap);
     }

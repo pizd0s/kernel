@@ -434,7 +434,7 @@ static void network(void) {
     printf(" servent %s %d %s protoent %s %d", se->s_name, ntohs(se->s_port), se->s_proto, pe->p_name, pe->p_proto);
     struct hostent* he = gethostbyname("box");
     printf(" hostent %s %s %d\n", he->h_name, inet_ntoa(*(struct in_addr*)he->h_addr_list[0]),
-           gethostbyname2("box", AF_UNIX) == 0 && h_errno == NO_RECOVERY);
+           gethostbyname2("box", AF_UNIX) == 0);
     int pair[2];
     socketpair(AF_UNIX, SOCK_STREAM, 0, pair);
     char buf[16] = {0};

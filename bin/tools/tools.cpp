@@ -11,6 +11,8 @@ namespace {
     };
 }
 
+const char* toolName = "tools";
+
 static const Tool tools[] = {
     {"blk", blkMain},
     {"console", consoleMain},
@@ -33,6 +35,8 @@ int runTool(int argc, char** argv) {
         const char* name = slash ? slash + 1 : argv[0];
         for (const Tool& tool : tools) {
             if (strcmp(tool.name, name) == 0) {
+                toolName = tool.name;
+
                 return tool.main(argc, argv);
             }
         }

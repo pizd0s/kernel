@@ -1,7 +1,7 @@
 //@ host: false
 //@ compile-flags: -O2 -D_GNU_SOURCE
 //@ stdout: "structure sizes: ok\n"
-//@ stderr-pattern: "(?s)(?:.*?a structure of \\d+ bytes, which this kernel knows of \\d+){8}.*"
+//@ stderr-pattern: "(?s)(?:.*?a structure of \\d+ bytes, which this kernel knows of \\d+){7}.*"
 
 // Every structure lib/c hands the kernel comes with its size, its version,
 // which the kernel checks against the layouts it knows. A call with
@@ -14,7 +14,6 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <pwd.h>
-#include <regex.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -26,7 +25,6 @@
 extern "C" {
 int __kernel_stat(const char*, struct stat*, size_t) __KERNEL(stat);
 struct passwd* __kernel_getpwnam(const char*, size_t) __KERNEL(getpwnam);
-void __kernel_regfree(regex_t*, size_t) __KERNEL(regfree);
 int __kernel_sigaction(int, const struct sigaction*, size_t, struct sigaction*, size_t, size_t) __KERNEL(sigaction);
 int __kernel_fcntl(int, int, va_list, size_t) __KERNEL(fcntl);
 int __kernel_ioctl(int, unsigned long, va_list, size_t) __KERNEL(ioctl);
@@ -77,11 +75,6 @@ int main() {
     });
     refused([] {
         __kernel_getpwnam("root", sizeof(struct passwd) + 4);
-    });
-    refused([] {
-        regex_t re;
-        assert(regcomp(&re, "a", 0) == 0);
-        __kernel_regfree(&re, sizeof re - 4);
     });
     refused([] {
         struct sigaction action = {};

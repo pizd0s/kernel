@@ -530,6 +530,7 @@ func (k *Kernel) functionTable() map[string]any {
 		"__errno_location":                      libc__errno_location,
 		"__kernel_start":                        libc__kernel_start,
 		"__kernel_program":                      libc__kernel_program,
+		"__kernel_name":                         libc__kernel_name,
 		"read":                                  libcRead,
 		"write":                                 libcWrite,
 		"readv":                                 libcReadv,

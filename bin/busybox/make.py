@@ -3,11 +3,12 @@
 
     make.py <cc> <ar> <wasm-ld> <busybox-tarball> <config> <libc-include> <libc.a> <busybox.wasm> <busybox.links>
 
-The tree is configured by gen.py, every selected object is compiled for
-wasm32, the lib-y objects go into an archive the way busybox's own lib.a
-files do, and the result is linked against libc.a. An undefined symbol is a
-link error: every libc function is either defined in libc.a or declared as a
-kernel import by its header.
+The tree is patched by patches/, each saying why, and configured by
+gen.py; every selected object is compiled for wasm32, the lib-y objects go
+into an archive the way busybox's own lib.a files do, and the result is
+linked against libc.a. An undefined symbol is a link error: every libc
+function is either defined in libc.a or declared as a kernel import by its
+header.
 """
 import os
 import shutil
@@ -80,6 +81,10 @@ def main():
         archive.extractall(work, filter="data")
 
     tree = next(work.glob("busybox-*"))
+
+    for change in sorted((HERE / "patches").glob("*.patch")):
+        subprocess.run(["patch", "-p1", "--batch", "--forward", "-s", "-d", str(tree), "-i", str(change)], check=True)
+
     objects_list = work / "objects.txt"
     os.environ.setdefault("CC", cc)
     Path(links).parent.mkdir(parents=True, exist_ok=True)

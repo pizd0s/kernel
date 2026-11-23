@@ -10,6 +10,10 @@ func libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt
 	proc().libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt, herrnoAt)
 }
 
+func libc__kernel_name() uint32 {
+	return proc().libc__kernel_name()
+}
+
 func libc__kernel_program(buf, size uint32) uint32 {
 	return proc().libc__kernel_program(buf, size)
 }

@@ -36,14 +36,14 @@ var libraryCalls = func() map[string]bool {
 
 var untracedCalls = map[string]bool{
 	"setjmp": true, "_setjmp": true, "sigsetjmp": true, "longjmp": true, "_longjmp": true, "siglongjmp": true,
-	"vfork": true, "fork": true, "forkpty": true, "__kernel_start": true, "__errno_location": true, "__kernel_program": true, "__assert_fail": true,
+	"vfork": true, "fork": true, "forkpty": true, "__kernel_start": true, "__errno_location": true, "__kernel_program": true, "__kernel_name": true, "__assert_fail": true,
 }
 
 var callFormats = func() map[string]string {
 	out := map[string]string{}
 
 	for _, word := range strings.Fields(`
-		_Exit:vd __assert_fail:vssds __dtoa:sfddppp __hdtoa:sfsdppp __hldtoa:sfsdppp __ldtoa:spddppp __pthread_cancelled:dd
+		_Exit:vd __assert_fail:vssds __dtoa:sfddppp __errno_location:p __hdtoa:sfsdppp __hldtoa:sfsdppp __ldtoa:spddppp __pthread_cancelled:dd
 		__pthread_key_take:ppp __pthread_once_begin:dp __pthread_once_end:vp __res_state:pd __sched_cpucount:ddp _exit:vd _longjmp:vpdd
 		_setjmp:dpd a64l:ds abort:v abs:dd accept:ddpp accept4:ddppd access:dsd acct:ds adjtime:dpdpd aio_cancel:ddpd aio_error:dpd
 		aio_fsync:ddpd aio_read:dpd aio_return:dpd aio_suspend:dpddpd aio_write:dpd alarm:dd aligned_alloc:pdd alphasort:dpdpd asctime:spd

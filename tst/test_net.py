@@ -153,7 +153,7 @@ nope.internal: Name does not resolve
 gateway.internal: 192.168.127.1
 res_init: 1 server 192.168.127.1, search internal
 res_query: host.internal a 192.168.127.254
-res_query nope.internal: -1 Host not found
+res_query nope.internal: -1
 res_search host: found
 host.internal a 192.168.127.254
 """

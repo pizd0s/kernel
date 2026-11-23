@@ -92,7 +92,7 @@ namespace {
         const int n = res_query("host.internal", C_IN, T_A, answer, sizeof answer);
         ns_msg msg;
         if (n < 0 || ns_initparse(answer, n, &msg) != 0) {
-            printf("res_query: %s\n", hstrerror(h_errno));
+            printf("res_query: %d\n", n);
             return;
         }
         for (int i = 0; i < ns_msg_count(msg, ns_s_an); ++i) {
@@ -102,9 +102,9 @@ namespace {
             }
         }
         const int none = res_query("nope.internal", C_IN, T_A, answer, sizeof answer);
-        printf("res_query nope.internal: %d %s\n", none, hstrerror(h_errno));
+        printf("res_query nope.internal: %d\n", none);
         const int found = res_search("host", C_IN, T_A, answer, sizeof answer);
-        printf("res_search host: %s\n", found > 0 ? "found" : hstrerror(h_errno));
+        printf("res_search host: %s\n", found > 0 ? "found" : "none");
     }
 
     void interfaces() {

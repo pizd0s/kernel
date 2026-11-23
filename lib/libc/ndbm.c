@@ -8,8 +8,7 @@
  * what is gone. A DBM keeps each key's newest content's place, the keys in
  * the order of their newest records.
  */
-#include "libc.h"
-
+#include <errno.h>
 #include <fcntl.h>
 #include <ndbm.h>
 #include <stdint.h>

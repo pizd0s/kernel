@@ -92,7 +92,7 @@ int main() {
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
     assert(getaddrinfo("127.0.0.1", "80", &hints, &addresses) == EAI_MEMORY && addresses == nullptr);
-    assert(gethostbyname("127.0.0.1") == nullptr && h_errno == NO_RECOVERY);
+    assert(gethostbyname("127.0.0.1") == nullptr);
     assert(getservbyname("http", "tcp") == nullptr && errno == ENOMEM);
     assert(getprotobyname("tcp") == nullptr && errno == ENOMEM);
     assert(if_nameindex() == nullptr && errno == ENOBUFS);

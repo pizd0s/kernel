@@ -27,3 +27,7 @@ int umountMain(int argc, char** argv);
 
 // Runs the tool argv[0] names, or the one after "tools".
 int runTool(int argc, char** argv);
+
+// The name of the tool that runs, which runTool sets: what a message of
+// no place of its own begins with.
+extern const char* toolName;

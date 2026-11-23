@@ -19,7 +19,6 @@ extern char* optarg;
 extern int optind;
 extern int opterr;
 extern int optopt;
-extern int optreset;
 
 int getopt(int, char* const[], const char*);
 int getopt_long(int, char* const*, const char*, const struct option*, int*);

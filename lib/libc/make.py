@@ -11,8 +11,7 @@ built as its libregex is, with the multibyte functions it calls over lib/c's
 one locale of them (lib/c/freebsd/xlocale.c). The forwarders are weak, so
 FreeBSD's function of a forwarder's name is the one libc.wasm calls.
 FreeBSD's sources are lib/c's slice of them with lib/c/freebsd/patches and
-then patches/ applied; libc.h is what this directory's sources include
-first, freebsd.h what FreeBSD's do.
+then patches/ applied; freebsd.h is what FreeBSD's include first.
 
     make.py <cc> <wasm-ld> <freebsd-slice> <libc.wasm>
 """

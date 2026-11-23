@@ -11,6 +11,7 @@
 #include <sys/param.h>
 #include <sys/socket.h>
 #include <bin/tools/lib.h>
+#include <bin/tools/tools.h>
 
 using namespace tools;
 
@@ -25,14 +26,14 @@ void tools::fatal(const char* format, ...) {
 
 usize tools::checkedAdd(usize a, usize b) {
     if (b > SIZE_MAX - a) {
-        fatal("%s: size overflow", program_invocation_short_name);
+        fatal("%s: size overflow", toolName);
     }
     return a + b;
 }
 
 usize tools::checkedMultiply(usize a, usize b) {
     if (a != 0 && b > SIZE_MAX / a) {
-        fatal("%s: size overflow", program_invocation_short_name);
+        fatal("%s: size overflow", toolName);
     }
     return a * b;
 }
@@ -40,7 +41,7 @@ usize tools::checkedMultiply(usize a, usize b) {
 void* tools::allocate(usize size) {
     void* p = malloc(size);
     if (!p) {
-        fatal("%s: out of memory", program_invocation_short_name);
+        fatal("%s: out of memory", toolName);
     }
     return p;
 }
@@ -48,7 +49,7 @@ void* tools::allocate(usize size) {
 void* tools::reallocate(void* p, usize size) {
     void* q = realloc(p, size);
     if (!q) {
-        fatal("%s: out of memory", program_invocation_short_name);
+        fatal("%s: out of memory", toolName);
     }
     return q;
 }
@@ -170,7 +171,7 @@ void tools::reply(int fd, u32 op, u32 arg, const iovec* parts, usize count, cons
     Header head{op, arg, 0, 0, 0, 0};
     iovec iov[3] = {{&head, sizeof head}};
     if (count > 2 || fdCount > maxFds) {
-        fatal("%s: a reply of %zu parts and %zu descriptors", program_invocation_short_name, count, fdCount);
+        fatal("%s: a reply of %zu parts and %zu descriptors", toolName, count, fdCount);
     }
     for (usize i = 0; i < count; ++i) {
         iov[1 + i] = parts[i];
@@ -244,7 +245,7 @@ u64 tools::device() {
     int ends[2];
     struct stat st;
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ends) != 0 || fstat(ends[0], &st) != 0) {
-        fatal("%s: a pair for a device: errno %d", program_invocation_short_name, errno);
+        fatal("%s: a pair for a device: errno %d", toolName, errno);
     }
     close(ends[0]);
     close(ends[1]);
@@ -263,7 +264,7 @@ Endpoint* tools::listen(int fd, Role role, void* node, bool reads, bool writes) 
     if (watcher < 0) {
         watcher = epoll_create1(EPOLL_CLOEXEC);
         if (watcher < 0) {
-            fatal("%s: epoll_create1: errno %d", program_invocation_short_name, errno);
+            fatal("%s: epoll_create1: errno %d", toolName, errno);
         }
     }
     Endpoint* ep = freeEndpoints;
@@ -282,7 +283,7 @@ Endpoint* tools::listen(int fd, Role role, void* node, bool reads, bool writes) 
     ev.events = EPOLLIN;
     ev.data.ptr = ep;
     if (epoll_ctl(watcher, EPOLL_CTL_ADD, fd, &ev) != 0) {
-        fatal("%s: epoll_ctl: errno %d", program_invocation_short_name, errno);
+        fatal("%s: epoll_ctl: errno %d", toolName, errno);
     }
     return ep;
 }
@@ -437,7 +438,7 @@ void tools::serve(FsCall fsCall, FileCall fileCall, Closing closing) {
     while (endpointCount > 0) {
         const int n = epoll_wait(watcher, events, 64, -1);
         if (n < 0 && errno != EINTR) {
-            fatal("%s: epoll_wait: errno %d", program_invocation_short_name, errno);
+            fatal("%s: epoll_wait: errno %d", toolName, errno);
         }
         for (int i = 0; i < n; ++i) {
             handle(static_cast<Endpoint*>(events[i].data.ptr), fsCall, fileCall, closing);

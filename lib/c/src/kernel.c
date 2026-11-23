@@ -186,6 +186,10 @@ KERNEL(long, telldir, (DIR* a), (a))
 KERNEL(int, dirfd, (DIR* a), (a))
 KERNEL_SIZED(int, alphasort, (const struct dirent** a, const struct dirent** b), (const struct dirent** a, size_t a_size, const struct dirent** b, size_t b_size), (a, sizeof(struct dirent), b, sizeof(struct dirent)))
 KERNEL_SIZED(int, versionsort, (const struct dirent** a, const struct dirent** b), (const struct dirent** a, size_t a_size, const struct dirent** b, size_t b_size), (a, sizeof(struct dirent), b, sizeof(struct dirent)))
+
+/* errno.h */
+KERNEL(int*, __errno_location, (void), ())
+
 /* fcntl.h */
 KERNEL(int, creat, (const char* a, mode_t b), (a, b))
 KERNEL(int, posix_fadvise, (int a, off_t b, off_t c, int d), (a, b, c, d))
@@ -351,7 +355,6 @@ KERNEL_SIZED(struct protoent*, getprotobyname, (const char* a), (const char* a, 
 KERNEL_SIZED(struct protoent*, getprotobynumber, (int a), (int a, size_t size), (a, sizeof(struct protoent)))
 KERNEL_SIZED(struct netent*, getnetbyname, (const char* a), (const char* a, size_t size), (a, sizeof(struct netent)))
 KERNEL_SIZED(struct netent*, getnetbyaddr, (uint32_t a, int b), (uint32_t a, int b, size_t size), (a, b, sizeof(struct netent)))
-KERNEL_VOID(herror, (const char* a), (a))
 KERNEL(const char*, hstrerror, (int a), (a))
 
 /* poll.h */
@@ -1292,3 +1295,11 @@ WEAK int execle(const char* path, const char* arg, ...) {
     va_end(ap);
     return r;
 }
+
+/*
+ * What an earlier lib/c called of the kernel and this one does not: the
+ * kernel keeps it for the programs built with that one, and nothing here
+ * calls it. herror wrote out what netdb.h's h_errno said, a variable of
+ * no POSIX and none of this lib/c.
+ */
+void __kernel_herror(const char*) __KERNEL(herror);

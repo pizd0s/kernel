@@ -4,9 +4,9 @@
 
 // err.h's messages, BSD's: the program's name, the message, and for warn
 // and err ": " and what errno named at the call, a line on stderr; err and
-// errx then exit with their status. The name is
-// program_invocation_short_name, set here so the host's and the system's
-// agree.
+// errx then exit with their status. The name is the last component of
+// the program's argv[0]: it runs itself as check, so the host's and the
+// system's agree.
 
 #include <assert.h>
 #include <err.h>
@@ -14,6 +14,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -59,8 +60,13 @@ namespace {
     }
 }
 
-int main() {
-    program_invocation_short_name = (char*)"check";
+int main(int argc, char** argv) {
+    if (strcmp(argv[0], "check") != 0) {
+        char* const named[] = {(char*)"check", nullptr};
+        execv(argv[0], named);
+        assert(false);
+    }
+
     errno = ENOENT;
     warn("open %s", "a");
     assert(errno == ENOENT);

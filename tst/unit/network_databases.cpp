@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 // The databases of the files in /etc: hosts, services, protocols and
 // networks, an entry a line with its aliases; their enumerations; the
@@ -19,6 +21,16 @@
 // write an entry's strings and lists into the buffer given, aligned, and
 // return ERANGE where it is too small and a null result where there is no
 // entry; getaddrinfo and getnameinfo over them.
+//
+// h_errno and herror are an earlier lib/c's: the place of the host
+// functions' error, which the program's start gave the kernel, and the
+// kernel's herror, which reads it. The program starts once more as that
+// lib/c did, with such a place of its own.
+extern "C" void earlierStart(int*, char***, int*, char***, char**, long*, int*, int*)
+    __attribute__((import_module("kernel"), import_name("__kernel_start")));
+extern "C" void herror(const char*) __attribute__((import_module("kernel"), import_name("herror")));
+
+static int h_errno;
 
 static void fixture(const char* path, const char* text) {
     FILE* file = fopen(path, "w");
@@ -26,6 +38,10 @@ static void fixture(const char* path, const char* text) {
 }
 
 int main() {
+    int count = 0;
+    char** arguments = nullptr;
+    earlierStart(&errno, &environ, &count, &arguments, tzname, &timezone, &daylight, &h_errno);
+    assert(count == 1 && arguments[0]);
     assert(mkdir("/etc", 0700) == 0);
     fixture("/etc/hosts", "# isolated test database\nbad\nnot-an-ip invalid\n192.0.2.10 alpha.test alias\n2001:db8::10 beta.test beta6\n");
     fixture("/etc/services", "# isolated services\nbad\ninvalid x/tcp\npizdos-stream 4101/tcp stream-alias\npizdos-dgram 4102/udp dgram-alias\n");

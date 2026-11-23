@@ -81,8 +81,6 @@ struct addrinfo {
 #define NO_DATA 4
 #define NO_ADDRESS NO_DATA
 
-extern int h_errno;
-
 int getaddrinfo(const char* __restrict, const char* __restrict, const struct addrinfo* __restrict, struct addrinfo** __restrict);
 void freeaddrinfo(struct addrinfo*);
 const char* gai_strerror(int);
@@ -122,7 +120,6 @@ int gethostbyaddr_r(const void* __restrict, socklen_t, int, struct hostent* __re
 int getservbyname_r(const char* __restrict, const char* __restrict, struct servent* __restrict, char* __restrict, size_t,
                     struct servent** __restrict);
 int getservbyport_r(int, const char* __restrict, struct servent* __restrict, char* __restrict, size_t, struct servent** __restrict);
-void herror(const char*);
 const char* hstrerror(int);
 
 __END_DECLS

@@ -61,6 +61,6 @@ int main() {
     memset(invalid, 'a', sizeof(invalid) - 1);
     invalid[sizeof(invalid) - 1] = 0;
     assert(getaddrinfo(invalid, "0", &hints, &list) == EAI_NONAME);
-    assert(gethostbyname(invalid) == nullptr && h_errno == HOST_NOT_FOUND);
+    assert(gethostbyname(invalid) == nullptr);
     puts("system resolution: ok");
 }

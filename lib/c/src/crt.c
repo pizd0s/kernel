@@ -8,11 +8,9 @@
 #include <time.h>
 #include <unistd.h>
 
-int errno;
+// errno's place, the kernel's to give (__errno_location).
+static int error;
 char** environ;
-char* program_invocation_name;
-char* program_invocation_short_name;
-int h_errno;
 char* tzname[2] = {"UTC", "UTC"};
 long timezone;
 int daylight;
@@ -24,30 +22,12 @@ int __main_argc_argv(int, char**);
 // The module's constructors, C++'s static objects among them (wasm-ld).
 void __wasm_call_ctors(void);
 
-static char* lastComponent(char* path) {
-    char* last = path;
-
-    for (char* p = path; *p; p++) {
-        if (*p == '/') {
-            last = p + 1;
-        }
-    }
-
-    return last;
-}
-
 __attribute__((__export_name__("_start"))) void _start(void) {
     int argc = 0;
     char** argv = 0;
 
-    __kernel_start(&errno, &environ, &argc, &argv, tzname, &timezone, &daylight, &h_errno);
+    __kernel_start(&error, &environ, &argc, &argv, tzname, &timezone, &daylight, 0);
     __wasm_call_ctors();
-
-    if (argc > 0) {
-        program_invocation_name = argv[0];
-        program_invocation_short_name = lastComponent(argv[0]);
-    }
-
     exit(__main_argc_argv(argc, argv));
 }
 

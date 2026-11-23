@@ -125,10 +125,8 @@ int main() {
     assert(strcmp(_res.defdname, "example.net") == 0);
     unsigned char answer[512];
     errno = 0;
-    h_errno = 0;
-    assert(res_query("www.example.com", C_IN, T_A, answer, sizeof answer) == -1 && h_errno == TRY_AGAIN && errno == ENETUNREACH);
-    h_errno = 0;
-    assert(res_search("www", C_IN, T_A, answer, sizeof answer) == -1 && h_errno == TRY_AGAIN);
+    assert(res_query("www.example.com", C_IN, T_A, answer, sizeof answer) == -1 && errno == ENETUNREACH);
+    assert(res_search("www", C_IN, T_A, answer, sizeof answer) == -1);
     errno = 0;
     assert(res_send(q, n, answer, sizeof answer) == -1 && errno == ENETUNREACH);
     struct __res_state mine = {};

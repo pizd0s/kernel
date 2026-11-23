@@ -251,6 +251,7 @@ type Process struct {
 	environAt  uint32
 	tzAt       [3]uint32
 	herrnoAt   uint32
+	nameAt     uint32
 	passwordAt uint32
 
 	heap   *Heap
@@ -578,7 +579,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 
 		i.attach(p)
 		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
-		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0
+		p.tzAt, p.herrnoAt, p.nameAt, p.passwordAt = [3]uint32{}, 0, 0, 0
 		p.constants, p.locale = map[string]uint32{}, [LC_ALL]string{}
 		p.iconvs, p.spawnFiles, p.locales = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}, map[uint32][LC_ALL]string{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
@@ -812,9 +813,17 @@ func (p *Process) libc__kernel_start(errnoAt, environAt, argcAt, argvAt, tznameA
 		p.exitWith(SIGABRT)
 	}
 
+	if len(p.image.argv) > 0 {
+		p.nameAt = p.u32(argv) + uint32(strings.LastIndexByte(p.image.argv[0], '/')+1)
+	}
+
 	p.put32(argcAt, uint32(len(p.image.argv)))
 	p.put32(argvAt, argv)
 	p.put32(environAt, p.env)
+}
+
+func (p *Process) libc__kernel_name() uint32 {
+	return p.nameAt
 }
 
 func (p *Process) libc__kernel_program(buf, size uint32) uint32 {
@@ -4576,6 +4585,7 @@ func (p *Process) startVfork() uint32 {
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
 	c.defaultStack, c.defaultGuard, c.desKey = p.defaultStack, p.defaultGuard, p.desKey
 	c.locale, c.envStrings, c.mappings, c.tzAt, c.herrnoAt, c.passwordAt = p.locale, p.envStrings, p.mappings, p.tzAt, p.herrnoAt, p.passwordAt
+	c.nameAt = p.nameAt
 	c.token.Store(p.token.Load())
 	c.inherit(p)
 	p.inst.attach(c)
@@ -4626,6 +4636,7 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 	c.image = p.image
 	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap.clone(), p.stack.clone(), p.static, p.env, p.errnoAt, p.environAt, p.siginfo
 	c.stackAt, c.locale, c.tzAt, c.herrnoAt, c.passwordAt = p.stackAt, p.locale, p.tzAt, p.herrnoAt, p.passwordAt
+	c.nameAt = p.nameAt
 	c.constants, c.jumps = map[string]uint32{}, map[uint32]*JmpBuf{}
 	c.iconvs, c.nextIconv = map[uint32]*Iconv{}, p.nextIconv
 	c.spawnFiles, c.nextSpawnFiles = map[uint32][]SpawnAction{}, p.nextSpawnFiles

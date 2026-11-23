@@ -1,0 +1,24 @@
+gethostbyname says no more of a failure than that it failed: lib/c has no
+h_errno, which is none of POSIX. A message of a failed lookup ends at what
+the applet says of it.
+
+--- a/libbb/herror_msg.c
++++ b/libbb/herror_msg.c
+@@ -13,7 +13,7 @@
+ 	va_list p;
+ 
+ 	va_start(p, s);
+-	bb_verror_msg(s, p, hstrerror(h_errno));
++	bb_verror_msg(s, p, NULL);
+ 	va_end(p);
+ }
+ 
+@@ -22,7 +22,7 @@
+ 	va_list p;
+ 
+ 	va_start(p, s);
+-	bb_verror_msg(s, p, hstrerror(h_errno));
++	bb_verror_msg(s, p, NULL);
+ 	va_end(p);
+ 	xfunc_die();
+ }

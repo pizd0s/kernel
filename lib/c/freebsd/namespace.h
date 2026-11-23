@@ -18,6 +18,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+// What a message of FreeBSD's begins with: the kernel's name of the
+// program (lib/c's kernel.h).
+const char* __kernel_name(void) __KERNEL(__kernel_name);
+
 #define __isthreaded 0
 #define _FLOCKFILE(fp) ((void)(fp))
 #define _funlockfile(fp) ((void)(fp))
@@ -37,7 +41,7 @@ struct _pthread_cleanup_info {
 #define _pthread_mutex_unlock(m) pthread_mutex_unlock(m)
 
 static inline const char* _getprogname(void) {
-    return program_invocation_short_name;
+    return __kernel_name();
 }
 
 static inline int _close(int fd) {
