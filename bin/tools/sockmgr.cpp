@@ -50,6 +50,7 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/un.h>
 #include <sys/watchdir.h>
@@ -378,6 +379,10 @@ static void setOption(Socket& h, const Request& r) {
     answer(r.reply(), opOk, 0);
 }
 
+// An option of the socket's, as a call set it, else as a stack has it of a
+// new socket, FreeBSD's defaults: off, no linger, no timeout, the buffers
+// of TCP's and UDP's sizes, a low-water mark of a byte to read and of a
+// cluster, 2048 bytes, to write.
 static void getOption(const Socket& h, const Request& r) {
     uint32_t level, name;
     if (!r.at(0, level) || !r.at(4, name)) {
@@ -388,11 +393,50 @@ static void getOption(const Socket& h, const Request& r) {
             return answer(r.reply(), opOk, 0, h.options[i].value, h.options[i].length);
         }
     }
-    int value = 0;
-    if (level == SOL_SOCKET && name == SO_TYPE) {
-        value = int(h.type);
-    } else if (level != SOL_SOCKET || name != SO_ERROR) {
+    if (level != SOL_SOCKET) {
         return fail(r.reply(), ENOPROTOOPT);
+    }
+    const bool stream = h.type == SOCK_STREAM;
+    int value = 0;
+    switch (name) {
+        case SO_TYPE:
+            value = int(h.type);
+            break;
+        case SO_ACCEPTCONN:
+            value = h.listening;
+            break;
+        case SO_SNDBUF:
+            value = stream ? 32768 : 9216;
+            break;
+        case SO_RCVBUF:
+            value = stream ? 65536 : 42080;
+            break;
+        case SO_RCVLOWAT:
+            value = 1;
+            break;
+        case SO_SNDLOWAT:
+            value = 2048;
+            break;
+        case SO_ERROR:
+        case SO_DEBUG:
+        case SO_REUSEADDR:
+        case SO_REUSEPORT:
+        case SO_DONTROUTE:
+        case SO_BROADCAST:
+        case SO_KEEPALIVE:
+        case SO_OOBINLINE:
+            break;
+        case SO_LINGER: {
+            const linger none{};
+            return answer(r.reply(), opOk, 0, &none, sizeof none);
+        }
+        case SO_RCVTIMEO:
+        case SO_SNDTIMEO: {
+            const timeval none{};
+            return answer(r.reply(), opOk, 0, &none, sizeof none);
+        }
+        default:
+            return fail(r.reply(), ENOPROTOOPT);
     }
     answer(r.reply(), opOk, 0, &value, sizeof value);
 }
@@ -405,6 +449,25 @@ static void handOn(Socket& h, Request& r, uint32_t to) {
     if (const int e = hand(*s, h, r.h, r.body, r.size, r.fds, r.count)) {
         fail(r.reply(), e);
     }
+}
+
+// A port of TCP's for a bind to port 0, which the socket's name says before
+// it listens or connects, as a stack's bind has it: the next of IANA's
+// dynamic ports, 49152 to 65535, no socket of sockmgr's is bound to.
+static uint16_t ephemeral() {
+    static uint32_t next = 49152;
+    for (uint32_t tries = 0; tries <= 65535 - 49152; ++tries) {
+        const uint16_t port = htons(uint16_t(next));
+        next = next == 65535 ? 49152 : next + 1;
+        bool held = false;
+        for (const Socket* h = handles; h && !held; h = h->next) {
+            held = h->hasBound && h->type == SOCK_STREAM && h->bound.sin_port == port;
+        }
+        if (!held) {
+            return port;
+        }
+    }
+    return 0;
 }
 
 static void bindCall(Socket& h, Request& r) {
@@ -430,6 +493,9 @@ static void bindCall(Socket& h, Request& r) {
             fail(r.reply(), e);
         }
         return;
+    }
+    if (a.sin_port == 0) {
+        a.sin_port = ephemeral();
     }
     h.bound = a;
     h.hasBound = true;

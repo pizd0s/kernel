@@ -10,6 +10,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/uio.h>
 #include <unistd.h>
 
@@ -320,9 +321,28 @@ namespace {
                 if (!take(at, stop, level) || !take(at, stop, name)) {
                     return done(EINVAL);
                 }
+                // SO_TYPE, which F-Stack's names of Linux's have not, is
+                // the socket's type.
+                if (level == SOL_SOCKET && name == SO_TYPE) {
+                    const int type = s.type;
+                    return done(0, &type, sizeof type);
+                }
                 alignas(8) unsigned char value[256];
                 socklen_t valueLength = sizeof value;
-                return ff_getsockopt(s.ff, int(level), int(name), value, &valueLength) == 0 ? done(0, value, valueLength) : done(errno);
+                if (ff_getsockopt(s.ff, int(level), int(name), value, &valueLength) != 0) {
+                    return done(errno);
+                }
+                // A timeout is FreeBSD's timeval, its tv_usec a long of 32
+                // bits and 4 of padding: lib/c's is of 64.
+                if (level == SOL_SOCKET && (name == SO_RCVTIMEO || name == SO_SNDTIMEO) && valueLength >= 12) {
+                    int64_t seconds;
+                    int32_t micro;
+                    memcpy(&seconds, value, sizeof seconds);
+                    memcpy(&micro, value + 8, sizeof micro);
+                    const timeval tv{seconds, micro};
+                    return done(0, &tv, sizeof tv);
+                }
+                return done(0, value, valueLength);
             }
             case opSetsockopt: {
                 uint32_t level, name;
