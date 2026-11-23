@@ -40,8 +40,8 @@ Per-project settings that the shared [STYLE.md](STYLE.md) delegates here.
   variable (`src/crt.c`), and a kernel function that uses one gets its
   place: at the program's start (`environ`, `tzname`), or after its own
   arguments at each call (`optarg`, `signgam`). What POSIX has as a macro
-  is a macro over a kernel function (`errno`, `stdin`). What POSIX has not
-  is not in lib/c.
+  is a macro over a kernel function (`errno`, `stdin`). A variable POSIX
+  has not is not in lib/c.
 - **Third-party code.** Sources are fetched as release tarballs, a big one
   cut down to what is built (`dev/slice.py`), and never edited in place; what they need from us lives beside their build
   (lib/libc's `freebsd/` and `llvm/` headers). Code
