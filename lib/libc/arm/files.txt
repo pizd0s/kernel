@@ -1,0 +1,28 @@
+# The functions libc.wasm takes of Arm's optimized-routines (math/), faster in
+# the system than LLVM libc's and FreeBSD's (make.py); not correctly
+# rounded, within about 0.5 ulp. musl's exp, log and pow families are
+# these. A line is a source, then the function it gives and the names of
+# the same function, as llvm/files.txt has them; a source alone is one
+# they need.
+math/exp10.c: double exp10(double); exp10l pow10 pow10l
+math/log.c: double log(double); logl
+math/log2.c: double log2(double); log2l
+math/pow.c: double pow(double, double); powl
+math/expf.c: float expf(float);
+math/exp2f.c: float exp2f(float);
+math/logf.c: float logf(float);
+math/log2f.c: float log2f(float);
+math/log10f.c: float log10f(float);
+math/powf.c: float powf(float, float);
+math/sincosf.c: void sincosf(float, float*, float*);
+math/exp_data.c
+math/log_data.c
+math/log2_data.c
+math/pow_log_data.c
+math/exp2f_data.c
+math/logf_data.c
+math/log2f_data.c
+math/powf_log2_data.c
+math/sincosf_data.c
+math/math_err.c
+math/math_errf.c

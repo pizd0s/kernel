@@ -110,7 +110,7 @@ llvm_tarball = fetch(
 )
 
 # FreeBSD's sources, of which lib/c builds msun and of its libc the stdio
-# and more (lib/c/freebsd): its release's src.txz.
+# and more (lib/libc/freebsd): its release's src.txz.
 freebsd_tarball = fetch(
     "freebsd_tarball",
     f"http://ftp-archive.freebsd.org/pub/FreeBSD-Archive/old-releases/amd64/{FREEBSD}-RELEASE/src.txz",
@@ -119,7 +119,7 @@ freebsd_tarball = fetch(
 )
 
 
-# Arm's optimized-routines, of which lib/c builds math (lib/c/arm): 1 MB,
+# Arm's optimized-routines, of which libc.wasm builds math (lib/libc/arm): 1 MB,
 # unpacked whole.
 arm_tarball = fetch(
     "arm_tarball",
@@ -144,9 +144,9 @@ def cut(name, tarball, root, prefixes, output):
     )
 
 
-freebsd_slice = cut("freebsd_slice", freebsd_tarball, "usr/src", "$(S)/lib/c/freebsd/slice.txt",
+freebsd_slice = cut("freebsd_slice", freebsd_tarball, "usr/src", "$(S)/lib/libc/freebsd/slice.txt",
                     f"$(B)/ext/freebsd-{FREEBSD}-libc.tar.gz")
-llvm_libc_slice = cut("llvm_libc_slice", llvm_tarball, f"llvm-project-{LLVM}.src", "$(S)/lib/c/llvm/slice.txt",
+llvm_libc_slice = cut("llvm_libc_slice", llvm_tarball, f"llvm-project-{LLVM}.src", "$(S)/lib/libc/llvm/slice.txt",
                       f"$(B)/ext/llvm-project-{LLVM}-libc.tar.gz")
 
 # Midnight Commander and what it stands on (bin/mc); ncurses for its
@@ -196,30 +196,14 @@ doom_wad = fetch(
 
 LIBC_HEADERS = build.glob("$(S)/lib/c/include/**/*.h")
 
-# lib/c: the in-process part of the C library, our sources plus FreeBSD's
-# in lib/c/freebsd/files.txt, msun and of its libc the stdio, the multibyte
-# functions and more, LLVM libc's in lib/c/llvm/files.txt and Arm's
-# optimized-routines' in lib/c/arm/files.txt; every other libc function is
-# a kernel import declared by its header.
+# lib/c: what of the C library a program keeps, its forwarders to the
+# kernel, its entry and the compiler's runtime; every other function of the
+# headers is the kernel's, its Go or its libc.wasm (lib/libc).
 libc = command(
     name="libc",
-    inputs=[
-        *LIBC_HEADERS,
-        *build.glob("$(S)/lib/c/src/*"),
-        *build.glob("$(S)/lib/c/freebsd/**/*.h"),
-        *build.glob("$(S)/lib/c/freebsd/*.txt"),
-        *build.glob("$(S)/lib/c/llvm/*.txt"),
-        *build.glob("$(S)/lib/c/llvm/patches/*"),
-        *build.glob("$(S)/lib/c/arm/*"),
-        *build.glob("$(S)/lib/c/freebsd/*.c"),
-        *build.glob("$(S)/lib/c/freebsd/patches/*"),
-        "$(S)/lib/c/make.py",
-        "$(S)/dev/wasm.py",
-    ],
+    inputs=[*LIBC_HEADERS, *build.glob("$(S)/lib/c/src/*"), "$(S)/lib/c/make.py", "$(S)/dev/wasm.py"],
     outputs=["$(B)/lib/c/libc.a"],
-    deps=[freebsd_slice, llvm_libc_slice, arm_tarball],
-    cmd=["python3", "$(S)/lib/c/make.py", CLANG, LLVM_AR, freebsd_slice.outputs[0],
-         llvm_libc_slice.outputs[0], arm_tarball.outputs[0], "$(B)/lib/c/libc.a"],
+    cmd=["python3", "$(S)/lib/c/make.py", CLANG, LLVM_AR, "$(B)/lib/c/libc.a"],
     descr="CC",
     color="green",
 )
@@ -406,18 +390,32 @@ python_core = command(
     color="yellow",
 )
 
-# lib/libc: libc.wasm, kernel functions written in C, a relocatable
-# object the kernel links what a program imports of into the program before
-# it compiles it (bin/vm/wasm_linker.go).
+# lib/libc: libc.wasm, the kernel's functions written in C: our sources,
+# FreeBSD's in lib/libc/freebsd/files.txt, msun and of its libc the stdio,
+# the multibyte functions and more, LLVM libc's in lib/libc/llvm/files.txt
+# and Arm's optimized-routines' in lib/libc/arm/files.txt. It is a
+# relocatable object the kernel links what a program imports of into the
+# program before it compiles it (bin/vm/wasm_linker.go).
 libc_wasm = command(
     name="libc_wasm",
-    inputs=[*LIBC_HEADERS, *build.glob("$(S)/lib/libc/*.c"), *build.glob("$(S)/lib/libc/*.h"), "$(S)/lib/libc/make.py",
-            *build.glob("$(S)/lib/libc/patches/*"), "$(S)/lib/c/src/kernel.c", "$(S)/lib/c/src/kernel.h",
-            *build.glob("$(S)/lib/c/freebsd/**/*.h"), "$(S)/lib/c/freebsd/xlocale.c", *build.glob("$(S)/lib/c/freebsd/patches/*"),
-            "$(S)/dev/wasm.py"],
+    inputs=[
+        *LIBC_HEADERS,
+        *build.glob("$(S)/lib/c/src/*"),
+        *build.glob("$(S)/lib/libc/*.c"),
+        *build.glob("$(S)/lib/libc/*.py"),
+        *build.glob("$(S)/lib/libc/freebsd/**/*.h"),
+        *build.glob("$(S)/lib/libc/freebsd/*.txt"),
+        *build.glob("$(S)/lib/libc/freebsd/*.c"),
+        *build.glob("$(S)/lib/libc/freebsd/patches/*"),
+        *build.glob("$(S)/lib/libc/llvm/*.txt"),
+        *build.glob("$(S)/lib/libc/llvm/patches/*"),
+        *build.glob("$(S)/lib/libc/arm/*"),
+        "$(S)/dev/wasm.py",
+    ],
     outputs=["$(B)/lib/libc/libc.wasm"],
-    deps=[freebsd_slice],
-    cmd=["python3", "$(S)/lib/libc/make.py", CLANG, WASM_LD, freebsd_slice.outputs[0], "$(B)/lib/libc/libc.wasm"],
+    deps=[freebsd_slice, llvm_libc_slice, arm_tarball],
+    cmd=["python3", "$(S)/lib/libc/make.py", CLANG, WASM_LD, freebsd_slice.outputs[0], llvm_libc_slice.outputs[0],
+         arm_tarball.outputs[0], "$(B)/lib/libc/libc.wasm"],
     descr="CC",
     color="green",
 )
@@ -1344,7 +1342,7 @@ for test in build.glob("$(S)/tst/test_*.py"):
 # lib/c hands it among them, against lib/c's headers as clang has them.
 libc_consts_test = command(
     name="test_libc_consts",
-    inputs=["$(S)/tst/test_libc_consts.py", "$(S)/bin/vm/libc_consts.go", "$(S)/lib/c/src/kernel.c", *build.glob("$(S)/lib/libc/*.c"),
+    inputs=["$(S)/tst/test_libc_consts.py", "$(S)/bin/vm/libc_consts.go", "$(S)/bin/vm/kernel.go", "$(S)/lib/c/src/kernel.c",
             *LIBC_HEADERS],
     outputs=["$(B)/tst/libc_consts.stamp"],
     deps=[],
@@ -1359,11 +1357,11 @@ e2e_tests.append(libc_consts_test)
 # declarations of the kernel's functions.
 call_formats_test = command(
     name="test_call_formats",
-    inputs=["$(S)/tst/test_call_formats.py", "$(S)/bin/vm/traced_imports.go", "$(S)/lib/c/src/kernel.c", "$(S)/lib/c/src/kernel.h",
-            *build.glob("$(S)/lib/libc/*.c"), *LIBC_HEADERS],
+    inputs=["$(S)/tst/test_call_formats.py", "$(S)/bin/vm/traced_imports.go", "$(S)/bin/vm/kernel.go", "$(S)/lib/c/src/kernel.c",
+            "$(S)/lib/libc/symbols.py", *LIBC_HEADERS],
     outputs=["$(B)/tst/call_formats.stamp"],
-    deps=[],
-    cmd=[["python3", "$(S)/tst/test_call_formats.py", CLANG, "$(S)"], touch("$(B)/tst/call_formats.stamp")],
+    deps=[libc_wasm],
+    cmd=[["python3", "$(S)/tst/test_call_formats.py", CLANG, "$(S)", libc_wasm.outputs[0]], touch("$(B)/tst/call_formats.stamp")],
     env={"PYTHONDONTWRITEBYTECODE": "1"},
     descr="TS", color="green",
 )

@@ -7,8 +7,8 @@ The source list is the Makefile's own; its xlib platform object is replaced
 by ours, which lives outside the tarball. The frame is 320x200 palette
 indices (CMAP256): the backend takes the palette through i_video.c. Nothing
 defines FEATURE_SOUND, so i_sound.c links empty. An undefined symbol is a
-link error: every libc function is either defined in libc.a or declared as
-a kernel import by its header. doom looks for its IWAD in wads, the
+link error: every libc function is libc.a's forwarder to the kernel. doom
+looks for its IWAD in wads, the
 directory of its package (dev/pkg.py), where config.h says the files are:
 FILES_DIR, "." in the tarball, which a configure of doomgeneric's would set.
 """

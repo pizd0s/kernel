@@ -1,14 +1,19 @@
 /*
- * Every function lib/c's headers declare that the kernel implements, but
- * those that return twice, which their headers define __INLINE: a call of
- * the kernel's import of the same name, __kernel_<name> here, and nothing
- * else. The compiler sees through such a function: where a program calls
+ * Every function lib/c's headers declare, but those that return twice,
+ * which their headers define __INLINE: a call of the kernel's import of
+ * the same name, __kernel_<name> here, and nothing else. The kernel has
+ * each in its Go or in its libc.wasm (lib/libc), which nothing here tells
+ * apart. The compiler sees through such a function: where a program calls
  * it, it calls the kernel's, or does there what the kernel's does; a
  * pointer to it reaches the kernel's. KERNEL declares the import and
  * defines the function, KERNEL_VOID and KERNEL_NORETURN those returning
  * nothing; a variadic function passes its va_list on, the pointer to its
  * variable arguments that the import took when the function was the
  * import.
+ *
+ * A variable of POSIX's is the program's (crt.c): a function that reads
+ * or writes one passes its place to the import after its own arguments,
+ * as getopt and lgamma do.
  *
  * A structure the kernel reads or writes comes with its size, which is
  * its version: the import has the size after each pointer to one, and the
@@ -97,6 +102,18 @@
 #include <utime.h>
 #include <wchar.h>
 #include <wctype.h>
+#include <complex.h>
+#include <dlfcn.h>
+#include <err.h>
+#include <fenv.h>
+#include <ftw.h>
+#include <getopt.h>
+#include <math.h>
+#include <mntent.h>
+#include <monetary.h>
+#include <search.h>
+#include <stdio_ext.h>
+#include <uchar.h>
 
 
 /*
@@ -156,6 +173,82 @@ KERNEL(in_addr_t, inet_netof, (struct in_addr a), (a))
 /* assert.h */
 KERNEL_NORETURN(__assert_fail, (const char* a, const char* b, int c, const char* d), (a, b, c, d))
 
+/* complex.h */
+// creal and cimag are the header's macros too: the functions are these.
+#undef creal
+#undef crealf
+#undef creall
+#undef cimag
+#undef cimagf
+#undef cimagl
+
+KERNEL(double, cabs, (double _Complex a), (a))
+KERNEL(float, cabsf, (float _Complex a), (a))
+KERNEL(long double, cabsl, (long double _Complex a), (a))
+KERNEL(double _Complex, cacos, (double _Complex a), (a))
+KERNEL(float _Complex, cacosf, (float _Complex a), (a))
+KERNEL(double _Complex, cacosh, (double _Complex a), (a))
+KERNEL(float _Complex, cacoshf, (float _Complex a), (a))
+KERNEL(long double _Complex, cacoshl, (long double _Complex a), (a))
+KERNEL(long double _Complex, cacosl, (long double _Complex a), (a))
+KERNEL(double, carg, (double _Complex a), (a))
+KERNEL(float, cargf, (float _Complex a), (a))
+KERNEL(long double, cargl, (long double _Complex a), (a))
+KERNEL(double _Complex, casin, (double _Complex a), (a))
+KERNEL(float _Complex, casinf, (float _Complex a), (a))
+KERNEL(double _Complex, casinh, (double _Complex a), (a))
+KERNEL(float _Complex, casinhf, (float _Complex a), (a))
+KERNEL(long double _Complex, casinhl, (long double _Complex a), (a))
+KERNEL(long double _Complex, casinl, (long double _Complex a), (a))
+KERNEL(double _Complex, catan, (double _Complex a), (a))
+KERNEL(float _Complex, catanf, (float _Complex a), (a))
+KERNEL(double _Complex, catanh, (double _Complex a), (a))
+KERNEL(float _Complex, catanhf, (float _Complex a), (a))
+KERNEL(long double _Complex, catanhl, (long double _Complex a), (a))
+KERNEL(long double _Complex, catanl, (long double _Complex a), (a))
+KERNEL(double _Complex, ccos, (double _Complex a), (a))
+KERNEL(float _Complex, ccosf, (float _Complex a), (a))
+KERNEL(double _Complex, ccosh, (double _Complex a), (a))
+KERNEL(float _Complex, ccoshf, (float _Complex a), (a))
+KERNEL(long double _Complex, ccoshl, (long double _Complex a), (a))
+KERNEL(long double _Complex, ccosl, (long double _Complex a), (a))
+KERNEL(double _Complex, cexp, (double _Complex a), (a))
+KERNEL(float _Complex, cexpf, (float _Complex a), (a))
+KERNEL(long double _Complex, cexpl, (long double _Complex a), (a))
+KERNEL(double, cimag, (double _Complex a), (a))
+KERNEL(float, cimagf, (float _Complex a), (a))
+KERNEL(long double, cimagl, (long double _Complex a), (a))
+KERNEL(double _Complex, clog, (double _Complex a), (a))
+KERNEL(float _Complex, clogf, (float _Complex a), (a))
+KERNEL(long double _Complex, clogl, (long double _Complex a), (a))
+KERNEL(double _Complex, conj, (double _Complex a), (a))
+KERNEL(float _Complex, conjf, (float _Complex a), (a))
+KERNEL(long double _Complex, conjl, (long double _Complex a), (a))
+KERNEL(double _Complex, cpow, (double _Complex a, double _Complex b), (a, b))
+KERNEL(float _Complex, cpowf, (float _Complex a, float _Complex b), (a, b))
+KERNEL(long double _Complex, cpowl, (long double _Complex a, long double _Complex b), (a, b))
+KERNEL(double _Complex, cproj, (double _Complex a), (a))
+KERNEL(float _Complex, cprojf, (float _Complex a), (a))
+KERNEL(long double _Complex, cprojl, (long double _Complex a), (a))
+KERNEL(double, creal, (double _Complex a), (a))
+KERNEL(float, crealf, (float _Complex a), (a))
+KERNEL(long double, creall, (long double _Complex a), (a))
+KERNEL(double _Complex, csin, (double _Complex a), (a))
+KERNEL(float _Complex, csinf, (float _Complex a), (a))
+KERNEL(double _Complex, csinh, (double _Complex a), (a))
+KERNEL(float _Complex, csinhf, (float _Complex a), (a))
+KERNEL(long double _Complex, csinhl, (long double _Complex a), (a))
+KERNEL(long double _Complex, csinl, (long double _Complex a), (a))
+KERNEL(double _Complex, csqrt, (double _Complex a), (a))
+KERNEL(float _Complex, csqrtf, (float _Complex a), (a))
+KERNEL(long double _Complex, csqrtl, (long double _Complex a), (a))
+KERNEL(double _Complex, ctan, (double _Complex a), (a))
+KERNEL(float _Complex, ctanf, (float _Complex a), (a))
+KERNEL(double _Complex, ctanh, (double _Complex a), (a))
+KERNEL(float _Complex, ctanhf, (float _Complex a), (a))
+KERNEL(long double _Complex, ctanhl, (long double _Complex a), (a))
+KERNEL(long double _Complex, ctanl, (long double _Complex a), (a))
+
 /* ctype.h */
 KERNEL(int, isalnum, (int a), (a))
 KERNEL(int, isalpha, (int a), (a))
@@ -173,6 +266,20 @@ KERNEL(int, isxdigit, (int a), (a))
 KERNEL(int, tolower, (int a), (a))
 KERNEL(int, toupper, (int a), (a))
 KERNEL(int, toascii, (int a), (a))
+KERNEL(int, isalnum_l, (int a, locale_t b), (a, b))
+KERNEL(int, isalpha_l, (int a, locale_t b), (a, b))
+KERNEL(int, isblank_l, (int a, locale_t b), (a, b))
+KERNEL(int, iscntrl_l, (int a, locale_t b), (a, b))
+KERNEL(int, isdigit_l, (int a, locale_t b), (a, b))
+KERNEL(int, isgraph_l, (int a, locale_t b), (a, b))
+KERNEL(int, islower_l, (int a, locale_t b), (a, b))
+KERNEL(int, isprint_l, (int a, locale_t b), (a, b))
+KERNEL(int, ispunct_l, (int a, locale_t b), (a, b))
+KERNEL(int, isspace_l, (int a, locale_t b), (a, b))
+KERNEL(int, isupper_l, (int a, locale_t b), (a, b))
+KERNEL(int, isxdigit_l, (int a, locale_t b), (a, b))
+KERNEL(int, tolower_l, (int a, locale_t b), (a, b))
+KERNEL(int, toupper_l, (int a, locale_t b), (a, b))
 
 /* dirent.h */
 KERNEL(DIR*, opendir, (const char* a), (a))
@@ -186,6 +293,20 @@ KERNEL(long, telldir, (DIR* a), (a))
 KERNEL(int, dirfd, (DIR* a), (a))
 KERNEL_SIZED(int, alphasort, (const struct dirent** a, const struct dirent** b), (const struct dirent** a, size_t a_size, const struct dirent** b, size_t b_size), (a, sizeof(struct dirent), b, sizeof(struct dirent)))
 KERNEL_SIZED(int, versionsort, (const struct dirent** a, const struct dirent** b), (const struct dirent** a, size_t a_size, const struct dirent** b, size_t b_size), (a, sizeof(struct dirent), b, sizeof(struct dirent)))
+KERNEL_SIZED(int, scandir, (const char* a, struct dirent*** b, int (*c)(const struct dirent*), int (*d)(const struct dirent**, const struct dirent**)), (const char* a, struct dirent*** b, size_t b_size, int (*c)(const struct dirent*), int (*d)(const struct dirent**, const struct dirent**)), (a, b, sizeof(struct dirent), c, d))
+
+/* dlfcn.h */
+KERNEL_SIZED(int, dladdr, (const void* a, Dl_info* b), (const void* a, Dl_info* b, size_t b_size), (a, b, sizeof(Dl_info)))
+KERNEL(int, dlclose, (void* a), (a))
+KERNEL(char*, dlerror, (void), ())
+KERNEL(void*, dlopen, (const char* a, int b), (a, b))
+KERNEL(void*, dlsym, (void* __restrict a, const char* __restrict b), (a, b))
+
+/* err.h */
+KERNEL_NORETURN(verr, (int a, const char* b, va_list c), (a, b, c))
+KERNEL_NORETURN(verrx, (int a, const char* b, va_list c), (a, b, c))
+KERNEL_VOID(vwarn, (const char* a, va_list b), (a, b))
+KERNEL_VOID(vwarnx, (const char* a, va_list b), (a, b))
 
 /* errno.h */
 KERNEL(int*, __errno_location, (void), ())
@@ -195,12 +316,50 @@ KERNEL(int, creat, (const char* a, mode_t b), (a, b))
 KERNEL(int, posix_fadvise, (int a, off_t b, off_t c, int d), (a, b, c, d))
 KERNEL(int, posix_fallocate, (int a, off_t b, off_t c), (a, b, c))
 
+/* fenv.h */
+KERNEL(int, feclearexcept, (int a), (a))
+KERNEL_SIZED(int, fegetenv, (fenv_t* a), (fenv_t* a, size_t a_size), (a, sizeof(fenv_t)))
+KERNEL_SIZED(int, fegetexceptflag, (fexcept_t* a, int b), (fexcept_t* a, size_t a_size, int b), (a, sizeof(fexcept_t), b))
+KERNEL(int, fegetround, (void), ())
+KERNEL_SIZED(int, feholdexcept, (fenv_t* a), (fenv_t* a, size_t a_size), (a, sizeof(fenv_t)))
+KERNEL(int, feraiseexcept, (int a), (a))
+KERNEL_SIZED(int, fesetenv, (const fenv_t* a), (const fenv_t* a, size_t a_size), (a, sizeof(fenv_t)))
+KERNEL_SIZED(int, fesetexceptflag, (const fexcept_t* a, int b), (const fexcept_t* a, size_t a_size, int b), (a, sizeof(fexcept_t), b))
+KERNEL(int, fesetround, (int a), (a))
+KERNEL(int, fetestexcept, (int a), (a))
+KERNEL_SIZED(int, feupdateenv, (const fenv_t* a), (const fenv_t* a, size_t a_size), (a, sizeof(fenv_t)))
+
 /* fnmatch.h */
 KERNEL(int, fnmatch, (const char* a, const char* b, int c), (a, b, c))
+
+/* ftw.h */
+KERNEL(int, ftw, (const char* a, int (*b)(const char*, const struct stat*, int), int c), (a, b, c))
+KERNEL(int, nftw, (const char* a, int (*b)(const char*, const struct stat*, int, struct FTW*), int c, int d), (a, b, c, d))
+
+/*
+ * getopt.h, unistd.h: getopt's variables are the program's (crt.c), and
+ * the kernel's functions take their places after their own arguments.
+ */
+int __kernel_getopt(int, char* const*, const char*, char**, int*, int*, int*) __KERNEL(getopt);
+int __kernel_getopt_long(int, char* const*, const char*, const struct option*, size_t, int*, char**, int*, int*, int*) __KERNEL(getopt_long);
+int __kernel_getopt_long_only(int, char* const*, const char*, const struct option*, size_t, int*, char**, int*, int*, int*) __KERNEL(getopt_long_only);
+
+WEAK int getopt(int argc, char* const argv[], const char* options) {
+    return __kernel_getopt(argc, argv, options, &optarg, &optind, &opterr, &optopt);
+}
+
+WEAK int getopt_long(int argc, char* const* argv, const char* options, const struct option* longs, int* index) {
+    return __kernel_getopt_long(argc, argv, options, longs, sizeof(struct option), index, &optarg, &optind, &opterr, &optopt);
+}
+
+WEAK int getopt_long_only(int argc, char* const* argv, const char* options, const struct option* longs, int* index) {
+    return __kernel_getopt_long_only(argc, argv, options, longs, sizeof(struct option), index, &optarg, &optind, &opterr, &optopt);
+}
 
 /* glob.h */
 KERNEL_SIZED(int, glob, (const char* __restrict a, int b, int (*c)(const char*, int), glob_t* __restrict d), (const char* __restrict a, int b, int (*c)(const char*, int), glob_t* __restrict d, size_t d_size), (a, b, c, d, sizeof(glob_t)))
 KERNEL_VOID_SIZED(globfree, (glob_t* a), (glob_t* a, size_t a_size), (a, sizeof(glob_t)))
+
 /* grp.h */
 KERNEL_SIZED(struct group*, getgrnam, (const char* a), (const char* a, size_t size), (a, sizeof(struct group)))
 KERNEL_SIZED(struct group*, getgrgid, (gid_t a), (gid_t a, size_t size), (a, sizeof(struct group)))
@@ -212,6 +371,7 @@ KERNEL_VOID(endgrent, (void), ())
 KERNEL(int, getgrouplist, (const char* a, gid_t b, gid_t* c, int* d), (a, b, c, d))
 KERNEL(int, initgroups, (const char* a, gid_t b), (a, b))
 KERNEL(int, setgroups, (size_t a, const gid_t* b), (a, b))
+KERNEL_SIZED(struct group*, fgetgrent, (FILE* a), (FILE* a, size_t size), (a, sizeof(struct group)))
 
 /* iconv.h */
 KERNEL(iconv_t, iconv_open, (const char* a, const char* b), (a, b))
@@ -228,10 +388,22 @@ KERNEL(imaxdiv_t, imaxdiv, (intmax_t a, intmax_t b), (a, b))
 
 /* langinfo.h */
 KERNEL(char*, nl_langinfo, (nl_item a), (a))
+KERNEL(char*, nl_langinfo_l, (nl_item a, locale_t b), (a, b))
 
 /* libgen.h */
 KERNEL(char*, basename, (char* a), (a))
 KERNEL(char*, dirname, (char* a), (a))
+
+/* libintl.h */
+KERNEL(char*, bind_textdomain_codeset, (const char* a, const char* b), (a, b))
+KERNEL(char*, bindtextdomain, (const char* a, const char* b), (a, b))
+KERNEL(char*, dcgettext, (const char* a, const char* b, int c), (a, b, c))
+KERNEL(char*, dcngettext, (const char* a, const char* b, const char* c, unsigned long d, int e), (a, b, c, d, e))
+KERNEL(char*, dgettext, (const char* a, const char* b), (a, b))
+KERNEL(char*, dngettext, (const char* a, const char* b, const char* c, unsigned long d), (a, b, c, d))
+KERNEL(char*, gettext, (const char* a), (a))
+KERNEL(char*, ngettext, (const char* a, const char* b, unsigned long c), (a, b, c))
+KERNEL(char*, textdomain, (const char* a), (a))
 
 /* locale.h */
 KERNEL(char*, setlocale, (int a, const char* b), (a, b))
@@ -247,11 +419,245 @@ KERNEL(char*, ngettext_l, (const char* a, const char* b, unsigned long c, locale
 KERNEL(char*, dngettext_l, (const char* a, const char* b, const char* c, unsigned long d, locale_t e), (a, b, c, d, e))
 KERNEL(char*, dcngettext_l, (const char* a, const char* b, const char* c, unsigned long d, int e, locale_t f), (a, b, c, d, e, f))
 KERNEL_SIZED(struct lconv*, localeconv, (void), (size_t size), (sizeof(struct lconv)))
+
 /* malloc.h */
 KERNEL(void*, memalign, (size_t a, size_t b), (a, b))
 KERNEL(size_t, malloc_usable_size, (void* a), (a))
 KERNEL(int, mallopt, (int a, int b), (a, b))
 KERNEL(int, malloc_trim, (size_t a), (a))
+
+/* math.h */
+KERNEL(int, __fpclassify, (double a), (a))
+KERNEL(int, __fpclassifyf, (float a), (a))
+KERNEL(int, __fpclassifyl, (long double a), (a))
+KERNEL(int, __signbit, (double a), (a))
+KERNEL(int, __signbitf, (float a), (a))
+KERNEL(int, __signbitl, (long double a), (a))
+KERNEL(double, acos, (double a), (a))
+KERNEL(float, acosf, (float a), (a))
+KERNEL(double, acosh, (double a), (a))
+KERNEL(float, acoshf, (float a), (a))
+KERNEL(long double, acoshl, (long double a), (a))
+KERNEL(long double, acosl, (long double a), (a))
+KERNEL(double, asin, (double a), (a))
+KERNEL(float, asinf, (float a), (a))
+KERNEL(double, asinh, (double a), (a))
+KERNEL(float, asinhf, (float a), (a))
+KERNEL(long double, asinhl, (long double a), (a))
+KERNEL(long double, asinl, (long double a), (a))
+KERNEL(double, atan, (double a), (a))
+KERNEL(double, atan2, (double a, double b), (a, b))
+KERNEL(float, atan2f, (float a, float b), (a, b))
+KERNEL(long double, atan2l, (long double a, long double b), (a, b))
+KERNEL(float, atanf, (float a), (a))
+KERNEL(double, atanh, (double a), (a))
+KERNEL(float, atanhf, (float a), (a))
+KERNEL(long double, atanhl, (long double a), (a))
+KERNEL(long double, atanl, (long double a), (a))
+KERNEL(double, cbrt, (double a), (a))
+KERNEL(float, cbrtf, (float a), (a))
+KERNEL(long double, cbrtl, (long double a), (a))
+KERNEL(double, ceil, (double a), (a))
+KERNEL(float, ceilf, (float a), (a))
+KERNEL(long double, ceill, (long double a), (a))
+KERNEL(double, copysign, (double a, double b), (a, b))
+KERNEL(float, copysignf, (float a, float b), (a, b))
+KERNEL(long double, copysignl, (long double a, long double b), (a, b))
+KERNEL(double, cos, (double a), (a))
+KERNEL(float, cosf, (float a), (a))
+KERNEL(double, cosh, (double a), (a))
+KERNEL(float, coshf, (float a), (a))
+KERNEL(long double, coshl, (long double a), (a))
+KERNEL(long double, cosl, (long double a), (a))
+KERNEL(double, drem, (double a, double b), (a, b))
+KERNEL(float, dremf, (float a, float b), (a, b))
+KERNEL(double, erf, (double a), (a))
+KERNEL(double, erfc, (double a), (a))
+KERNEL(float, erfcf, (float a), (a))
+KERNEL(long double, erfcl, (long double a), (a))
+KERNEL(float, erff, (float a), (a))
+KERNEL(long double, erfl, (long double a), (a))
+KERNEL(double, exp, (double a), (a))
+KERNEL(double, exp10, (double a), (a))
+KERNEL(float, exp10f, (float a), (a))
+KERNEL(long double, exp10l, (long double a), (a))
+KERNEL(double, exp2, (double a), (a))
+KERNEL(float, exp2f, (float a), (a))
+KERNEL(long double, exp2l, (long double a), (a))
+KERNEL(float, expf, (float a), (a))
+KERNEL(long double, expl, (long double a), (a))
+KERNEL(double, expm1, (double a), (a))
+KERNEL(float, expm1f, (float a), (a))
+KERNEL(long double, expm1l, (long double a), (a))
+KERNEL(double, fabs, (double a), (a))
+KERNEL(float, fabsf, (float a), (a))
+KERNEL(long double, fabsl, (long double a), (a))
+KERNEL(double, fdim, (double a, double b), (a, b))
+KERNEL(float, fdimf, (float a, float b), (a, b))
+KERNEL(long double, fdiml, (long double a, long double b), (a, b))
+KERNEL(int, finite, (double a), (a))
+KERNEL(int, finitef, (float a), (a))
+KERNEL(double, floor, (double a), (a))
+KERNEL(float, floorf, (float a), (a))
+KERNEL(long double, floorl, (long double a), (a))
+KERNEL(double, fma, (double a, double b, double c), (a, b, c))
+KERNEL(float, fmaf, (float a, float b, float c), (a, b, c))
+KERNEL(long double, fmal, (long double a, long double b, long double c), (a, b, c))
+KERNEL(double, fmax, (double a, double b), (a, b))
+KERNEL(float, fmaxf, (float a, float b), (a, b))
+KERNEL(long double, fmaxl, (long double a, long double b), (a, b))
+KERNEL(double, fmin, (double a, double b), (a, b))
+KERNEL(float, fminf, (float a, float b), (a, b))
+KERNEL(long double, fminl, (long double a, long double b), (a, b))
+KERNEL(double, fmod, (double a, double b), (a, b))
+KERNEL(float, fmodf, (float a, float b), (a, b))
+KERNEL(long double, fmodl, (long double a, long double b), (a, b))
+KERNEL(double, frexp, (double a, int* b), (a, b))
+KERNEL(float, frexpf, (float a, int* b), (a, b))
+KERNEL(long double, frexpl, (long double a, int* b), (a, b))
+KERNEL(double, hypot, (double a, double b), (a, b))
+KERNEL(float, hypotf, (float a, float b), (a, b))
+KERNEL(long double, hypotl, (long double a, long double b), (a, b))
+KERNEL(int, ilogb, (double a), (a))
+KERNEL(int, ilogbf, (float a), (a))
+KERNEL(int, ilogbl, (long double a), (a))
+KERNEL(double, j0, (double a), (a))
+KERNEL(float, j0f, (float a), (a))
+KERNEL(double, j1, (double a), (a))
+KERNEL(float, j1f, (float a), (a))
+KERNEL(double, jn, (int a, double b), (a, b))
+KERNEL(float, jnf, (int a, float b), (a, b))
+KERNEL(double, ldexp, (double a, int b), (a, b))
+KERNEL(float, ldexpf, (float a, int b), (a, b))
+KERNEL(long double, ldexpl, (long double a, int b), (a, b))
+KERNEL(double, lgamma_r, (double a, int* b), (a, b))
+KERNEL(float, lgammaf_r, (float a, int* b), (a, b))
+KERNEL(long double, lgammal_r, (long double a, int* b), (a, b))
+KERNEL(long long, llrint, (double a), (a))
+KERNEL(long long, llrintf, (float a), (a))
+KERNEL(long long, llrintl, (long double a), (a))
+KERNEL(long long, llround, (double a), (a))
+KERNEL(long long, llroundf, (float a), (a))
+KERNEL(long long, llroundl, (long double a), (a))
+KERNEL(double, log, (double a), (a))
+KERNEL(double, log10, (double a), (a))
+KERNEL(float, log10f, (float a), (a))
+KERNEL(long double, log10l, (long double a), (a))
+KERNEL(double, log1p, (double a), (a))
+KERNEL(float, log1pf, (float a), (a))
+KERNEL(long double, log1pl, (long double a), (a))
+KERNEL(double, log2, (double a), (a))
+KERNEL(float, log2f, (float a), (a))
+KERNEL(long double, log2l, (long double a), (a))
+KERNEL(double, logb, (double a), (a))
+KERNEL(float, logbf, (float a), (a))
+KERNEL(long double, logbl, (long double a), (a))
+KERNEL(float, logf, (float a), (a))
+KERNEL(long double, logl, (long double a), (a))
+KERNEL(long, lrint, (double a), (a))
+KERNEL(long, lrintf, (float a), (a))
+KERNEL(long, lrintl, (long double a), (a))
+KERNEL(long, lround, (double a), (a))
+KERNEL(long, lroundf, (float a), (a))
+KERNEL(long, lroundl, (long double a), (a))
+KERNEL(double, modf, (double a, double* b), (a, b))
+KERNEL(float, modff, (float a, float* b), (a, b))
+KERNEL(long double, modfl, (long double a, long double* b), (a, b))
+KERNEL(double, nan, (const char* a), (a))
+KERNEL(float, nanf, (const char* a), (a))
+KERNEL(long double, nanl, (const char* a), (a))
+KERNEL(double, nearbyint, (double a), (a))
+KERNEL(float, nearbyintf, (float a), (a))
+KERNEL(long double, nearbyintl, (long double a), (a))
+KERNEL(double, nextafter, (double a, double b), (a, b))
+KERNEL(float, nextafterf, (float a, float b), (a, b))
+KERNEL(long double, nextafterl, (long double a, long double b), (a, b))
+KERNEL(double, nexttoward, (double a, long double b), (a, b))
+KERNEL(float, nexttowardf, (float a, long double b), (a, b))
+KERNEL(long double, nexttowardl, (long double a, long double b), (a, b))
+KERNEL(double, pow, (double a, double b), (a, b))
+KERNEL(double, pow10, (double a), (a))
+KERNEL(float, pow10f, (float a), (a))
+KERNEL(long double, pow10l, (long double a), (a))
+KERNEL(float, powf, (float a, float b), (a, b))
+KERNEL(long double, powl, (long double a, long double b), (a, b))
+KERNEL(double, remainder, (double a, double b), (a, b))
+KERNEL(float, remainderf, (float a, float b), (a, b))
+KERNEL(long double, remainderl, (long double a, long double b), (a, b))
+KERNEL(double, remquo, (double a, double b, int* c), (a, b, c))
+KERNEL(float, remquof, (float a, float b, int* c), (a, b, c))
+KERNEL(long double, remquol, (long double a, long double b, int* c), (a, b, c))
+KERNEL(double, rint, (double a), (a))
+KERNEL(float, rintf, (float a), (a))
+KERNEL(long double, rintl, (long double a), (a))
+KERNEL(double, round, (double a), (a))
+KERNEL(float, roundf, (float a), (a))
+KERNEL(long double, roundl, (long double a), (a))
+KERNEL(double, scalb, (double a, double b), (a, b))
+KERNEL(float, scalbf, (float a, float b), (a, b))
+KERNEL(double, scalbln, (double a, long b), (a, b))
+KERNEL(float, scalblnf, (float a, long b), (a, b))
+KERNEL(long double, scalblnl, (long double a, long b), (a, b))
+KERNEL(double, scalbn, (double a, int b), (a, b))
+KERNEL(float, scalbnf, (float a, int b), (a, b))
+KERNEL(long double, scalbnl, (long double a, int b), (a, b))
+KERNEL(double, significand, (double a), (a))
+KERNEL(float, significandf, (float a), (a))
+KERNEL(double, sin, (double a), (a))
+KERNEL_VOID(sincos, (double a, double* b, double* c), (a, b, c))
+KERNEL_VOID(sincosf, (float a, float* b, float* c), (a, b, c))
+KERNEL_VOID(sincosl, (long double a, long double* b, long double* c), (a, b, c))
+KERNEL(float, sinf, (float a), (a))
+KERNEL(double, sinh, (double a), (a))
+KERNEL(float, sinhf, (float a), (a))
+KERNEL(long double, sinhl, (long double a), (a))
+KERNEL(long double, sinl, (long double a), (a))
+KERNEL(double, sqrt, (double a), (a))
+KERNEL(float, sqrtf, (float a), (a))
+KERNEL(long double, sqrtl, (long double a), (a))
+KERNEL(double, tan, (double a), (a))
+KERNEL(float, tanf, (float a), (a))
+KERNEL(double, tanh, (double a), (a))
+KERNEL(float, tanhf, (float a), (a))
+KERNEL(long double, tanhl, (long double a), (a))
+KERNEL(long double, tanl, (long double a), (a))
+KERNEL(double, tgamma, (double a), (a))
+KERNEL(float, tgammaf, (float a), (a))
+KERNEL(long double, tgammal, (long double a), (a))
+KERNEL(double, trunc, (double a), (a))
+KERNEL(float, truncf, (float a), (a))
+KERNEL(long double, truncl, (long double a), (a))
+KERNEL(double, y0, (double a), (a))
+KERNEL(float, y0f, (float a), (a))
+KERNEL(double, y1, (double a), (a))
+KERNEL(float, y1f, (float a), (a))
+KERNEL(double, yn, (int a, double b), (a, b))
+KERNEL(float, ynf, (int a, float b), (a, b))
+
+/* signgam is the program's (crt.c), and the kernel's lgamma takes its place. */
+double __kernel_lgamma(double, int*) __KERNEL(lgamma);
+float __kernel_lgammaf(float, int*) __KERNEL(lgammaf);
+long double __kernel_lgammal(long double, int*) __KERNEL(lgammal);
+
+WEAK double lgamma(double x) {
+    return __kernel_lgamma(x, &signgam);
+}
+
+WEAK float lgammaf(float x) {
+    return __kernel_lgammaf(x, &signgam);
+}
+
+WEAK long double lgammal(long double x) {
+    return __kernel_lgammal(x, &signgam);
+}
+
+/* mntent.h */
+KERNEL_SIZED(int, addmntent, (FILE* a, const struct mntent* b), (FILE* a, const struct mntent* b, size_t b_size), (a, b, sizeof(struct mntent)))
+KERNEL(int, endmntent, (FILE* a), (a))
+KERNEL_SIZED(struct mntent*, getmntent, (FILE* a), (FILE* a, size_t size), (a, sizeof(struct mntent)))
+KERNEL_SIZED(struct mntent*, getmntent_r, (FILE* a, struct mntent* b, char* c, int d), (FILE* a, struct mntent* b, size_t b_size, char* c, int d, size_t size), (a, b, sizeof(struct mntent), c, d, sizeof(struct mntent)))
+KERNEL_SIZED(char*, hasmntopt, (const struct mntent* a, const char* b), (const struct mntent* a, size_t a_size, const char* b), (a, sizeof(struct mntent), b))
+KERNEL(FILE*, setmntent, (const char* a, const char* b), (a, b))
 
 /* net/if.h */
 KERNEL(unsigned, if_nametoindex, (const char* a), (a))
@@ -260,6 +666,7 @@ KERNEL_SIZED(struct if_nameindex*, if_nameindex, (void), (size_t size), (sizeof(
 KERNEL_VOID_SIZED(if_freenameindex, (struct if_nameindex* a), (struct if_nameindex* a, size_t a_size), (a, sizeof(struct if_nameindex)))
 KERNEL_SIZED(int, getifaddrs, (struct ifaddrs** a), (struct ifaddrs** a, size_t size), (a, sizeof(struct ifaddrs)))
 KERNEL_VOID(freeifaddrs, (struct ifaddrs* a), (a))
+
 /* resolv.h, arpa/nameser.h */
 KERNEL_SIZED(struct __res_state*, __res_state, (void), (size_t size), (sizeof(struct __res_state)))
 KERNEL(int, res_init, (void), ())
@@ -282,10 +689,12 @@ KERNEL_SIZED(int, ns_initparse, (const unsigned char* a, int b, ns_msg* c), (con
 KERNEL_SIZED(int, ns_parserr, (ns_msg* a, ns_sect b, int c, ns_rr* d), (ns_msg* a, size_t a_size, ns_sect b, int c, ns_rr* d, size_t d_size), (a, sizeof(ns_msg), b, c, d, sizeof(ns_rr)))
 KERNEL(int, ns_skiprr, (const unsigned char* a, const unsigned char* b, ns_sect c, int d), (a, b, c, d))
 KERNEL(int, ns_name_uncompress, (const unsigned char* a, const unsigned char* b, const unsigned char* c, char* d, size_t e), (a, b, c, d, e))
+
 /* nl_types.h */
 KERNEL(nl_catd, catopen, (const char* a, int b), (a, b))
 KERNEL(char*, catgets, (nl_catd a, int b, int c, const char* d), (a, b, c, d))
 KERNEL(int, catclose, (nl_catd a), (a))
+
 /* ndbm.h */
 KERNEL(DBM*, dbm_open, (const char* a, int b, mode_t c), (a, b, c))
 KERNEL_VOID(dbm_close, (DBM* a), (a))
@@ -360,25 +769,73 @@ KERNEL(const char*, hstrerror, (int a), (a))
 /* poll.h */
 KERNEL_SIZED(int, poll, (struct pollfd* a, nfds_t b, int c), (struct pollfd* a, size_t a_size, nfds_t b, int c), (a, sizeof(struct pollfd), b, c))
 KERNEL_SIZED(int, ppoll, (struct pollfd* a, nfds_t b, const struct timespec* c, const sigset_t* d), (struct pollfd* a, size_t a_size, nfds_t b, const struct timespec* c, size_t c_size, const sigset_t* d, size_t d_size), (a, sizeof(struct pollfd), b, c, sizeof(struct timespec), d, sizeof(sigset_t)))
+
+/* search.h */
+KERNEL(int, hcreate, (size_t a), (a))
+KERNEL_SIZED(int, hcreate_r, (size_t a, struct hsearch_data* b), (size_t a, struct hsearch_data* b, size_t b_size), (a, b, sizeof(struct hsearch_data)))
+KERNEL_VOID(hdestroy, (void), ())
+KERNEL_VOID_SIZED(hdestroy_r, (struct hsearch_data* a), (struct hsearch_data* a, size_t a_size), (a, sizeof(struct hsearch_data)))
+KERNEL_VOID(insque, (void* a, void* b), (a, b))
+KERNEL(void*, lfind, (const void* a, const void* b, size_t* c, size_t d, int (*e)(const void*, const void*)), (a, b, c, d, e))
+KERNEL(void*, lsearch, (const void* a, void* b, size_t* c, size_t d, int (*e)(const void*, const void*)), (a, b, c, d, e))
+KERNEL_VOID(remque, (void* a), (a))
+KERNEL(void*, tdelete, (const void* __restrict a, posix_tnode** __restrict b, int (*c)(const void*, const void*)), (a, b, c))
+KERNEL_VOID(tdestroy, (void* a, void (*b)(void*)), (a, b))
+KERNEL(posix_tnode*, tfind, (const void* a, posix_tnode* const* b, int (*c)(const void*, const void*)), (a, b, c))
+KERNEL(posix_tnode*, tsearch, (const void* a, posix_tnode** b, int (*c)(const void*, const void*)), (a, b, c))
+KERNEL_VOID(twalk, (const posix_tnode* a, void (*b)(const posix_tnode*, VISIT, int)), (a, b))
+
+/* An ENTRY goes to the kernel by its place. */
+ENTRY* __kernel_hsearch(const ENTRY*, size_t, ACTION) __KERNEL(hsearch);
+int __kernel_hsearch_r(const ENTRY*, size_t, ACTION, ENTRY**, struct hsearch_data*, size_t) __KERNEL(hsearch_r);
+
+WEAK ENTRY* hsearch(ENTRY item, ACTION action) {
+    return __kernel_hsearch(&item, sizeof item, action);
+}
+
+WEAK int hsearch_r(ENTRY item, ACTION action, ENTRY** found, struct hsearch_data* table) {
+    return __kernel_hsearch_r(&item, sizeof item, action, found, table, sizeof(struct hsearch_data));
+}
+
+/* stdio_ext.h */
+KERNEL(size_t, __fbufsize, (FILE* a), (a))
+KERNEL(int, __flbf, (FILE* a), (a))
+KERNEL(size_t, __fpending, (FILE* a), (a))
+KERNEL(int, __fpurge, (FILE* a), (a))
+KERNEL(int, __freadable, (FILE* a), (a))
+KERNEL(size_t, __freadahead, (FILE* a), (a))
+KERNEL(int, __freading, (FILE* a), (a))
+KERNEL(const char*, __freadptr, (FILE* a, size_t* b), (a, b))
+KERNEL_VOID(__freadptrinc, (FILE* a, size_t b), (a, b))
+KERNEL_VOID(__fseterr, (FILE* a), (a))
+KERNEL(int, __fsetlocking, (FILE* a, int b), (a, b))
+KERNEL(int, __fwritable, (FILE* a), (a))
+KERNEL(int, __fwriting, (FILE* a), (a))
+KERNEL_VOID(_flushlbf, (void), ())
+
 /* sys/epoll.h */
 KERNEL(int, epoll_create, (int a), (a))
 KERNEL(int, epoll_create1, (int a), (a))
 KERNEL_SIZED(int, epoll_ctl, (int a, int b, int c, struct epoll_event* d), (int a, int b, int c, struct epoll_event* d, size_t d_size), (a, b, c, d, sizeof(struct epoll_event)))
 KERNEL_SIZED(int, epoll_wait, (int a, struct epoll_event* b, int c, int d), (int a, struct epoll_event* b, size_t b_size, int c, int d), (a, b, sizeof(struct epoll_event), c, d))
 KERNEL_SIZED(int, epoll_pwait, (int a, struct epoll_event* b, int c, int d, const sigset_t* e), (int a, struct epoll_event* b, size_t b_size, int c, int d, const sigset_t* e, size_t e_size), (a, b, sizeof(struct epoll_event), c, d, e, sizeof(sigset_t)))
+
 /* sys/eventfd.h */
 KERNEL(int, eventfd, (unsigned int a, int b), (a, b))
 KERNEL(int, eventfd_read, (int a, eventfd_t* b), (a, b))
 KERNEL(int, eventfd_write, (int a, eventfd_t b), (a, b))
+
 /* sys/timerfd.h */
 KERNEL(int, timerfd_create, (int a, int b), (a, b))
 KERNEL_SIZED(int, timerfd_settime, (int a, int b, const struct itimerspec* c, struct itimerspec* d), (int a, int b, const struct itimerspec* c, size_t c_size, struct itimerspec* d, size_t d_size), (a, b, c, sizeof(struct itimerspec), d, sizeof(struct itimerspec)))
 KERNEL_SIZED(int, timerfd_gettime, (int a, struct itimerspec* b), (int a, struct itimerspec* b, size_t b_size), (a, b, sizeof(struct itimerspec)))
+
 /* sys/inotify.h */
 KERNEL(int, inotify_init, (void), ())
 KERNEL(int, inotify_init1, (int a), (a))
 KERNEL(int, inotify_add_watch, (int a, const char* b, uint32_t c), (a, b, c))
 KERNEL(int, inotify_rm_watch, (int a, int b), (a, b))
+
 /* pthread.h */
 KERNEL_SIZED(int, pthread_create, (pthread_t* __restrict a, const pthread_attr_t* __restrict b, void* (*c)(void*), void* __restrict d), (pthread_t* __restrict a, const pthread_attr_t* __restrict b, size_t b_size, void* (*c)(void*), void* __restrict d), (a, b, sizeof(pthread_attr_t), c, d))
 KERNEL(int, pthread_join, (pthread_t a, void** b), (a, b))
@@ -489,9 +946,16 @@ KERNEL(int, __pthread_once_begin, (pthread_once_t* a), (a))
 KERNEL_VOID(__pthread_once_end, (pthread_once_t* a), (a))
 KERNEL(int, __pthread_cancelled, (int a), (a))
 KERNEL(void*, __pthread_key_take, (pthread_key_t* a, void (**b)(void*)), (a, b))
+KERNEL_VOID_SIZED(_pthread_cleanup_pop, (struct __ptcb* a, int b), (struct __ptcb* a, size_t a_size, int b), (a, sizeof(struct __ptcb), b))
+KERNEL_VOID_SIZED(_pthread_cleanup_push, (struct __ptcb* a, void (*b)(void*), void* c), (struct __ptcb* a, size_t a_size, void (*b)(void*), void* c), (a, sizeof(struct __ptcb), b, c))
+KERNEL(int, pthread_atfork, (void (*a)(void), void (*b)(void), void (*c)(void)), (a, b, c))
+KERNEL_NORETURN(pthread_exit, (void* a), (a))
+KERNEL(int, pthread_once, (pthread_once_t* a, void (*b)(void)), (a, b))
+KERNEL_VOID(pthread_testcancel, (void), ())
 
 /* pty.h */
 KERNEL_SIZED(int, openpty, (int* a, int* b, char* c, const struct termios* d, const struct winsize* e), (int* a, int* b, char* c, const struct termios* d, size_t d_size, const struct winsize* e, size_t e_size), (a, b, c, d, sizeof(struct termios), e, sizeof(struct winsize)))
+
 /* pwd.h */
 KERNEL_SIZED(struct passwd*, getpwnam, (const char* a), (const char* a, size_t size), (a, sizeof(struct passwd)))
 KERNEL_SIZED(struct passwd*, getpwuid, (uid_t a), (uid_t a, size_t size), (a, sizeof(struct passwd)))
@@ -500,12 +964,15 @@ KERNEL_SIZED(int, getpwuid_r, (uid_t a, struct passwd* b, char* c, size_t d, str
 KERNEL_SIZED(struct passwd*, getpwent, (void), (size_t size), (sizeof(struct passwd)))
 KERNEL_VOID(setpwent, (void), ())
 KERNEL_VOID(endpwent, (void), ())
+KERNEL_SIZED(struct passwd*, fgetpwent, (FILE* a), (FILE* a, size_t size), (a, sizeof(struct passwd)))
+KERNEL_SIZED(int, putpwent, (const struct passwd* a, FILE* b), (const struct passwd* a, size_t a_size, FILE* b), (a, sizeof(struct passwd), b))
 
 /* regex.h */
 KERNEL_SIZED(int, regcomp, (regex_t* __restrict a, const char* __restrict b, int c), (regex_t* __restrict a, size_t a_size, const char* __restrict b, int c), (a, sizeof(regex_t), b, c))
 KERNEL_SIZED(int, regexec, (const regex_t* __restrict a, const char* __restrict b, size_t c, regmatch_t* __restrict d, int e), (const regex_t* __restrict a, size_t a_size, const char* __restrict b, size_t c, regmatch_t* __restrict d, size_t d_size, int e), (a, sizeof(regex_t), b, c, d, sizeof(regmatch_t), e))
 KERNEL_VOID_SIZED(regfree, (regex_t* a), (regex_t* a, size_t a_size), (a, sizeof(regex_t)))
 KERNEL_SIZED(size_t, regerror, (int a, const regex_t* __restrict b, char* __restrict c, size_t d), (int a, const regex_t* __restrict b, size_t b_size, char* __restrict c, size_t d), (a, b, sizeof(regex_t), c, d))
+
 /* sched.h */
 KERNEL(int, sched_yield, (void), ())
 KERNEL(int, sched_get_priority_max, (int a), (a))
@@ -519,6 +986,7 @@ KERNEL(int, __sched_cpucount, (size_t a, const cpu_set_t* b), (a, b))
 KERNEL(int, sched_getaffinity, (pid_t a, size_t b, cpu_set_t* c), (a, b, c))
 KERNEL(int, sched_setaffinity, (pid_t a, size_t b, const cpu_set_t* c), (a, b, c))
 KERNEL(int, sched_getcpu, (void), ())
+
 /* semaphore.h */
 KERNEL_SIZED(int, sem_init, (sem_t* a, int b, unsigned c), (sem_t* a, size_t a_size, int b, unsigned c), (a, sizeof(sem_t), b, c))
 KERNEL_SIZED(int, sem_destroy, (sem_t* a), (sem_t* a, size_t a_size), (a, sizeof(sem_t)))
@@ -535,6 +1003,7 @@ KERNEL(int, sem_unlink, (const char* a), (a))
 KERNEL_NORETURN_SIZED(longjmp, (jmp_buf a, int b), (jmp_buf a, size_t a_size, int b), (a, sizeof(jmp_buf), b))
 KERNEL_NORETURN_SIZED(_longjmp, (jmp_buf a, int b), (jmp_buf a, size_t a_size, int b), (a, sizeof(jmp_buf), b))
 KERNEL_NORETURN_SIZED(siglongjmp, (sigjmp_buf a, int b), (sigjmp_buf a, size_t a_size, int b), (a, sizeof(sigjmp_buf), b))
+
 /* signal.h */
 KERNEL(sighandler_t, signal, (int a, sighandler_t b), (a, b))
 KERNEL(sighandler_t, bsd_signal, (int a, sighandler_t b), (a, b))
@@ -570,6 +1039,7 @@ KERNEL(int, raise, (int a), (a))
 KERNEL_VOID(psignal, (int a, const char* b), (a, b))
 KERNEL_VOID_SIZED(psiginfo, (const siginfo_t* a, const char* b), (const siginfo_t* a, size_t a_size, const char* b), (a, sizeof(siginfo_t), b))
 KERNEL(int, pthread_kill, (pthread_t a, int b), (a, b))
+
 /* stdio.h */
 KERNEL(int, remove, (const char* a), (a))
 KERNEL(int, rename, (const char* a, const char* b), (a, b))
@@ -580,6 +1050,90 @@ KERNEL(char*, __dtoa, (double a, int b, int c, int* d, int* e, char** f), (a, b,
 KERNEL(char*, __ldtoa, (long double* a, int b, int c, int* d, int* e, char** f), (a, b, c, d, e, f))
 KERNEL(char*, __hdtoa, (double a, const char* b, int c, int* d, int* e, char** f), (a, b, c, d, e, f))
 KERNEL(char*, __hldtoa, (long double a, const char* b, int c, int* d, int* e, char** f), (a, b, c, d, e, f))
+KERNEL_VOID(clearerr, (FILE* a), (a))
+KERNEL_VOID(clearerr_unlocked, (FILE* a), (a))
+KERNEL(int, fclose, (FILE* a), (a))
+KERNEL(FILE*, fdopen, (int a, const char* b), (a, b))
+KERNEL(int, feof, (FILE* a), (a))
+KERNEL(int, feof_unlocked, (FILE* a), (a))
+KERNEL(int, ferror, (FILE* a), (a))
+KERNEL(int, ferror_unlocked, (FILE* a), (a))
+KERNEL(int, fflush, (FILE* a), (a))
+KERNEL(int, fflush_unlocked, (FILE* a), (a))
+KERNEL(int, fgetc, (FILE* a), (a))
+KERNEL(int, fgetc_unlocked, (FILE* a), (a))
+KERNEL(char*, fgetln, (FILE* a, size_t* b), (a, b))
+KERNEL(int, fgetpos, (FILE* __restrict a, fpos_t* __restrict b), (a, b))
+KERNEL(char*, fgets, (char* __restrict a, int b, FILE* __restrict c), (a, b, c))
+KERNEL(char*, fgets_unlocked, (char* a, int b, FILE* c), (a, b, c))
+KERNEL(int, fileno, (FILE* a), (a))
+KERNEL(int, fileno_unlocked, (FILE* a), (a))
+KERNEL_VOID(flockfile, (FILE* a), (a))
+KERNEL(FILE*, fmemopen, (void* __restrict a, size_t b, const char* __restrict c), (a, b, c))
+KERNEL(FILE*, fopen, (const char* a, const char* b), (a, b))
+KERNEL(int, fpurge, (FILE* a), (a))
+KERNEL(int, fputc, (int a, FILE* b), (a, b))
+KERNEL(int, fputc_unlocked, (int a, FILE* b), (a, b))
+KERNEL(int, fputs, (const char* __restrict a, FILE* __restrict b), (a, b))
+KERNEL(int, fputs_unlocked, (const char* a, FILE* b), (a, b))
+KERNEL(size_t, fread, (void* a, size_t b, size_t c, FILE* d), (a, b, c, d))
+KERNEL(size_t, fread_unlocked, (void* a, size_t b, size_t c, FILE* d), (a, b, c, d))
+KERNEL(FILE*, freopen, (const char* __restrict a, const char* __restrict b, FILE* __restrict c), (a, b, c))
+KERNEL(int, fseek, (FILE* a, long b, int c), (a, b, c))
+KERNEL(int, fseeko, (FILE* a, off_t b, int c), (a, b, c))
+KERNEL(int, fsetpos, (FILE* a, const fpos_t* b), (a, b))
+KERNEL(long, ftell, (FILE* a), (a))
+KERNEL(off_t, ftello, (FILE* a), (a))
+KERNEL(int, ftrylockfile, (FILE* a), (a))
+KERNEL_VOID(funlockfile, (FILE* a), (a))
+KERNEL(FILE*, funopen, (const void* a, int (*b)(void*, char*, int), int (*c)(void*, const char*, int), fpos_t (*d)(void*, fpos_t, int), int (*e)(void*)), (a, b, c, d, e))
+KERNEL(size_t, fwrite, (const void* a, size_t b, size_t c, FILE* d), (a, b, c, d))
+KERNEL(size_t, fwrite_unlocked, (const void* a, size_t b, size_t c, FILE* d), (a, b, c, d))
+KERNEL(int, getc, (FILE* a), (a))
+KERNEL(int, getc_unlocked, (FILE* a), (a))
+KERNEL(int, getchar, (void), ())
+KERNEL(int, getchar_unlocked, (void), ())
+KERNEL(ssize_t, getdelim, (char** __restrict a, size_t* __restrict b, int c, FILE* __restrict d), (a, b, c, d))
+KERNEL(ssize_t, getline, (char** __restrict a, size_t* __restrict b, FILE* __restrict c), (a, b, c))
+KERNEL(int, getw, (FILE* a), (a))
+KERNEL(FILE*, open_memstream, (char** a, size_t* b), (a, b))
+KERNEL(int, pclose, (FILE* a), (a))
+KERNEL_VOID(perror, (const char* a), (a))
+KERNEL(FILE*, popen, (const char* a, const char* b), (a, b))
+KERNEL(int, putc, (int a, FILE* b), (a, b))
+KERNEL(int, putc_unlocked, (int a, FILE* b), (a, b))
+KERNEL(int, putchar, (int a), (a))
+KERNEL(int, putchar_unlocked, (int a), (a))
+KERNEL(int, puts, (const char* a), (a))
+KERNEL(int, putw, (int a, FILE* b), (a, b))
+KERNEL_VOID(rewind, (FILE* a), (a))
+KERNEL_VOID(setbuf, (FILE* __restrict a, char* __restrict b), (a, b))
+KERNEL_VOID(setbuffer, (FILE* a, char* b, size_t c), (a, b, c))
+KERNEL_VOID(setlinebuf, (FILE* a), (a))
+KERNEL(int, setvbuf, (FILE* __restrict a, char* __restrict b, int c, size_t d), (a, b, c, d))
+KERNEL(char*, tempnam, (const char* a, const char* b), (a, b))
+KERNEL(FILE*, tmpfile, (void), ())
+KERNEL(char*, tmpnam, (char* a), (a))
+KERNEL(int, ungetc, (int a, FILE* b), (a, b))
+KERNEL(int, vasprintf, (char** a, const char* b, va_list c), (a, b, c))
+KERNEL(int, vdprintf, (int a, const char* __restrict b, va_list c), (a, b, c))
+KERNEL(int, vfprintf, (FILE* __restrict a, const char* __restrict b, va_list c), (a, b, c))
+KERNEL(int, vfscanf, (FILE* __restrict a, const char* __restrict b, va_list c), (a, b, c))
+KERNEL(int, vprintf, (const char* __restrict a, va_list b), (a, b))
+KERNEL(int, vscanf, (const char* __restrict a, va_list b), (a, b))
+KERNEL(int, vsnprintf, (char* __restrict a, size_t b, const char* __restrict c, va_list d), (a, b, c, d))
+KERNEL(int, vsprintf, (char* __restrict a, const char* __restrict b, va_list c), (a, b, c))
+KERNEL(int, vsscanf, (const char* __restrict a, const char* __restrict b, va_list c), (a, b, c))
+KERNEL(FILE*, __stdin, (void), ())
+KERNEL(FILE*, __stdout, (void), ())
+KERNEL(FILE*, __stderr, (void), ())
+
+/* fopencookie's functions go to the kernel by their place. */
+FILE* __kernel_fopencookie(void*, const char*, const cookie_io_functions_t*, size_t) __KERNEL(fopencookie);
+
+WEAK FILE* fopencookie(void* cookie, const char* mode, cookie_io_functions_t functions) {
+    return __kernel_fopencookie(cookie, mode, &functions, sizeof functions);
+}
 
 /* stdlib.h */
 KERNEL(void*, reallocarray, (void* a, size_t b, size_t c), (a, b, c))
@@ -652,6 +1206,33 @@ KERNEL(char*, ptsname, (int a), (a))
 KERNEL(int, ptsname_r, (int a, char* b, size_t c), (a, b, c))
 KERNEL(int, getloadavg, (double* a, int b), (a, b))
 KERNEL(int, getsubopt, (char** a, char* const* b, char** c), (a, b, c))
+KERNEL(int, at_quick_exit, (void (*a)(void)), (a))
+KERNEL(int, atexit, (void (*a)(void)), (a))
+KERNEL(void*, bsearch, (const void* a, const void* b, size_t c, size_t d, int (*e)(const void*, const void*)), (a, b, c, d, e))
+KERNEL(double, drand48, (void), ())
+KERNEL(char*, ecvt, (double a, int b, int* c, int* d), (a, b, c, d))
+KERNEL(double, erand48, (unsigned short* a), (a))
+KERNEL_NORETURN(exit, (int a), (a))
+KERNEL(char*, fcvt, (double a, int b, int* c, int* d), (a, b, c, d))
+KERNEL(long, jrand48, (unsigned short* a), (a))
+KERNEL_VOID(lcong48, (unsigned short* a), (a))
+KERNEL(long, lrand48, (void), ())
+KERNEL(int, mblen, (const char* a, size_t b), (a, b))
+KERNEL(size_t, mbstowcs, (wchar_t* __restrict a, const char* __restrict b, size_t c), (a, b, c))
+KERNEL(int, mbtowc, (wchar_t* __restrict a, const char* __restrict b, size_t c), (a, b, c))
+KERNEL(long, mrand48, (void), ())
+KERNEL(long, nrand48, (unsigned short* a), (a))
+KERNEL_VOID(qsort, (void* a, size_t b, size_t c, int (*d)(const void*, const void*)), (a, b, c, d))
+KERNEL_VOID(qsort_r, (void* a, size_t b, size_t c, int (*d)(const void*, const void*, void*), void* e), (a, b, c, d, e))
+KERNEL_NORETURN(quick_exit, (int a), (a))
+KERNEL(unsigned short*, seed48, (unsigned short* a), (a))
+KERNEL_VOID(srand48, (long a), (a))
+KERNEL(size_t, wcstombs, (char* __restrict a, const wchar_t* __restrict b, size_t c), (a, b, c))
+KERNEL(int, wctomb, (char* a, wchar_t b), (a, b))
+
+/* The C++ ABI's: an object's destructor to run at exit, and one of a thread's. */
+KERNEL(int, __cxa_atexit, (void (*a)(void*), void* b, void* c), (a, b, c))
+KERNEL(int, __cxa_thread_atexit, (void (*a)(void*), void* b, void* c), (a, b, c))
 
 /* string.h */
 KERNEL(void*, memcpy, (void* __restrict a, const void* __restrict b, size_t c), (a, b, c))
@@ -697,6 +1278,8 @@ KERNEL(char*, strerror_l, (int a, locale_t b), (a, b))
 KERNEL(int, strerror_r, (int a, char* b, size_t c), (a, b, c))
 KERNEL(char*, strsignal, (int a), (a))
 KERNEL_VOID(explicit_bzero, (void* a, size_t b), (a, b))
+KERNEL(int, strcoll_l, (const char* a, const char* b, locale_t c), (a, b, c))
+KERNEL(size_t, strxfrm_l, (char* __restrict a, const char* __restrict b, size_t c, locale_t d), (a, b, c, d))
 
 /* strings.h */
 KERNEL(int, bcmp, (const void* a, const void* b, size_t c), (a, b, c))
@@ -738,6 +1321,7 @@ KERNEL(int, setpriority, (int a, id_t b, int c), (a, b, c))
 /* sys/select.h */
 KERNEL_SIZED(int, select, (int a, fd_set* __restrict b, fd_set* __restrict c, fd_set* __restrict d, struct timeval* __restrict e), (int a, fd_set* __restrict b, size_t b_size, fd_set* __restrict c, size_t c_size, fd_set* __restrict d, size_t d_size, struct timeval* __restrict e, size_t e_size), (a, b, sizeof(fd_set), c, sizeof(fd_set), d, sizeof(fd_set), e, sizeof(struct timeval)))
 KERNEL_SIZED(int, pselect, (int a, fd_set* __restrict b, fd_set* __restrict c, fd_set* __restrict d, const struct timespec* __restrict e, const sigset_t* __restrict f), (int a, fd_set* __restrict b, size_t b_size, fd_set* __restrict c, size_t c_size, fd_set* __restrict d, size_t d_size, const struct timespec* __restrict e, size_t e_size, const sigset_t* __restrict f, size_t f_size), (a, b, sizeof(fd_set), c, sizeof(fd_set), d, sizeof(fd_set), e, sizeof(struct timespec), f, sizeof(sigset_t)))
+
 /* sys/socket.h */
 KERNEL(int, socket, (int a, int b, int c), (a, b, c))
 KERNEL(int, socketpair, (int a, int b, int c, int d[2]), (a, b, c, d))
@@ -779,12 +1363,15 @@ KERNEL(int, mknodat, (int a, const char* b, mode_t c, dev_t d), (a, b, c, d))
 KERNEL(mode_t, umask, (mode_t a), (a))
 KERNEL_SIZED(int, utimensat, (int a, const char* b, const struct timespec c[2], int d), (int a, const char* b, const struct timespec c[2], size_t c_size, int d), (a, b, c, sizeof(struct timespec), d))
 KERNEL_SIZED(int, futimens, (int a, const struct timespec b[2]), (int a, const struct timespec b[2], size_t b_size), (a, b, sizeof(struct timespec)))
+
 /* sys/statfs.h */
 KERNEL_SIZED(int, statfs, (const char* a, struct statfs* b), (const char* a, struct statfs* b, size_t b_size), (a, b, sizeof(struct statfs)))
 KERNEL_SIZED(int, fstatfs, (int a, struct statfs* b), (int a, struct statfs* b, size_t b_size), (a, b, sizeof(struct statfs)))
+
 /* sys/statvfs.h */
 KERNEL_SIZED(int, statvfs, (const char* __restrict a, struct statvfs* __restrict b), (const char* __restrict a, struct statvfs* __restrict b, size_t b_size), (a, b, sizeof(struct statvfs)))
 KERNEL_SIZED(int, fstatvfs, (int a, struct statvfs* b), (int a, struct statvfs* b, size_t b_size), (a, b, sizeof(struct statvfs)))
+
 /* sys/sysinfo.h */
 KERNEL_SIZED(int, sysinfo, (struct sysinfo* a), (struct sysinfo* a, size_t a_size), (a, sizeof(struct sysinfo)))
 KERNEL(int, get_nprocs_conf, (void), ())
@@ -801,25 +1388,31 @@ KERNEL_SIZED(int, utimes, (const char* a, const struct timeval b[2]), (const cha
 KERNEL_SIZED(int, lutimes, (const char* a, const struct timeval b[2]), (const char* a, const struct timeval b[2], size_t b_size), (a, b, sizeof(struct timeval)))
 KERNEL_SIZED(int, futimes, (int a, const struct timeval b[2]), (int a, const struct timeval b[2], size_t b_size), (a, b, sizeof(struct timeval)))
 KERNEL_SIZED(int, adjtime, (const struct timeval* a, struct timeval* b), (const struct timeval* a, size_t a_size, struct timeval* b, size_t b_size), (a, sizeof(struct timeval), b, sizeof(struct timeval)))
+
 /* sys/times.h */
 KERNEL_SIZED(clock_t, times, (struct tms* a), (struct tms* a, size_t a_size), (a, sizeof(struct tms)))
+
 /* sys/uio.h */
 KERNEL_SIZED(ssize_t, readv, (int a, const struct iovec* b, int c), (int a, const struct iovec* b, size_t b_size, int c), (a, b, sizeof(struct iovec), c))
 KERNEL_SIZED(ssize_t, writev, (int a, const struct iovec* b, int c), (int a, const struct iovec* b, size_t b_size, int c), (a, b, sizeof(struct iovec), c))
 KERNEL_SIZED(ssize_t, preadv, (int a, const struct iovec* b, int c, off_t d), (int a, const struct iovec* b, size_t b_size, int c, off_t d), (a, b, sizeof(struct iovec), c, d))
 KERNEL_SIZED(ssize_t, pwritev, (int a, const struct iovec* b, int c, off_t d), (int a, const struct iovec* b, size_t b_size, int c, off_t d), (a, b, sizeof(struct iovec), c, d))
+
 /* sys/utsname.h */
 KERNEL_SIZED(int, uname, (struct utsname* a), (struct utsname* a, size_t a_size), (a, sizeof(struct utsname)))
+
 /* sys/wait.h */
 KERNEL(pid_t, wait, (int* a), (a))
 KERNEL(pid_t, waitpid, (pid_t a, int* b, int c), (a, b, c))
 KERNEL_SIZED(pid_t, wait3, (int* a, int b, struct rusage* c), (int* a, int b, struct rusage* c, size_t c_size), (a, b, c, sizeof(struct rusage)))
 KERNEL_SIZED(pid_t, wait4, (pid_t a, int* b, int c, struct rusage* d), (pid_t a, int* b, int c, struct rusage* d, size_t d_size), (a, b, c, d, sizeof(struct rusage)))
 KERNEL_SIZED(int, waitid, (idtype_t a, id_t b, siginfo_t* c, int d), (idtype_t a, id_t b, siginfo_t* c, size_t c_size, int d), (a, b, c, sizeof(siginfo_t), d))
+
 /* syslog.h */
 KERNEL_VOID(openlog, (const char* a, int b, int c), (a, b, c))
 KERNEL_VOID(closelog, (void), ())
 KERNEL(int, setlogmask, (int a), (a))
+KERNEL_VOID(vsyslog, (int a, const char* b, va_list c), (a, b, c))
 
 /* termios.h */
 KERNEL_SIZED(int, tcgetattr, (int a, struct termios* b), (int a, struct termios* b, size_t b_size), (a, b, sizeof(struct termios)))
@@ -837,6 +1430,7 @@ KERNEL_SIZED(int, cfsetospeed, (struct termios* a, speed_t b), (struct termios* 
 KERNEL_SIZED(int, cfsetispeed, (struct termios* a, speed_t b), (struct termios* a, size_t a_size, speed_t b), (a, sizeof(struct termios), b))
 KERNEL_SIZED(int, cfsetspeed, (struct termios* a, speed_t b), (struct termios* a, size_t a_size, speed_t b), (a, sizeof(struct termios), b))
 KERNEL_VOID_SIZED(cfmakeraw, (struct termios* a), (struct termios* a, size_t a_size), (a, sizeof(struct termios)))
+
 /* threads.h */
 KERNEL(int, thrd_create, (thrd_t* a, thrd_start_t b, void* c), (a, b, c))
 KERNEL(int, thrd_join, (thrd_t a, int* b), (a, b))
@@ -861,6 +1455,8 @@ KERNEL(int, tss_create, (tss_t* a, tss_dtor_t b), (a, b))
 KERNEL_VOID(tss_delete, (tss_t a), (a))
 KERNEL(int, tss_set, (tss_t a, void* b), (a, b))
 KERNEL(void*, tss_get, (tss_t a), (a))
+KERNEL_VOID(call_once, (once_flag* a, void (*b)(void)), (a, b))
+KERNEL_NORETURN(thrd_exit, (int a), (a))
 
 /* time.h */
 KERNEL(time_t, time, (time_t* a), (a))
@@ -892,6 +1488,21 @@ KERNEL(int, timer_getoverrun, (timer_t a), (a))
 KERNEL(int, clock_getcpuclockid, (pid_t a, clockid_t* b), (a, b))
 KERNEL_SIZED(int, clock_nanosleep, (clockid_t a, int b, const struct timespec* c, struct timespec* d), (clockid_t a, int b, const struct timespec* c, size_t c_size, struct timespec* d, size_t d_size), (a, b, c, sizeof(struct timespec), d, sizeof(struct timespec)))
 KERNEL(int, stime, (const time_t* a), (a))
+KERNEL_SIZED(size_t, strftime_l, (char* __restrict a, size_t b, const char* __restrict c, const struct tm* __restrict d, locale_t e), (char* __restrict a, size_t b, const char* __restrict c, const struct tm* __restrict d, size_t d_size, locale_t e), (a, b, c, d, sizeof(struct tm), e))
+KERNEL(int*, __getdate_err, (void), ())
+
+/* getdate reads tzname, the program's (crt.c), by its place. */
+struct tm* __kernel_getdate(const char*, char**, size_t) __KERNEL(getdate);
+
+WEAK struct tm* getdate(const char* string) {
+    return __kernel_getdate(string, tzname, sizeof(struct tm));
+}
+
+/* uchar.h */
+KERNEL_SIZED(size_t, c16rtomb, (char* __restrict a, char16_t b, mbstate_t* __restrict c), (char* __restrict a, char16_t b, mbstate_t* __restrict c, size_t c_size), (a, b, c, sizeof(mbstate_t)))
+KERNEL_SIZED(size_t, c32rtomb, (char* __restrict a, char32_t b, mbstate_t* __restrict c), (char* __restrict a, char32_t b, mbstate_t* __restrict c, size_t c_size), (a, b, c, sizeof(mbstate_t)))
+KERNEL_SIZED(size_t, mbrtoc16, (char16_t* __restrict a, const char* __restrict b, size_t c, mbstate_t* __restrict d), (char16_t* __restrict a, const char* __restrict b, size_t c, mbstate_t* __restrict d, size_t d_size), (a, b, c, d, sizeof(mbstate_t)))
+KERNEL_SIZED(size_t, mbrtoc32, (char32_t* __restrict a, const char* __restrict b, size_t c, mbstate_t* __restrict d), (char32_t* __restrict a, const char* __restrict b, size_t c, mbstate_t* __restrict d, size_t d_size), (a, b, c, d, sizeof(mbstate_t)))
 
 /* unistd.h */
 KERNEL(ssize_t, read, (int a, void* b, size_t c), (a, b, c))
@@ -1081,9 +1692,12 @@ KERNEL(int, getpagesize, (void), ())
 KERNEL(int, getdtablesize, (void), ())
 KERNEL_VOID(swab, (const void* __restrict a, void* __restrict b, ssize_t c), (a, b, c))
 KERNEL(pid_t, gettid, (void), ())
+KERNEL_VOID(__fork_done, (pid_t a), (a))
+KERNEL_VOID(__fork_prepare, (void), ())
 
 /* utime.h */
 KERNEL_SIZED(int, utime, (const char* a, const struct utimbuf* b), (const char* a, const struct utimbuf* b, size_t b_size), (a, b, sizeof(struct utimbuf)))
+
 /* wchar.h */
 KERNEL(size_t, wcslen, (const wchar_t* a), (a))
 KERNEL(size_t, wcsnlen, (const wchar_t* a, size_t b), (a, b))
@@ -1121,6 +1735,43 @@ KERNEL(wchar_t*, wmemmove, (wchar_t* a, const wchar_t* b, size_t c), (a, b, c))
 KERNEL(wchar_t*, wmemset, (wchar_t* a, wchar_t b, size_t c), (a, b, c))
 KERNEL(int, wcwidth, (wchar_t a), (a))
 KERNEL(int, wcswidth, (const wchar_t* a, size_t b), (a, b))
+KERNEL(wint_t, btowc, (int a), (a))
+KERNEL(wint_t, fgetwc, (FILE* a), (a))
+KERNEL(wint_t, fgetwc_unlocked, (FILE* a), (a))
+KERNEL(wchar_t*, fgetws, (wchar_t* __restrict a, int b, FILE* __restrict c), (a, b, c))
+KERNEL(wchar_t*, fgetws_unlocked, (wchar_t* __restrict a, int b, FILE* __restrict c), (a, b, c))
+KERNEL(wint_t, fputwc, (wchar_t a, FILE* b), (a, b))
+KERNEL(wint_t, fputwc_unlocked, (wchar_t a, FILE* b), (a, b))
+KERNEL(int, fputws, (const wchar_t* __restrict a, FILE* __restrict b), (a, b))
+KERNEL(int, fputws_unlocked, (const wchar_t* __restrict a, FILE* __restrict b), (a, b))
+KERNEL(int, fwide, (FILE* a, int b), (a, b))
+KERNEL(wint_t, getwc, (FILE* a), (a))
+KERNEL(wint_t, getwc_unlocked, (FILE* a), (a))
+KERNEL(wint_t, getwchar, (void), ())
+KERNEL(wint_t, getwchar_unlocked, (void), ())
+KERNEL_SIZED(size_t, mbrlen, (const char* __restrict a, size_t b, mbstate_t* __restrict c), (const char* __restrict a, size_t b, mbstate_t* __restrict c, size_t c_size), (a, b, c, sizeof(mbstate_t)))
+KERNEL_SIZED(size_t, mbrtowc, (wchar_t* __restrict a, const char* __restrict b, size_t c, mbstate_t* __restrict d), (wchar_t* __restrict a, const char* __restrict b, size_t c, mbstate_t* __restrict d, size_t d_size), (a, b, c, d, sizeof(mbstate_t)))
+KERNEL_SIZED(int, mbsinit, (const mbstate_t* a), (const mbstate_t* a, size_t a_size), (a, sizeof(mbstate_t)))
+KERNEL_SIZED(size_t, mbsnrtowcs, (wchar_t* __restrict a, const char** __restrict b, size_t c, size_t d, mbstate_t* __restrict e), (wchar_t* __restrict a, const char** __restrict b, size_t c, size_t d, mbstate_t* __restrict e, size_t e_size), (a, b, c, d, e, sizeof(mbstate_t)))
+KERNEL_SIZED(size_t, mbsrtowcs, (wchar_t* __restrict a, const char** __restrict b, size_t c, mbstate_t* __restrict d), (wchar_t* __restrict a, const char** __restrict b, size_t c, mbstate_t* __restrict d, size_t d_size), (a, b, c, d, sizeof(mbstate_t)))
+KERNEL(FILE*, open_wmemstream, (wchar_t** a, size_t* b), (a, b))
+KERNEL(wint_t, putwc, (wchar_t a, FILE* b), (a, b))
+KERNEL(wint_t, putwc_unlocked, (wchar_t a, FILE* b), (a, b))
+KERNEL(wint_t, putwchar, (wchar_t a), (a))
+KERNEL(wint_t, putwchar_unlocked, (wchar_t a), (a))
+KERNEL(wint_t, ungetwc, (wint_t a, FILE* b), (a, b))
+KERNEL(int, vfwprintf, (FILE* __restrict a, const wchar_t* __restrict b, va_list c), (a, b, c))
+KERNEL(int, vfwscanf, (FILE* __restrict a, const wchar_t* __restrict b, va_list c), (a, b, c))
+KERNEL(int, vswprintf, (wchar_t* __restrict a, size_t b, const wchar_t* __restrict c, va_list d), (a, b, c, d))
+KERNEL(int, vswscanf, (const wchar_t* __restrict a, const wchar_t* __restrict b, va_list c), (a, b, c))
+KERNEL(int, vwprintf, (const wchar_t* __restrict a, va_list b), (a, b))
+KERNEL(int, vwscanf, (const wchar_t* __restrict a, va_list b), (a, b))
+KERNEL_SIZED(size_t, wcrtomb, (char* __restrict a, wchar_t b, mbstate_t* __restrict c), (char* __restrict a, wchar_t b, mbstate_t* __restrict c, size_t c_size), (a, b, c, sizeof(mbstate_t)))
+KERNEL(int, wcscoll_l, (const wchar_t* a, const wchar_t* b, locale_t c), (a, b, c))
+KERNEL_SIZED(size_t, wcsnrtombs, (char* __restrict a, const wchar_t** __restrict b, size_t c, size_t d, mbstate_t* __restrict e), (char* __restrict a, const wchar_t** __restrict b, size_t c, size_t d, mbstate_t* __restrict e, size_t e_size), (a, b, c, d, e, sizeof(mbstate_t)))
+KERNEL_SIZED(size_t, wcsrtombs, (char* __restrict a, const wchar_t** __restrict b, size_t c, mbstate_t* __restrict d), (char* __restrict a, const wchar_t** __restrict b, size_t c, mbstate_t* __restrict d, size_t d_size), (a, b, c, d, sizeof(mbstate_t)))
+KERNEL(size_t, wcsxfrm_l, (wchar_t* __restrict a, const wchar_t* __restrict b, size_t c, locale_t d), (a, b, c, d))
+KERNEL(int, wctob, (wint_t a), (a))
 
 /* wctype.h */
 KERNEL(int, iswalnum, (wint_t a), (a))
@@ -1145,11 +1796,27 @@ KERNEL(wint_t, towctrans_l, (wint_t a, wctrans_t b, locale_t c), (a, b, c))
 KERNEL(wctrans_t, wctrans_l, (const char* a, locale_t b), (a, b))
 
 int __pthread_cancelled(int);
+KERNEL(int, iswalnum_l, (wint_t a, locale_t b), (a, b))
+KERNEL(int, iswalpha_l, (wint_t a, locale_t b), (a, b))
+KERNEL(int, iswblank_l, (wint_t a, locale_t b), (a, b))
+KERNEL(int, iswcntrl_l, (wint_t a, locale_t b), (a, b))
+KERNEL(int, iswctype_l, (wint_t a, wctype_t b, locale_t c), (a, b, c))
+KERNEL(int, iswdigit_l, (wint_t a, locale_t b), (a, b))
+KERNEL(int, iswgraph_l, (wint_t a, locale_t b), (a, b))
+KERNEL(int, iswlower_l, (wint_t a, locale_t b), (a, b))
+KERNEL(int, iswprint_l, (wint_t a, locale_t b), (a, b))
+KERNEL(int, iswpunct_l, (wint_t a, locale_t b), (a, b))
+KERNEL(int, iswspace_l, (wint_t a, locale_t b), (a, b))
+KERNEL(int, iswupper_l, (wint_t a, locale_t b), (a, b))
+KERNEL(int, iswxdigit_l, (wint_t a, locale_t b), (a, b))
+KERNEL(wint_t, towlower_l, (wint_t a, locale_t b), (a, b))
+KERNEL(wint_t, towupper_l, (wint_t a, locale_t b), (a, b))
+KERNEL(wctype_t, wctype_l, (const char* a, locale_t b), (a, b))
 
 /*
  * Of a cancellation that may end the thread at once: after the kernel's
  * call, a cancellation pending that may act now ends it, by pthread_exit,
- * which runs what the thread pushed (pthread.c).
+ * which runs what the thread pushed (lib/libc's pthread.c).
  */
 int __kernel_pthread_cancel(pthread_t) __KERNEL(pthread_cancel);
 int __kernel_pthread_setcanceltype(int, int*) __KERNEL(pthread_setcanceltype);
@@ -1292,6 +1959,198 @@ WEAK int execle(const char* path, const char* arg, ...) {
     va_list ap;
     va_start(ap, arg);
     int r = __kernel_execle(path, arg, ap);
+    va_end(ap);
+    return r;
+}
+
+__NORETURN void __kernel_err(int, const char*, va_list) __KERNEL(err);
+__NORETURN void __kernel_errx(int, const char*, va_list) __KERNEL(errx);
+void __kernel_warn(const char*, va_list) __KERNEL(warn);
+void __kernel_warnx(const char*, va_list) __KERNEL(warnx);
+ssize_t __kernel_strfmon(char*, size_t, const char*, va_list) __KERNEL(strfmon);
+ssize_t __kernel_strfmon_l(char*, size_t, locale_t, const char*, va_list) __KERNEL(strfmon_l);
+int __kernel_asprintf(char**, const char*, va_list) __KERNEL(asprintf);
+int __kernel_dprintf(int, const char*, va_list) __KERNEL(dprintf);
+int __kernel_fprintf(FILE*, const char*, va_list) __KERNEL(fprintf);
+int __kernel_fscanf(FILE*, const char*, va_list) __KERNEL(fscanf);
+int __kernel_printf(const char*, va_list) __KERNEL(printf);
+int __kernel_scanf(const char*, va_list) __KERNEL(scanf);
+int __kernel_snprintf(char*, size_t, const char*, va_list) __KERNEL(snprintf);
+int __kernel_sprintf(char*, const char*, va_list) __KERNEL(sprintf);
+int __kernel_sscanf(const char*, const char*, va_list) __KERNEL(sscanf);
+void __kernel_syslog(int, const char*, va_list) __KERNEL(syslog);
+int __kernel_fwprintf(FILE*, const wchar_t*, va_list) __KERNEL(fwprintf);
+int __kernel_fwscanf(FILE*, const wchar_t*, va_list) __KERNEL(fwscanf);
+int __kernel_swprintf(wchar_t*, size_t, const wchar_t*, va_list) __KERNEL(swprintf);
+int __kernel_swscanf(const wchar_t*, const wchar_t*, va_list) __KERNEL(swscanf);
+int __kernel_wprintf(const wchar_t*, va_list) __KERNEL(wprintf);
+int __kernel_wscanf(const wchar_t*, va_list) __KERNEL(wscanf);
+
+WEAK __NORETURN void err(int a, const char* b, ...) {
+    va_list ap;
+    va_start(ap, b);
+    __kernel_err(a, b, ap);
+}
+
+WEAK __NORETURN void errx(int a, const char* b, ...) {
+    va_list ap;
+    va_start(ap, b);
+    __kernel_errx(a, b, ap);
+}
+
+WEAK void warn(const char* a, ...) {
+    va_list ap;
+    va_start(ap, a);
+    __kernel_warn(a, ap);
+    va_end(ap);
+}
+
+WEAK void warnx(const char* a, ...) {
+    va_list ap;
+    va_start(ap, a);
+    __kernel_warnx(a, ap);
+    va_end(ap);
+}
+
+WEAK ssize_t strfmon(char* __restrict a, size_t b, const char* __restrict c, ...) {
+    va_list ap;
+    va_start(ap, c);
+    ssize_t r = __kernel_strfmon(a, b, c, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK ssize_t strfmon_l(char* __restrict a, size_t b, locale_t c, const char* __restrict d, ...) {
+    va_list ap;
+    va_start(ap, d);
+    ssize_t r = __kernel_strfmon_l(a, b, c, d, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int asprintf(char** a, const char* b, ...) {
+    va_list ap;
+    va_start(ap, b);
+    int r = __kernel_asprintf(a, b, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int dprintf(int a, const char* __restrict b, ...) {
+    va_list ap;
+    va_start(ap, b);
+    int r = __kernel_dprintf(a, b, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int fprintf(FILE* __restrict a, const char* __restrict b, ...) {
+    va_list ap;
+    va_start(ap, b);
+    int r = __kernel_fprintf(a, b, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int fscanf(FILE* __restrict a, const char* __restrict b, ...) {
+    va_list ap;
+    va_start(ap, b);
+    int r = __kernel_fscanf(a, b, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int printf(const char* a, ...) {
+    va_list ap;
+    va_start(ap, a);
+    int r = __kernel_printf(a, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int scanf(const char* __restrict a, ...) {
+    va_list ap;
+    va_start(ap, a);
+    int r = __kernel_scanf(a, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int snprintf(char* __restrict a, size_t b, const char* __restrict c, ...) {
+    va_list ap;
+    va_start(ap, c);
+    int r = __kernel_snprintf(a, b, c, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int sprintf(char* __restrict a, const char* __restrict b, ...) {
+    va_list ap;
+    va_start(ap, b);
+    int r = __kernel_sprintf(a, b, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int sscanf(const char* __restrict a, const char* __restrict b, ...) {
+    va_list ap;
+    va_start(ap, b);
+    int r = __kernel_sscanf(a, b, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK void syslog(int a, const char* b, ...) {
+    va_list ap;
+    va_start(ap, b);
+    __kernel_syslog(a, b, ap);
+    va_end(ap);
+}
+
+WEAK int fwprintf(FILE* __restrict a, const wchar_t* __restrict b, ...) {
+    va_list ap;
+    va_start(ap, b);
+    int r = __kernel_fwprintf(a, b, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int fwscanf(FILE* __restrict a, const wchar_t* __restrict b, ...) {
+    va_list ap;
+    va_start(ap, b);
+    int r = __kernel_fwscanf(a, b, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int swprintf(wchar_t* __restrict a, size_t b, const wchar_t* __restrict c, ...) {
+    va_list ap;
+    va_start(ap, c);
+    int r = __kernel_swprintf(a, b, c, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int swscanf(const wchar_t* __restrict a, const wchar_t* __restrict b, ...) {
+    va_list ap;
+    va_start(ap, b);
+    int r = __kernel_swscanf(a, b, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int wprintf(const wchar_t* __restrict a, ...) {
+    va_list ap;
+    va_start(ap, a);
+    int r = __kernel_wprintf(a, ap);
+    va_end(ap);
+    return r;
+}
+
+WEAK int wscanf(const wchar_t* __restrict a, ...) {
+    va_list ap;
+    va_start(ap, a);
+    int r = __kernel_wscanf(a, ap);
     va_end(ap);
     return r;
 }

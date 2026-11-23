@@ -20,25 +20,34 @@ Per-project settings that the shared [STYLE.md](STYLE.md) delegates here.
   in a namespace of its own, as bin/tools/lib.h's `tools`: the header
   declares in it, its .cpp defines the members qualified, and the files
   that use it say `using namespace tools;`.
-- **Kernel imports.** A libc function the kernel implements is lib/c's own
-  function calling the import, declared `__KERNEL(name)` under the C name
-  `__kernel_<name>` (`src/kernel.c`, or `__INLINE` in its header); the
-  import name is spelled out so the linker can tell an import from a
-  missing definition. No other declaration has the attribute, but libc.wasm's
-  own imports of the kernel (`lib/libc/libc.h`). The forwarders are weak, so
-  that a program's own function of a name is its own. The kernel implements
-  each import in Go or in libc.wasm (`lib/libc`), whose C defines
-  `__kernel_<name>`, the import's prototype as it is, never the C name, and
-  calls the C library through its own copy of kernel.c. The kernel links
-  what a program imports of libc.wasm, and what that reaches, into the
-  program: the two share the imports, each has its own forwarders.
+- **Kernel imports.** Every libc function is the kernel's: lib/c's own
+  function of the name calls the import, declared `__KERNEL(name)` under
+  the C name `__kernel_<name>` (`src/kernel.c`, or `__INLINE` in its
+  header); the import name is spelled out so the linker can tell an import
+  from a missing definition. A program keeps only these forwarders, its
+  entry with the variables POSIX has it define (`src/crt.c`) and the
+  compiler's runtime. The forwarders are weak, so that a program's own
+  function of a name is its own. The kernel implements each import in Go or
+  in libc.wasm (`lib/libc`), whose C defines `__kernel_<name>`, the
+  import's prototype as it is, never the C name, and calls the C library
+  through its own copy of kernel.c; a function of FreeBSD's, LLVM's or
+  Arm's sources there gets the name beside its own (`symbols.py`). The
+  kernel links what a program imports of libc.wasm, and what that reaches,
+  into the program: the two share the imports, each has its own
+  forwarders. A function that takes a structure takes its size after it,
+  and serves each size it has known.
+- **POSIX's variables.** What POSIX has as a variable is the program's
+  variable (`src/crt.c`), and a kernel function that uses one gets its
+  place: at the program's start (`environ`, `tzname`), or after its own
+  arguments at each call (`optarg`, `signgam`). What POSIX has as a macro
+  is a macro over a kernel function (`errno`, `stdin`). What POSIX has not
+  is not in lib/c.
 - **Third-party code.** Sources are fetched as release tarballs, a big one
   cut down to what is built (`dev/slice.py`), and never edited in place; what they need from us lives beside their build
-  (lib/c's `freebsd/` and `llvm/` headers, `lib/c/src`, and `lib/libc/freebsd.h`). Code
+  (lib/libc's `freebsd/` and `llvm/` headers). Code
   whose own error the system cannot live with is patched as it is built, by
   patch files beside its build script, each with its reason at its head and
   fit to send to its authors: GLib and mc (`bin/mc/*.patch`), LLVM libc and
-  FreeBSD (`lib/c/llvm/patches`, `lib/c/freebsd/patches`). So is FreeBSD's
-  code in libc.wasm that calls what libc.wasm does not have yet
-  (`lib/libc/patches`), each patch gone when it has it.
+  FreeBSD (`lib/libc/llvm/patches`, `lib/libc/freebsd/patches`). So is code
+  that uses what POSIX has not and lib/c has dropped (`bin/busybox/patches`).
 - **Formatter.** None yet: `style.py` covers C++ only.

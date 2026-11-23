@@ -7,11 +7,12 @@ C type: s a string, const char* and a result of char*; p another pointer,
 a va_list among them; o a mode_t; f a floating number; d any other number;
 v no result.
 
-The kernel's table must be the declarations' of its Go functions, all
-but those libc.wasm defines (lib/libc, __kernel_ and the name): the test
-tells what differs and prints the table as it should be.
+The kernel's table must be the declarations' of its Go functions
+(bin/vm/kernel.go's table of them): the test tells what differs and prints
+the table as it should be. Every other function declared is libc.wasm's,
+its __kernel_ and the name, and none is both's.
 
-    test_call_formats.py <clang> <source root>
+    test_call_formats.py <clang> <source root> <libc.wasm>
 """
 import re
 import subprocess
@@ -73,20 +74,30 @@ def formats(clang, root):
     return out
 
 
-def libc_wasm(root):
+def go_functions(root):
+    """The kernel's functions of its Go."""
+    text = (root / "bin/vm/kernel.go").read_text()
+    table = text[text.index("func (k *Kernel) functionTable()"):]
+
+    return set(re.findall(r'^\t\t"(\w+)":', table[:table.index("\n}\n")], re.M))
+
+
+def libc_wasm(root, path):
     """The kernel's functions libc.wasm defines."""
-    names = set()
+    sys.path.insert(0, str(root / "lib/libc"))
 
-    for source in (root / "lib/libc").glob("*.c"):
-        names.update(re.findall(r"\b__kernel_(\w+)\s*\([^;{}]*\)\s*\{", source.read_text()))
+    import symbols
 
-    return names
+    return {name[len("__kernel_"):] for name in symbols.Object(Path(path).read_bytes()).defined() if name.startswith("__kernel_")}
 
 
 def main():
     clang, root = sys.argv[1], Path(sys.argv[2])
-    defined = libc_wasm(root)
-    want = {name: kind for name, kind in formats(clang, root).items() if name not in defined}
+    declared, go, libc = formats(clang, root), go_functions(root), libc_wasm(root, sys.argv[3])
+    nowhere, twice = sorted(set(declared) - go - libc), sorted(go & libc)
+    assert not nowhere, f"declared, and neither the kernel's Go nor libc.wasm's: {nowhere}"
+    assert not twice, f"both the kernel's Go and libc.wasm's: {twice}"
+    want = {name: kind for name, kind in declared.items() if name in go}
     go = (root / "bin/vm/traced_imports.go").read_text()
     block = re.search(r"callFormats\s*=.*?strings\.Fields\(`(.*?)`\)", go, re.S)
     assert block, "traced_imports.go has no table of formats"

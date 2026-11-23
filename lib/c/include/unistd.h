@@ -231,7 +231,7 @@ void swab(const void* __restrict, void* __restrict, ssize_t);
 /*
  * Inline only: the import's call is in the caller's frame, which a
  * later return lands in. There is no definition to point to. fork runs
- * pthread_atfork's handlers around it (lib/c's pthread.c); vfork none.
+ * pthread_atfork's handlers around it (lib/libc's pthread.c); vfork none.
  */
 pid_t __kernel_fork(void) __RETURNS_TWICE __KERNEL(fork);
 pid_t __kernel_vfork(void) __RETURNS_TWICE __KERNEL(vfork);

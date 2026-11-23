@@ -71,7 +71,10 @@ int timer_delete(timer_t);
 int timer_settime(timer_t, int, const struct itimerspec* __restrict, struct itimerspec* __restrict);
 int timer_gettime(timer_t, struct itimerspec*);
 int timer_getoverrun(timer_t);
-extern int getdate_err;
+// getdate_err is a macro, as POSIX lets it be: the kernel's int, which
+// __getdate_err is the address of.
+int* __getdate_err(void) __attribute__((__const__));
+#define getdate_err (*__getdate_err())
 struct tm* getdate(const char*);
 void tzset(void);
 int nanosleep(const struct timespec*, struct timespec*);

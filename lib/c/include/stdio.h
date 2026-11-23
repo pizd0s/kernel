@@ -28,13 +28,15 @@ typedef long long fpos_t;
 #define SEEK_END 2
 #endif
 
-extern FILE* stdin;
-extern FILE* stdout;
-extern FILE* stderr;
+// The standard streams are macros, as POSIX has them: the kernel's
+// streams, which these functions give.
+FILE* __stdin(void) __attribute__((__const__));
+FILE* __stdout(void) __attribute__((__const__));
+FILE* __stderr(void) __attribute__((__const__));
 
-#define stdin (stdin)
-#define stdout (stdout)
-#define stderr (stderr)
+#define stdin (__stdin())
+#define stdout (__stdout())
+#define stderr (__stderr())
 
 FILE* fopen(const char* __restrict, const char* __restrict);
 FILE* freopen(const char* __restrict, const char* __restrict, FILE* __restrict);

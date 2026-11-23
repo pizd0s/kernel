@@ -165,14 +165,12 @@ def evaluate(clang, include, expressions):
     return {key: values[k] for k, key in enumerate(keys) if k in values and k not in floats}
 
 
-def libc_wasm(root):
-    """The kernel's functions libc.wasm defines, whose sizes are its own."""
-    names = set()
+def go_functions(root):
+    """The kernel's functions of its Go; another's sizes are libc.wasm's own."""
+    text = (root / "bin/vm/kernel.go").read_text()
+    table = text[text.index("func (k *Kernel) functionTable()"):]
 
-    for source in (root / "lib/libc").glob("*.c"):
-        names.update(re.findall(r"\b__kernel_(\w+)\s*\([^;{}]*\)\s*\{", source.read_text()))
-
-    return names
+    return set(re.findall(r'^\t\t"(\w+)":', table[:table.index("\n}\n")], re.M))
 
 
 def main():
@@ -189,11 +187,11 @@ def main():
     assert set(sizes) == set(TYPES), f"sizes with no C type here, or C types with no size: {sorted(set(sizes) ^ set(TYPES))}"
     known = {TYPES[name] for name in sizes}
     passed = set()
-    defined = libc_wasm(root)
+    go = go_functions(root)
     for source in (root / "lib/c/src/kernel.c", include / "setjmp.h", include / "pty.h"):
         for line in source.read_text().splitlines():
-            forwarder = re.match(r"KERNEL\w*\(.*?(\w+), \(", line)
-            if not forwarder or forwarder.group(1) not in defined:
+            called = [a or b for a, b in re.findall(r"^KERNEL\w*\(.*?(\w+), \(|\b__kernel_(\w+)\(", line)]
+            if not called or any(name in go for name in called):
                 passed.update(re.findall(r"sizeof\(((?:struct )?\w+)\)", line))
     passed = {ALIASES.get(t, t) for t in passed}
     assert not passed - known, f"lib/c passes sizes the kernel does not know: {sorted(passed - known)}"

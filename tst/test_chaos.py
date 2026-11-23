@@ -89,7 +89,12 @@ def main():
         assert result.returncode != 0 and b"invalid chaos rule" in result.stderr
         assert compile_with(vm_chaos, PIZDOS_VM_CHAOS="mmap@4294967295").returncode == 0
 
-        compiled = call([native], data=Path(guest).read_bytes())
+        # What vm compiles of the guest is the guest with libc.wasm's
+        # functions it imports linked into it.
+        linked = work / "guest-linked.wasm"
+        result = call([vm, "link", "-o", str(linked), guest])
+        assert result.returncode == 0, result.stderr
+        compiled = call([native], data=linked.read_bytes())
         assert compiled.returncode == 0, compiled.stderr
         program = work / "guest.o"
         embedded = work / "guest-embedded.o"

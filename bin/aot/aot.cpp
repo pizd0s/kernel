@@ -78,6 +78,16 @@ static void writeAll(int fd, const void* data, usize length) {
 #endif
 }
 
+#if defined(__wasm__) || defined(wasm)
+// The system's exit is libc.wasm's, which the kernel links into a program
+// before it compiles it. The compiler is compiled for the kernel by its
+// native build, with no kernel to link it: its exit is its own, with
+// nothing to run or flush.
+extern "C" void exit(int code) {
+    _exit(code);
+}
+#endif
+
 [[noreturn]] static void fail(const char* text) {
     usize length = 0;
     while (text[length] != 0) {

@@ -5,8 +5,8 @@
 __BEGIN_DECLS
 
 /*
- * C99's complex numbers, lib/c's own as libm is (musl's): long double is
- * double here, so its functions are double's.
+ * C99's complex numbers: long double is double here, so its functions are
+ * double's.
  */
 #define complex _Complex
 #ifdef __GNUC__

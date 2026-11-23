@@ -7,7 +7,7 @@ __BEGIN_DECLS
 
 /*
  * A walk of a file tree, calling the program's function for each name:
- * lib/c's (src/nftw.c), POSIX.1-2024's nftw and POSIX.1-2017's ftw.
+ * POSIX.1-2024's nftw and POSIX.1-2017's ftw (lib/libc's nftw.c).
  */
 #define FTW_F 1
 #define FTW_D 2

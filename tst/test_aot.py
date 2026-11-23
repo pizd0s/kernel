@@ -21,19 +21,23 @@ def main():
     aot, vm, fixture, rootfs = sys.argv[1:]
     env = dict(os.environ, W2X_MEMORY_TAIL="optimized", W2X_TAIL_PROFILE="")
     empty = b"\0asm\1\0\0\0"
-    sources = {
-        "empty": empty,
-        # A malformed optional name subsection must not reject the module.
-        "optional-names": empty + b"\0\x0b\x04name\x01\x04\x01\0\x01\xff",
-        "fixture": Path(fixture).read_bytes(),
-        "aot": Path(aot).read_bytes(),
-    }
     malformed = [b"", b"bad!\1\0\0\0", b"\0asm\1\0\0\0\1\1\x80"]
 
     with tempfile.TemporaryDirectory(prefix="aot-") as directory:
         directory = Path(directory)
         source, output = directory / "input.wasm", directory / "output.o"
         references = {}
+        # What vm compiles of the fixture is the fixture with libc.wasm's
+        # functions it imports linked into it, which the compiler in the
+        # system gets as its input.
+        subprocess.run([vm, "link", "-o", str(source), fixture], env=env, capture_output=True, check=True)
+        sources = {
+            "empty": empty,
+            # A malformed optional name subsection must not reject the module.
+            "optional-names": empty + b"\0\x0b\x04name\x01\x04\x01\0\x01\xff",
+            "fixture": source.read_bytes(),
+            "aot": Path(aot).read_bytes(),
+        }
 
         for name, data in sources.items():
             source.write_bytes(data)

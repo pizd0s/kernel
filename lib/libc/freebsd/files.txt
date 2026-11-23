@@ -1,0 +1,235 @@
+# The FreeBSD 14.3 sources libc.wasm compiles, from the tree's root
+# (make.py): the math functions FreeBSD's are chosen for by speed in the
+# system against LLVM libc's (llvm/files.txt), those only it has, and the
+# complex functions. A double function's file gives its long double name
+# too, an alias, as on FreeBSD's ARM, whose long double is a double.
+lib/msun/bsdsrc/b_tgamma.c -Dsinpi=__freebsd_sinpi -Dsinpil=__freebsd_sinpil -Dcospi=__freebsd_cospi -Dcospil=__freebsd_cospil  # its sinpi and cospi, which C23 has and lib/c not yet
+lib/msun/src/e_acos.c
+lib/msun/src/e_acosf.c
+lib/msun/src/e_acosh.c
+lib/msun/src/e_acoshf.c
+lib/msun/src/e_asin.c
+lib/msun/src/e_asinf.c
+lib/msun/src/e_atanh.c
+lib/msun/src/e_cosh.c
+lib/msun/src/e_hypot.c
+lib/msun/src/e_hypotf.c
+lib/msun/src/e_j0.c
+lib/msun/src/e_j0f.c
+lib/msun/src/e_j1.c
+lib/msun/src/e_j1f.c
+lib/msun/src/e_jn.c
+lib/msun/src/e_jnf.c
+lib/msun/src/e_lgamma.c
+lib/msun/src/e_lgamma_r.c
+lib/msun/src/e_lgammaf.c
+lib/msun/src/e_lgammaf_r.c
+lib/msun/src/e_remainder.c
+lib/msun/src/e_remainderf.c
+lib/msun/src/e_scalb.c
+lib/msun/src/e_scalbf.c
+lib/msun/src/e_sinh.c
+lib/msun/src/k_cos.c
+lib/msun/src/k_cosf.c
+lib/msun/src/k_exp.c
+lib/msun/src/k_expf.c
+lib/msun/src/k_sin.c
+lib/msun/src/k_sinf.c
+lib/msun/src/s_asinh.c
+lib/msun/src/s_asinhf.c
+lib/msun/src/s_atan.c
+lib/msun/src/s_cbrt.c
+lib/msun/src/s_cospi.c -Dsinpi=__freebsd_sinpi -Dsinpil=__freebsd_sinpil -Dcospi=__freebsd_cospi -Dcospil=__freebsd_cospil
+lib/msun/src/s_erf.c
+lib/msun/src/s_erff.c -Derff=__freebsd_erff  # its erfcf; erff is LLVM's
+lib/msun/src/s_exp2.c
+lib/msun/src/s_finite.c
+lib/msun/src/s_finitef.c
+lib/msun/src/s_fma.c
+lib/msun/src/s_lround.c
+lib/msun/src/s_nextafterf.c
+lib/msun/src/s_nexttowardf.c
+lib/msun/src/s_remquo.c
+lib/msun/src/s_remquof.c
+lib/msun/src/s_scalbln.c
+lib/msun/src/s_scalbn.c
+lib/msun/src/s_scalbnf.c
+lib/msun/src/s_signgam.c
+lib/msun/src/s_significand.c
+lib/msun/src/s_significandf.c
+lib/msun/src/s_sinpi.c -Dsinpi=__freebsd_sinpi -Dsinpil=__freebsd_sinpil -Dcospi=__freebsd_cospi -Dcospil=__freebsd_cospil
+lib/msun/src/s_tanh.c
+lib/msun/src/s_tgammaf.c
+lib/msun/src/w_drem.c
+lib/msun/src/w_dremf.c
+lib/msun/src/catrig.c
+lib/msun/src/catrigf.c
+lib/msun/src/s_carg.c
+lib/msun/src/s_cargf.c
+lib/msun/src/s_cargl.c
+lib/msun/src/s_ccosh.c
+lib/msun/src/s_ccoshf.c
+lib/msun/src/s_cexp.c
+lib/msun/src/s_cexpf.c
+lib/msun/src/s_clog.c
+lib/msun/src/s_clogf.c
+lib/msun/src/s_conj.c
+lib/msun/src/s_conjf.c
+lib/msun/src/s_conjl.c
+lib/msun/src/s_cpow.c
+lib/msun/src/s_cpowf.c
+lib/msun/src/s_cpowl.c
+lib/msun/src/s_cproj.c
+lib/msun/src/s_cprojf.c
+lib/msun/src/s_csinh.c
+lib/msun/src/s_csinhf.c
+lib/msun/src/s_csqrt.c
+lib/msun/src/s_csqrtf.c
+lib/msun/src/s_ctanh.c
+lib/msun/src/s_ctanhf.c
+lib/msun/src/w_cabs.c
+lib/msun/src/w_cabsf.c
+
+# Its libc's, with its stdio's and multibyte functions' headers and lib/c's
+# (make.py), and freebsd/patches/: the stdio, but for what lib/c has
+# elsewhere or not (remove and mktemp are the kernel's Go, tmpfile, tmpnam
+# and tempnam tmp.c's; gets, gets_s, fcloseall, fgetwln and the extensible
+# printf are not lib/c's; flockfile and its kind are freebsd/streams.c's);
+# the multibyte functions, whose ctype is utf8.c's (freebsd/xlocale.c); the
+# trees, getopt, the drand48 family, quick_exit and popen.
+lib/libc/stdio/asprintf.c
+lib/libc/stdio/clrerr.c
+lib/libc/stdio/dprintf.c
+lib/libc/stdio/fclose.c
+lib/libc/stdio/fdopen.c
+lib/libc/stdio/feof.c
+lib/libc/stdio/ferror.c
+lib/libc/stdio/fflush.c
+lib/libc/stdio/fgetc.c
+lib/libc/stdio/fgetln.c
+lib/libc/stdio/fgetpos.c
+lib/libc/stdio/fgets.c
+lib/libc/stdio/fgetwc.c
+lib/libc/stdio/fgetws.c
+lib/libc/stdio/fileno.c
+lib/libc/stdio/findfp.c
+lib/libc/stdio/flags.c
+lib/libc/stdio/fmemopen.c
+lib/libc/stdio/fopen.c
+lib/libc/stdio/fopencookie.c
+lib/libc/stdio/fprintf.c
+lib/libc/stdio/fpurge.c
+lib/libc/stdio/fputc.c
+lib/libc/stdio/fputs.c
+lib/libc/stdio/fputwc.c
+lib/libc/stdio/fputws.c
+lib/libc/stdio/fread.c
+lib/libc/stdio/freopen.c
+lib/libc/stdio/fscanf.c
+lib/libc/stdio/fseek.c
+lib/libc/stdio/fsetpos.c
+lib/libc/stdio/ftell.c
+lib/libc/stdio/funopen.c
+lib/libc/stdio/fvwrite.c
+lib/libc/stdio/fwalk.c
+lib/libc/stdio/fwide.c
+lib/libc/stdio/fwprintf.c
+lib/libc/stdio/fwrite.c
+lib/libc/stdio/fwscanf.c
+lib/libc/stdio/getc.c
+lib/libc/stdio/getchar.c
+lib/libc/stdio/getdelim.c
+lib/libc/stdio/getline.c
+lib/libc/stdio/getw.c
+lib/libc/stdio/getwc.c
+lib/libc/stdio/getwchar.c
+lib/libc/stdio/makebuf.c
+lib/libc/stdio/open_memstream.c
+lib/libc/stdio/open_wmemstream.c
+lib/libc/stdio/perror.c
+lib/libc/stdio/printf-pos.c
+lib/libc/stdio/printf.c
+lib/libc/stdio/putc.c
+lib/libc/stdio/putchar.c
+lib/libc/stdio/puts.c
+lib/libc/stdio/putw.c
+lib/libc/stdio/putwc.c
+lib/libc/stdio/putwchar.c
+lib/libc/stdio/refill.c
+lib/libc/stdio/rewind.c
+lib/libc/stdio/rget.c
+lib/libc/stdio/scanf.c
+lib/libc/stdio/setbuf.c
+lib/libc/stdio/setbuffer.c
+lib/libc/stdio/setvbuf.c
+lib/libc/stdio/snprintf.c
+lib/libc/stdio/sprintf.c
+lib/libc/stdio/sscanf.c
+lib/libc/stdio/stdio.c
+lib/libc/stdio/swprintf.c
+lib/libc/stdio/swscanf.c
+lib/libc/stdio/ungetc.c
+lib/libc/stdio/ungetwc.c
+lib/libc/stdio/vasprintf.c
+lib/libc/stdio/vdprintf.c
+lib/libc/stdio/vfprintf.c
+lib/libc/stdio/vfscanf.c
+lib/libc/stdio/vfwprintf.c
+lib/libc/stdio/vfwscanf.c
+lib/libc/stdio/vprintf.c
+lib/libc/stdio/vscanf.c
+lib/libc/stdio/vsnprintf.c
+lib/libc/stdio/vsprintf.c
+lib/libc/stdio/vsscanf.c
+lib/libc/stdio/vswprintf.c
+lib/libc/stdio/vswscanf.c
+lib/libc/stdio/vwprintf.c
+lib/libc/stdio/vwscanf.c
+lib/libc/stdio/wbuf.c
+lib/libc/stdio/wprintf.c
+lib/libc/stdio/wscanf.c
+lib/libc/stdio/wsetup.c
+lib/libc/locale/mbrtowc.c
+lib/libc/locale/wcrtomb.c
+lib/libc/locale/mbsinit.c
+lib/libc/locale/mbsrtowcs.c
+lib/libc/locale/mbsnrtowcs.c
+lib/libc/locale/wcsrtombs.c
+lib/libc/locale/wcsnrtombs.c
+lib/libc/locale/btowc.c
+lib/libc/locale/wctob.c
+lib/libc/locale/mblen.c
+lib/libc/locale/mbrlen.c
+lib/libc/locale/mbtowc.c
+lib/libc/locale/wctomb.c
+lib/libc/locale/mbstowcs.c
+lib/libc/locale/wcstombs.c
+lib/libc/locale/c16rtomb.c
+lib/libc/locale/c32rtomb.c
+lib/libc/locale/mbrtoc16.c
+lib/libc/locale/mbrtoc32.c
+lib/libc/stdlib/tsearch.c
+lib/libc/stdlib/tfind.c
+lib/libc/stdlib/tdelete.c
+lib/libc/stdlib/twalk.c
+lib/libc/stdlib/getopt.c
+lib/libc/stdlib/getopt_long.c
+lib/libc/stdlib/quick_exit.c
+lib/libc/gen/_rand48.c
+lib/libc/gen/drand48.c
+lib/libc/gen/erand48.c
+lib/libc/gen/jrand48.c
+lib/libc/gen/lcong48.c
+lib/libc/gen/lrand48.c
+lib/libc/gen/mrand48.c
+lib/libc/gen/nrand48.c
+lib/libc/gen/seed48.c
+lib/libc/gen/srand48.c
+lib/libc/gen/popen.c
+
+# Its regex, as its libregex builds it: POSIX's expressions with GNU's
+# escapes beside (regex.c).
+lib/libc/regex/regcomp.c -DLIBREGEX -include runetype.h  # the encoding it asks of the rune locale
+lib/libc/regex/regexec.c -DLIBREGEX
+lib/libc/regex/regerror.c -DLIBREGEX
+lib/libc/regex/regfree.c -DLIBREGEX

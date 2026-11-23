@@ -1,0 +1,15 @@
+# What libc.wasm takes of LLVM's source tree, cut out of the release tarball
+# once (dev/slice.py): LLVM libc's header-only math and what it includes,
+# the sources of its stdlib and search functions and the memory and string
+# helpers they inline, and the license.
+libc/LICENSE.TXT
+libc/shared
+libc/src/__support
+libc/hdr
+libc/include/llvm-libc-macros
+libc/include/llvm-libc-types
+libc/src/stdlib
+libc/src/search
+libc/src/string/memory_utils
+libc/src/string/string_utils.h
+libc/src/string/string_length.h

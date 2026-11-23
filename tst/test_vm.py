@@ -24,8 +24,13 @@ def main():
         isolated.chmod(0o755)
         env = dict(os.environ, PATH="")
 
+        # What vm compiles of a program is the program with libc.wasm's
+        # functions it imports linked into it (vm link).
+        linked = Path(work) / "linked.wasm"
+
         for source in [compiler, fixture]:
-            data = Path(source).read_bytes()
+            subprocess.run([str(isolated), "link", "-o", str(linked), source], cwd=work, env=env, check=True)
+            data = linked.read_bytes()
             want = subprocess.run([native], input=data, capture_output=True, check=True).stdout
             subprocess.run([str(isolated), "-o", str(out), source], cwd=work, env=env, check=True)
             assert out.read_bytes() == want, f"embedded AOT: {source} differs from native C++"

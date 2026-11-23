@@ -1,10 +1,12 @@
 #pragma once
 
 /*
- * Shared vocabulary of every public header. Every function is lib/c's own,
- * defined inside the process (crt, stdio, libm and the rest of lib/c); one
- * the kernel implements calls the kernel's import, declared __KERNEL(name)
- * under the C name __kernel_<name> (src/kernel.c), and does nothing else.
+ * Shared vocabulary of every public header. Every function is the
+ * kernel's: lib/c's own of the name calls the kernel's import, declared
+ * __KERNEL(name) under the C name __kernel_<name> (src/kernel.c), and does
+ * nothing else; the kernel has it in its Go or in its libc.wasm (lib/libc),
+ * which it links into the program. A program keeps its entry, the
+ * variables POSIX has it define (src/crt.c) and the compiler's runtime.
  * A function that returns twice is its header's __INLINE definition, in
  * the frame of who calls it at every call and never emitted: a frame of
  * its own would be gone at the second return.

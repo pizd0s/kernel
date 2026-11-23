@@ -7,8 +7,7 @@ The tree is patched by patches/, each saying why, and configured by
 gen.py; every selected object is compiled for wasm32, the lib-y objects go
 into an archive the way busybox's own lib.a files do, and the result is
 linked against libc.a. An undefined symbol is a link error: every libc
-function is either defined in libc.a or declared as a kernel import by its
-header.
+function is libc.a's forwarder to the kernel.
 """
 import os
 import shutil

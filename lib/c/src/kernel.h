@@ -12,7 +12,10 @@
  */
 void __kernel_start(int* errnoAt, char*** environAt, int* argc, char*** argv, char** tznameAt, long* timezoneAt,
                     int* daylightAt, int* herrnoAt) __KERNEL(__kernel_start);
-void __kernel_syslog(int priority, const char* message) __KERNEL(__kernel_syslog);
+
+// __kernel_log_message is the kernel's log of a message syslog has made;
+// its import's name is of the time syslog was a program's own.
+void __kernel_log_message(int priority, const char* message) __KERNEL(__kernel_syslog);
 
 // __kernel_program is getcwd of the program's file: its absolute path,
 // through its links, or a failure when it is outside the root.
