@@ -154,6 +154,19 @@ const (
 	SEMVMX                            = 32767
 	SEMOPM                            = 500
 	MQ_PRIO_MAX                       = 32768
+	AIO_CANCELED                      = 0
+	O_DSYNC                           = 0o10000
+	O_SYNC                            = 0o4010000
+	AIO_NOTCANCELED                   = 1
+	AIO_ALLDONE                       = 2
+	LIO_READ                          = 0
+	LIO_WRITE                         = 1
+	LIO_NOP                           = 2
+	LIO_WAIT                          = 0
+	LIO_NOWAIT                        = 1
+	AIO_MAX                           = 1024
+	AIO_LISTIO_MAX                    = 1024
+	SI_ASYNCIO                        = -4
 	EMPTY                             = 0
 	RUN_LVL                           = 1
 	BOOT_TIME                         = 2
@@ -328,6 +341,7 @@ const (
 	sizeofSemidDs                     = 56
 	sizeofSembuf                      = 6
 	sizeofUtmpx                       = 400
+	sizeofAiocb                       = 128
 	sizeofPosixSpawnFileActions       = 4
 	sizeofPthreadAttr                 = 32
 	sizeofPthreadMutex                = 4

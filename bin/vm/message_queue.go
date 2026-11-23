@@ -34,9 +34,7 @@ type MessageQueue struct {
 
 	notifier *Process
 	notified *MqEnd
-	kind     uint32
-	signal   int
-	value    uint32
+	event    SigEvent
 }
 
 func newMessageQueue(name string, mode, uid, gid uint32, maxmsg, msgsize int) *MessageQueue {
@@ -153,9 +151,9 @@ func (q *MessageQueue) send(p *Process, r *MqSend, nonblock bool) error {
 	var info SigInfo
 
 	if len(q.messages) == 1 && q.waiting == 0 && q.notifier != nil {
-		if q.kind == SIGEV_SIGNAL {
-			target, sig = q.notifier, q.signal
-			info = SigInfo{code: SI_MESGQ, pid: p.pid, uid: p.cred.uid(), value: q.value}
+		if q.event.kind == SIGEV_SIGNAL {
+			target, sig = q.notifier, q.event.signal
+			info = SigInfo{code: SI_MESGQ, pid: p.pid, uid: p.cred.uid(), value: q.event.value}
 		}
 
 		q.notifier, q.notified = nil, nil
@@ -237,7 +235,7 @@ func (q *MessageQueue) notify(p *Process, e *MqEnd, r *MqNotify) error {
 		return EBUSY
 	}
 
-	q.notifier, q.notified, q.kind, q.signal, q.value = p, e, r.kind, r.signal, r.value
+	q.notifier, q.notified, q.event = p, e, r.event
 
 	return nil
 }

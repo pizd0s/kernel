@@ -17,6 +17,7 @@
  * each size it has known; it ends a process that passes another by
  * SIGSYS. DIR is the kernel's handle, of no size here.
  */
+#include <aio.h>
 #include <arpa/inet.h>
 #include <assert.h>
 #include <ctype.h>
@@ -835,6 +836,14 @@ KERNEL(int, execvpe, (const char* a, char* const b[], char* const c[]), (a, b, c
 KERNEL(int, fexecve, (int a, char* const b[], char* const c[]), (a, b, c))
 KERNEL(ssize_t, posix_getdents, (int a, void* b, size_t c, int d), (a, b, c, d))
 KERNEL(int, posix_devctl, (int a, int b, void* __restrict c, size_t d, int* __restrict e), (a, b, c, d, e))
+KERNEL_SIZED(int, aio_read, (struct aiocb* a), (struct aiocb* a, size_t a_size), (a, sizeof(struct aiocb)))
+KERNEL_SIZED(int, aio_write, (struct aiocb* a), (struct aiocb* a, size_t a_size), (a, sizeof(struct aiocb)))
+KERNEL_SIZED(int, aio_fsync, (int a, struct aiocb* b), (int a, struct aiocb* b, size_t b_size), (a, b, sizeof(struct aiocb)))
+KERNEL_SIZED(int, aio_error, (const struct aiocb* a), (const struct aiocb* a, size_t a_size), (a, sizeof(struct aiocb)))
+KERNEL_SIZED(ssize_t, aio_return, (struct aiocb* a), (struct aiocb* a, size_t a_size), (a, sizeof(struct aiocb)))
+KERNEL_SIZED(int, aio_suspend, (const struct aiocb* const a[], int b, const struct timespec* c), (const struct aiocb* const a[], size_t a_size, int b, const struct timespec* c, size_t c_size), (a, sizeof(struct aiocb), b, c, sizeof(struct timespec)))
+KERNEL_SIZED(int, aio_cancel, (int a, struct aiocb* b), (int a, struct aiocb* b, size_t b_size), (a, b, sizeof(struct aiocb)))
+KERNEL_SIZED(int, lio_listio, (int a, struct aiocb* __restrict const* __restrict b, int c, struct sigevent* __restrict d), (int a, struct aiocb* __restrict const* __restrict b, size_t b_size, int c, struct sigevent* __restrict d, size_t d_size), (a, b, sizeof(struct aiocb), c, d, sizeof(struct sigevent)))
 KERNEL_VOID(setutxent, (void), ())
 KERNEL_VOID(endutxent, (void), ())
 KERNEL_SIZED(struct utmpx*, getutxent, (void), (size_t size), (sizeof(struct utmpx)))

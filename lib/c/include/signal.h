@@ -155,6 +155,7 @@ typedef struct {
 #define SI_QUEUE (-1)
 #define SI_TIMER (-2)
 #define SI_MESGQ (-3)
+#define SI_ASYNCIO (-4)
 #define CLD_EXITED 1
 #define CLD_KILLED 2
 #define CLD_DUMPED 3

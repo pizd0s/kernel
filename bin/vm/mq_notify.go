@@ -3,10 +3,8 @@
 package main
 
 type MqNotify struct {
-	set    bool
-	kind   uint32
-	signal int
-	value  uint32
+	set   bool
+	event SigEvent
 }
 
 func (r *MqNotify) op() uint32 {

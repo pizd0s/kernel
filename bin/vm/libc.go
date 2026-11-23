@@ -4530,3 +4530,67 @@ func libcPututxline(ut, utSize, size uint32) uint32 {
 
 	return p.libcPututxline(ut)
 }
+
+func libcAio_read(cb, cbSize uint32) uint32 {
+	p := proc()
+
+	p.sized("aio_read", cbSize, sizeofAiocb)
+
+	return p.libcAio_read(cb)
+}
+
+func libcAio_write(cb, cbSize uint32) uint32 {
+	p := proc()
+
+	p.sized("aio_write", cbSize, sizeofAiocb)
+
+	return p.libcAio_write(cb)
+}
+
+func libcAio_fsync(op, cb, cbSize uint32) uint32 {
+	p := proc()
+
+	p.sized("aio_fsync", cbSize, sizeofAiocb)
+
+	return p.libcAio_fsync(op, cb)
+}
+
+func libcAio_error(cb, cbSize uint32) uint32 {
+	p := proc()
+
+	p.sized("aio_error", cbSize, sizeofAiocb)
+
+	return p.libcAio_error(cb)
+}
+
+func libcAio_return(cb, cbSize uint32) uint32 {
+	p := proc()
+
+	p.sized("aio_return", cbSize, sizeofAiocb)
+
+	return p.libcAio_return(cb)
+}
+
+func libcAio_suspend(list, listSize, n, timeout, timeoutSize uint32) uint32 {
+	p := proc()
+
+	p.sized("aio_suspend", listSize, sizeofAiocb, timeoutSize, sizeofTimespec)
+
+	return p.libcAio_suspend(list, n, timeout)
+}
+
+func libcAio_cancel(fd, cb, cbSize uint32) uint32 {
+	p := proc()
+
+	p.sized("aio_cancel", cbSize, sizeofAiocb)
+
+	return p.libcAio_cancel(fd, cb)
+}
+
+func libcLio_listio(mode, list, listSize, n, sig, sigSize uint32) uint32 {
+	p := proc()
+
+	p.sized("lio_listio", listSize, sizeofAiocb, sigSize, sizeofSigevent)
+
+	return p.libcLio_listio(mode, list, n, sig)
+}

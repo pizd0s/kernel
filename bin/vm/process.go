@@ -265,6 +265,7 @@ type Process struct {
 	locales        map[uint32][LC_ALL]string
 	nextLocale     uint32
 	semUndo        map[*SemSet]bool
+	aios           map[uint32]*AioOp
 
 	desKey       [8]byte
 	posixTimers  map[int32]*PosixTimer
@@ -579,6 +580,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 		}
 
 		p.posixTimers = nil
+		p.aioDrop()
 		p.envStrings, p.mappings = map[uint32]bool{}, map[uint32]Mapping{}
 		p.jumps, p.stackAt = map[uint32]*JmpBuf{}, 0
 		enter = func() {
@@ -670,6 +672,7 @@ func (p *Process) terminate(status int) {
 	}
 
 	p.undoSems()
+	p.aioDrop()
 	p.stopTimers()
 	p.leaveSession(true)
 
@@ -2543,22 +2546,16 @@ func (p *Process) libcMq_setattr(fd, attr, old uint32) uint32 {
 }
 
 func (p *Process) libcMq_notify(fd, event uint32) uint32 {
-	r := MqNotify{}
+	r := MqNotify{set: event != 0}
 
-	if event != 0 {
-		r.set, r.value, r.signal, r.kind = true, p.u32(event), int(p.u32(event+4)), p.u32(event+8)
+	if r.set {
+		e, err := p.sigEvent(event)
 
-		switch r.kind {
-		case SIGEV_NONE:
-		case SIGEV_SIGNAL:
-			if !validSignal(uint32(r.signal)) {
-				return p.result(0, EINVAL)
-			}
-		case SIGEV_THREAD:
-			return p.result(0, EAGAIN)
-		default:
-			return p.result(0, EINVAL)
+		if err != nil {
+			return p.result(0, err)
 		}
+
+		r.event = e
 	}
 
 	return p.result(0, p.mqRequest(fd, &r))
@@ -3084,6 +3081,388 @@ func (p *Process) libcPututxline(ut uint32) uint32 {
 	p.put32(at, uint32(slot+1))
 
 	return p.utmpResult(rec)
+}
+
+func (p *Process) sigEvent(at uint32) (SigEvent, error) {
+	e := SigEvent{value: p.u32(at), signal: int(p.u32(at + 4)), kind: p.u32(at + 8)}
+
+	switch e.kind {
+	case SIGEV_NONE:
+	case SIGEV_SIGNAL:
+		if !validSignal(uint32(e.signal)) {
+			return e, EINVAL
+		}
+	case SIGEV_THREAD:
+		return e, EAGAIN
+	default:
+		return e, EINVAL
+	}
+
+	return e, nil
+}
+
+func (p *Process) aioSubmit(cb uint32, kind int, list *AioList) error {
+	fd, buf, n, off := p.u32(cb), p.u32(cb+12), p.u32(cb+16), int64(p.u64(cb+88))
+	event, err := p.sigEvent(cb + 20)
+
+	if err != nil {
+		return err
+	}
+
+	o, err := p.fd(fd)
+
+	if err != nil {
+		return err
+	}
+
+	fl, err := p.fileFlags(o)
+
+	switch {
+	case err != nil:
+		fl = O_RDWR
+	case fl&O_PATH != 0:
+		return EBADF
+	}
+
+	switch {
+	case kind == aioRead && fl&O_ACCMODE == O_WRONLY, kind == aioWrite && fl&O_ACCMODE == O_RDONLY:
+		return EBADF
+	case (kind == aioRead || kind == aioWrite) && (off < 0 || int32(n) < 0):
+		return EINVAL
+	case len(p.aios) >= AIO_MAX:
+		return EAGAIN
+	}
+
+	op := &AioOp{cb: cb, fd: fd, kind: kind, file: o, stream: kind == aioWrite && fl&O_APPEND != 0, offset: off, n: int(n), buf: buf, event: event,
+		list: list, stop: make(chan struct{}), over: make(chan struct{})}
+
+	switch kind {
+	case aioRead:
+		p.span(buf, n)
+	case aioWrite:
+		op.data = bytes.Clone(p.span(buf, n))
+	default:
+		for _, b := range p.aios {
+			if b.file == o && !b.finished.Load() {
+				op.before = append(op.before, b)
+			}
+		}
+	}
+
+	op.done = Event{kind: eventAio, run: func(q *Process) { q.aioTake(op) }}
+	op.halt = Event{kind: eventAio, run: (*Process).aioHalt}
+
+	if p.aios == nil {
+		p.aios = map[uint32]*AioOp{}
+	}
+
+	if list != nil {
+		list.left++
+	}
+
+	o.ref()
+	p.aios[cb] = op
+	op.agent = p.k.process(p.pid, p)
+
+	go op.run(p)
+
+	return nil
+}
+
+func (p *Process) aioHalt() {
+	p.interruption = signalFinal
+
+	if r := p.asking; r != nil && !p.cancelled {
+		p.cancelled = true
+		r.cancel(p)
+	}
+}
+
+func (p *Process) aioFailed(cb uint32, err error) {
+	op := &AioOp{cb: cb, result: -1, err: errnoOf(err), taken: true}
+
+	op.finished.Store(true)
+
+	if p.aios == nil {
+		p.aios = map[uint32]*AioOp{}
+	}
+
+	p.aios[cb] = op
+}
+
+func (p *Process) aioNotify(e SigEvent) {
+	if e.kind == SIGEV_SIGNAL {
+		p.sendSelfInfo(e.signal, SigInfo{code: SI_ASYNCIO, pid: p.pid, uid: p.cred.uid(), value: e.value})
+	}
+}
+
+func (p *Process) aioTake(op *AioOp) {
+	if op.taken || !op.finished.Load() || p.aios[op.cb] != op {
+		return
+	}
+
+	op.taken = true
+
+	if op.kind == aioRead && len(op.data) > 0 {
+		copy(p.span(op.buf, uint32(len(op.data))), op.data)
+	}
+
+	op.data = nil
+	p.aioNotify(op.event)
+
+	if l := op.list; l != nil {
+		if l.left--; l.left == 0 {
+			p.aioNotify(l.event)
+		}
+	}
+}
+
+func (p *Process) aioDrop() {
+	for _, op := range p.aios {
+		if !op.finished.Load() {
+			op.abandon()
+		}
+	}
+
+	p.aios = nil
+}
+
+func (p *Process) libcAio_read(cb uint32) uint32 {
+	return p.result(0, p.aioSubmit(cb, aioRead, nil))
+}
+
+func (p *Process) libcAio_write(cb uint32) uint32 {
+	return p.result(0, p.aioSubmit(cb, aioWrite, nil))
+}
+
+func (p *Process) libcAio_fsync(op, cb uint32) uint32 {
+	switch op {
+	case O_SYNC:
+		return p.result(0, p.aioSubmit(cb, aioSync, nil))
+	case O_DSYNC:
+		return p.result(0, p.aioSubmit(cb, aioDataSync, nil))
+	}
+
+	return p.result(0, EINVAL)
+}
+
+func (p *Process) libcAio_error(cb uint32) uint32 {
+	op := p.aios[cb]
+
+	if op == nil {
+		return p.result(0, EINVAL)
+	}
+
+	p.aioTake(op)
+
+	if !op.taken {
+		return uint32(EINPROGRESS)
+	}
+
+	return uint32(op.err)
+}
+
+func (p *Process) libcAio_return(cb uint32) uint32 {
+	op := p.aios[cb]
+
+	if op == nil {
+		return p.result(0, EINVAL)
+	}
+
+	p.aioTake(op)
+
+	if !op.taken {
+		return p.result(0, EINVAL)
+	}
+
+	delete(p.aios, cb)
+
+	return uint32(op.result)
+}
+
+func (p *Process) aioListed(list, n uint32) []*AioOp {
+	var ops []*AioOp
+
+	for i := uint32(0); int32(n) > 0 && i < n; i++ {
+		if op := p.aios[p.u32(list+4*i)]; op != nil {
+			ops = append(ops, op)
+		}
+	}
+
+	return ops
+}
+
+func (p *Process) libcAio_suspend(list, n, timeout uint32) uint32 {
+	ops := p.aioListed(list, n)
+	end := time.Time{}
+
+	if timeout != 0 {
+		d, err := p.timespec(timeout)
+
+		if err != nil {
+			return p.result(0, err)
+		}
+
+		end = time.Now().Add(d)
+	}
+
+	timedOut, err := p.wait(end, func(*Event) (bool, error) {
+		for _, op := range ops {
+			if p.aioTake(op); op.taken {
+				return true, nil
+			}
+		}
+
+		return p.interrupts(false), EINTR
+	})
+
+	switch {
+	case err != nil:
+		return p.result(0, err)
+	case timedOut:
+		return p.result(0, EAGAIN)
+	}
+
+	return 0
+}
+
+func (p *Process) libcLio_listio(mode, list, n, sig uint32) uint32 {
+	if mode != LIO_WAIT && mode != LIO_NOWAIT || int32(n) < 0 || n > AIO_LISTIO_MAX {
+		return p.result(0, EINVAL)
+	}
+
+	l := &AioList{event: SigEvent{kind: SIGEV_NONE}}
+
+	if mode == LIO_NOWAIT && sig != 0 {
+		e, err := p.sigEvent(sig)
+
+		if err != nil {
+			return p.result(0, err)
+		}
+
+		l.event = e
+	}
+
+	var ops []*AioOp
+
+	failed := false
+
+	for i := range n {
+		cb := p.u32(list + 4*i)
+
+		if cb == 0 {
+			continue
+		}
+
+		kind := aioRead
+
+		switch p.u32(cb + 4) {
+		case LIO_NOP:
+			continue
+		case LIO_READ:
+		case LIO_WRITE:
+			kind = aioWrite
+		default:
+			p.aioFailed(cb, EINVAL)
+			failed = true
+
+			continue
+		}
+
+		if err := p.aioSubmit(cb, kind, l); err != nil {
+			p.aioFailed(cb, err)
+			failed = true
+
+			continue
+		}
+
+		ops = append(ops, p.aios[cb])
+	}
+
+	if mode == LIO_NOWAIT {
+		if l.left == 0 {
+			p.aioNotify(l.event)
+		}
+
+		if failed {
+			return p.result(0, EIO)
+		}
+
+		return 0
+	}
+
+	_, err := p.wait(time.Time{}, func(*Event) (bool, error) {
+		all := true
+
+		for _, op := range ops {
+			p.aioTake(op)
+			all = all && op.taken
+		}
+
+		if all {
+			return true, nil
+		}
+
+		return p.interrupts(false), EINTR
+	})
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	for _, op := range ops {
+		failed = failed || op.err != 0
+	}
+
+	if failed {
+		return p.result(0, EIO)
+	}
+
+	return 0
+}
+
+func (p *Process) libcAio_cancel(fd, cb uint32) uint32 {
+	if _, err := p.fd(fd); err != nil {
+		return p.result(0, err)
+	}
+
+	var pending []*AioOp
+
+	for key, op := range p.aios {
+		if cb != 0 && key != cb || op.fd != fd {
+			continue
+		}
+
+		if p.aioTake(op); !op.taken {
+			pending = append(pending, op)
+		}
+	}
+
+	if len(pending) == 0 {
+		return AIO_ALLDONE
+	}
+
+	for _, op := range pending {
+		op.abandon()
+	}
+
+	p.wait(time.Time{}, func(*Event) (bool, error) {
+		for _, op := range pending {
+			if p.aioTake(op); !op.taken {
+				return false, nil
+			}
+		}
+
+		return true, nil
+	})
+
+	for _, op := range pending {
+		if op.err != ECANCELED {
+			return AIO_NOTCANCELED
+		}
+	}
+
+	return AIO_CANCELED
 }
 
 func (p *Process) libcExecl(path, arg0, va uint32) uint32 {

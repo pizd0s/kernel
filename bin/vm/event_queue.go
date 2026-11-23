@@ -18,6 +18,7 @@ const (
 	eventTimer
 	eventRelocate
 	eventPool
+	eventAio
 )
 
 type EventKind uint8
