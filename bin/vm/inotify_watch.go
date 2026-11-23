@@ -14,6 +14,9 @@ type InotifyWatch struct {
 	end   Object
 	names map[string]bool
 	sub   Subscription
+
+	users   int
+	retired bool
 }
 
 func (w *InotifyWatch) wake(l *Hook) {

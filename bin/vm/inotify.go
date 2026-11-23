@@ -52,20 +52,64 @@ func (in *Inotify) unref() {
 
 	in.mu.Lock()
 
-	watches := in.watches
+	var freed []*InotifyWatch
+
+	for _, w := range in.watches {
+		if in.retire(w) {
+			freed = append(freed, w)
+		}
+	}
 
 	in.watches = map[int32]*InotifyWatch{}
 	in.mu.Unlock()
 
-	for _, w := range watches {
-		in.release(w)
+	for _, w := range freed {
+		in.free(w)
 	}
 }
 
-func (in *Inotify) release(w *InotifyWatch) {
+func (in *Inotify) retire(w *InotifyWatch) bool {
+	if w.retired {
+		return false
+	}
+
+	w.retired = true
+
+	return w.users == 0
+}
+
+func (in *Inotify) free(w *InotifyWatch) {
 	w.end.unsubscribe(&w.sub)
 	w.end.unref()
 	w.dir.unref()
+}
+
+func (in *Inotify) use(w *InotifyWatch) bool {
+	in.mu.Lock()
+
+	defer in.mu.Unlock()
+
+	if w.retired {
+		return false
+	}
+
+	w.users++
+
+	return true
+}
+
+func (in *Inotify) done(w *InotifyWatch) {
+	in.mu.Lock()
+
+	w.users--
+
+	freed := w.retired && w.users == 0
+
+	in.mu.Unlock()
+
+	if freed {
+		in.free(w)
+	}
 }
 
 func (in *Inotify) ring() {
@@ -187,9 +231,25 @@ func cstring(b []byte) string {
 }
 
 func (in *Inotify) drain(p *Process, w *InotifyWatch) error {
+	if !in.use(w) {
+		return nil
+	}
+
+	defer in.done(w)
+
 	buf := make([]byte, inotifyRecord)
 
 	for {
+		in.mu.Lock()
+
+		retired := w.retired
+
+		in.mu.Unlock()
+
+		if retired {
+			return nil
+		}
+
 		n, err := p.fileRead(w.end, bytesFile(buf), len(buf), IoMode{nonblock: true, kernel: true})
 
 		if err == EAGAIN {
@@ -209,8 +269,8 @@ func (in *Inotify) drain(p *Process, w *InotifyWatch) error {
 				in.put(w.wd, IN_IGNORED, "")
 			}
 
+			in.retire(w)
 			in.mu.Unlock()
-			in.release(w)
 
 			return nil
 		}
@@ -262,8 +322,7 @@ func (in *Inotify) tell(w *InotifyWatch, mask uint32, name string) {
 	if w.mask&IN_ONESHOT != 0 && mask != IN_DELETE_SELF {
 		delete(in.watches, w.wd)
 		in.put(w.wd, IN_IGNORED, "")
-
-		go in.release(w)
+		in.retire(w)
 	}
 }
 
@@ -427,10 +486,14 @@ func (in *Inotify) remove(wd int32) error {
 	delete(in.watches, wd)
 	in.put(wd, IN_IGNORED, "")
 
+	freed := in.retire(w)
 	hooks := in.watchers.hooks(nil)
 
 	in.mu.Unlock()
-	in.release(w)
+
+	if freed {
+		in.free(w)
+	}
 
 	for _, h := range hooks {
 		h.sub.to.wake(h)

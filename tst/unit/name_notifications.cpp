@@ -35,13 +35,17 @@ namespace {
     Event events[64];
     int count;
 
-    // The events a read gives once poll finds them.
-    int take(int in) {
+    // The events a read gives once poll finds them; a failure says the
+    // caller's line.
+    int take(int in, int line = __builtin_LINE()) {
         alignas(struct inotify_event) char buf[4096];
         count = 0;
         pollfd p = {in, POLLIN, 0};
-        assert(poll(&p, 1, 2000) == 1 && p.revents == POLLIN);
-        ssize_t n = read(in, buf, sizeof buf);
+        int polled = poll(&p, 1, 2000);
+        ssize_t n = polled == 1 && p.revents == POLLIN ? read(in, buf, sizeof buf) : 0;
+        if (n <= 0) {
+            fprintf(stderr, "take at line %d: poll %d revents %#x read %zd errno %d\n", line, polled, p.revents, n, errno);
+        }
         assert(n > 0);
         for (char* at = buf; at < buf + n;) {
             auto* e = reinterpret_cast<struct inotify_event*>(at);
