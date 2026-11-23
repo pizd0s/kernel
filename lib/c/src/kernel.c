@@ -99,39 +99,46 @@
 #include <wctype.h>
 
 
+/*
+ * The forwarders are weak: kernel.o is one object, which a program takes
+ * whole for any of them, and a function of the program's own of one's name
+ * is the program's, as with a static C library.
+ */
+#define WEAK __attribute__((__weak__))
+
 #define KERNEL(ret, name, params, args) \
     ret __kernel_##name params __KERNEL(name); \
-    ret name params { \
+    WEAK ret name params { \
         return __kernel_##name args; \
     }
 
 #define KERNEL_VOID(name, params, args) \
     void __kernel_##name params __KERNEL(name); \
-    void name params { \
+    WEAK void name params { \
         __kernel_##name args; \
     }
 
 #define KERNEL_NORETURN(name, params, args) \
     __NORETURN void __kernel_##name params __KERNEL(name); \
-    __NORETURN void name params { \
+    WEAK __NORETURN void name params { \
         __kernel_##name args; \
     }
 
 #define KERNEL_SIZED(ret, name, params, imported, args) \
     ret __kernel_##name imported __KERNEL(name); \
-    ret name params { \
+    WEAK ret name params { \
         return __kernel_##name args; \
     }
 
 #define KERNEL_VOID_SIZED(name, params, imported, args) \
     void __kernel_##name imported __KERNEL(name); \
-    void name params { \
+    WEAK void name params { \
         __kernel_##name args; \
     }
 
 #define KERNEL_NORETURN_SIZED(name, params, imported, args) \
     __NORETURN void __kernel_##name imported __KERNEL(name); \
-    __NORETURN void name params { \
+    WEAK __NORETURN void name params { \
         __kernel_##name args; \
     }
 
@@ -287,27 +294,27 @@ void* __kernel_dbm_fetch(DBM*, const void*, size_t, size_t*) __KERNEL(dbm_fetch)
 void* __kernel_dbm_firstkey(DBM*, size_t*) __KERNEL(dbm_firstkey);
 void* __kernel_dbm_nextkey(DBM*, size_t*) __KERNEL(dbm_nextkey);
 
-int dbm_store(DBM* db, datum key, datum content, int mode) {
+WEAK int dbm_store(DBM* db, datum key, datum content, int mode) {
     return __kernel_dbm_store(db, key.dptr, key.dsize, content.dptr, content.dsize, mode);
 }
 
-int dbm_delete(DBM* db, datum key) {
+WEAK int dbm_delete(DBM* db, datum key) {
     return __kernel_dbm_delete(db, key.dptr, key.dsize);
 }
 
-datum dbm_fetch(DBM* db, datum key) {
+WEAK datum dbm_fetch(DBM* db, datum key) {
     datum content;
     content.dptr = __kernel_dbm_fetch(db, key.dptr, key.dsize, &content.dsize);
     return content;
 }
 
-datum dbm_firstkey(DBM* db) {
+WEAK datum dbm_firstkey(DBM* db) {
     datum key;
     key.dptr = __kernel_dbm_firstkey(db, &key.dsize);
     return key;
 }
 
-datum dbm_nextkey(DBM* db) {
+WEAK datum dbm_nextkey(DBM* db) {
     datum key;
     key.dptr = __kernel_dbm_nextkey(db, &key.dsize);
     return key;
@@ -1144,7 +1151,7 @@ int __pthread_cancelled(int);
 int __kernel_pthread_cancel(pthread_t) __KERNEL(pthread_cancel);
 int __kernel_pthread_setcanceltype(int, int*) __KERNEL(pthread_setcanceltype);
 
-int pthread_cancel(pthread_t thread) {
+WEAK int pthread_cancel(pthread_t thread) {
     int e = __kernel_pthread_cancel(thread);
     if (e == 0 && thread == pthread_self() && __pthread_cancelled(1)) {
         pthread_exit(PTHREAD_CANCELED);
@@ -1152,7 +1159,7 @@ int pthread_cancel(pthread_t thread) {
     return e;
 }
 
-int pthread_setcanceltype(int type, int* old) {
+WEAK int pthread_setcanceltype(int type, int* old) {
     int e = __kernel_pthread_setcanceltype(type, old);
     if (e == 0 && type == PTHREAD_CANCEL_ASYNCHRONOUS) {
         pthread_testcancel();
@@ -1174,7 +1181,7 @@ mqd_t __kernel_mq_open(const char*, int, va_list, size_t) __KERNEL(mq_open);
 int __kernel_semctl(int, int, int, va_list, size_t) __KERNEL(semctl);
 long __kernel_ulimit(int, va_list) __KERNEL(ulimit);
 
-int open(const char* path, int flags, ...) {
+WEAK int open(const char* path, int flags, ...) {
     va_list ap;
     va_start(ap, flags);
     int r = __kernel_open(path, flags, ap);
@@ -1182,7 +1189,7 @@ int open(const char* path, int flags, ...) {
     return r;
 }
 
-sem_t* sem_open(const char* name, int flags, ...) {
+WEAK sem_t* sem_open(const char* name, int flags, ...) {
     va_list ap;
     va_start(ap, flags);
     sem_t* r = __kernel_sem_open(name, flags, ap, sizeof(sem_t));
@@ -1190,7 +1197,7 @@ sem_t* sem_open(const char* name, int flags, ...) {
     return r;
 }
 
-mqd_t mq_open(const char* name, int flags, ...) {
+WEAK mqd_t mq_open(const char* name, int flags, ...) {
     va_list ap;
     va_start(ap, flags);
     mqd_t r = __kernel_mq_open(name, flags, ap, sizeof(struct mq_attr));
@@ -1198,7 +1205,7 @@ mqd_t mq_open(const char* name, int flags, ...) {
     return r;
 }
 
-long ulimit(int cmd, ...) {
+WEAK long ulimit(int cmd, ...) {
     va_list ap;
     va_start(ap, cmd);
     long r = __kernel_ulimit(cmd, ap);
@@ -1206,7 +1213,7 @@ long ulimit(int cmd, ...) {
     return r;
 }
 
-int semctl(int id, int num, int cmd, ...) {
+WEAK int semctl(int id, int num, int cmd, ...) {
     va_list ap;
     va_start(ap, cmd);
     int r = __kernel_semctl(id, num, cmd, ap, sizeof(struct semid_ds));
@@ -1214,7 +1221,7 @@ int semctl(int id, int num, int cmd, ...) {
     return r;
 }
 
-int openat(int dirfd, const char* path, int flags, ...) {
+WEAK int openat(int dirfd, const char* path, int flags, ...) {
     va_list ap;
     va_start(ap, flags);
     int r = __kernel_openat(dirfd, path, flags, ap);
@@ -1222,7 +1229,7 @@ int openat(int dirfd, const char* path, int flags, ...) {
     return r;
 }
 
-int fcntl(int fd, int cmd, ...) {
+WEAK int fcntl(int fd, int cmd, ...) {
     va_list ap;
     va_start(ap, cmd);
     // The size of the structure the command passes, or 0.
@@ -1232,7 +1239,7 @@ int fcntl(int fd, int cmd, ...) {
     return r;
 }
 
-int ioctl(int fd, unsigned long request, ...) {
+WEAK int ioctl(int fd, unsigned long request, ...) {
     va_list ap;
     va_start(ap, request);
     // The size of the structure the request passes, or 0.
@@ -1254,7 +1261,7 @@ int ioctl(int fd, unsigned long request, ...) {
     return r;
 }
 
-int prctl(int option, ...) {
+WEAK int prctl(int option, ...) {
     va_list ap;
     va_start(ap, option);
     int r = __kernel_prctl(option, ap);
@@ -1262,7 +1269,7 @@ int prctl(int option, ...) {
     return r;
 }
 
-int execl(const char* path, const char* arg, ...) {
+WEAK int execl(const char* path, const char* arg, ...) {
     va_list ap;
     va_start(ap, arg);
     int r = __kernel_execl(path, arg, ap);
@@ -1270,7 +1277,7 @@ int execl(const char* path, const char* arg, ...) {
     return r;
 }
 
-int execlp(const char* file, const char* arg, ...) {
+WEAK int execlp(const char* file, const char* arg, ...) {
     va_list ap;
     va_start(ap, arg);
     int r = __kernel_execlp(file, arg, ap);
@@ -1278,7 +1285,7 @@ int execlp(const char* file, const char* arg, ...) {
     return r;
 }
 
-int execle(const char* path, const char* arg, ...) {
+WEAK int execle(const char* path, const char* arg, ...) {
     va_list ap;
     va_start(ap, arg);
     int r = __kernel_execle(path, arg, ap);

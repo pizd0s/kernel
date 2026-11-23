@@ -25,9 +25,13 @@ Per-project settings that the shared [STYLE.md](STYLE.md) delegates here.
   `__kernel_<name>` (`src/kernel.c`, or `__INLINE` in its header); the
   import name is spelled out so the linker can tell an import from a
   missing definition. No other declaration has the attribute, but libc.wasm's
-  own imports of the kernel (`lib/libc/libc.h`). The kernel implements each in
-  Go or in libc.wasm (`lib/libc`), C that defines `__kernel_<name>` and that
-  the kernel links into a program importing it.
+  own imports of the kernel (`lib/libc/libc.h`). The forwarders are weak, so
+  that a program's own function of a name is its own. The kernel implements
+  each import in Go or in libc.wasm (`lib/libc`), whose C defines
+  `__kernel_<name>`, the import's prototype as it is, never the C name, and
+  calls the C library through its own copy of kernel.c. The kernel links
+  what a program imports of libc.wasm, and what that reaches, into the
+  program: the two share the imports, each has its own forwarders.
 - **Third-party code.** Sources are fetched as release tarballs, a big one
   cut down to what is built (`dev/slice.py`), and never edited in place; what they need from us lives beside their build
   (lib/c's `freebsd/` and `llvm/` headers, and `lib/c/src`). Code
