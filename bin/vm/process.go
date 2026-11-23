@@ -19851,7 +19851,7 @@ func (p *Process) libcSbrk(increment uint32) uint32 {
 }
 
 func (p *Process) libcIssetugid() uint32 {
-	return bit(p.cred.uid() != p.cred.euid() || p.cred.gid() != p.cred.egid())
+	return 0
 }
 
 func (p *Process) libcWcsncat(d, s, n uint32) uint32 {

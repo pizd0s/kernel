@@ -791,9 +791,6 @@ static int change(Server& s, Node* node, u32 op, const Header& h, Body args) {
             if (h.uid != 0 && (h.uid != node->uid || toUid != node->uid || (toGid != node->gid && toGid != h.gid))) {
                 return EPERM;
             }
-            if ((toUid != node->uid || toGid != node->gid) && node->kind != Kind::Dir) {
-                node->perm &= ~u32(S_ISUID | S_ISGID);
-            }
             node->uid = toUid;
             node->gid = toGid;
             break;
