@@ -82,6 +82,7 @@
 #include <threads.h>
 #include <time.h>
 #include <unistd.h>
+#include <utmpx.h>
 #include <utime.h>
 #include <wchar.h>
 #include <wctype.h>
@@ -834,6 +835,12 @@ KERNEL(int, execvpe, (const char* a, char* const b[], char* const c[]), (a, b, c
 KERNEL(int, fexecve, (int a, char* const b[], char* const c[]), (a, b, c))
 KERNEL(ssize_t, posix_getdents, (int a, void* b, size_t c, int d), (a, b, c, d))
 KERNEL(int, posix_devctl, (int a, int b, void* __restrict c, size_t d, int* __restrict e), (a, b, c, d, e))
+KERNEL_VOID(setutxent, (void), ())
+KERNEL_VOID(endutxent, (void), ())
+KERNEL_SIZED(struct utmpx*, getutxent, (void), (size_t size), (sizeof(struct utmpx)))
+KERNEL_SIZED(struct utmpx*, getutxid, (const struct utmpx* a), (const struct utmpx* a, size_t a_size, size_t size), (a, sizeof(struct utmpx), sizeof(struct utmpx)))
+KERNEL_SIZED(struct utmpx*, getutxline, (const struct utmpx* a), (const struct utmpx* a, size_t a_size, size_t size), (a, sizeof(struct utmpx), sizeof(struct utmpx)))
+KERNEL_SIZED(struct utmpx*, pututxline, (const struct utmpx* a), (const struct utmpx* a, size_t a_size, size_t size), (a, sizeof(struct utmpx), sizeof(struct utmpx)))
 KERNEL(int, mq_close, (mqd_t a), (a))
 KERNEL(int, mq_unlink, (const char* a), (a))
 KERNEL(int, mq_send, (mqd_t a, const char* b, size_t c, unsigned d), (a, b, c, d))

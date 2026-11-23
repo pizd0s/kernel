@@ -152,7 +152,9 @@ const (
 	staticServIndex  = 584
 	staticProtoIndex = 588
 	staticNetIndex   = 592
-	staticSize       = 596
+	staticUtmpx      = 596
+	staticUtmpIndex  = 600
+	staticSize       = 604
 	niceMin          = -20
 	niceMax          = 19
 	ngroupsMax       = 65536
@@ -187,6 +189,7 @@ const (
 	packetRoomKept   = 4096
 	localeNameMax    = 23
 	traceStringMax   = 64
+	utmpxPath        = "/run/utmp"
 )
 
 const (
@@ -2951,6 +2954,136 @@ func (p *Process) semSetValues(s *SemSet, from int, values []int32) error {
 	}
 
 	return nil
+}
+
+func (p *Process) utmpRecords() [][]byte {
+	data, _ := p.readPath(utmpxPath, databaseMax)
+
+	var out [][]byte
+
+	for len(data) >= sizeofUtmpx {
+		out, data = append(out, data[:sizeofUtmpx]), data[sizeofUtmpx:]
+	}
+
+	return out
+}
+
+func utmpType(rec []byte) int16 {
+	return int16(binary.LittleEndian.Uint16(rec))
+}
+
+func utmpField(rec []byte, at, n int) []byte {
+	b, _, _ := bytes.Cut(rec[at:at+n], []byte{0})
+
+	return b
+}
+
+func utmpProcess(t int16) bool {
+	return t == INIT_PROCESS || t == LOGIN_PROCESS || t == USER_PROCESS || t == DEAD_PROCESS
+}
+
+func utmpSameId(rec, id []byte) bool {
+	switch t := utmpType(id); {
+	case t == RUN_LVL || t == BOOT_TIME || t == OLD_TIME || t == NEW_TIME:
+		return utmpType(rec) == t
+	case utmpProcess(t):
+		return utmpProcess(utmpType(rec)) && bytes.Equal(rec[40:44], id[40:44])
+	}
+
+	return false
+}
+
+func utmpSameLine(rec, line []byte) bool {
+	t := utmpType(rec)
+
+	return (t == LOGIN_PROCESS || t == USER_PROCESS) && bytes.Equal(utmpField(rec, 8, 32), utmpField(line, 8, 32))
+}
+
+func (p *Process) utmpResult(rec []byte) uint32 {
+	block := p.staticResult(staticUtmpx, sizeofUtmpx)
+
+	if block != 0 {
+		copy(p.span(block, sizeofUtmpx), rec)
+	}
+
+	return block
+}
+
+func (p *Process) utmpSearch(match func(rec []byte) bool) uint32 {
+	at := p.staticAt(staticUtmpIndex)
+	recs := p.utmpRecords()
+
+	for i := int(p.u32(at)); i < len(recs); i++ {
+		if match(recs[i]) {
+			p.put32(at, uint32(i+1))
+
+			return p.utmpResult(recs[i])
+		}
+	}
+
+	p.put32(at, uint32(len(recs)))
+
+	return 0
+}
+
+func (p *Process) libcSetutxent() {
+	p.rewind(staticUtmpIndex)
+}
+
+func (p *Process) libcEndutxent() {
+	p.rewind(staticUtmpIndex)
+}
+
+func (p *Process) libcGetutxent() uint32 {
+	return p.utmpSearch(func([]byte) bool { return true })
+}
+
+func (p *Process) libcGetutxid(id uint32) uint32 {
+	want := bytes.Clone(p.span(id, sizeofUtmpx))
+
+	return p.utmpSearch(func(rec []byte) bool { return utmpSameId(rec, want) })
+}
+
+func (p *Process) libcGetutxline(line uint32) uint32 {
+	want := bytes.Clone(p.span(line, sizeofUtmpx))
+
+	return p.utmpSearch(func(rec []byte) bool { return utmpSameLine(rec, want) })
+}
+
+func (p *Process) libcPututxline(ut uint32) uint32 {
+	rec := bytes.Clone(p.span(ut, sizeofUtmpx))
+	f, err := p.openPath(utmpxPath, O_RDWR|O_CREAT, 0o644)
+
+	if err != nil {
+		return p.pointer(0, err)
+	}
+
+	defer f.unref()
+
+	at := p.staticAt(staticUtmpIndex)
+	recs := p.utmpRecords()
+	from := min(max(int(p.u32(at))-1, 0), len(recs))
+	slot := len(recs)
+
+	for k := range recs {
+		if i := (from + k) % len(recs); utmpSameId(recs[i], rec) {
+			slot = i
+
+			break
+		}
+	}
+
+	if n, err := p.filePwrite(f, bytesFile(rec), sizeofUtmpx, int64(slot)*sizeofUtmpx); err != nil || n != sizeofUtmpx {
+		if err == nil {
+			err = EIO
+		}
+
+		return p.pointer(0, err)
+	}
+
+	p.put32(at, uint32(slot+1))
+
+	return p.utmpResult(rec)
 }
 
 func (p *Process) libcExecl(path, arg0, va uint32) uint32 {

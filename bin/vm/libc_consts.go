@@ -154,6 +154,15 @@ const (
 	SEMVMX                            = 32767
 	SEMOPM                            = 500
 	MQ_PRIO_MAX                       = 32768
+	EMPTY                             = 0
+	RUN_LVL                           = 1
+	BOOT_TIME                         = 2
+	NEW_TIME                          = 3
+	OLD_TIME                          = 4
+	INIT_PROCESS                      = 5
+	LOGIN_PROCESS                     = 6
+	USER_PROCESS                      = 7
+	DEAD_PROCESS                      = 8
 	F_DUPFD                           = 0
 	F_GETFD                           = 1
 	F_SETFD                           = 2
@@ -318,6 +327,7 @@ const (
 	sizeofMsqidDs                     = 80
 	sizeofSemidDs                     = 56
 	sizeofSembuf                      = 6
+	sizeofUtmpx                       = 400
 	sizeofPosixSpawnFileActions       = 4
 	sizeofPthreadAttr                 = 32
 	sizeofPthreadMutex                = 4

@@ -4490,3 +4490,43 @@ func libcSemctl(id, num, cmd, va, dsSize uint32) uint32 {
 
 	return p.libcSemctl(id, num, cmd, va)
 }
+
+func libcSetutxent() {
+	proc().libcSetutxent()
+}
+
+func libcEndutxent() {
+	proc().libcEndutxent()
+}
+
+func libcGetutxent(size uint32) uint32 {
+	p := proc()
+
+	p.sized("getutxent", size, sizeofUtmpx)
+
+	return p.libcGetutxent()
+}
+
+func libcGetutxid(id, idSize, size uint32) uint32 {
+	p := proc()
+
+	p.sized("getutxid", idSize, sizeofUtmpx, size, sizeofUtmpx)
+
+	return p.libcGetutxid(id)
+}
+
+func libcGetutxline(line, lineSize, size uint32) uint32 {
+	p := proc()
+
+	p.sized("getutxline", lineSize, sizeofUtmpx, size, sizeofUtmpx)
+
+	return p.libcGetutxline(line)
+}
+
+func libcPututxline(ut, utSize, size uint32) uint32 {
+	p := proc()
+
+	p.sized("pututxline", utSize, sizeofUtmpx, size, sizeofUtmpx)
+
+	return p.libcPututxline(ut)
+}

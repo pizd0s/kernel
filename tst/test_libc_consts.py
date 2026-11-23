@@ -56,6 +56,7 @@ TYPES = {
     "sizeofMsqidDs": "struct msqid_ds",
     "sizeofSemidDs": "struct semid_ds",
     "sizeofSembuf": "struct sembuf",
+    "sizeofUtmpx": "struct utmpx",
     "sizeofPosixSpawnFileActions": "posix_spawn_file_actions_t",
     "sizeofPthreadAttr": "pthread_attr_t",
     "sizeofPthreadMutex": "pthread_mutex_t",
