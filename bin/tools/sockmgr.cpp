@@ -417,8 +417,12 @@ static void bindCall(Socket& h, Request& r) {
         return fail(r.reply(), EADDRNOTAVAIL);
     }
     if (h.type == SOCK_DGRAM) {
-        // A datagram socket's bind is its stack's, which receives on it.
+        // A datagram socket's bind is its stack's, which receives on it: a
+        // wildcard's, the stack with a router's, else the loopback's.
         Stack* s = a.sin_addr.s_addr != 0 ? owner(a.sin_addr.s_addr) : route(h, 0);
+        if (!s && a.sin_addr.s_addr == 0 && !h.device[0]) {
+            s = owner(htonl(INADDR_LOOPBACK));
+        }
         if (!s) {
             return fail(r.reply(), EADDRNOTAVAIL);
         }

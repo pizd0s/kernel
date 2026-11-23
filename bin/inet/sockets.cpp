@@ -36,6 +36,10 @@ namespace {
         int tag; // what at is of
     };
 
+    // Of a turn's readiness, before it is told: a side's end, EV_EOF's.
+    constexpr uint32_t readEnded = 1u << 30;
+    constexpr uint32_t writeEnded = 1u << 31;
+
     struct Socket {
         int ff;
         int type;
@@ -99,6 +103,29 @@ namespace {
         EV_SET(&change[0], s.ff, EVFILT_READ, EV_ADD, 0, 0, &s);
         EV_SET(&change[1], s.ff, EVFILT_WRITE, EV_ADD, 0, 0, &s);
         ff_kevent(kq, change, 2, nullptr, 0, nullptr);
+    }
+
+    // An option of a socket's. SO_REUSEADDR of a datagram socket lets
+    // another bind its address too, as a datagram server's programs have
+    // it of the option (tftpd's socket of a transfer, on the address of
+    // inetd's or udpsvd's socket): FreeBSD's is that of SO_REUSEPORT.
+    int setOption(int ff, int type, uint32_t level, uint32_t name, const void* value, socklen_t length) {
+        if (ff_setsockopt(ff, int(level), int(name), value, length) != 0) {
+            return errno;
+        }
+        if (type == SOCK_DGRAM && level == SOL_SOCKET && name == SO_REUSEADDR) {
+            ff_setsockopt(ff, SOL_SOCKET, SO_REUSEPORT, value, length);
+        }
+        return 0;
+    }
+
+    // Whether an address is a connected socket's peer's: its family, port
+    // and address, those of a sockaddr_in.
+    bool isPeer(int ff, const linux_sockaddr* addr, socklen_t length) {
+        alignas(8) unsigned char peer[128];
+        socklen_t peerLength = sizeof peer;
+        return addr && length >= 8 && ff_getpeername(ff, reinterpret_cast<linux_sockaddr*>(peer), &peerLength) == 0 &&
+               peerLength >= 8 && memcmp(peer, addr, 8) == 0;
     }
 
     // A socket of F-Stack's descriptor, its open file the first end of a
@@ -203,7 +230,14 @@ namespace {
                     return done(EINVAL);
                 }
                 const int flags = int(h.arg) & ~(MSG_DONTWAIT | MSG_NOSIGNAL);
-                const ssize_t n = ff_sendto(s.ff, at, size_t(stop - at), flags, addr, length);
+                ssize_t n = ff_sendto(s.ff, at, size_t(stop - at), flags, addr, length);
+                // A datagram to a connected socket's peer, by the peer's
+                // address, goes: FreeBSD's sendto refuses the address,
+                // EISCONN, POSIX's "may", which a datagram server's programs
+                // do not expect of it (tftpd's).
+                if (n < 0 && errno == EISCONN && s.type == SOCK_DGRAM && isPeer(s.ff, addr, length)) {
+                    n = ff_sendto(s.ff, at, size_t(stop - at), flags, nullptr, 0);
+                }
                 if (n < 0) {
                     return again(Outcome::Write, errno);
                 }
@@ -224,6 +258,12 @@ namespace {
                 const ssize_t n = ff_recvfrom(s.ff, out + head, room, flags, reinterpret_cast<linux_sockaddr*>(from), &fromLength);
                 if (n < 0) {
                     return again(Outcome::Read, errno);
+                }
+                // A receive of no bytes on a datagram socket waits for a
+                // datagram, its sender's address the answer, as POSIX has
+                // it: FreeBSD's returns at once while none has come.
+                if (s.type == SOCK_DGRAM && n == 0 && fromLength == 0) {
+                    return again(Outcome::Read, EAGAIN);
                 }
                 if (s.type == SOCK_STREAM) {
                     fromLength = 0;
@@ -289,7 +329,7 @@ namespace {
                 if (!take(at, stop, level) || !take(at, stop, name)) {
                     return done(EINVAL);
                 }
-                return done(ff_setsockopt(s.ff, int(level), int(name), at, socklen_t(stop - at)) == 0 ? 0 : errno);
+                return done(setOption(s.ff, s.type, level, name, at, socklen_t(stop - at)));
             }
             case opShutdown:
                 return done(ff_shutdown(s.ff, int(h.arg)) == 0 ? 0 : errno);
@@ -397,7 +437,7 @@ void socketsHand(Request& r) {
             ff_close(ff);
             return fail(r.reply(), EINVAL);
         }
-        ff_setsockopt(ff, int(level), int(name), at, socklen_t(length));
+        setOption(ff, int(type), level, name, at, socklen_t(length));
         at += length;
     }
     if (bound && ff_bind(ff, bound, boundLength) != 0) {
@@ -499,15 +539,25 @@ void socketsTurn() {
     struct kevent events[64];
     const timespec zero{0, 0};
     const int n = ff_kevent(kq, nullptr, 0, events, 64, &zero);
+    // The end of a side, EV_EOF, is readiness: a read gives 0, a write
+    // EPIPE. The hangup, POLLHUP, is both sides' end, as FreeBSD's poll has
+    // it: a socket shut for writing only, shutdown's SHUT_WR, still reads.
     for (int i = 0; i < n; ++i) {
         auto* s = static_cast<Socket*>(events[i].udata);
         if (!socketOf(s)) {
             continue;
         }
-        s->ready |= events[i].filter == EVFILT_READ ? POLLIN : POLLOUT;
+        const bool read = events[i].filter == EVFILT_READ;
+        s->ready |= read ? POLLIN : POLLOUT;
         if ((events[i].flags & EV_EOF) != 0) {
-            s->ready |= events[i].filter == EVFILT_READ ? POLLIN | POLLHUP : POLLHUP;
+            s->ready |= read ? readEnded : writeEnded;
         }
+    }
+    for (Socket* s = sockets; s; s = s->next) {
+        if ((s->ready & (readEnded | writeEnded)) == (readEnded | writeEnded)) {
+            s->ready |= POLLHUP;
+        }
+        s->ready &= ~(readEnded | writeEnded);
     }
     for (Socket* s = sockets, *next; s; s = next) {
         next = s->next;
