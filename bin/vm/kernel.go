@@ -99,7 +99,7 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 }
 
 func (k *Kernel) process(pid int32, parent *Process) *Process {
-	p := &Process{k: k, pid: pid, umask: 0o022, regexes: map[uint32]*PosixRegex{}, iconvs: map[uint32]*Iconv{}, seed: 0, syncs: map[int32]Object{},
+	p := &Process{k: k, pid: pid, umask: 0o022, iconvs: map[uint32]*Iconv{}, seed: 0, syncs: map[int32]Object{},
 		semOpens: map[string]*SemOpen{}, spawnFiles: map[uint32][]SpawnAction{}, locales: map[uint32][LC_ALL]string{}}
 
 	p.own.signal.kind, p.own.continued.kind = eventSignal, eventContinued
@@ -528,6 +528,7 @@ type SystemNames struct {
 func (k *Kernel) functionTable() map[string]any {
 	return map[string]any{
 		"__errno_location":                      libc__errno_location,
+		"__sized":                               libc__sized,
 		"__kernel_start":                        libc__kernel_start,
 		"__kernel_program":                      libc__kernel_program,
 		"read":                                  libcRead,
@@ -833,10 +834,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"sleep":                                 libcSleep,
 		"clock_gettime":                         libcClock_gettime,
 		"nanosleep":                             libcNanosleep,
-		"regcomp":                               libcRegcomp,
-		"regexec":                               libcRegexec,
-		"regfree":                               libcRegfree,
-		"regerror":                              libcRegerror,
 		"signal":                                libcSignal,
 		"sigaction":                             libcSigaction,
 		"sigprocmask":                           libcSigprocmask,

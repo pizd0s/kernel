@@ -7,14 +7,25 @@
 #include <stdio.h>
 #include <string.h>
 
-// GNU escapes supplement POSIX syntax in the kernel's regex interface;
-// the host's musl regex need not implement those extensions.
+// regex is FreeBSD's as its libregex builds it: GNU escapes supplement
+// POSIX syntax, \| \+ \? of a basic expression, \< \> \b \B \w \W \s \S
+// \` \', which the host's musl regex need not implement. What POSIX leaves
+// undefined FreeBSD rejects: an escape of a letter it gives no meaning,
+// a repetition of a repetition, a ) with no (, a { of no interval, a
+// count past RE_DUP_MAX, 255; REG_STARTEND's end before its start is
+// REG_INVARG, a code of the BSDs'.
 struct Case {
     const char* pattern;
     const char* text;
     int flags;
     int begin;
     int end;
+};
+
+struct Rejected {
+    const char* pattern;
+    int flags;
+    int code;
 };
 
 int main() {
@@ -27,7 +38,6 @@ int main() {
         {R"(\+)", "+", 0, 0, 1},
         {R"(\?)", "?", 0, 0, 1},
         {"*", "x*y", 0, 1, 2},
-        {"{oops}", "x{oops}y", REG_EXTENDED, 1, 7},
         {R"(\<word\>)", "a word!", REG_EXTENDED, 2, 6},
         {R"(\bword\b)", "sword word!", REG_EXTENDED, 6, 10},
         {R"(\Boo\B)", "food", REG_EXTENDED, 1, 3},
@@ -35,8 +45,6 @@ int main() {
         {R"(\`abc\')", "abc", REG_EXTENDED, 0, 3},
         {R"(\`abc\')", "xabc", REG_EXTENDED, -1, -1},
         {R"(\`abc\')", "abcx", REG_EXTENDED, -1, -1},
-        {R"(\n\t)", "x\n\ty", REG_EXTENDED, 1, 3},
-        {R"(\q)", "aqb", REG_EXTENDED, 1, 2},
         {R"(\(ab\)\{2\})", "xababz", 0, 1, 5},
         {R"(a\{2,\})", "xaaab", 0, 1, 4},
         {R"(a\{0,2\})", "aaab", 0, 0, 2},
@@ -44,10 +52,6 @@ int main() {
         {"a{2,}", "xaaab", REG_EXTENDED, 1, 4},
         {"a{0,2}", "aaab", REG_EXTENDED, 0, 2},
         {"(ab){2,3}", "xabababz", REG_EXTENDED, 1, 7},
-        {"a**", "xaaab", REG_EXTENDED, 0, 0},
-        {"a*+", "aaab", REG_EXTENDED, 0, 3},
-        {"a+?", "aaab", REG_EXTENDED, 0, 3},
-        {")", "x)y", REG_EXTENDED, 1, 2},
     };
     for (const auto& entry : cases) {
         regex_t expression{};
@@ -62,11 +66,24 @@ int main() {
         }
         regfree(&expression);
     }
+    const Rejected rejected[] = {
+        {"{oops}", REG_EXTENDED, REG_BADRPT},
+        {R"(\n\t)", REG_EXTENDED, REG_EESCAPE},
+        {R"(\q)", REG_EXTENDED, REG_EESCAPE},
+        {"a**", REG_EXTENDED, REG_BADRPT},
+        {"a*+", REG_EXTENDED, REG_BADRPT},
+        {"a+?", REG_EXTENDED, REG_BADRPT},
+        {")", REG_EXTENDED, REG_EPAREN},
+        {"(a{1000}){1000}", REG_EXTENDED, REG_BADBR},
+    };
+    for (const auto& entry : rejected) {
+        regex_t expression{};
+        assert(regcomp(&expression, entry.pattern, entry.flags) == entry.code);
+    }
     regex_t expression{};
-    assert(regcomp(&expression, "(a{1000}){1000}", REG_EXTENDED) == REG_BADPAT);
     assert(regcomp(&expression, "ab", REG_EXTENDED) == 0);
     regmatch_t range{3, 2};
-    assert(regexec(&expression, "zabz", 1, &range, REG_STARTEND) == REG_BADPAT);
+    assert(regexec(&expression, "zabz", 1, &range, REG_STARTEND) == REG_INVARG);
     range = {1, 3};
     assert(regexec(&expression, "zabz", 1, &range, REG_STARTEND) == 0 && range.rm_so == 1 && range.rm_eo == 3);
     regfree(&expression);

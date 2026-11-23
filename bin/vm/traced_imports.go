@@ -127,8 +127,8 @@ var callFormats = func() map[string]string {
 		pthread_spin_destroy:dp pthread_spin_init:dpd pthread_spin_lock:dp pthread_spin_trylock:dp pthread_spin_unlock:dp
 		pthread_timedjoin_np:ddppd pthread_tryjoin_np:ddp ptsname:sd ptsname_r:ddpd putenv:dp pututxline:ppdd pwrite:ddpdd pwritev:ddpddd
 		raise:dd rand:d rand_r:dp random:d rawmemchr:ppd read:ddpd readdir:ppd readdir_r:dppdpd readlink:dspd readlinkat:ddspd readv:ddpdd
-		realloc:ppd reallocarray:ppdd realpath:ssp recv:ddpdd recvfrom:ddpddpp recvmmsg:ddpddddpd recvmsg:ddpddd regcomp:dpdsd
-		regerror:ddpdpd regexec:dpdsdpdd regfree:vpd remove:ds rename:dss renameat:ddsds res_init:d res_mkquery:ddsddpdppd res_nclose:vdd
+		realloc:ppd reallocarray:ppdd realpath:ssp recv:ddpdd recvfrom:ddpddpp recvmmsg:ddpddddpd recvmsg:ddpddd
+		 remove:ds rename:dss renameat:ddsds res_init:d res_mkquery:ddsddpdppd res_nclose:vdd
 		res_ninit:ddd res_nmkquery:ddddsddpdppd res_nquery:dddsddpd res_nquerydomain:dddssddpd res_nsearch:dddsddpd res_nsend:dddpdpd
 		res_query:dsddpd res_querydomain:dssddpd res_search:dsddpd res_send:dpdpd rewinddir:vp rindex:ssd rmdir:ds sbrk:pd
 		sched_get_priority_max:dd sched_get_priority_min:dd sched_getaffinity:dddp sched_getcpu:d sched_getparam:ddpd

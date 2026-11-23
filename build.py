@@ -410,9 +410,13 @@ python_core = command(
 # it compiles it (bin/vm/wasm_linker.go).
 libc_wasm = command(
     name="libc_wasm",
-    inputs=[*LIBC_HEADERS, *build.glob("$(S)/lib/libc/*"), "$(S)/lib/c/src/kernel.c", "$(S)/lib/c/src/kernel.h", "$(S)/dev/wasm.py"],
+    inputs=[*LIBC_HEADERS, *build.glob("$(S)/lib/libc/*.c"), *build.glob("$(S)/lib/libc/*.h"), "$(S)/lib/libc/make.py",
+            *build.glob("$(S)/lib/libc/patches/*"), "$(S)/lib/c/src/kernel.c", "$(S)/lib/c/src/kernel.h",
+            *build.glob("$(S)/lib/c/freebsd/**/*.h"), "$(S)/lib/c/freebsd/xlocale.c", *build.glob("$(S)/lib/c/freebsd/patches/*"),
+            "$(S)/dev/wasm.py"],
     outputs=["$(B)/lib/libc/libc.wasm"],
-    cmd=["python3", "$(S)/lib/libc/make.py", CLANG, WASM_LD, "$(B)/lib/libc/libc.wasm"],
+    deps=[freebsd_slice],
+    cmd=["python3", "$(S)/lib/libc/make.py", CLANG, WASM_LD, freebsd_slice.outputs[0], "$(B)/lib/libc/libc.wasm"],
     descr="CC",
     color="green",
 )
@@ -1339,7 +1343,8 @@ for test in build.glob("$(S)/tst/test_*.py"):
 # lib/c hands it among them, against lib/c's headers as clang has them.
 libc_consts_test = command(
     name="test_libc_consts",
-    inputs=["$(S)/tst/test_libc_consts.py", "$(S)/bin/vm/libc_consts.go", "$(S)/lib/c/src/kernel.c", *LIBC_HEADERS],
+    inputs=["$(S)/tst/test_libc_consts.py", "$(S)/bin/vm/libc_consts.go", "$(S)/lib/c/src/kernel.c", *build.glob("$(S)/lib/libc/*.c"),
+            *LIBC_HEADERS],
     outputs=["$(B)/tst/libc_consts.stamp"],
     deps=[],
     cmd=[["python3", "$(S)/tst/test_libc_consts.py", CLANG, "$(S)"], touch("$(B)/tst/libc_consts.stamp")],

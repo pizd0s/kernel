@@ -1,0 +1,52 @@
+libc.wasm, which regex is built into, has no stdio of its own yet:
+regerror's two numbers, REG_ITOA's code past its table and REG_ATOI's
+code of a name, are written by hand instead of by sprintf.
+
+--- a/lib/libc/regex/regerror.c
++++ b/lib/libc/regex/regerror.c
+@@ -54,6 +54,7 @@
+ 
+ /* === regerror.c === */
+ static const char *regatoi(const regex_t *preg, char *localbuf);
++static void regnumber(char *buf, const char *prefix, unsigned int value, unsigned int base);
+ 
+ #ifdef __cplusplus
+ }
+@@ -133,7 +134,7 @@
+ 			if (r->code != 0)
+ 				(void) strcpy(convbuf, r->name);
+ 			else
+-				sprintf(convbuf, "REG_0x%x", target);
++				regnumber(convbuf, "REG_0x", target, 16);
+ 			assert(strlen(convbuf) < sizeof(convbuf));
+ 			s = convbuf;
+ 		} else
+@@ -168,6 +169,27 @@
+ 	if (r->code == 0)
+ 		return("0");
+ 
+-	sprintf(localbuf, "%d", r->code);
++	regnumber(localbuf, "", r->code, 10);
+ 	return(localbuf);
+ }
++
++/*
++ - regnumber - write prefix and value, in base, into buf
++ == static void regnumber(char *buf, const char *prefix, unsigned int value, unsigned int base);
++ */
++static void
++regnumber(char *buf, const char *prefix, unsigned int value, unsigned int base)
++{
++	char digits[sizeof(value) * 8];
++	size_t n = 0;
++
++	do {
++		digits[n++] = "0123456789abcdef"[value % base];
++		value /= base;
++	} while (value != 0);
++	(void) strcpy(buf, prefix);
++	buf += strlen(buf);
++	while (n > 0)
++		*buf++ = digits[--n];
++	*buf = '\0';
++}

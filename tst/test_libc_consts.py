@@ -11,7 +11,8 @@ lib/c passes the kernel has its size there.
 
 The test tells what it found: how many of the kernel's constants are
 lib/c's, which differ, which lib/c knows nothing of, and, by header, the
-integer constants lib/c has that the kernel has none for.
+integer constants lib/c has that the kernel has none for. A size lib/c
+passes a function libc.wasm defines (lib/libc) is libc.wasm's to check.
 
     test_libc_consts.py <clang> <source root>
 """
@@ -53,8 +54,6 @@ TYPES = {
     "sizeofPasswd": "struct passwd",
     "sizeofPollfd": "struct pollfd",
     "sizeofProtoent": "struct protoent",
-    "sizeofRegex": "regex_t",
-    "sizeofRegmatch": "regmatch_t",
     "sizeofRlimit": "struct rlimit",
     "sizeofRusage": "struct rusage",
     "sizeofSchedParam": "struct sched_param",
@@ -166,6 +165,16 @@ def evaluate(clang, include, expressions):
     return {key: values[k] for k, key in enumerate(keys) if k in values and k not in floats}
 
 
+def libc_wasm(root):
+    """The kernel's functions libc.wasm defines, whose sizes are its own."""
+    names = set()
+
+    for source in (root / "lib/libc").glob("*.c"):
+        names.update(re.findall(r"\b__kernel_(\w+)\s*\([^;{}]*\)\s*\{", source.read_text()))
+
+    return names
+
+
 def main():
     clang, root = sys.argv[1], Path(sys.argv[2])
     go = (root / "bin/vm/libc_consts.go").read_text()
@@ -180,8 +189,12 @@ def main():
     assert set(sizes) == set(TYPES), f"sizes with no C type here, or C types with no size: {sorted(set(sizes) ^ set(TYPES))}"
     known = {TYPES[name] for name in sizes}
     passed = set()
+    defined = libc_wasm(root)
     for source in (root / "lib/c/src/kernel.c", include / "setjmp.h", include / "pty.h"):
-        passed.update(re.findall(r"sizeof\(((?:struct )?\w+)\)", source.read_text()))
+        for line in source.read_text().splitlines():
+            forwarder = re.match(r"KERNEL\w*\(.*?(\w+), \(", line)
+            if not forwarder or forwarder.group(1) not in defined:
+                passed.update(re.findall(r"sizeof\(((?:struct )?\w+)\)", line))
     passed = {ALIASES.get(t, t) for t in passed}
     assert not passed - known, f"lib/c passes sizes the kernel does not know: {sorted(passed - known)}"
 

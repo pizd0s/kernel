@@ -2,6 +2,10 @@
 
 package main
 
+func libc__sized(call, have, want uint32) {
+	proc().libc__sized(call, have, want)
+}
+
 func libc__errno_location() uint32 {
 	return proc().libc__errno_location()
 }
@@ -1236,38 +1240,6 @@ func libcNanosleep(req, reqSize, rem, remSize uint32) uint32 {
 	p.sized("nanosleep", reqSize, sizeofTimespec, remSize, sizeofTimespec)
 
 	return p.libcNanosleep(req, rem)
-}
-
-func libcRegcomp(preg, pregSize, pattern, flags uint32) uint32 {
-	p := proc()
-
-	p.sized("regcomp", pregSize, sizeofRegex)
-
-	return p.libcRegcomp(preg, pattern, flags)
-}
-
-func libcRegexec(preg, pregSize, s, nmatch, pmatch, pmatchSize, eflags uint32) uint32 {
-	p := proc()
-
-	p.sized("regexec", pregSize, sizeofRegex, pmatchSize, sizeofRegmatch)
-
-	return p.libcRegexec(preg, s, nmatch, pmatch, eflags)
-}
-
-func libcRegfree(preg, pregSize uint32) {
-	p := proc()
-
-	p.sized("regfree", pregSize, sizeofRegex)
-
-	p.libcRegfree(preg)
-}
-
-func libcRegerror(code, preg, pregSize, buf, size uint32) uint32 {
-	p := proc()
-
-	p.sized("regerror", pregSize, sizeofRegex)
-
-	return p.libcRegerror(code, preg, buf, size)
 }
 
 func libcSignal(sig, handler uint32) uint32 {

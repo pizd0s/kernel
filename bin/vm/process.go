@@ -17,8 +17,6 @@ import (
 	"os"
 	"path"
 	"reflect"
-	"regexp"
-	"regexp/syntax"
 	"runtime"
 	"slices"
 	"strconv"
@@ -85,13 +83,6 @@ var langItems = map[int][]string{
 		"", "", "%m/%d/%y", "0123456789", "%a %b %e %T %Y", "%H:%M:%S",
 	},
 	LC_MESSAGES: {"^[yY]", "^[nN]", "yes", "no"},
-}
-
-var regMessages = map[uint32]string{
-	0: "No error", REG_NOMATCH: "No match", REG_BADPAT: "Invalid regexp", 3: "Unknown collating element",
-	4: "Unknown character class name", REG_EESCAPE: "Trailing backslash", REG_ESUBREG: "Invalid back reference",
-	REG_EBRACK: "Missing ']'", REG_EPAREN: "Missing ')'", REG_EBRACE: "Missing '}'", REG_BADBR: "Invalid contents of {}",
-	11: "Invalid character range", 12: "Out of memory", REG_BADRPT: "Repetition not preceded by valid expression",
 }
 
 var hostRlimits = [RLIM_NLIMITS]int{
@@ -275,8 +266,6 @@ type Process struct {
 	classes   uint32
 	sink      Object
 	failure   Errno
-	regexes   map[uint32]*PosixRegex
-	nextRegex uint32
 	iconvs    map[uint32]*Iconv
 	nextIconv uint32
 
@@ -590,7 +579,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 		i.attach(p)
 		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
 		p.tzAt, p.herrnoAt, p.passwordAt = [3]uint32{}, 0, 0
-		p.regexes, p.constants, p.locale = map[uint32]*PosixRegex{}, map[string]uint32{}, [LC_ALL]string{}
+		p.constants, p.locale = map[string]uint32{}, [LC_ALL]string{}
 		p.iconvs, p.spawnFiles, p.locales = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}, map[uint32][LC_ALL]string{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
 		p.defaultStack, p.defaultGuard, p.desKey = 0, 0, [8]byte{}
@@ -805,6 +794,10 @@ func (p *Process) exitWith(status int) {
 	}
 
 	panic(&ProcExit{status})
+}
+
+func (p *Process) libc__sized(call, have, want uint32) {
+	p.sized(p.str(call), have, want)
 }
 
 func (p *Process) libc__errno_location() uint32 {
@@ -4580,7 +4573,7 @@ func (p *Process) startVfork() uint32 {
 	c.setInstance(p.inst)
 	c.image, c.vfork = p.image, v
 	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo
-	c.regexes, c.nextRegex, c.constants, c.jumps, c.stackAt = p.regexes, p.nextRegex, p.constants, p.jumps, p.stackAt
+	c.constants, c.jumps, c.stackAt = p.constants, p.jumps, p.stackAt
 	c.iconvs, c.nextIconv = p.iconvs, p.nextIconv
 	c.spawnFiles, c.nextSpawnFiles = p.spawnFiles, p.nextSpawnFiles
 	c.locales, c.nextLocale = p.locales, p.nextLocale
@@ -4636,17 +4629,11 @@ func (p *Process) fork(setup, begin func(c *Process)) (int32, error) {
 	inst.attach(c)
 	c.image = p.image
 	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap.clone(), p.stack.clone(), p.static, p.env, p.errnoAt, p.environAt, p.siginfo
-	c.nextRegex, c.stackAt, c.locale, c.tzAt, c.herrnoAt, c.passwordAt = p.nextRegex, p.stackAt, p.locale, p.tzAt, p.herrnoAt, p.passwordAt
-	c.regexes, c.constants, c.jumps = map[uint32]*PosixRegex{}, map[string]uint32{}, map[uint32]*JmpBuf{}
+	c.stackAt, c.locale, c.tzAt, c.herrnoAt, c.passwordAt = p.stackAt, p.locale, p.tzAt, p.herrnoAt, p.passwordAt
+	c.constants, c.jumps = map[string]uint32{}, map[uint32]*JmpBuf{}
 	c.iconvs, c.nextIconv = map[uint32]*Iconv{}, p.nextIconv
 	c.spawnFiles, c.nextSpawnFiles = map[uint32][]SpawnAction{}, p.nextSpawnFiles
 	c.locales, c.nextLocale = maps.Clone(p.locales), p.nextLocale
-
-	for id, r := range p.regexes {
-		copied := *r
-
-		c.regexes[id] = &copied
-	}
 
 	for id, cd := range p.iconvs {
 		c.iconvs[id] = cd.copy()
@@ -17346,132 +17333,6 @@ func (p *Process) libcIconv_close(cd uint32) uint32 {
 	delete(p.iconvs, cd)
 
 	return p.result(0, nil)
-}
-
-func (p *Process) libcRegcomp(preg, pattern, flags uint32) uint32 {
-	pat := bytes.Clone(p.cstr(pattern))
-	src, nsub, code := translateRegex(pat, flags, false, false)
-
-	if code != 0 {
-		return code
-	}
-
-	re, err := regexp.Compile(src)
-
-	if err != nil {
-		if parsed, ok := err.(*syntax.Error); ok && parsed.Code == syntax.ErrInvalidCharRange {
-			return REG_ERANGE
-		}
-
-		return REG_BADPAT
-	}
-
-	re.Longest()
-	p.nextRegex++
-
-	r := &PosixRegex{pattern: pat, flags: flags, nsub: nsub}
-
-	r.variants[0] = re
-	p.regexes[p.nextRegex] = r
-	p.put32(preg, uint32(nsub))
-	p.put32(preg+4, p.nextRegex)
-
-	return 0
-}
-
-func (p *Process) libcRegexec(preg, s, nmatch, pmatch, eflags uint32) uint32 {
-	r, ok := p.regexes[p.u32(preg+4)]
-
-	if !ok {
-		return REG_BADPAT
-	}
-
-	var subject []byte
-
-	base := uint32(0)
-
-	if eflags&REG_STARTEND != 0 {
-		so, eo := p.u32(pmatch), p.u32(pmatch+4)
-
-		if eo < so {
-			return REG_BADPAT
-		}
-
-		subject, base = p.span(s+so, eo-so), so
-	} else {
-		subject = p.cstr(s)
-	}
-
-	boundary := r.flags&REG_NEWLINE != 0 && eflags&(REG_NOTBOL|REG_NOTEOL) != 0
-	prefix := 0
-
-	if boundary {
-		suffix := 0
-
-		if eflags&REG_NOTBOL != 0 {
-			prefix = 1
-		}
-
-		if eflags&REG_NOTEOL != 0 {
-			suffix = 1
-		}
-
-		padded := make([]byte, prefix+len(subject)+suffix)
-
-		copy(padded[prefix:], subject)
-		subject = padded
-	}
-
-	m := r.variant(eflags).FindSubmatchIndex(subject)
-
-	if m == nil {
-		return REG_NOMATCH
-	}
-
-	if boundary {
-		m = m[2:]
-
-		for i, at := range m {
-			if at >= 0 {
-				m[i] = at - prefix
-			}
-		}
-	}
-
-	if r.flags&REG_NOSUB == 0 {
-		out := p.span(pmatch, 8*nmatch)
-
-		for i := range int(nmatch) {
-			so, eo := int32(-1), int32(-1)
-
-			if 2*i < len(m) && m[2*i] >= 0 {
-				so, eo = int32(m[2*i])+int32(base), int32(m[2*i+1])+int32(base)
-			}
-
-			binary.LittleEndian.PutUint32(out[8*i:], uint32(so))
-			binary.LittleEndian.PutUint32(out[8*i+4:], uint32(eo))
-		}
-	}
-
-	return 0
-}
-
-func (p *Process) libcRegfree(preg uint32) {
-	delete(p.regexes, p.u32(preg+4))
-}
-
-func (p *Process) libcRegerror(code, preg, buf, size uint32) uint32 {
-	msg, ok := regMessages[code]
-
-	if !ok {
-		msg = "Unknown error"
-	}
-
-	if size > 0 {
-		p.putString(buf, truncate(msg, int(size)-1))
-	}
-
-	return uint32(len(msg) + 1)
 }
 
 func (p *Process) glob(pattern, flags, errfunc, out uint32) uint32 {

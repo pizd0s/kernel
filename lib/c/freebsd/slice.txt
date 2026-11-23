@@ -1,9 +1,11 @@
-# What lib/c takes of FreeBSD 14.3's source tree, cut out of its src.txz
-# once after the download (dev/slice.py): msun, its math and complex
-# functions; of its libc the stdio, the multibyte functions, the trees,
-# getopt, the drand48 family, quick_exit and popen, and the declarations
-# of their functions of a locale; and the copyright.
+# What lib/c and libc.wasm take of FreeBSD 14.3's source tree, cut out of
+# its src.txz once after the download (dev/slice.py): msun, its math and
+# complex functions; of its libc the stdio, the multibyte functions, the
+# trees, getopt, the drand48 family, quick_exit and popen, and the
+# declarations of their functions of a locale; libc.wasm's regex
+# (lib/libc); and the copyright.
 COPYRIGHT
+lib/libc/regex
 lib/msun/src
 lib/msun/bsdsrc
 lib/libc/stdio

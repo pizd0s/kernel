@@ -34,9 +34,11 @@ Per-project settings that the shared [STYLE.md](STYLE.md) delegates here.
   program: the two share the imports, each has its own forwarders.
 - **Third-party code.** Sources are fetched as release tarballs, a big one
   cut down to what is built (`dev/slice.py`), and never edited in place; what they need from us lives beside their build
-  (lib/c's `freebsd/` and `llvm/` headers, and `lib/c/src`). Code
+  (lib/c's `freebsd/` and `llvm/` headers, `lib/c/src`, and `lib/libc/freebsd.h`). Code
   whose own error the system cannot live with is patched as it is built, by
   patch files beside its build script, each with its reason at its head and
   fit to send to its authors: GLib and mc (`bin/mc/*.patch`), LLVM libc and
-  FreeBSD (`lib/c/llvm/patches`, `lib/c/freebsd/patches`).
+  FreeBSD (`lib/c/llvm/patches`, `lib/c/freebsd/patches`). So is FreeBSD's
+  code in libc.wasm that calls what libc.wasm does not have yet
+  (`lib/libc/patches`), each patch gone when it has it.
 - **Formatter.** None yet: `style.py` covers C++ only.

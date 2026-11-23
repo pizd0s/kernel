@@ -61,10 +61,22 @@ int main() {
             abort();
         }
     }
-    const char* invalidCollations[] = {"[[.ab.]]", "[[==]]"};
-    for (const char* pattern : invalidCollations) {
+    // An empty equivalence class is no character: FreeBSD's regex, lib/c's,
+    // takes it for an illegal byte sequence.
+#ifdef __wasm__
+    const int empty = REG_ILLSEQ;
+#else
+    const int empty = REG_ECOLLATE;
+#endif
+    const struct {
+        const char* pattern;
+        int code;
+    } invalidCollations[] = {{"[[.ab.]]", REG_ECOLLATE}, {"[[==]]", empty}};
+    for (const auto& entry : invalidCollations) {
         regex_t expression;
-        if (regcomp(&expression, pattern, REG_EXTENDED) != REG_ECOLLATE) {
+        int code = regcomp(&expression, entry.pattern, REG_EXTENDED);
+        if (code != entry.code) {
+            fprintf(stderr, "%s: regcomp returned %d, expected %d\n", entry.pattern, code, entry.code);
             abort();
         }
     }
