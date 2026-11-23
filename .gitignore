@@ -89,3 +89,13 @@ __pycache__/
 /pcre2_tarball
 /ncurses_tarball
 /terminfo
+/libz
+/libbz2
+/liblzma
+/libzstd
+/libsqlite3
+/zlib_tarball
+/bzip2_tarball
+/xz_tarball
+/zstd_tarball
+/sqlite_tarball

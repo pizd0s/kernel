@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """CPython in the system: python3 is the image's /bin/python3, of its
-package (bin/python), its standard library its own file's. A script, its standard input, prints what
-the interpreter computes and what it gets from the kernel: processes,
-pipes, a pseudoterminal, signals, timers, locks, mappings written back,
-the user database, locales and the tokenizer's positions. Then a set of
-CPython's own tests, from the release tarball's Lib/test, the image of the
-tests' /tests/python/test, which PYTHONPATH names, runs with its regrtest, but for the cases XFAIL names, which run apart and
-must fail. Each boots rootfs from the image of the tests and runs in /run.
+package (bin/python), its standard library its own file's. A script, its
+standard input, prints what the interpreter computes and what it gets
+from the kernel: processes, pipes, a pseudoterminal, signals, timers,
+locks, mappings written back, the user database, locales, the
+tokenizer's positions, sockets of the network's family on the loopback,
+and the modules of the libraries of lib/: compression, SQLite, XML,
+decimal, CJK's codecs and ndbm. Then a set of CPython's own tests, from
+the release tarball's Lib/test, the image of the tests'
+/tests/python/test, which PYTHONPATH names, runs with its regrtest, but
+for the cases SKIPPED names and XFAIL's, which run apart and must fail.
+Each boots rootfs from the image of the tests and runs in /run.
 
     test_python.py <vm> <rootfs> <tests.img>
 """
@@ -16,12 +20,27 @@ import sys
 
 import system
 
-# CPython's tests that need nothing the build leaves out: no sockets, no
-# threads, no test modules of the C API.
+# CPython's tests that need nothing the build leaves out: no threads, no
+# test modules of the C API.
 TESTS = [
     "test_bisect", "test_bool", "test_dict", "test_errno", "test_exceptions", "test_float", "test_fstring",
     "test_glob", "test_grammar", "test_grp", "test_list", "test_long", "test_pwd", "test_re", "test_resource",
     "test_scope", "test_select", "test_set", "test_str", "test_string", "test_struct", "test_time", "test_tuple",
+    "test_zlib", "test_gzip", "test_bz2", "test_lzma", "test_zstd", "test_zipfile", "test_tarfile", "test_sqlite3",
+    "test_decimal", "test_xml_etree", "test_xml_etree_c", "test_pyexpat", "test_minidom", "test_sax",
+    "test_multibytecodec", "test_codecencodings_cn", "test_codecencodings_hk", "test_codecencodings_iso2022",
+    "test_codecencodings_jp", "test_codecencodings_kr", "test_codecencodings_tw", "test_dbm", "test_dbm_ndbm",
+]
+
+# Cases the system does not run: those that start threads, which CPython's
+# tests take every platform but WASI's and Emscripten's to have; those of a
+# recursion in C deeper than the kernel lets a stack grow, which python,
+# as it checks the depth of none, dies of; and ZipInfo's of the tests' own
+# files, whose times in the image are of 1970, before ZIP's.
+SKIPPED = [
+    "*test_bz2.BZ2FileTest.testThreading", "*test_zstd.FreeThreadingMethodTests.*", "*test_sqlite3.test_dbapi.ThreadTests.*",
+    "*test_decimal.*ThreadingTest.test_threading", "*.test_deeply_nested_deepcopy",
+    "*test_pyexpat.ElementDeclHandlerTest.test_deeply_nested_content_model", "*test_zipfile.test_core.ZipInfoTests.test_from_*",
 ]
 
 # Cases that expect RecursionError of a recursion in C deeper than a C stack
@@ -31,8 +50,10 @@ TESTS = [
 XFAIL = ["*test_dict.DictTest.test_repr_deep", "*test_list.ListTest.test_repr_deep", "*test_tuple.TupleTest.test_hash_deeply_nested"]
 
 SCRIPT = r'''
-import errno, fcntl, hashlib, io, json, locale, math, mmap, os, pty, pwd, random, re, resource, select, signal
-import struct, subprocess, sys, time, tokenize
+import bz2, decimal, dbm, dbm.ndbm, errno, fcntl, hashlib, io, json, locale, lzma, math, mmap, os, pty, pwd, random, re
+import resource, select, signal, socket, sqlite3, struct, subprocess, sys, time, tokenize, zlib
+import xml.etree.ElementTree as ET
+from compression import zstd
 
 print(sys.version.split()[0], sys.platform, len(sys.builtin_module_names))
 print(hashlib.sha256(b"abc").hexdigest()[:16], random.Random("seed").random())
@@ -120,9 +141,46 @@ print("locale", locale.setlocale(locale.LC_ALL, ""), locale.getpreferredencoding
 t = time.process_time()
 sum(range(100000))
 print("clock", time.process_time() > t, time.monotonic() > 0)
+
+# sockets on the loopback: a TCP server of port 0, whose name has its port
+# from the bind on, and a connection to it; a datagram, and a socket of its
+# descriptor's; a pair; a new socket's options; the names of the resolver
+srv = socket.socket()
+srv.bind(("127.0.0.1", 0))
+port = srv.getsockname()[1]
+srv.listen()
+c = socket.create_connection(("127.0.0.1", port))
+conn, addr = srv.accept()
+c.sendall(b"tcp")
+print("tcp", port != 0, srv.getsockname()[1] == port, conn.recv(3), addr[0])
+u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+u.bind(("127.0.0.1", 0))
+socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b"udp", u.getsockname())
+v = socket.socket(fileno=os.dup(u.fileno()))
+print("udp", u.recvfrom(3)[0], v.type == socket.SOCK_DGRAM, v.getsockopt(socket.SOL_SOCKET, socket.SO_RCVTIMEO, 16) == bytes(16))
+a, b = socket.socketpair()
+a.sendall(b"pair")
+n = socket.socket()
+print("pair", b.recv(4), n.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR), n.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE))
+print("names", socket.getaddrinfo("localhost", 80, socket.AF_INET, socket.SOCK_STREAM)[0][4], socket.gethostbyname("localhost"))
+
+# the libraries' modules: compression, SQLite of a journal of WAL's, XML,
+# decimal, CJK's codecs, ndbm
+data = b"pizdos " * 1000
+print("compress", [m.decompress(m.compress(data)) == data for m in (zlib, bz2, lzma, zstd)], zlib.ZLIB_RUNTIME_VERSION)
+db = sqlite3.connect("/run/t.db")
+db.execute("pragma journal_mode=wal")
+db.execute("create table t (v)")
+db.executemany("insert into t values (?)", [("a",), ("b",)])
+db.commit()
+print("sqlite", sqlite3.sqlite_version, db.execute("select group_concat(v) from t").fetchone()[0], db.execute("pragma journal_mode").fetchone()[0])
+print("xml", ET.fromstring("<a><b>t</b></a>").find("b").text, decimal.Decimal(1) / decimal.Decimal(7), "日本".encode("shift_jis").hex())
+with dbm.ndbm.open("/run/db", "c") as d:
+    d[b"k"] = b"v"
+print("dbm", dbm.whichdb("/run/db"), dbm.ndbm.open("/run/db")[b"k"])
 '''
 
-EXPECTED = '''3.14.10 pizdos 68
+EXPECTED = '''3.14.10 pizdos 85
 ba7816bf8f01cfea 0.1382359792209653
 547900196 0.3333333333333333 2.5000000000000001e-05 9a9999999999f13ffbffffffffffffff
 {"x": [1.5, 1e+300, -0.0]} <hi> <there> ['a', 'b']
@@ -143,6 +201,14 @@ rlimit True 0 root
 sched 0 0
 locale C.UTF-8;C;C;C;C;C UTF-8
 clock True True
+tcp True True b'tcp' 127.0.0.1
+udp b'udp' True True
+pair b'pair' 0 1
+names ('127.0.0.1', 80) 127.0.0.1
+compress [True, True, True, True] 1.3.2
+sqlite 3.54.1 a,b wal
+xml t 0.1428571428571428571428571429 93fa967b
+dbm dbm.ndbm b'v'
 '''
 
 
@@ -169,7 +235,7 @@ def main():
     if r.returncode != 0 or r.stdout != EXPECTED:
         failures.append(f"check.py: exit {r.returncode}\n--- stdout\n{r.stdout}\n--- expected\n{EXPECTED}\n--- stderr\n{r.stderr[-3000:]}")
 
-    r = python(vm, rootfs, image, ["-m", "test", *TESTS, *(shlex.quote("--ignore=" + x) for x in XFAIL)], 1800)
+    r = python(vm, rootfs, image, ["-m", "test", *TESTS, *(shlex.quote("--ignore=" + x) for x in SKIPPED + XFAIL)], 1800)
 
     if r.returncode != 0 or "Result: SUCCESS" not in r.stdout:
         failures.append(f"regrtest: exit {r.returncode}\n{r.stdout[-5000:]}\n{r.stderr[-2000:]}")

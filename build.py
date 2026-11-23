@@ -46,6 +46,13 @@ SLANG = "2.3.3"
 PCRE2 = "10.49"
 NCURSES = "6.6"
 FSTACK = "2.0"
+ZLIB = "1.3.2"
+BZIP2 = "1.0.8"
+XZ = "5.8.4"
+ZSTD = "1.5.7"
+# SQLite 3.54.1, as its download names it, and the year of its directory.
+SQLITE = "3540100"
+SQLITE_YEAR = "2026"
 
 
 def fetch(name, url, sha256, output):
@@ -86,6 +93,41 @@ e2fsprogs_tarball = fetch(
     f"https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v{E2FSPROGS}/e2fsprogs-{E2FSPROGS}.tar.xz",
     "fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b",
     f"$(B)/ext/e2fsprogs-{E2FSPROGS}.tar.xz",
+)
+
+zlib_tarball = fetch(
+    "zlib_tarball",
+    f"https://zlib.net/fossils/zlib-{ZLIB}.tar.gz",
+    "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16",
+    f"$(B)/ext/zlib-{ZLIB}.tar.gz",
+)
+
+bzip2_tarball = fetch(
+    "bzip2_tarball",
+    f"https://sourceware.org/pub/bzip2/bzip2-{BZIP2}.tar.gz",
+    "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269",
+    f"$(B)/ext/bzip2-{BZIP2}.tar.gz",
+)
+
+xz_tarball = fetch(
+    "xz_tarball",
+    f"https://github.com/tukaani-project/xz/releases/download/v{XZ}/xz-{XZ}.tar.gz",
+    "0014c7886930454fe8bd4228665b51af55eeae560ea135c9c4cd33f55b2591d9",
+    f"$(B)/ext/xz-{XZ}.tar.gz",
+)
+
+zstd_tarball = fetch(
+    "zstd_tarball",
+    f"https://github.com/facebook/zstd/releases/download/v{ZSTD}/zstd-{ZSTD}.tar.gz",
+    "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
+    f"$(B)/ext/zstd-{ZSTD}.tar.gz",
+)
+
+sqlite_tarball = fetch(
+    "sqlite_tarball",
+    f"https://www.sqlite.org/{SQLITE_YEAR}/sqlite-autoconf-{SQLITE}.tar.gz",
+    "926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e",
+    f"$(B)/ext/sqlite-autoconf-{SQLITE}.tar.gz",
 )
 
 python_tarball = fetch(
@@ -231,6 +273,30 @@ libcxx = command(
     color="green",
 )
 
+# lib/z, lib/bz2, lib/lzma, lib/zstd and lib/sqlite3: the libraries of their
+# release tarballs, for lib/c, each its archive and include.tar, the
+# headers a program of it includes.
+def library(name, tarball, archive):
+    return command(
+        name="lib" + name,
+        inputs=[*LIBC_HEADERS, f"$(S)/lib/{name}/make.py", "$(S)/dev/wasm.py"],
+        outputs=[f"$(B)/lib/{name}/{archive}", f"$(B)/lib/{name}/include.tar"],
+        deps=[tarball],
+        cmd=["python3", f"$(S)/lib/{name}/make.py", CLANG, LLVM_AR, tarball.outputs[0], "$(S)/lib/c/include",
+             f"$(B)/lib/{name}/{archive}", f"$(B)/lib/{name}/include.tar"],
+        descr="CC",
+        color="green",
+    )
+
+
+libz = library("z", zlib_tarball, "libz.a")
+libbz2 = library("bz2", bzip2_tarball, "libbz2.a")
+liblzma = library("lzma", xz_tarball, "liblzma.a")
+libzstd = library("zstd", zstd_tarball, "libzstd.a")
+libsqlite3 = library("sqlite3", sqlite_tarball, "libsqlite3.a")
+# python's: each an archive and its include.tar.
+PYTHON_LIBRARIES = [libz, libbz2, liblzma, libzstd, libsqlite3]
+
 # lib/str: pg83/str's string and memory functions, compiled by str's own
 # compiler in the convention of the code vm compiles, for its loader.
 libstr = command(
@@ -375,7 +441,7 @@ python_core = command(
     name="python_core",
     inputs=[*LIBC_HEADERS, "$(S)/bin/python/pyconfig.h", "$(S)/bin/python/make.py", "$(S)/dev/wasm.py"],
     outputs=["$(B)/bin/python/libpython.a", "$(B)/bin/python/freeze.wasm"],
-    deps=[python_tarball, libc],
+    deps=[python_tarball, libc, *PYTHON_LIBRARIES],
     cmd=[
         "python3", "$(S)/bin/python/make.py", "core",
         CLANG, LLVM_AR, WASM_LD,
@@ -385,6 +451,7 @@ python_core = command(
         libc.outputs[0],
         "$(B)/bin/python/libpython.a",
         "$(B)/bin/python/freeze.wasm",
+        *(output for library in PYTHON_LIBRARIES for output in library.outputs),
     ],
     descr="PY",
     color="yellow",
@@ -804,7 +871,7 @@ python = package(
     inputs=[*LIBC_HEADERS, "$(S)/bin/python/pyconfig.h", "$(S)/bin/python/make.py", "$(S)/bin/python/main.c", "$(S)/dev/wasm.py",
             "$(S)/dev/exe.py"],
     outputs=["$(B)/bin/python/python.wasm", "$(B)/bin/python/stdlib.zip", "$(B)/bin/python/python3"],
-    deps=[python_tarball, libc, python_core, vm, rootfs_base],
+    deps=[python_tarball, libc, python_core, vm, rootfs_base, *PYTHON_LIBRARIES],
     recipe=[
         [
             "python3", "$(S)/bin/python/make.py", "python",
@@ -817,6 +884,7 @@ python = package(
             "$(B)/bin/python/python.wasm",
             "$(B)/bin/python/stdlib.zip",
             store("bin/python"),
+            *(library.outputs[0] for library in PYTHON_LIBRARIES),
         ],
         packing("$(B)/bin/python/python.wasm", "$(B)/bin/python/python3", tail="$(B)/bin/python/stdlib.zip"),
     ],

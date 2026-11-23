@@ -2,22 +2,25 @@
 """Build CPython for pizdos from a release tarball, our pyconfig.h and lib/c.
 
     make.py core <cc> <ar> <wasm-ld> <tarball> <pyconfig.h> <libc-include> <libc.a> <libpython.a> <freeze.wasm>
+                 [<library.a> <include.tar>]...
     make.py python <cc> <wasm-ld> <vm> <rootfs> <tarball> <pyconfig.h> <libc-include> <libc.a> <libpython.a> <freeze.wasm> <python.wasm> <stdlib.zip>
-                   <prefix>
+                   <prefix> [<library.a>]...
 
 core compiles the interpreter and its built-in modules into libpython.a,
-the objects the tarball's Makefile.pre.in names and the modules below, and
-links Programs/_freeze_module against it. python runs that freezer, packed
-into an executable (dev/exe.py), in the kernel, which compiles it, to
-freeze the modules the Makefile freezes, and links python.wasm with them
-and main.c, its own main, which finds the standard library in the
-program's own file: the library, without its tests, with the build's
-sysconfig data, is stdlib.zip, the tail of python's executable, where
-zipimport finds it. The prefix is python's directory of the store
-(dev/pkg.py), the program in its bin. Threads are
-CPython's stubs, there is no dynamic loading, every module is built in and
-none needs more than lib/c: no sockets, no compression. An undefined symbol
-is a link error, as for every program of lib/c.
+the objects the tarball's Makefile.pre.in names and the modules below,
+those of the libraries of lib/ (zlib, bzip2's, liblzma, zstd's and SQLite)
+with their include.tars, and links Programs/_freeze_module against it and
+the libraries. python runs that freezer, packed into an executable
+(dev/exe.py), in the kernel, which compiles it, to freeze the modules the
+Makefile freezes, and links python.wasm with them, main.c, its own main,
+and the libraries: main finds the standard library in the program's own
+file, the library, without its tests, with the build's sysconfig data, as
+stdlib.zip, the tail of python's executable, where zipimport finds it. The
+prefix is python's directory of the store (dev/pkg.py), the program in its
+bin. Threads are CPython's stubs, there is no dynamic loading, every
+module is built in and none needs more than lib/c, the libraries and the
+tarball's expat and libmpdec. An undefined symbol is a link error, as for
+every program of lib/c.
 """
 import calendar
 import io
@@ -66,8 +69,13 @@ LINK = [
     "--error-limit=0",
 ]
 
+# libmpdec, _decimal's, which the tarball carries.
+LIBMPDEC = ["basearith", "constants", "context", "convolute", "crt", "difradix2", "fnt", "fourstep", "io", "mpalloc", "mpdecimal",
+            "numbertheory", "sixstep", "transpose"]
+
 # The built-in modules beyond Modules/Setup.bootstrap.in's: those of the
-# standard library that need nothing but libc, by name and sources.
+# standard library that need nothing but libc and what the tarball
+# carries, expat and libmpdec, by name and sources.
 MODULES = {
     "array": ["arraymodule.c"],
     "_asyncio": ["_asynciomodule.c"],
@@ -100,7 +108,27 @@ MODULES = {
     "_sha3": ["sha3module.c"],
     "_blake2": ["blake2module.c"],
     "_hmac": ["hmacmodule.c"],
+    "_socket": ["socketmodule.c"],
+    "pyexpat": ["pyexpat.c", "expat/xcs.c", "expat/xmlparse.c", "expat/xmlrole.c", "expat/xmltok.c"],
+    "_elementtree": ["_elementtree.c"],
+    "_decimal": ["_decimal/_decimal.c", *(f"_decimal/libmpdec/{name}.c" for name in LIBMPDEC)],
+    "_multibytecodec": ["cjkcodecs/multibytecodec.c"],
+    "_codecs_cn": ["cjkcodecs/_codecs_cn.c"],
+    "_codecs_hk": ["cjkcodecs/_codecs_hk.c"],
+    "_codecs_iso2022": ["cjkcodecs/_codecs_iso2022.c"],
+    "_codecs_jp": ["cjkcodecs/_codecs_jp.c"],
+    "_codecs_kr": ["cjkcodecs/_codecs_kr.c"],
+    "_codecs_tw": ["cjkcodecs/_codecs_tw.c"],
+    "_dbm": ["_dbmmodule.c"],
+    "zlib": ["zlibmodule.c"],
+    "_bz2": ["_bz2module.c"],
+    "_lzma": ["_lzmamodule.c"],
+    "_zstd": ["_zstd/_zstdmodule.c", "_zstd/zstddict.c", "_zstd/compressor.c", "_zstd/decompressor.c"],
+    "_sqlite3": [f"_sqlite/{name}.c" for name in ("blob", "connection", "cursor", "microprotocols", "module", "prepare_protocol",
+                                                   "row", "statement", "util")],
 }
+# The modules of the libraries of lib/, which their headers compile.
+LIBRARY_MODULES = {"zlib", "_bz2", "_lzma", "_zstd", "_sqlite3"}
 
 # HACL*, the hashes' implementation the tarball carries, without its SIMD
 # variants.
@@ -116,6 +144,18 @@ HACL = [
     "Lib_Memzero0.c",
 ]
 HACL_FLAGS = ["-I", "Modules/_hacl", "-I", "Modules/_hacl/include", "-D_BSD_SOURCE", "-D_DEFAULT_SOURCE"]
+
+# The flags of a module's sources beyond the library's: HACL*'s of the
+# hashes, expat's of the XML parsers, libmpdec's of a 32-bit machine of no
+# assembly, and dbm's of ndbm.h, lib/c's.
+EXPAT_FLAGS = ["-I", "Modules/expat"]
+MODULE_FLAGS = {
+    **{name: HACL_FLAGS for name in ("_md5", "_sha1", "_sha2", "_sha3", "_blake2", "_hmac")},
+    "pyexpat": EXPAT_FLAGS,
+    "_elementtree": EXPAT_FLAGS,
+    "_decimal": ["-I", "Modules/_decimal/libmpdec", "-DCONFIG_32=1", "-DANSI=1"],
+    "_dbm": ["-DUSE_NDBM"],
+}
 
 # The standard library's packages the zip leaves out: tests, the GUI and
 # pip's bundled wheels.
@@ -258,13 +298,41 @@ def patch(tree):
     return;
 """
     path.write_text(src.replace(anchor, anchor + limits))
+    patch_socket(tree)
 
 
-def core(cc, ar, ld, tarball, pyconfig, libc_include, libc, libpython, freeze):
+def replace(path, old, new):
+    src = path.read_text()
+
+    if src.count(old) != 1:
+        raise SystemExit(f"{path.name} has no {old.splitlines()[0]!r}")
+
+    path.write_text(src.replace(old, new))
+
+
+def patch_socket(tree):
+    """socketmodule.c takes the configure script's gethostbyname_r on
+    Linux alone, else gethostbyname, whose error is h_errno's, which lib/c
+    has not, as POSIX has neither: on wasm, pyconfig.h's is the configure
+    script's."""
+    path = tree / "Modules" / "socketmodule.c"
+    replace(path, "#ifndef __linux__\n# undef HAVE_GETHOSTBYNAME_R_3_ARG",
+            "#if !defined(__linux__) && !defined(__wasm__)\n# undef HAVE_GETHOSTBYNAME_R_3_ARG")
+    replace(path, "# elif defined(__linux__)\n/* Rely on the configure script */",
+            "# elif defined(__linux__) || defined(__wasm__)\n/* Rely on the configure script */")
+
+
+def core(cc, ar, ld, tarball, pyconfig, libc_include, libc, libpython, freeze, *libraries):
     work = Path(os.environ.get("TMPDIR") or "/tmp") / "python-core"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     tree, newest = extract(tarball, work)
+    archives, include_tars = libraries[0::2], libraries[1::2]
+
+    for include_tar in include_tars:
+        with tarfile.open(include_tar) as archive:
+            archive.extractall(work / "libs", filter="data")
+
     patch(tree)
     include = work / "include"
     include.mkdir()
@@ -286,7 +354,7 @@ def core(cc, ar, ld, tarball, pyconfig, libc_include, libc, libpython, freeze):
 
     for name, sources in modules.items():
         for source in sources:
-            extra = HACL_FLAGS if name in ("_md5", "_sha1", "_sha2", "_sha3", "_blake2", "_hmac") else []
+            extra = MODULE_FLAGS.get(name, []) + (["-I", str(work / "libs" / "include")] if name in LIBRARY_MODULES else [])
             units.append((tree / "Modules" / source, object_name(work, "Modules/" + source), flags + extra + ["-DPy_BUILD_CORE_BUILTIN"]))
 
     for source in HACL:
@@ -302,7 +370,7 @@ def core(cc, ar, ld, tarball, pyconfig, libc_include, libc, libpython, freeze):
     wasm.compile_all(cc, units + programs, cwd=tree)
     wasm.archive(ar, libpython, [obj for _, obj, _ in units])
     Path(freeze).parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run([ld, *LINK, "-o", freeze, *(str(obj) for _, obj, _ in programs), libpython, libc], check=True)
+    subprocess.run([ld, *LINK, "-o", freeze, *(str(obj) for _, obj, _ in programs), libpython, *archives, libc], check=True)
 
 
 def sysconfigdata(pyconfig):
@@ -383,7 +451,7 @@ def stdlib_zip(tree, pyconfig):
     return out.getvalue()
 
 
-def python(cc, ld, vm, rootfs, tarball, pyconfig, libc_include, libc, libpython, freeze, output, stdlib, prefix):
+def python(cc, ld, vm, rootfs, tarball, pyconfig, libc_include, libc, libpython, freeze, output, stdlib, prefix, *archives):
     global PREFIX, STDLIB
     PREFIX, STDLIB = prefix, posixpath.join(prefix, "lib", f"python{VERSION}")
     work = Path(os.environ.get("TMPDIR") or "/tmp") / "python"
@@ -447,7 +515,7 @@ def python(cc, ld, vm, rootfs, tarball, pyconfig, libc_include, libc, libpython,
     ]
     wasm.compile_all(cc, units, cwd=tree)
     Path(output).parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run([ld, *LINK, "-o", output, *(str(obj) for _, obj, _ in units), libpython, libc], check=True)
+    subprocess.run([ld, *LINK, "-o", output, *(str(obj) for _, obj, _ in units), libpython, *archives, libc], check=True)
     Path(stdlib).write_bytes(stdlib_zip(tree, pyconfig))
 
 

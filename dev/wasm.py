@@ -81,3 +81,36 @@ def write_tar(output, base, root):
                 archive.addfile(info)
             else:
                 archive.addfile(info, io.BytesIO(path.read_bytes()))
+
+
+def unpack(tarball, work):
+    """A release tarball extracted under work: its tree, the one directory at
+    its top."""
+    Path(work).mkdir(parents=True, exist_ok=True)
+
+    with tarfile.open(tarball) as archive:
+        archive.extractall(work, filter="data")
+
+    (tree,) = [path for path in Path(work).iterdir() if path.is_dir()]
+
+    return tree
+
+
+def library(cc, ar, tree, sources, flags, output, work):
+    """The archive output of sources, paths of the tree, each compiled with
+    flags in the tree, its object in work's obj."""
+    units = [(tree / source, Path(work) / "obj" / (str(Path(source).with_suffix("")).replace("/", "_") + ".o"), flags)
+             for source in sources]
+    compile_all(cc, units, cwd=tree)
+    archive(ar, output, [obj for _, obj, _ in units])
+
+
+def headers(output, include, files):
+    """output, the tar of include/, the headers of files: each a source path
+    and its name under include."""
+    for source, name in files:
+        target = Path(include) / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(Path(source).read_bytes())
+
+    write_tar(output, Path(include).parent, include)

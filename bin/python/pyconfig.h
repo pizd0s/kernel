@@ -147,6 +147,8 @@
 #define HAVE_GETGROUPS 1
 #define HAVE_GETHOSTBYADDR 1
 #define HAVE_GETHOSTBYNAME 1
+#define HAVE_GETHOSTBYNAME_R 1
+#define HAVE_GETHOSTBYNAME_R_6_ARG 1
 #define HAVE_GETHOSTNAME 1
 #define HAVE_GETITIMER 1
 #define HAVE_GETLOADAVG 1
@@ -331,5 +333,10 @@
 #define WITH_DOC_STRINGS 1
 #define WITH_PYMALLOC 1
 #define _PYTHONFRAMEWORK ""
+
+/* The libraries of lib/: zlib's inflateCopy and deflateCopy, SQLite's
+   sqlite3_serialize. */
+#define HAVE_ZLIB_COPY 1
+#define PY_SQLITE_HAVE_SERIALIZE 1
 
 #endif /* Py_PYCONFIG_H */
