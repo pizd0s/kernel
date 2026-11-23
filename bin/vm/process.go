@@ -3707,6 +3707,276 @@ func (p *Process) libcEther_line(line, addr, host uint32) uint32 {
 	return 0
 }
 
+func wordexpCheck(s string, nocmd bool) uint32 {
+	frames := []WordFrame{{}}
+	sq := false
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		f := &frames[len(frames)-1]
+
+		if sq {
+			sq = c != '\''
+
+			continue
+		}
+
+		switch {
+		case c == '\\':
+			if i++; i >= len(s) {
+				return WRDE_SYNTAX
+			}
+		case c == '\'' && !f.dq:
+			sq = true
+		case c == '"':
+			f.dq = !f.dq
+		case c == '`':
+			if nocmd {
+				return WRDE_CMDSUB
+			}
+
+			if f.kind == '`' {
+				frames = frames[:len(frames)-1]
+			} else {
+				frames = append(frames, WordFrame{kind: '`'})
+			}
+		case c == '$' && strings.HasPrefix(s[i:], "$(("):
+			frames = append(frames, WordFrame{kind: 'a'})
+			i += 2
+		case c == '$' && strings.HasPrefix(s[i:], "$("):
+			if nocmd {
+				return WRDE_CMDSUB
+			}
+
+			frames = append(frames, WordFrame{kind: '('})
+			i++
+		case c == '$' && strings.HasPrefix(s[i:], "${"):
+			frames = append(frames, WordFrame{kind: '{'})
+			i++
+		case f.dq || f.kind == '`':
+		case f.kind == '(' || f.kind == 'a':
+			switch {
+			case c == '(':
+				f.depth++
+			case c == ')' && f.depth > 0:
+				f.depth--
+			case c == ')' && f.kind == 'a' && (i+1 >= len(s) || s[i+1] != ')'):
+				return WRDE_SYNTAX
+			case c == ')':
+				if f.kind == 'a' {
+					i++
+				}
+
+				frames = frames[:len(frames)-1]
+			}
+		case f.kind == '{':
+			if c == '}' {
+				frames = frames[:len(frames)-1]
+			}
+		case strings.IndexByte("\n|&;<>(){}", c) >= 0:
+			return WRDE_BADCHAR
+		}
+	}
+
+	if sq || len(frames) > 1 || frames[0].dq {
+		return WRDE_SYNTAX
+	}
+
+	return 0
+}
+
+func wordexpFields(out []byte) ([]string, bool) {
+	rest, ok := bytes.CutPrefix(out, []byte("x\x00"))
+
+	if !ok {
+		return nil, false
+	}
+
+	fields := strings.Split(string(rest), "\x00")
+
+	return fields[:len(fields)-1], true
+}
+
+func (p *Process) shellWords(text string, flags uint32) []byte {
+	script := `eval "printf %s\\\\0 x $1"`
+
+	if flags&WRDE_UNDEF != 0 {
+		script = "set -u; " + script
+	}
+
+	img, err := p.loadProgram("/bin/sh", []string{"sh", "-c", script, "sh", text})
+
+	if err != nil {
+		return nil
+	}
+
+	img.envp = p.environment()
+
+	c, err := p.k.newProcess(p)
+
+	if err != nil {
+		return nil
+	}
+
+	c.inherit(p)
+
+	out := newCapture(nil)
+
+	out.ref()
+	c.closeFd(1)
+	c.files.put(1, out, false)
+
+	if flags&WRDE_SHOWERR == 0 {
+		c.closeFd(2)
+
+		if null, err := c.openPath("/dev/null", O_WRONLY, 0); err == nil {
+			c.files.put(2, null, false)
+		}
+	}
+
+	c.execReset()
+
+	var ended atomic.Bool
+
+	go func() {
+		c.run(img)
+		ended.Store(true)
+		p.post(&p.own.child)
+	}()
+
+	mask := p.setMask(p.mask() | sigBit(SIGCHLD))
+
+	p.wait(time.Time{}, func(*Event) (bool, error) {
+		return ended.Load(), nil
+	})
+
+	p.setMask(mask)
+	p.k.mu.Lock()
+	delete(p.k.procs, c.pid)
+	p.k.mu.Unlock()
+
+	data := out.bytes()
+
+	out.unref()
+
+	return data
+}
+
+func (p *Process) wordexpFailed(we, flags, e uint32) uint32 {
+	if flags&WRDE_APPEND == 0 {
+		p.put32(we, 0)
+		p.put32(we+4, 0)
+	}
+
+	return e
+}
+
+func (p *Process) libcWordexp(words, we, flags uint32) uint32 {
+	text := p.str(words)
+
+	if e := wordexpCheck(text, flags&WRDE_NOCMD != 0); e != 0 {
+		return p.wordexpFailed(we, flags, e)
+	}
+
+	if flags&WRDE_REUSE != 0 {
+		p.libcWordfree(we)
+		flags &^= WRDE_APPEND
+	}
+
+	fields, ok := wordexpFields(p.shellWords(text, flags))
+
+	if !ok {
+		e := uint32(WRDE_SYNTAX)
+
+		if _, plain := wordexpFields(p.shellWords(text, flags&^WRDE_UNDEF)); plain && flags&WRDE_UNDEF != 0 {
+			e = WRDE_BADVAL
+		}
+
+		return p.wordexpFailed(we, flags, e)
+	}
+
+	offs := uint32(0)
+
+	if flags&WRDE_DOOFFS != 0 {
+		offs = p.u32(we + 8)
+	} else {
+		p.put32(we+8, 0)
+	}
+
+	var words2 []uint32
+
+	if old := p.u32(we + 4); flags&WRDE_APPEND != 0 && old != 0 {
+		for i := range p.u32(we) {
+			words2 = append(words2, p.u32(old+4*(offs+i)))
+		}
+	}
+
+	if offs > 1<<26 {
+		return WRDE_NOSPACE
+	}
+
+	vec := p.malloc(4 * (offs + uint32(len(words2)+len(fields)) + 1))
+
+	if vec == 0 {
+		return WRDE_NOSPACE
+	}
+
+	var made []uint32
+
+	for _, f := range fields {
+		at := p.malloc(uint32(len(f)) + 1)
+
+		if at == 0 {
+			for _, m := range made {
+				p.free(m)
+			}
+
+			p.free(vec)
+
+			return WRDE_NOSPACE
+		}
+
+		p.putString(at, f)
+		made = append(made, at)
+	}
+
+	all := append(append(make([]uint32, offs), words2...), made...)
+
+	for i, w := range append(all, 0) {
+		p.put32(vec+4*uint32(i), w)
+	}
+
+	if old := p.u32(we + 4); flags&WRDE_APPEND != 0 && old != 0 {
+		p.free(old)
+	}
+
+	p.put32(we, uint32(len(words2)+len(made)))
+	p.put32(we+4, vec)
+
+	return 0
+}
+
+func (p *Process) libcWordfree(we uint32) {
+	vec := p.u32(we + 4)
+
+	if vec == 0 {
+		return
+	}
+
+	for at := vec + 4*p.u32(we+8); ; at += 4 {
+		w := p.u32(at)
+
+		if w == 0 {
+			break
+		}
+
+		p.free(w)
+	}
+
+	p.free(vec)
+	p.put32(we+4, 0)
+}
+
 func (p *Process) libcExecl(path, arg0, va uint32) uint32 {
 	return p.result(0, p.exec(p.str(path), p.argList(arg0, va), p.environment()))
 }

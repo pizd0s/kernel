@@ -158,7 +158,7 @@ var callFormats = func() map[string]string {
 		wcslcpy:dppd wcslen:dp wcsncasecmp:dppd wcsncasecmp_l:dppdd wcsncat:pppd wcsncmp:dppd wcsncpy:pppd wcsnlen:dpd wcspbrk:ppp
 		wcsrchr:ppd wcsspn:dpp wcsstr:ppp wcstod:fpp wcstof:fpp wcstoimax:dppd wcstok:pppp wcstol:dppd wcstold:fpp wcstoll:dppd
 		wcstoul:dppd wcstoull:dppd wcstoumax:dppd wcswcs:ppp wcswidth:dpd wcsxfrm:dppd wctrans:ds wctrans_l:dsd wctype:ds wcwidth:dd
-		wmemchr:ppdd wmemcmp:dppd wmemcpy:pppd wmemmove:pppd wmemset:ppdd write:ddpd writev:ddpdd
+		wmemchr:ppdd wmemcmp:dppd wmemcpy:pppd wmemmove:pppd wmemset:ppdd wordexp:dspdd wordfree:vpd write:ddpd writev:ddpdd
 `) {
 		name, format, _ := strings.Cut(word, ":")
 

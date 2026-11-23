@@ -155,6 +155,17 @@ const (
 	SEMOPM                            = 500
 	MQ_PRIO_MAX                       = 32768
 	AIO_CANCELED                      = 0
+	WRDE_DOOFFS                       = 1
+	WRDE_APPEND                       = 2
+	WRDE_NOCMD                        = 4
+	WRDE_REUSE                        = 8
+	WRDE_SHOWERR                      = 16
+	WRDE_UNDEF                        = 32
+	WRDE_NOSPACE                      = 1
+	WRDE_BADCHAR                      = 2
+	WRDE_BADVAL                       = 3
+	WRDE_CMDSUB                       = 4
+	WRDE_SYNTAX                       = 5
 	GRND_NONBLOCK                     = 0x0001
 	GRND_RANDOM                       = 0x0002
 	GRND_INSECURE                     = 0x0004
@@ -364,6 +375,7 @@ const (
 	sizeofSembuf                      = 6
 	sizeofUtmpx                       = 400
 	sizeofAiocb                       = 128
+	sizeofWordexp                     = 12
 	sizeofPosixSpawnFileActions       = 4
 	sizeofPthreadAttr                 = 32
 	sizeofPthreadMutex                = 4

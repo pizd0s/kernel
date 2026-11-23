@@ -58,6 +58,7 @@ TYPES = {
     "sizeofSembuf": "struct sembuf",
     "sizeofUtmpx": "struct utmpx",
     "sizeofAiocb": "struct aiocb",
+    "sizeofWordexp": "wordexp_t",
     "sizeofPosixSpawnFileActions": "posix_spawn_file_actions_t",
     "sizeofPthreadAttr": "pthread_attr_t",
     "sizeofPthreadMutex": "pthread_mutex_t",

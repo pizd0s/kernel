@@ -923,6 +923,8 @@ func (k *Kernel) functionTable() map[string]any {
 		"dcngettext_l":                          libcDcngettext_l,
 		"posix_getdents":                        libcPosix_getdents,
 		"posix_devctl":                          libcPosix_devctl,
+		"wordexp":                               libcWordexp,
+		"wordfree":                              libcWordfree,
 		"getrandom":                             libcGetrandom,
 		"ulimit":                                libcUlimit,
 		"posix_madvise":                         libcPosix_madvise,

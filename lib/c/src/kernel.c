@@ -88,6 +88,7 @@
 #include <unistd.h>
 #include <ulimit.h>
 #include <utmpx.h>
+#include <wordexp.h>
 #include <utime.h>
 #include <wchar.h>
 #include <wctype.h>
@@ -840,6 +841,8 @@ KERNEL(int, execvpe, (const char* a, char* const b[], char* const c[]), (a, b, c
 KERNEL(int, fexecve, (int a, char* const b[], char* const c[]), (a, b, c))
 KERNEL(ssize_t, posix_getdents, (int a, void* b, size_t c, int d), (a, b, c, d))
 KERNEL(int, posix_devctl, (int a, int b, void* __restrict c, size_t d, int* __restrict e), (a, b, c, d, e))
+KERNEL_SIZED(int, wordexp, (const char* __restrict a, wordexp_t* __restrict b, int c), (const char* __restrict a, wordexp_t* __restrict b, size_t b_size, int c), (a, b, sizeof(wordexp_t), c))
+KERNEL_VOID_SIZED(wordfree, (wordexp_t* a), (wordexp_t* a, size_t a_size), (a, sizeof(wordexp_t)))
 KERNEL(ssize_t, getrandom, (void* a, size_t b, unsigned c), (a, b, c))
 KERNEL(int, posix_madvise, (void* a, size_t b, int c), (a, b, c))
 KERNEL(int, fmtmsg, (long a, const char* b, int c, const char* d, const char* e, const char* f), (a, b, c, d, e, f))

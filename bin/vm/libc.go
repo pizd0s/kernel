@@ -4638,3 +4638,18 @@ func libcEther_hostton(host, addr uint32) uint32 {
 func libcEther_line(line, addr, host uint32) uint32 {
 	return proc().libcEther_line(line, addr, host)
 }
+
+func libcWordexp(words, we, weSize, flags uint32) uint32 {
+	p := proc()
+
+	p.sized("wordexp", weSize, sizeofWordexp)
+
+	return p.libcWordexp(words, we, flags)
+}
+
+func libcWordfree(we, weSize uint32) {
+	p := proc()
+
+	p.sized("wordfree", weSize, sizeofWordexp)
+	p.libcWordfree(we)
+}
