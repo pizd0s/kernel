@@ -2,10 +2,9 @@
 
 #include <__base.h>
 #include <locale.h>
+#include <nl_types.h>
 
 __BEGIN_DECLS
-
-typedef int nl_item;
 
 /* An item is its locale category, shifted 16 bits, and its index there. */
 #define ABDAY_1 0x20000

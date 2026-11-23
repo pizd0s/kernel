@@ -18,6 +18,7 @@ static const Tool tools[] = {
     {"devices", devicesMain},
     {"dns", dnsMain},
     {"erofs", erofsMain},
+    {"gencat", gencatMain},
     {"mount", mountMain},
     {"pty", ptyMain},
     {"sockmgr", sockmgrMain},

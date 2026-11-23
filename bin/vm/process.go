@@ -15477,6 +15477,117 @@ func (p *Process) libcNs_skiprr(at, eom, section, count uint32) uint32 {
 	return uint32(end)
 }
 
+func (p *Process) catalog(path string) (uint32, error) {
+	data, err := p.readPath(path, catalogMax+1)
+
+	if err != nil {
+		return 0, err
+	}
+
+	if len(data) > catalogMax || !catalogValid(data) {
+		return 0, ENOENT
+	}
+
+	at := p.malloc(uint32(len(data)))
+
+	if at == 0 {
+		return 0, ENOMEM
+	}
+
+	copy(p.span(at, uint32(len(data))), data)
+
+	return at, nil
+}
+
+func (p *Process) libcCatopen(name, oflag uint32) uint32 {
+	n := p.str(name)
+
+	if strings.Contains(n, "/") {
+		at, err := p.catalog(n)
+
+		if err != nil {
+			return p.result(0, err)
+		}
+
+		return at
+	}
+
+	lang, _ := p.getenv("LANG")
+
+	if oflag == NL_CAT_LOCALE {
+		lang = localeShown(p.locale[LC_MESSAGES])
+	}
+
+	path, ok := p.getenv("NLSPATH")
+
+	if !ok {
+		path = nlsDefault
+	}
+
+	templates := strings.Split(path, ":")
+
+	for i, t := range templates {
+		if t == "" && i == len(templates)-1 {
+			continue
+		}
+
+		if candidate, ok := nlsExpand(t, n, lang); ok {
+			if at, err := p.catalog(candidate); err == nil {
+				return at
+			}
+		}
+	}
+
+	return p.result(0, ENOENT)
+}
+
+func (p *Process) catalogAt(catd uint32) ([]byte, bool) {
+	memory := p.inst.memory.pages * pageSize
+
+	if catd == 0 || uint64(catd)+catalogHeader > memory || binary.BigEndian.Uint32(p.span(catd, 4)) != catalogMagic {
+		return nil, false
+	}
+
+	size := uint64(binary.BigEndian.Uint32(p.span(catd+8, 4))) + catalogHeader
+
+	if uint64(catd)+size > memory {
+		return nil, false
+	}
+
+	return p.span(catd, uint32(size)), true
+}
+
+func (p *Process) libcCatgets(catd, set, msg, s uint32) uint32 {
+	b, ok := p.catalogAt(catd)
+
+	if !ok {
+		p.setErrno(EBADF)
+
+		return s
+	}
+
+	at, ok := catalogFind(b, int32(set), int32(msg))
+
+	if !ok {
+		p.setErrno(ENOMSG)
+
+		return s
+	}
+
+	return catd + uint32(at)
+}
+
+func (p *Process) libcCatclose(catd uint32) uint32 {
+	if _, ok := p.catalogAt(catd); !ok {
+		return p.result(0, EBADF)
+	}
+
+	p.put32(catd, 0)
+	p.free(catd)
+
+	return 0
+}
+
 func (p *Process) dbm(db uint32) (*Dbm, error) {
 	if d, ok := p.dbms[db]; ok {
 		return d, nil

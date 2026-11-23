@@ -2936,6 +2936,18 @@ func libcNs_name_uncompress(msg, eom, src, dst, size uint32) uint32 {
 	return proc().libcNs_name_uncompress(msg, eom, src, dst, size)
 }
 
+func libcCatopen(name, oflag uint32) uint32 {
+	return proc().libcCatopen(name, oflag)
+}
+
+func libcCatgets(catd, set, msg, s uint32) uint32 {
+	return proc().libcCatgets(catd, set, msg, s)
+}
+
+func libcCatclose(catd uint32) uint32 {
+	return proc().libcCatclose(catd)
+}
+
 func libcDbm_open(file, flags, mode uint32) uint32 {
 	return proc().libcDbm_open(file, flags, mode)
 }

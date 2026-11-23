@@ -42,6 +42,7 @@
 #include <malloc.h>
 #include <net/if.h>
 #include <netdb.h>
+#include <nl_types.h>
 #include <poll.h>
 #include <pthread.h>
 #include <pty.h>
@@ -270,6 +271,10 @@ KERNEL_SIZED(int, ns_initparse, (const unsigned char* a, int b, ns_msg* c), (con
 KERNEL_SIZED(int, ns_parserr, (ns_msg* a, ns_sect b, int c, ns_rr* d), (ns_msg* a, size_t a_size, ns_sect b, int c, ns_rr* d, size_t d_size), (a, sizeof(ns_msg), b, c, d, sizeof(ns_rr)))
 KERNEL(int, ns_skiprr, (const unsigned char* a, const unsigned char* b, ns_sect c, int d), (a, b, c, d))
 KERNEL(int, ns_name_uncompress, (const unsigned char* a, const unsigned char* b, const unsigned char* c, char* d, size_t e), (a, b, c, d, e))
+/* nl_types.h */
+KERNEL(nl_catd, catopen, (const char* a, int b), (a, b))
+KERNEL(char*, catgets, (nl_catd a, int b, int c, const char* d), (a, b, c, d))
+KERNEL(int, catclose, (nl_catd a), (a))
 /* ndbm.h */
 KERNEL(DBM*, dbm_open, (const char* a, int b, mode_t c), (a, b, c))
 KERNEL_VOID(dbm_close, (DBM* a), (a))
