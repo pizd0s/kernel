@@ -52,9 +52,10 @@ var callFormats = func() map[string]string {
 		cfsetspeed:dpdd chdir:ds chmod:dso chown:dsdd chroot:ds clearenv:d clock:d clock_getcpuclockid:ddp clock_getres:ddpd
 		clock_gettime:ddpd clock_nanosleep:dddpdpd clock_settime:ddpd close:dd closedir:dp closelog:v cnd_broadcast:dpd cnd_destroy:vpd
 		cnd_init:dpd cnd_signal:dpd cnd_timedwait:dpdpdpd cnd_wait:dpdpd confstr:ddpd connect:ddpd copy_file_range:ddpdpdd creat:dso
-		crypt:sss ctermid:sp ctime:sp ctime_r:spp cuserid:sp daemon:ddd dcgettext_l:sssdd dcngettext_l:ssssddd dgettext_l:sssd
-		difftime:fdd dirfd:dp dirname:sp div:ddd dn_comp:dspdpp dn_expand:dppppd dn_skipname:dpp dngettext_l:ssssdd dup:dd dup2:ddd
-		dup3:dddd duplocale:dd eaccess:dsd encrypt:vpd endgrent:v endhostent:v endnetent:v endprotoent:v endpwent:v endservent:v
+		crypt:sss ctermid:sp ctime:sp ctime_r:spp cuserid:sp daemon:ddd dbm_clearerr:dp dbm_close:vp dbm_delete:dppd dbm_error:dp
+		dbm_fetch:pppdp dbm_firstkey:ppp dbm_nextkey:ppp dbm_open:psdo dbm_store:dppdpdd dcgettext_l:sssdd dcngettext_l:ssssddd
+		dgettext_l:sssd difftime:fdd dirfd:dp dirname:sp div:ddd dn_comp:dspdpp dn_expand:dppppd dn_skipname:dpp dngettext_l:ssssdd dup:dd
+		dup2:ddd dup3:dddd duplocale:dd eaccess:dsd encrypt:vpd endgrent:v endhostent:v endnetent:v endprotoent:v endpwent:v endservent:v
 		endusershell:v endutxent:v epoll_create:dd epoll_create1:dd epoll_ctl:ddddpd epoll_pwait:ddpdddpd epoll_wait:ddpddd ether_aton:ps
 		ether_aton_r:psp ether_hostton:dsp ether_line:dspp ether_ntoa:sp ether_ntoa_r:spp ether_ntohost:dpp euidaccess:dsd eventfd:ddd
 		eventfd_read:ddp eventfd_write:ddd execl:dssp execle:dssp execlp:dssp execmode:dddd execv:dsp execve:dspp execvp:dsp execvpe:dspp

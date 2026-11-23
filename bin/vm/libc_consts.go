@@ -335,6 +335,8 @@ const (
 	NS_RRFIXEDSZ                      = 10
 	NS_CMPRSFLGS                      = 0xc0
 	NS_DEFAULTPORT                    = 53
+	DBM_INSERT                        = 0
+	DBM_REPLACE                       = 1
 	SOCK_NONBLOCK                     = 0o4000
 	SOCK_CLOEXEC                      = 0o2000000
 	MSG_DONTWAIT                      = 0x40

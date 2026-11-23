@@ -35,6 +35,7 @@
 #include <langinfo.h>
 #include <libintl.h>
 #include <mqueue.h>
+#include <ndbm.h>
 #include <net/ethernet.h>
 #include <libgen.h>
 #include <locale.h>
@@ -246,6 +247,8 @@ KERNEL(char*, if_indextoname, (unsigned a, char* b), (a, b))
 KERNEL_SIZED(struct if_nameindex*, if_nameindex, (void), (size_t size), (sizeof(struct if_nameindex)))
 KERNEL_VOID_SIZED(if_freenameindex, (struct if_nameindex* a), (struct if_nameindex* a, size_t a_size), (a, sizeof(struct if_nameindex)))
 KERNEL_SIZED(int, getifaddrs, (struct ifaddrs** a), (struct ifaddrs** a, size_t size), (a, sizeof(struct ifaddrs)))
+KERNEL_VOID(freeifaddrs, (struct ifaddrs* a), (a))
+/* resolv.h, arpa/nameser.h */
 KERNEL_SIZED(struct __res_state*, __res_state, (void), (size_t size), (sizeof(struct __res_state)))
 KERNEL(int, res_init, (void), ())
 KERNEL(int, res_query, (const char* a, int b, int c, unsigned char* d, int e), (a, b, c, d, e))
@@ -267,7 +270,44 @@ KERNEL_SIZED(int, ns_initparse, (const unsigned char* a, int b, ns_msg* c), (con
 KERNEL_SIZED(int, ns_parserr, (ns_msg* a, ns_sect b, int c, ns_rr* d), (ns_msg* a, size_t a_size, ns_sect b, int c, ns_rr* d, size_t d_size), (a, sizeof(ns_msg), b, c, d, sizeof(ns_rr)))
 KERNEL(int, ns_skiprr, (const unsigned char* a, const unsigned char* b, ns_sect c, int d), (a, b, c, d))
 KERNEL(int, ns_name_uncompress, (const unsigned char* a, const unsigned char* b, const unsigned char* c, char* d, size_t e), (a, b, c, d, e))
-KERNEL_VOID(freeifaddrs, (struct ifaddrs* a), (a))
+/* ndbm.h */
+KERNEL(DBM*, dbm_open, (const char* a, int b, mode_t c), (a, b, c))
+KERNEL_VOID(dbm_close, (DBM* a), (a))
+KERNEL(int, dbm_error, (DBM* a), (a))
+KERNEL(int, dbm_clearerr, (DBM* a), (a))
+/* A datum goes to the kernel and comes back as its pointer and size. */
+int __kernel_dbm_store(DBM*, const void*, size_t, const void*, size_t, int) __KERNEL(dbm_store);
+int __kernel_dbm_delete(DBM*, const void*, size_t) __KERNEL(dbm_delete);
+void* __kernel_dbm_fetch(DBM*, const void*, size_t, size_t*) __KERNEL(dbm_fetch);
+void* __kernel_dbm_firstkey(DBM*, size_t*) __KERNEL(dbm_firstkey);
+void* __kernel_dbm_nextkey(DBM*, size_t*) __KERNEL(dbm_nextkey);
+
+int dbm_store(DBM* db, datum key, datum content, int mode) {
+    return __kernel_dbm_store(db, key.dptr, key.dsize, content.dptr, content.dsize, mode);
+}
+
+int dbm_delete(DBM* db, datum key) {
+    return __kernel_dbm_delete(db, key.dptr, key.dsize);
+}
+
+datum dbm_fetch(DBM* db, datum key) {
+    datum content;
+    content.dptr = __kernel_dbm_fetch(db, key.dptr, key.dsize, &content.dsize);
+    return content;
+}
+
+datum dbm_firstkey(DBM* db) {
+    datum key;
+    key.dptr = __kernel_dbm_firstkey(db, &key.dsize);
+    return key;
+}
+
+datum dbm_nextkey(DBM* db) {
+    datum key;
+    key.dptr = __kernel_dbm_nextkey(db, &key.dsize);
+    return key;
+}
+
 /* netdb.h */
 KERNEL_SIZED(int, getaddrinfo, (const char* __restrict a, const char* __restrict b, const struct addrinfo* __restrict c, struct addrinfo** __restrict d), (const char* __restrict a, const char* __restrict b, const struct addrinfo* __restrict c, size_t c_size, struct addrinfo** __restrict d, size_t d_size), (a, b, c, sizeof(struct addrinfo), d, sizeof(struct addrinfo)))
 KERNEL_VOID_SIZED(freeaddrinfo, (struct addrinfo* a), (struct addrinfo* a, size_t a_size), (a, sizeof(struct addrinfo)))
