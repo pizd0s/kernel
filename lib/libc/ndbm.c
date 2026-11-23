@@ -293,7 +293,18 @@ static int update(DBM* d) {
     if (d->scanned == 0) {
         unsigned char head[HEADER];
 
+        // A file of fewer bytes than the header is one an open is making,
+        // if they are of the header: else it is no database.
         if (st.st_size < HEADER) {
+            const unsigned char made[HEADER] = MAGIC;
+            ssize_t got = pread(d->fd, head, st.st_size, 0);
+
+            if (got < 0 || memcmp(head, made, got) != 0) {
+                errno = EINVAL;
+
+                return -1;
+            }
+
             return 0;
         }
 

@@ -10,9 +10,10 @@
 // stop them; keys and contents are bytes, an empty content a pointer.
 // The database stays when it is closed, a read-only open of it refuses
 // changes (EPERM), O_EXCL an existing one, and a file that is no database
-// is EINVAL. Opens of it, of this process and of a child of fork, see one
-// another's changes; an open for writing rewrites it where most of it is
-// of what is gone, and an open of before reads on, there is none in musl.
+// is EINVAL, one shorter than the header too, but for an empty one. Opens
+// of it, of this process and of a child of fork, see one another's
+// changes; an open for writing rewrites it where most of it is of what is
+// gone, and an open of before reads on, there is none in musl.
 
 #include <assert.h>
 #include <errno.h>
@@ -90,6 +91,16 @@ int main() {
     assert(fd >= 0 && write(fd, "not a database at all", 21) == 21 && close(fd) == 0);
     errno = 0;
     assert(!dbm_open("junk", O_RDONLY, 0) && errno == EINVAL);
+    // shorter than the header: an open's making of one is of its bytes
+    const int short_fd = open("spam.db", O_WRONLY | O_CREAT, 0644);
+    assert(short_fd >= 0 && write(short_fd, "spam", 4) == 4 && close(short_fd) == 0);
+    errno = 0;
+    assert(!dbm_open("spam", O_RDONLY, 0) && errno == EINVAL);
+    const int empty_fd = open("empty.db", O_WRONLY | O_CREAT, 0644);
+    assert(empty_fd >= 0 && close(empty_fd) == 0);
+    db = dbm_open("empty", O_RDONLY, 0);
+    assert(db && dbm_firstkey(db).dptr == nullptr);
+    dbm_close(db);
 
     // Most of it gone: the next open for writing rewrites it.
     db = dbm_open("words", O_WRONLY, 0);
