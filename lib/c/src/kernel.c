@@ -19,6 +19,7 @@
  */
 #include <aio.h>
 #include <arpa/inet.h>
+#include <arpa/nameser.h>
 #include <assert.h>
 #include <ctype.h>
 #include <devctl.h>
@@ -45,6 +46,7 @@
 #include <pty.h>
 #include <pwd.h>
 #include <regex.h>
+#include <resolv.h>
 #include <sched.h>
 #include <semaphore.h>
 #include <setjmp.h>
@@ -244,6 +246,27 @@ KERNEL(char*, if_indextoname, (unsigned a, char* b), (a, b))
 KERNEL_SIZED(struct if_nameindex*, if_nameindex, (void), (size_t size), (sizeof(struct if_nameindex)))
 KERNEL_VOID_SIZED(if_freenameindex, (struct if_nameindex* a), (struct if_nameindex* a, size_t a_size), (a, sizeof(struct if_nameindex)))
 KERNEL_SIZED(int, getifaddrs, (struct ifaddrs** a), (struct ifaddrs** a, size_t size), (a, sizeof(struct ifaddrs)))
+KERNEL_SIZED(struct __res_state*, __res_state, (void), (size_t size), (sizeof(struct __res_state)))
+KERNEL(int, res_init, (void), ())
+KERNEL(int, res_query, (const char* a, int b, int c, unsigned char* d, int e), (a, b, c, d, e))
+KERNEL(int, res_querydomain, (const char* a, const char* b, int c, int d, unsigned char* e, int f), (a, b, c, d, e, f))
+KERNEL(int, res_search, (const char* a, int b, int c, unsigned char* d, int e), (a, b, c, d, e))
+KERNEL(int, res_mkquery, (int a, const char* b, int c, int d, const unsigned char* e, int f, const unsigned char* g, unsigned char* h, int i), (a, b, c, d, e, f, g, h, i))
+KERNEL(int, res_send, (const unsigned char* a, int b, unsigned char* c, int d), (a, b, c, d))
+KERNEL_SIZED(int, res_ninit, (res_state a), (res_state a, size_t a_size), (a, sizeof(struct __res_state)))
+KERNEL_VOID_SIZED(res_nclose, (res_state a), (res_state a, size_t a_size), (a, sizeof(struct __res_state)))
+KERNEL_SIZED(int, res_nquery, (res_state a, const char* b, int c, int d, unsigned char* e, int f), (res_state a, size_t a_size, const char* b, int c, int d, unsigned char* e, int f), (a, sizeof(struct __res_state), b, c, d, e, f))
+KERNEL_SIZED(int, res_nquerydomain, (res_state a, const char* b, const char* c, int d, int e, unsigned char* f, int g), (res_state a, size_t a_size, const char* b, const char* c, int d, int e, unsigned char* f, int g), (a, sizeof(struct __res_state), b, c, d, e, f, g))
+KERNEL_SIZED(int, res_nsearch, (res_state a, const char* b, int c, int d, unsigned char* e, int f), (res_state a, size_t a_size, const char* b, int c, int d, unsigned char* e, int f), (a, sizeof(struct __res_state), b, c, d, e, f))
+KERNEL_SIZED(int, res_nmkquery, (res_state a, int b, const char* c, int d, int e, const unsigned char* f, int g, const unsigned char* h, unsigned char* i, int j), (res_state a, size_t a_size, int b, const char* c, int d, int e, const unsigned char* f, int g, const unsigned char* h, unsigned char* i, int j), (a, sizeof(struct __res_state), b, c, d, e, f, g, h, i, j))
+KERNEL_SIZED(int, res_nsend, (res_state a, const unsigned char* b, int c, unsigned char* d, int e), (res_state a, size_t a_size, const unsigned char* b, int c, unsigned char* d, int e), (a, sizeof(struct __res_state), b, c, d, e))
+KERNEL(int, dn_comp, (const char* a, unsigned char* b, int c, unsigned char** d, unsigned char** e), (a, b, c, d, e))
+KERNEL(int, dn_expand, (const unsigned char* a, const unsigned char* b, const unsigned char* c, char* d, int e), (a, b, c, d, e))
+KERNEL(int, dn_skipname, (const unsigned char* a, const unsigned char* b), (a, b))
+KERNEL_SIZED(int, ns_initparse, (const unsigned char* a, int b, ns_msg* c), (const unsigned char* a, int b, ns_msg* c, size_t c_size), (a, b, c, sizeof(ns_msg)))
+KERNEL_SIZED(int, ns_parserr, (ns_msg* a, ns_sect b, int c, ns_rr* d), (ns_msg* a, size_t a_size, ns_sect b, int c, ns_rr* d, size_t d_size), (a, sizeof(ns_msg), b, c, d, sizeof(ns_rr)))
+KERNEL(int, ns_skiprr, (const unsigned char* a, const unsigned char* b, ns_sect c, int d), (a, b, c, d))
+KERNEL(int, ns_name_uncompress, (const unsigned char* a, const unsigned char* b, const unsigned char* c, char* d, size_t e), (a, b, c, d, e))
 KERNEL_VOID(freeifaddrs, (struct ifaddrs* a), (a))
 /* netdb.h */
 KERNEL_SIZED(int, getaddrinfo, (const char* __restrict a, const char* __restrict b, const struct addrinfo* __restrict c, struct addrinfo** __restrict d), (const char* __restrict a, const char* __restrict b, const struct addrinfo* __restrict c, size_t c_size, struct addrinfo** __restrict d, size_t d_size), (a, b, c, sizeof(struct addrinfo), d, sizeof(struct addrinfo)))

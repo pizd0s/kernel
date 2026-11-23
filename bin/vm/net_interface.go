@@ -10,4 +10,6 @@ type NetInterface struct {
 	inet  bool
 	addr  [4]byte
 	mask  [4]byte
+	named bool
+	dns   [4]byte
 }

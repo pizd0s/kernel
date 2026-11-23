@@ -8,11 +8,15 @@
 // a connect that does not wait, and poll of it; epoll's watch of the socket,
 // made before connect, of sockmgr's, which sees its text, the stack's; the
 // errors of a socket on no stack; a name the gateway has not, and
-// gethostbyname's of one it has.
+// gethostbyname's of one it has. The resolver: res_init's server, the
+// card's, and search list, LOCALDOMAIN's; res_query's answer, a message
+// ns_parserr reads, and the code of a name the gateway has not;
+// res_search's name of the search list.
 //
 //     inet_sockets <port>
 
 #include <arpa/inet.h>
+#include <arpa/nameser.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
@@ -20,6 +24,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netpacket/packet.h>
+#include <resolv.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,6 +80,31 @@ namespace {
             }
         }
         printf("\n");
+    }
+
+    void resolver() {
+        setenv("LOCALDOMAIN", "internal", 1);
+        res_init();
+        char text[INET_ADDRSTRLEN];
+        printf("res_init: %d server %s, search %s\n", _res.nscount, inet_ntop(AF_INET, &_res.nsaddr_list[0].sin_addr, text, sizeof text),
+               _res.dnsrch[0]);
+        unsigned char answer[NS_PACKETSZ];
+        const int n = res_query("host.internal", C_IN, T_A, answer, sizeof answer);
+        ns_msg msg;
+        if (n < 0 || ns_initparse(answer, n, &msg) != 0) {
+            printf("res_query: %s\n", hstrerror(h_errno));
+            return;
+        }
+        for (int i = 0; i < ns_msg_count(msg, ns_s_an); ++i) {
+            ns_rr rr;
+            if (ns_parserr(&msg, ns_s_an, i, &rr) == 0 && ns_rr_type(rr) == ns_t_a) {
+                printf("res_query: %s a %s\n", ns_rr_name(rr), inet_ntop(AF_INET, ns_rr_rdata(rr), text, sizeof text));
+            }
+        }
+        const int none = res_query("nope.internal", C_IN, T_A, answer, sizeof answer);
+        printf("res_query nope.internal: %d %s\n", none, hstrerror(h_errno));
+        const int found = res_search("host", C_IN, T_A, answer, sizeof answer);
+        printf("res_search host: %s\n", found > 0 ? "found" : hstrerror(h_errno));
     }
 
     void interfaces() {
@@ -180,5 +210,6 @@ int main(int argc, char** argv) {
     printf("nope.internal: %s\n", gai_strerror(getaddrinfo("nope.internal", nullptr, &hints, &none)));
     const hostent* gateway = gethostbyname("Gateway.Internal");
     printf("gateway.internal: %s\n", gateway ? inet_ntoa(*reinterpret_cast<const in_addr*>(gateway->h_addr_list[0])) : "-");
+    resolver();
     return 0;
 }

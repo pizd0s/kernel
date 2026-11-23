@@ -4,14 +4,22 @@
 // sockmgr, the card's stack. getaddrinfo asks it of a name /etc/hosts
 // does not have.
 //
-// Its file, which it registers at /dev/init/ctl:
+// Its files, which it registers at /dev/init/ctl:
 //
-//     dns/query   a write of "<name> a" asks, and waits until the name is
-//                 found: ENOENT, no such name, or none of its addresses;
-//                 ETIMEDOUT, no server answered; ENETUNREACH, no card has
-//                 a name server. A read then gives the answer from the
-//                 start, a record a line: "<name> a <address>", "<name>
-//                 cname <name>". Each write asks anew.
+//     dns/query     a write of "<name> a" asks, and waits until the name is
+//                   found: ENOENT, no such name, or none of its addresses;
+//                   ETIMEDOUT, no server answered; ENETUNREACH, no card
+//                   has a name server. A read then gives the answer from
+//                   the start, a record a line: "<name> a <address>",
+//                   "<name> cname <name>". Each write asks anew.
+//     dns/message   a write of a message of the DNS's, a question of 512
+//                   bytes at most, asks the servers as query does, the
+//                   message as it is under an id of dns's own, and waits
+//                   for an answer: one of no error or no such name, else
+//                   the last a server gave, else ETIMEDOUT; EINVAL for no
+//                   question. A read then gives the answer, the server's
+//                   message, the asker's id on it. Nothing is kept. The
+//                   resolver of lib/c, res_send, is its.
 //
 // The name servers are the cards' (/dev/net/<card>/iface/status, its dns
 // line), read at each question, in the order of the cards' names. The
@@ -67,6 +75,9 @@ namespace {
     // and until when; the answer, a record a line.
     struct Query {
         Endpoint* end;
+        bool raw; // of dns/message: message is the question
+        unsigned char message[512];
+        size_t messageSize;
         char name[256];
         Endpoint* waiting;
         char waitTag;
@@ -92,6 +103,8 @@ namespace {
 
 static int epoll = -1;
 static Device device;
+static Device messages;
+static char messagesTag; // what dns/message's channel is of
 static Query* queries;
 static Link* links;
 static Remembered remembered[32];
@@ -409,7 +422,14 @@ static void ask(Query& q) {
             q.id = uint16_t(nowMs() | 1);
         }
         unsigned char m[512];
-        const size_t n = question(m, sizeof m, q.id, q.name);
+        size_t n = q.messageSize;
+        if (q.raw) {
+            memcpy(m, q.message, n);
+            m[0] = uint8_t(q.id >> 8);
+            m[1] = uint8_t(q.id);
+        } else {
+            n = question(m, sizeof m, q.id, q.name);
+        }
         sockaddr_in to{};
         to.sin_family = AF_INET;
         to.sin_port = htons(53);
@@ -422,7 +442,7 @@ static void ask(Query& q) {
             dropLink(l);
         }
     }
-    finish(q, ETIMEDOUT);
+    finish(q, q.raw && q.size > 0 ? 0 : ETIMEDOUT);
 }
 
 // A record of the answer's, a line of the text: false when it has no
@@ -436,9 +456,28 @@ static bool line(Query& q, const char* owner, const char* type, const char* valu
     return true;
 }
 
+// A server's answer to a message, the asker's id back on it: one of
+// another code than no error or no such name goes on to the next server,
+// kept for the asker where no other comes.
+static void answeredMessage(Query& q, const unsigned char* m, size_t size) {
+    q.size = size < sizeof q.text ? size : sizeof q.text;
+    memcpy(q.text, m, q.size);
+    q.text[0] = char(q.message[0]);
+    q.text[1] = char(q.message[1]);
+    const unsigned rcode = m[3] & 0x0f;
+    if (rcode != 0 && rcode != 3) {
+        ++q.attempt;
+        return ask(q);
+    }
+    finish(q, 0);
+}
+
 // The answer of a server's: the question's records, the end of the
 // question, or the next server's turn.
 static void answered(Query& q, const unsigned char* m, size_t size) {
+    if (q.raw) {
+        return answeredMessage(q, m, size);
+    }
     const unsigned rcode = m[3] & 0x0f;
     if (rcode == 3) {
         return finish(q, ENOENT);
@@ -557,10 +596,45 @@ static int expire() {
 
 // ---- the file ----------------------------------------------------------------
 
+// A message written, a question: its first question's name is what an
+// answer must be of.
+static void writtenMessage(Query& q, Endpoint& e, Request& r) {
+    Io io;
+    if (r.memfd() < 0 || !r.io(io)) {
+        return fail(r.reply(), EINVAL);
+    }
+    if (r.h.arg > sizeof q.message) {
+        return fail(r.reply(), EMSGSIZE);
+    }
+    if (pread(r.memfd(), q.message, r.h.arg, 0) != ssize_t(r.h.arg)) {
+        return fail(r.reply(), EIO);
+    }
+    q.messageSize = r.h.arg;
+    char name[256];
+    if (q.messageSize < 12 || (q.message[2] & 0x80) != 0 || u16(q.message + 4) == 0 ||
+        nameAt(q.message, q.messageSize, 12, name, sizeof name) == 0) {
+        return fail(r.reply(), EINVAL);
+    }
+    lowered(q.name, sizeof q.name, name);
+    q.size = 0;
+    e.pos = 0;
+    q.count = r.h.arg;
+    q.serverCount = serversOf(q.servers, maxServers);
+    if (q.serverCount == 0) {
+        return fail(r.reply(), ENETUNREACH);
+    }
+    q.attempt = 0;
+    q.waiting = keep(epoll, r, &q.waitTag);
+    ask(q);
+}
+
 // A question written: "<name> a", a line.
 static void written(Query& q, Endpoint& e, Request& r) {
     if (q.waiting) {
         return fail(r.reply(), EBUSY);
+    }
+    if (q.raw) {
+        return writtenMessage(q, e, r);
     }
     Io io;
     char text[300];
@@ -628,7 +702,9 @@ static void handle(Endpoint& e, Request& r) {
             fatal("dns: out of memory");
         }
         q->deadline = -1;
-        q->end = answerOpen(epoll, r, {openedFile, 0, device.st.dev, device.st.ino, 0, POLLIN | POLLOUT}, q);
+        q->raw = e.of == &messagesTag;
+        const Device& d = q->raw ? messages : device;
+        q->end = answerOpen(epoll, r, {openedFile, 0, d.st.dev, d.st.ino, 0, POLLIN | POLLOUT}, q);
         if (!q->end) {
             free(q);
             return;
@@ -655,7 +731,7 @@ static void handle(Endpoint& e, Request& r) {
         case opSeek:
             return answerSeek(e, r, q->size);
         case opFstat:
-            return answer(r.reply(), opOk, 0, &device.st, sizeof device.st);
+            return answer(r.reply(), opOk, 0, q->raw ? &messages.st : &device.st, sizeof device.st);
         default:
             return fail(r.reply(), unserved(r.h.op));
     }
@@ -699,6 +775,8 @@ int dnsMain(int argc, char** argv) {
     }
     device = enroll("dns", "dns/query", S_IFREG | 0666);
     watch(epoll, {device.end, true, false, false, nullptr});
+    messages = enroll("dns", "dns/message", S_IFREG | 0666);
+    watch(epoll, {messages.end, true, false, false, &messagesTag});
     if (ready >= 0) {
         close(ready);
     }

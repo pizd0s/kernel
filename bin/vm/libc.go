@@ -2806,6 +2806,136 @@ func libcFreeifaddrs(list uint32) {
 	proc().libcFreeifaddrs(list)
 }
 
+func libc__res_state(size uint32) uint32 {
+	p := proc()
+
+	p.sized("__res_state", size, sizeofResState)
+
+	return p.staticAt(staticRes)
+}
+
+func libcRes_init() uint32 {
+	return proc().libcRes_init()
+}
+
+func libcRes_query(name, class, typ, answer, anslen uint32) uint32 {
+	p := proc()
+
+	return p.libcRes_nquery(p.staticAt(staticRes), name, class, typ, answer, anslen)
+}
+
+func libcRes_querydomain(name, domain, class, typ, answer, anslen uint32) uint32 {
+	p := proc()
+
+	return p.libcRes_nquerydomain(p.staticAt(staticRes), name, domain, class, typ, answer, anslen)
+}
+
+func libcRes_search(name, class, typ, answer, anslen uint32) uint32 {
+	p := proc()
+
+	return p.libcRes_nsearch(p.staticAt(staticRes), name, class, typ, answer, anslen)
+}
+
+func libcRes_mkquery(op, name, class, typ, data, datalen, newrr, buf, buflen uint32) uint32 {
+	p := proc()
+
+	return p.libcRes_nmkquery(p.staticAt(staticRes), op, name, class, typ, buf, buflen)
+}
+
+func libcRes_send(msg, msglen, answer, anslen uint32) uint32 {
+	p := proc()
+
+	return p.libcRes_nsend(p.staticAt(staticRes), msg, msglen, answer, anslen)
+}
+
+func libcRes_ninit(state, size uint32) uint32 {
+	p := proc()
+
+	p.sized("res_ninit", size, sizeofResState)
+
+	return p.libcRes_ninit(state)
+}
+
+func libcRes_nclose(state, size uint32) {
+	proc().sized("res_nclose", size, sizeofResState)
+}
+
+func libcRes_nquery(state, size, name, class, typ, answer, anslen uint32) uint32 {
+	p := proc()
+
+	p.sized("res_nquery", size, sizeofResState)
+
+	return p.libcRes_nquery(state, name, class, typ, answer, anslen)
+}
+
+func libcRes_nquerydomain(state, size, name, domain, class, typ, answer, anslen uint32) uint32 {
+	p := proc()
+
+	p.sized("res_nquerydomain", size, sizeofResState)
+
+	return p.libcRes_nquerydomain(state, name, domain, class, typ, answer, anslen)
+}
+
+func libcRes_nsearch(state, size, name, class, typ, answer, anslen uint32) uint32 {
+	p := proc()
+
+	p.sized("res_nsearch", size, sizeofResState)
+
+	return p.libcRes_nsearch(state, name, class, typ, answer, anslen)
+}
+
+func libcRes_nmkquery(state, size, op, name, class, typ, data, datalen, newrr, buf, buflen uint32) uint32 {
+	p := proc()
+
+	p.sized("res_nmkquery", size, sizeofResState)
+
+	return p.libcRes_nmkquery(state, op, name, class, typ, buf, buflen)
+}
+
+func libcRes_nsend(state, size, msg, msglen, answer, anslen uint32) uint32 {
+	p := proc()
+
+	p.sized("res_nsend", size, sizeofResState)
+
+	return p.libcRes_nsend(state, msg, msglen, answer, anslen)
+}
+
+func libcDn_comp(name, out, length, dnptrs, lastdnptr uint32) uint32 {
+	return proc().libcDn_comp(name, out, length, dnptrs, lastdnptr)
+}
+
+func libcDn_expand(msg, eom, src, dst, size uint32) uint32 {
+	return proc().libcDn_expand(msg, eom, src, dst, size)
+}
+
+func libcDn_skipname(at, eom uint32) uint32 {
+	return proc().libcDn_skipname(at, eom)
+}
+
+func libcNs_initparse(msg, size, handle, handleSize uint32) uint32 {
+	p := proc()
+
+	p.sized("ns_initparse", handleSize, sizeofNsMsg)
+
+	return p.libcNs_initparse(msg, size, handle)
+}
+
+func libcNs_parserr(handle, handleSize, section, num, rr, rrSize uint32) uint32 {
+	p := proc()
+
+	p.sized("ns_parserr", handleSize, sizeofNsMsg, rrSize, sizeofNsRr)
+
+	return p.libcNs_parserr(handle, section, num, rr)
+}
+
+func libcNs_skiprr(at, eom, section, count uint32) uint32 {
+	return proc().libcNs_skiprr(at, eom, section, count)
+}
+
+func libcNs_name_uncompress(msg, eom, src, dst, size uint32) uint32 {
+	return proc().libcNs_name_uncompress(msg, eom, src, dst, size)
+}
+
 func libcCrypt(key, setting uint32) uint32 {
 	return proc().libcCrypt(key, setting)
 }
