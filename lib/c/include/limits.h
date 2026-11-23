@@ -51,6 +51,7 @@
 #define DELAYTIMER_MAX 0x7fffffff
 #define SEM_VALUE_MAX 0x7fffffff
 #define SEM_NSEMS_MAX 256
+#define MQ_PRIO_MAX 32768
 #define PAGESIZE 65536
 #define PAGE_SIZE PAGESIZE
 #define FILESIZEBITS 64

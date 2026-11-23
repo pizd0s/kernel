@@ -261,6 +261,7 @@ type Process struct {
 	nextSpawnFiles uint32
 	locales        map[uint32][LC_ALL]string
 	nextLocale     uint32
+	semUndo        map[*SemSet]bool
 
 	desKey       [8]byte
 	posixTimers  map[int32]*PosixTimer
@@ -665,6 +666,7 @@ func (p *Process) terminate(status int) {
 		p.trace(TRACE_PROCESS, fmt.Sprintf("exit %d", status>>8&0xff))
 	}
 
+	p.undoSems()
 	p.stopTimers()
 	p.leaveSession(true)
 
@@ -2332,6 +2334,623 @@ func (p *Process) libcPosix_devctl(fd, cmd, data, n, info uint32) uint32 {
 	}
 
 	return 0
+}
+
+func (p *Process) ended() bool {
+	p.sig.mu.Lock()
+
+	defer p.sig.mu.Unlock()
+
+	return p.sig.dead
+}
+
+func (p *Process) undoSet(s *SemSet) {
+	if p.semUndo == nil {
+		p.semUndo = map[*SemSet]bool{}
+	}
+
+	p.semUndo[s] = true
+}
+
+func (p *Process) undoSems() {
+	for s := range p.semUndo {
+		s.undoExit(p)
+	}
+
+	p.semUndo = nil
+}
+
+func (p *Process) libcMq_open(name, flags, va uint32) uint32 {
+	key, err := semaphoreName(p.str(name))
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	access := int(flags & O_ACCMODE)
+
+	if access == O_ACCMODE {
+		return p.result(0, EINVAL)
+	}
+
+	p.k.mu.Lock()
+
+	q := p.k.queues[key]
+	made := false
+
+	switch {
+	case q != nil && flags&(O_CREAT|O_EXCL) == O_CREAT|O_EXCL:
+		p.k.mu.Unlock()
+
+		return p.result(0, EEXIST)
+	case q == nil && flags&O_CREAT == 0:
+		p.k.mu.Unlock()
+
+		return p.result(0, ENOENT)
+	case q == nil:
+		maxmsg, msgsize := mqDefaultMaxmsg, mqDefaultMsgsize
+
+		if attr := p.varArg(va, 1); attr != 0 {
+			maxmsg, msgsize = int(int32(p.u32(attr+4))), int(int32(p.u32(attr+8)))
+		}
+
+		if maxmsg <= 0 || msgsize <= 0 || maxmsg > mqMaxmsg || msgsize > mqMsgsize || maxmsg*msgsize > mqBytes {
+			p.k.mu.Unlock()
+
+			return p.result(0, EINVAL)
+		}
+
+		q = newMessageQueue(key, p.varArg(va, 0)&0o777&^p.umask, p.cred.euid(), p.cred.egid(), maxmsg, msgsize)
+		p.k.queues[key] = q
+		made = true
+	}
+
+	p.k.mu.Unlock()
+
+	want := map[int]uint32{O_RDONLY: 4, O_WRONLY: 2, O_RDWR: 6}[access]
+
+	if !made && !p.permits(&Stat{Mode: q.mode, Uid: q.uid, Gid: q.gid}, want) {
+		return p.result(0, EACCES)
+	}
+
+	return p.result(p.install(newMqEnd(q, access, flags&O_NONBLOCK != 0), 0, true))
+}
+
+func (p *Process) mqRequest(fd uint32, r Request) error {
+	o, err := p.fd(fd)
+
+	if err != nil {
+		return err
+	}
+
+	return p.request(o, r)
+}
+
+func (p *Process) libcMq_close(fd uint32) uint32 {
+	if err := p.mqRequest(fd, &MqAttr{}); err != nil {
+		return p.result(0, err)
+	}
+
+	p.closeFd(int(fd))
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcMq_unlink(name uint32) uint32 {
+	key, err := semaphoreName(p.str(name))
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	p.k.mu.Lock()
+
+	defer p.k.mu.Unlock()
+
+	q := p.k.queues[key]
+
+	switch {
+	case q == nil:
+		return p.result(0, ENOENT)
+	case !p.cred.privileged() && p.cred.euid() != q.uid:
+		return p.result(0, EACCES)
+	}
+
+	delete(p.k.queues, key)
+
+	return p.result(0, nil)
+}
+
+func (p *Process) mqSend(fd, msg, n, prio, at uint32, timed bool) uint32 {
+	if prio >= MQ_PRIO_MAX {
+		return p.result(0, EINVAL)
+	}
+
+	return p.result(0, p.mqRequest(fd, &MqSend{from: msg, n: n, prio: prio, at: at, timed: timed}))
+}
+
+func (p *Process) libcMq_send(fd, msg, n, prio uint32) uint32 {
+	return p.mqSend(fd, msg, n, prio, 0, false)
+}
+
+func (p *Process) libcMq_timedsend(fd, msg, n, prio, at uint32) uint32 {
+	return p.mqSend(fd, msg, n, prio, at, true)
+}
+
+func (p *Process) mqReceive(fd, buf, n, prio, at uint32, timed bool) uint32 {
+	r := MqReceive{room: int(n), at: at, timed: timed}
+
+	if err := p.mqRequest(fd, &r); err != nil {
+		return p.result(0, err)
+	}
+
+	copy(p.span(buf, uint32(len(r.message.data))), r.message.data)
+
+	if prio != 0 {
+		p.put32(prio, r.message.prio)
+	}
+
+	return p.result(len(r.message.data), nil)
+}
+
+func (p *Process) libcMq_receive(fd, buf, n, prio uint32) uint32 {
+	return p.mqReceive(fd, buf, n, prio, 0, false)
+}
+
+func (p *Process) libcMq_timedreceive(fd, buf, n, prio, at uint32) uint32 {
+	return p.mqReceive(fd, buf, n, prio, at, true)
+}
+
+func (p *Process) putMqAttr(at uint32, r *MqAttr) {
+	flags := uint32(0)
+
+	if r.nonblock {
+		flags = O_NONBLOCK
+	}
+
+	for i, v := range []uint32{flags, uint32(r.maxmsg), uint32(r.msgsize), uint32(r.curmsgs), 0, 0, 0, 0} {
+		p.put32(at+4*uint32(i), v)
+	}
+}
+
+func (p *Process) libcMq_getattr(fd, attr uint32) uint32 {
+	r := MqAttr{}
+
+	if err := p.mqRequest(fd, &r); err != nil {
+		return p.result(0, err)
+	}
+
+	p.putMqAttr(attr, &r)
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcMq_setattr(fd, attr, old uint32) uint32 {
+	r := MqAttr{set: true, want: p.u32(attr)&O_NONBLOCK != 0}
+
+	if err := p.mqRequest(fd, &r); err != nil {
+		return p.result(0, err)
+	}
+
+	if old != 0 {
+		p.putMqAttr(old, &r)
+	}
+
+	return p.result(0, nil)
+}
+
+func (p *Process) libcMq_notify(fd, event uint32) uint32 {
+	r := MqNotify{}
+
+	if event != 0 {
+		r.set, r.value, r.signal, r.kind = true, p.u32(event), int(p.u32(event+4)), p.u32(event+8)
+
+		switch r.kind {
+		case SIGEV_NONE:
+		case SIGEV_SIGNAL:
+			if !validSignal(uint32(r.signal)) {
+				return p.result(0, EINVAL)
+			}
+		case SIGEV_THREAD:
+			return p.result(0, EAGAIN)
+		default:
+			return p.result(0, EINVAL)
+		}
+	}
+
+	return p.result(0, p.mqRequest(fd, &r))
+}
+
+func (p *Process) libcFtok(path, id uint32) uint32 {
+	var st Stat
+
+	if err := p.statPath(p.str(path), true, &st); err != nil {
+		return p.result(0, err)
+	}
+
+	return id&0xff<<24 | uint32(st.Dev&0xff)<<16 | uint32(st.Ino&0xffff)
+}
+
+func ipcGet[T any](p *Process, t *IpcTable[T], key int32, flags uint32, perm func(T) IpcPerm, fits func(T) error, made func(IpcPerm) (T, error)) (int32, error) {
+	p.k.mu.Lock()
+
+	defer p.k.mu.Unlock()
+
+	if id, ok := t.keys[key]; ok && key != IPC_PRIVATE {
+		o := t.objects[id]
+		m := perm(o)
+
+		if flags&(IPC_CREAT|IPC_EXCL) == IPC_CREAT|IPC_EXCL {
+			return 0, EEXIST
+		}
+
+		if !m.grants(&p.cred, (flags>>6|flags>>3|flags)&7) {
+			return 0, EACCES
+		}
+
+		return id, fits(o)
+	}
+
+	if key != IPC_PRIVATE && flags&IPC_CREAT == 0 {
+		return 0, ENOENT
+	}
+
+	if len(t.objects) >= ipcMax {
+		return 0, ENOSPC
+	}
+
+	o, err := made(IpcPerm{key: key, uid: p.cred.euid(), gid: p.cred.egid(), cuid: p.cred.euid(), cgid: p.cred.egid(), mode: flags & 0o777})
+
+	if err != nil {
+		return 0, err
+	}
+
+	return t.add(key, o), nil
+}
+
+func (p *Process) putIpcPerm(at uint32, m IpcPerm) {
+	for i, v := range []uint32{uint32(m.key), m.uid, m.gid, m.cuid, m.cgid, m.mode, uint32(m.seq)} {
+		p.put32(at+4*uint32(i), v)
+	}
+}
+
+func (p *Process) libcMsgget(key, flags uint32) uint32 {
+	id, err := ipcGet(p, &p.k.msgs, int32(key), flags, (*MsgQueue).permission, func(*MsgQueue) error { return nil },
+		func(m IpcPerm) (*MsgQueue, error) { return newMsgQueue(m), nil })
+
+	return p.result(int(id), err)
+}
+
+func (p *Process) msgQueue(id uint32) (*MsgQueue, error) {
+	p.k.mu.Lock()
+
+	defer p.k.mu.Unlock()
+
+	q, ok := p.k.msgs.objects[int32(id)]
+
+	if !ok {
+		return nil, EINVAL
+	}
+
+	return q, nil
+}
+
+func (p *Process) libcMsgsnd(id, msg, n, flags uint32) uint32 {
+	q, err := p.msgQueue(id)
+
+	switch {
+	case err != nil:
+		return p.result(0, err)
+	case n > MSGMAX || int32(p.u32(msg)) < 1:
+		return p.result(0, EINVAL)
+	}
+
+	m := SysvMessage{mtype: int32(p.u32(msg)), text: bytes.Clone(p.span(msg+4, n))}
+
+	return p.result(0, q.send(p, m, flags&IPC_NOWAIT != 0))
+}
+
+func (p *Process) libcMsgrcv(id, msg, n, mtype, flags uint32) uint32 {
+	q, err := p.msgQueue(id)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	if int32(n) < 0 {
+		return p.result(0, EINVAL)
+	}
+
+	m, err := q.receive(p, int(n), int32(mtype), flags)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	p.put32(msg, uint32(m.mtype))
+	copy(p.span(msg+4, uint32(len(m.text))), m.text)
+
+	return p.result(len(m.text), nil)
+}
+
+func (p *Process) libcMsgctl(id, cmd, buf uint32) uint32 {
+	q, err := p.msgQueue(id)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	switch cmd {
+	case IPC_STAT:
+		q.mu.Lock()
+
+		if !q.perm.grants(&p.cred, 4) {
+			q.mu.Unlock()
+
+			return p.result(0, EACCES)
+		}
+
+		m, stime, rtime, ctime, qnum, qbytes, lspid, lrpid, bytes := q.perm, q.stime, q.rtime, q.ctime, len(q.messages), q.qbytes, q.lspid, q.lrpid, q.bytes
+
+		q.mu.Unlock()
+		p.putIpcPerm(buf, m)
+
+		for i, v := range []int64{stime, rtime, ctime} {
+			p.put64(buf+32+8*uint32(i), uint64(v))
+		}
+
+		for i, v := range []uint32{uint32(qnum), uint32(qbytes), uint32(lspid), uint32(lrpid), uint32(bytes)} {
+			p.put32(buf+56+4*uint32(i), v)
+		}
+
+		return p.result(0, nil)
+	case IPC_SET:
+		uid, gid, mode, qbytes := p.u32(buf+4), p.u32(buf+8), p.u32(buf+20), int(p.u32(buf+60))
+
+		q.mu.Lock()
+
+		defer q.mu.Unlock()
+
+		switch {
+		case !q.perm.owned(&p.cred):
+			return p.result(0, EPERM)
+		case qbytes > q.qbytes && qbytes > MSGMNB && !p.cred.privileged():
+			return p.result(0, EPERM)
+		}
+
+		q.perm.uid, q.perm.gid, q.perm.mode, q.qbytes, q.ctime = uid, gid, mode&0o777, qbytes, time.Now().Unix()
+
+		return p.result(0, nil)
+	case IPC_RMID:
+		m := q.permission()
+
+		if !m.owned(&p.cred) {
+			return p.result(0, EPERM)
+		}
+
+		p.k.mu.Lock()
+		p.k.msgs.remove(int32(id), m.key)
+		p.k.mu.Unlock()
+		q.remove()
+
+		return p.result(0, nil)
+	}
+
+	return p.result(0, EINVAL)
+}
+
+func (p *Process) libcSemget(key, n, flags uint32) uint32 {
+	count := int(int32(n))
+
+	if count < 0 || count > SEMMSL {
+		return p.result(0, EINVAL)
+	}
+
+	id, err := ipcGet(p, &p.k.sems, int32(key), flags, (*SemSet).permission, func(s *SemSet) error {
+		if count > len(s.sems) {
+			return EINVAL
+		}
+
+		return nil
+	}, func(m IpcPerm) (*SemSet, error) {
+		if count == 0 {
+			return nil, EINVAL
+		}
+
+		return newSemSet(m, count), nil
+	})
+
+	return p.result(int(id), err)
+}
+
+func (p *Process) semSet(id uint32) (*SemSet, error) {
+	p.k.mu.Lock()
+
+	defer p.k.mu.Unlock()
+
+	s, ok := p.k.sems.objects[int32(id)]
+
+	if !ok {
+		return nil, EINVAL
+	}
+
+	return s, nil
+}
+
+func (p *Process) semop(id, at, n uint32, end time.Time) uint32 {
+	s, err := p.semSet(id)
+
+	switch {
+	case err != nil:
+		return p.result(0, err)
+	case n == 0:
+		return p.result(0, EINVAL)
+	case n > SEMOPM:
+		return p.result(0, E2BIG)
+	}
+
+	ops := make([]SemOp, n)
+
+	for i := range ops {
+		b := at + 6*uint32(i)
+
+		ops[i] = SemOp{num: p.u16(b), op: int16(p.u16(b + 2)), flags: int16(p.u16(b + 4))}
+
+		if int(ops[i].num) >= len(s.sems) {
+			return p.result(0, EFBIG)
+		}
+	}
+
+	return p.result(0, s.operate(p, ops, end))
+}
+
+func (p *Process) libcSemop(id, ops, n uint32) uint32 {
+	return p.semop(id, ops, n, time.Time{})
+}
+
+func (p *Process) libcSemtimedop(id, ops, n, at uint32) uint32 {
+	end := time.Time{}
+
+	if at != 0 {
+		d, err := p.timespec(at)
+
+		if err != nil {
+			return p.result(0, err)
+		}
+
+		end = time.Now().Add(d)
+	}
+
+	return p.semop(id, ops, n, end)
+}
+
+func (p *Process) libcSemctl(id, num, cmd, va uint32) uint32 {
+	s, err := p.semSet(id)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	n, count := int(int32(num)), len(s.sems)
+
+	switch cmd {
+	case GETVAL, GETPID, GETNCNT, GETZCNT, SETVAL:
+		if n < 0 || n >= count {
+			return p.result(0, EINVAL)
+		}
+	case GETALL, SETALL, IPC_STAT, IPC_SET, IPC_RMID:
+	default:
+		return p.result(0, EINVAL)
+	}
+
+	arg := uint32(0)
+
+	switch cmd {
+	case SETVAL, GETALL, SETALL, IPC_STAT, IPC_SET:
+		arg = p.u32(p.varArg(va, 0))
+	}
+
+	switch cmd {
+	case SETVAL:
+		return p.result(0, p.semSetValues(s, n, []int32{int32(arg)}))
+	case SETALL:
+		values := make([]int32, count)
+
+		for i := range values {
+			values[i] = int32(p.u16(arg + 2*uint32(i)))
+		}
+
+		return p.result(0, p.semSetValues(s, 0, values))
+	case IPC_SET:
+		uid, gid, mode := p.u32(arg+4), p.u32(arg+8), p.u32(arg+20)
+
+		s.mu.Lock()
+
+		defer s.mu.Unlock()
+
+		if !s.perm.owned(&p.cred) {
+			return p.result(0, EPERM)
+		}
+
+		s.perm.uid, s.perm.gid, s.perm.mode, s.ctime = uid, gid, mode&0o777, time.Now().Unix()
+
+		return p.result(0, nil)
+	case IPC_RMID:
+		m := s.permission()
+
+		if !m.owned(&p.cred) {
+			return p.result(0, EPERM)
+		}
+
+		p.k.mu.Lock()
+		p.k.sems.remove(int32(id), m.key)
+		p.k.mu.Unlock()
+		s.remove()
+
+		return p.result(0, nil)
+	}
+
+	s.mu.Lock()
+
+	if !s.perm.grants(&p.cred, 4) {
+		s.mu.Unlock()
+
+		return p.result(0, EACCES)
+	}
+
+	m, otime, ctime := s.perm, s.otime, s.ctime
+	values := slices.Clone(s.sems)
+
+	s.mu.Unlock()
+
+	switch cmd {
+	case GETVAL:
+		return uint32(values[n].value)
+	case GETPID:
+		return uint32(values[n].pid)
+	case GETNCNT:
+		return uint32(values[n].ncnt)
+	case GETZCNT:
+		return uint32(values[n].zcnt)
+	case GETALL:
+		for i, v := range values {
+			p.put16(arg+2*uint32(i), uint16(v.value))
+		}
+
+		return 0
+	}
+
+	p.putIpcPerm(arg, m)
+	p.put64(arg+32, uint64(otime))
+	p.put64(arg+40, uint64(ctime))
+	p.put16(arg+48, uint16(count))
+
+	return 0
+}
+
+func (p *Process) semSetValues(s *SemSet, from int, values []int32) error {
+	for _, v := range values {
+		if v < 0 || v > SEMVMX {
+			return ERANGE
+		}
+	}
+
+	s.mu.Lock()
+
+	defer s.mu.Unlock()
+
+	switch {
+	case s.removed:
+		return EIDRM
+	case !s.perm.grants(&p.cred, 2):
+		return EACCES
+	}
+
+	for i, v := range values {
+		s.set(p, from+i, v)
+	}
+
+	return nil
 }
 
 func (p *Process) libcExecl(path, arg0, va uint32) uint32 {

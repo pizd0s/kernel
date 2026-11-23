@@ -30,6 +30,7 @@
 #include <inttypes.h>
 #include <langinfo.h>
 #include <libintl.h>
+#include <mqueue.h>
 #include <libgen.h>
 #include <locale.h>
 #include <malloc.h>
@@ -55,6 +56,9 @@
 #include <sys/execmode.h>
 #include <sys/watchdir.h>
 #include <sys/inotify.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
+#include <sys/sem.h>
 #include <sys/timerfd.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
@@ -830,6 +834,23 @@ KERNEL(int, execvpe, (const char* a, char* const b[], char* const c[]), (a, b, c
 KERNEL(int, fexecve, (int a, char* const b[], char* const c[]), (a, b, c))
 KERNEL(ssize_t, posix_getdents, (int a, void* b, size_t c, int d), (a, b, c, d))
 KERNEL(int, posix_devctl, (int a, int b, void* __restrict c, size_t d, int* __restrict e), (a, b, c, d, e))
+KERNEL(int, mq_close, (mqd_t a), (a))
+KERNEL(int, mq_unlink, (const char* a), (a))
+KERNEL(int, mq_send, (mqd_t a, const char* b, size_t c, unsigned d), (a, b, c, d))
+KERNEL_SIZED(int, mq_timedsend, (mqd_t a, const char* b, size_t c, unsigned d, const struct timespec* e), (mqd_t a, const char* b, size_t c, unsigned d, const struct timespec* e, size_t e_size), (a, b, c, d, e, sizeof(struct timespec)))
+KERNEL(ssize_t, mq_receive, (mqd_t a, char* b, size_t c, unsigned* d), (a, b, c, d))
+KERNEL_SIZED(ssize_t, mq_timedreceive, (mqd_t a, char* __restrict b, size_t c, unsigned* __restrict d, const struct timespec* __restrict e), (mqd_t a, char* __restrict b, size_t c, unsigned* __restrict d, const struct timespec* __restrict e, size_t e_size), (a, b, c, d, e, sizeof(struct timespec)))
+KERNEL_SIZED(int, mq_getattr, (mqd_t a, struct mq_attr* b), (mqd_t a, struct mq_attr* b, size_t b_size), (a, b, sizeof(struct mq_attr)))
+KERNEL_SIZED(int, mq_setattr, (mqd_t a, const struct mq_attr* __restrict b, struct mq_attr* __restrict c), (mqd_t a, const struct mq_attr* __restrict b, size_t b_size, struct mq_attr* __restrict c, size_t c_size), (a, b, sizeof(struct mq_attr), c, sizeof(struct mq_attr)))
+KERNEL_SIZED(int, mq_notify, (mqd_t a, const struct sigevent* b), (mqd_t a, const struct sigevent* b, size_t b_size), (a, b, sizeof(struct sigevent)))
+KERNEL(key_t, ftok, (const char* a, int b), (a, b))
+KERNEL(int, msgget, (key_t a, int b), (a, b))
+KERNEL(int, msgsnd, (int a, const void* b, size_t c, int d), (a, b, c, d))
+KERNEL(ssize_t, msgrcv, (int a, void* b, size_t c, long d, int e), (a, b, c, d, e))
+KERNEL_SIZED(int, msgctl, (int a, int b, struct msqid_ds* c), (int a, int b, struct msqid_ds* c, size_t c_size), (a, b, c, sizeof(struct msqid_ds)))
+KERNEL(int, semget, (key_t a, int b, int c), (a, b, c))
+KERNEL_SIZED(int, semop, (int a, struct sembuf* b, size_t c), (int a, struct sembuf* b, size_t b_size, size_t c), (a, b, sizeof(struct sembuf), c))
+KERNEL_SIZED(int, semtimedop, (int a, struct sembuf* b, size_t c, const struct timespec* d), (int a, struct sembuf* b, size_t b_size, size_t c, const struct timespec* d, size_t d_size), (a, b, sizeof(struct sembuf), c, d, sizeof(struct timespec)))
 KERNEL_SIZED(int, posix_spawn, (pid_t* __restrict a, const char* __restrict b, const posix_spawn_file_actions_t* c, const posix_spawnattr_t* __restrict d, char* const e[], char* const f[]), (pid_t* __restrict a, const char* __restrict b, const posix_spawn_file_actions_t* c, size_t c_size, const posix_spawnattr_t* __restrict d, size_t d_size, char* const e[], char* const f[]), (a, b, c, sizeof(posix_spawn_file_actions_t), d, sizeof(posix_spawnattr_t), e, f))
 KERNEL_SIZED(int, posix_spawnp, (pid_t* __restrict a, const char* __restrict b, const posix_spawn_file_actions_t* c, const posix_spawnattr_t* __restrict d, char* const e[], char* const f[]), (pid_t* __restrict a, const char* __restrict b, const posix_spawn_file_actions_t* c, size_t c_size, const posix_spawnattr_t* __restrict d, size_t d_size, char* const e[], char* const f[]), (a, b, c, sizeof(posix_spawn_file_actions_t), d, sizeof(posix_spawnattr_t), e, f))
 KERNEL_SIZED(int, posix_spawn_file_actions_init, (posix_spawn_file_actions_t* a), (posix_spawn_file_actions_t* a, size_t a_size), (a, sizeof(posix_spawn_file_actions_t)))
@@ -1043,6 +1064,8 @@ int __kernel_execl(const char*, const char*, va_list) __KERNEL(execl);
 int __kernel_execlp(const char*, const char*, va_list) __KERNEL(execlp);
 int __kernel_execle(const char*, const char*, va_list) __KERNEL(execle);
 sem_t* __kernel_sem_open(const char*, int, va_list, size_t) __KERNEL(sem_open);
+mqd_t __kernel_mq_open(const char*, int, va_list, size_t) __KERNEL(mq_open);
+int __kernel_semctl(int, int, int, va_list, size_t) __KERNEL(semctl);
 
 int open(const char* path, int flags, ...) {
     va_list ap;
@@ -1056,6 +1079,22 @@ sem_t* sem_open(const char* name, int flags, ...) {
     va_list ap;
     va_start(ap, flags);
     sem_t* r = __kernel_sem_open(name, flags, ap, sizeof(sem_t));
+    va_end(ap);
+    return r;
+}
+
+mqd_t mq_open(const char* name, int flags, ...) {
+    va_list ap;
+    va_start(ap, flags);
+    mqd_t r = __kernel_mq_open(name, flags, ap, sizeof(struct mq_attr));
+    va_end(ap);
+    return r;
+}
+
+int semctl(int id, int num, int cmd, ...) {
+    va_list ap;
+    va_start(ap, cmd);
+    int r = __kernel_semctl(id, num, cmd, ap, sizeof(struct semid_ds));
     va_end(ap);
     return r;
 }
