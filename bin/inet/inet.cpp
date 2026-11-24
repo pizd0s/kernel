@@ -356,7 +356,8 @@ namespace {
     void frames(Endpoint& e) {
         if (stack == Stack::Up) {
             stackFrames();
-            return socketsTurn();
+            socketsTurn();
+            return;
         }
         unsigned char frame[2048];
         for (ssize_t n; (n = recv(e.fd, frame, sizeof frame, MSG_DONTWAIT)) != 0;) {
@@ -375,6 +376,11 @@ namespace {
         exit(1);
     }
 
+    // The sooner of two times until what is due, -1 for nothing.
+    int sooner(int a, int b) {
+        return a < 0 || (b >= 0 && b < a) ? b : a;
+    }
+
     int expire() {
         switch (stack) {
             case Stack::Dhcp:
@@ -382,8 +388,7 @@ namespace {
             case Stack::Up: {
                 const int lease = dhcpTimer();
                 const int due = stackTicks();
-                socketsTurn();
-                return lease < 0 ? due : due < 0 || lease < due ? lease : due;
+                return sooner(sooner(lease, due), socketsTurn());
             }
             default:
                 return -1;

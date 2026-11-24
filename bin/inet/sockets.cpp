@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdlib.h>
@@ -12,6 +13,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/uio.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "ff_api.h"
@@ -24,8 +26,9 @@ namespace {
     };
 
     // A call that waits for its socket: its endpoint, kept; the call; a
-    // READ's or WRITE's memfd; and of a HAND's, the kernel's end of the
-    // socket's pair, which goes with the answer, attached.
+    // READ's or WRITE's memfd; of a HAND's, the kernel's end of the
+    // socket's pair, which goes with the answer, attached; and when it has
+    // waited its socket's timeout, -1 for none.
     struct Waiting {
         Endpoint* at;
         Header h;
@@ -34,6 +37,7 @@ namespace {
         int memfd;
         bool attach;
         int end;
+        long long due;
         int tag; // what at is of
     };
 
@@ -118,6 +122,39 @@ namespace {
             ff_setsockopt(ff, SOL_SOCKET, SO_REUSEPORT, value, length);
         }
         return 0;
+    }
+
+    // A timeout, SO_RCVTIMEO's or SO_SNDTIMEO's, of FreeBSD's timeval, its
+    // tv_usec a long of 32 bits and 4 of padding: lib/c's is of 64.
+    timeval timeoutOf(const unsigned char* value) {
+        int64_t seconds;
+        int32_t micro;
+        memcpy(&seconds, value, sizeof seconds);
+        memcpy(&micro, value + 8, sizeof micro);
+        return {seconds, micro};
+    }
+
+    long long nowUs() {
+        timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+    }
+
+    // When a call that waits from now has waited its socket's timeout:
+    // SO_RCVTIMEO's of a receive, SO_SNDTIMEO's of a send, -1 of a timeout
+    // of 0 and of a call that has none, a connect or an accept.
+    long long dueOf(const Socket& s, uint32_t op) {
+        const bool receives = op == opRecv || op == opRead;
+        if (!receives && op != opSend && op != opWrite) {
+            return -1;
+        }
+        alignas(8) unsigned char value[16];
+        socklen_t length = sizeof value;
+        if (ff_getsockopt(s.ff, SOL_SOCKET, receives ? SO_RCVTIMEO : SO_SNDTIMEO, value, &length) != 0 || length < 12) {
+            return -1;
+        }
+        const timeval tv = timeoutOf(value);
+        return tv.tv_sec == 0 && tv.tv_usec == 0 ? -1 : nowUs() + (long long)tv.tv_sec * 1000000 + tv.tv_usec;
     }
 
     // Whether an address is a connected socket's peer's: its family, port
@@ -332,14 +369,8 @@ namespace {
                 if (ff_getsockopt(s.ff, int(level), int(name), value, &valueLength) != 0) {
                     return done(errno);
                 }
-                // A timeout is FreeBSD's timeval, its tv_usec a long of 32
-                // bits and 4 of padding: lib/c's is of 64.
                 if (level == SOL_SOCKET && (name == SO_RCVTIMEO || name == SO_SNDTIMEO) && valueLength >= 12) {
-                    int64_t seconds;
-                    int32_t micro;
-                    memcpy(&seconds, value, sizeof seconds);
-                    memcpy(&micro, value + 8, sizeof micro);
-                    const timeval tv{seconds, micro};
+                    const timeval tv = timeoutOf(value);
                     return done(0, &tv, sizeof tv);
                 }
                 return done(0, value, valueLength);
@@ -388,6 +419,7 @@ namespace {
         }
         w->attach = attach;
         w->end = end;
+        w->due = dueOf(s, w->h.op);
         w->at = keep(epoll, r, &w->tag);
         s.waiting[side] = w;
     }
@@ -549,9 +581,9 @@ bool socketsGone(Endpoint& e) {
     return false;
 }
 
-void socketsTurn() {
+int socketsTurn() {
     if (kq < 0) {
-        return;
+        return -1;
     }
     for (Socket* s = sockets; s; s = s->next) {
         s->ready = 0;
@@ -579,16 +611,25 @@ void socketsTurn() {
         }
         s->ready &= ~(readEnded | writeEnded);
     }
+    const long long now = nowUs();
+    long long due = -1;
     for (Socket* s = sockets, *next; s; s = next) {
         next = s->next;
         for (int side = 0; side < 2; ++side) {
             Waiting* w = s->waiting[side];
-            if (!w || (s->ready & (side == 0 ? POLLIN | POLLHUP : POLLOUT | POLLHUP)) == 0) {
+            if (!w) {
                 continue;
             }
-            if (run(*s, w->h, w->body, w->size, w->memfd, w->at->fd, false, w->attach, w->end) == Outcome::Done) {
+            const bool ready = (s->ready & (side == 0 ? POLLIN | POLLHUP : POLLOUT | POLLHUP)) != 0;
+            if (ready && run(*s, w->h, w->body, w->size, w->memfd, w->at->fd, false, w->attach, w->end) == Outcome::Done) {
                 w->end = -1; // gone with the answer
                 release(*s, side);
+            } else if (w->due >= 0 && w->due <= now) {
+                reply(w->at->fd, w->attach, w->end, EAGAIN, nullptr, 0);
+                w->end = -1;
+                release(*s, side);
+            } else if (w->due >= 0 && (due < 0 || w->due < due)) {
+                due = w->due;
             }
         }
         if (s->ready != s->told) {
@@ -596,4 +637,9 @@ void socketsTurn() {
             tell(s->end->fd, s->ready);
         }
     }
+    if (due < 0) {
+        return -1;
+    }
+    const long long left = (due - now + 999) / 1000;
+    return left < INT_MAX ? int(left) : INT_MAX;
 }
