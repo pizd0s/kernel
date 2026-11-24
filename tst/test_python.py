@@ -145,7 +145,9 @@ print("clock", time.process_time() > t, time.monotonic() > 0)
 # sockets on the loopback: a TCP server of port 0, whose name has its port
 # from the bind on, and a connection to it; a datagram, and a socket of its
 # descriptor's; a pair; a new socket's options; the names of the resolver,
-# of AI_ADDRCONFIG's family the loopback's too
+# of AI_ADDRCONFIG's family the loopback's too; a sendall of more than a
+# packet of the kernel's to the stack, to a reader of its own, and a
+# datagram too big, EMSGSIZE, of a socket on no stack and of a bound one
 srv = socket.socket()
 srv.bind(("127.0.0.1", 0))
 port = srv.getsockname()[1]
@@ -165,6 +167,23 @@ n = socket.socket()
 print("pair", b.recv(4), n.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR), n.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE))
 configured = socket.getaddrinfo("127.0.0.1", 80, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_ADDRCONFIG)
 print("names", socket.getaddrinfo("localhost", 80, socket.AF_INET, socket.SOCK_STREAM)[0][4], socket.gethostbyname("localhost"), len(configured))
+big = bytes(range(256)) * 1024
+reader = os.fork()
+if reader == 0:
+    c.close()
+    got = bytearray()
+    while len(got) < len(big) and (d := conn.recv(65536)):
+        got += d
+    os._exit(got != big)
+c.sendall(big)
+c.close()
+refused = []
+for s, size in ((socket.socket(socket.AF_INET, socket.SOCK_DGRAM), 65480), (u, 70000)):
+    try:
+        s.sendto(bytes(size), ("127.0.0.1", 9))
+    except OSError as e:
+        refused.append(errno.errorcode[e.errno])
+print("large", os.waitpid(reader, 0)[1], refused)
 
 # the libraries' modules: compression, SQLite of a journal of WAL's, XML,
 # decimal, CJK's codecs, ndbm
@@ -207,6 +226,7 @@ tcp True True b'tcp' 127.0.0.1
 udp b'udp' True True
 pair b'pair' 0 1
 names ('127.0.0.1', 80) 127.0.0.1 1
+large 0 ['EMSGSIZE', 'EMSGSIZE']
 compress [True, True, True, True] 1.3.2
 sqlite 3.54.1 a,b wal
 xml t 0.1428571428571428571428571429 93fa967b

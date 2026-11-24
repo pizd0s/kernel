@@ -125,6 +125,20 @@ func (f *RemoteFD) call(p *Process, r Request, group uint32, waits bool) (bool, 
 		case r.n == 0:
 			return false, nil
 		}
+	case *SockSend:
+		if room := packetMax - remoteHeader - 4 - len(r.to.raw); len(r.pk.data) > room {
+			kind := SockType{}
+
+			if err := p.request(f, &kind); err != nil {
+				return false, err
+			}
+
+			if kind.kind != SOCK_STREAM {
+				return false, EMSGSIZE
+			}
+
+			r.pk.data = r.pk.data[:room]
+		}
 	case *FileCopyTo:
 		var err error
 

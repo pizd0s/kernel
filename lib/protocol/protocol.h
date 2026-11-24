@@ -273,7 +273,9 @@
 //   an address, sockmgr hands on to the stack it chooses for it, with
 //   where it is answered, and the stack answers it attached: OK opened,
 //   then the call's own answer, fds[0] the socket's open file of the
-//   stack's, which the socket is from then on.
+//   stack's, which the socket is from then on. A packet is at most 65536
+//   bytes: of a stream's send of more, the kernel sends what fits, the
+//   send's count, and a datagram that does not fit is EMSGSIZE.
 //     SOCKET    arg type    domain u32, protocol u32
 //     BIND                  len u32, sockaddr   attached: OK opened
 //     CONNECT               len u32, sockaddr   attached: OK opened,

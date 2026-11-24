@@ -7,9 +7,11 @@
 // carry their sender's address. A socket's timeouts: a receive that has
 // waited SO_RCVTIMEO and a send that has waited SO_SNDTIMEO for room are
 // EAGAIN, not sooner; what comes in the time is received; a timeout set
-// before the socket has a stack holds too, and a timeout of 0 is none. In
-// the system the loopback is a card of its own, lo, whose stack sockmgr
-// opens once it is up.
+// before the socket has a stack holds too, and a timeout of 0 is none.
+// Sends of more than a packet of the kernel's to the stack, 65536 bytes:
+// TCP's send and sendmsg each send a part, and the peer reads all of them;
+// a datagram bigger than UDP's is EMSGSIZE. In the system the loopback is
+// a card of its own, lo, whose stack sockmgr opens once it is up.
 
 #include <arpa/inet.h>
 #include <assert.h>
@@ -19,6 +21,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -127,6 +130,43 @@ namespace {
         fills([&] { return send(client, block, sizeof block, 0); });
         fills([&] { return write(client, block, sizeof block); });
     }
+
+    // The data, sent by send, then by sendmsg of two parts, to a child
+    // that reads both.
+    void large(int sender, int receiver) {
+        static unsigned char data[200000];
+        for (size_t i = 0; i < sizeof data; ++i) {
+            data[i] = static_cast<unsigned char>(i * 7 % 251);
+        }
+        const pid_t child = fork();
+        assert(child >= 0);
+        if (child == 0) {
+            close(sender);
+            static unsigned char got[2 * sizeof data];
+            size_t n = 0;
+            for (ssize_t k; n < sizeof got && (k = read(receiver, got + n, sizeof got - n)) > 0;) {
+                n += size_t(k);
+            }
+            const bool same = n == sizeof got && memcmp(got, data, sizeof data) == 0 && memcmp(got + sizeof data, data, sizeof data) == 0;
+            _exit(same ? 0 : 1);
+        }
+        for (size_t at = 0; at < sizeof data;) {
+            const ssize_t n = send(sender, data + at, sizeof data - at, 0);
+            assert(n > 0);
+            at += size_t(n);
+        }
+        for (size_t at = 0; at < sizeof data;) {
+            const size_t half = (sizeof data - at) / 2;
+            iovec parts[] = {{data + at, half}, {data + at + half, sizeof data - at - half}};
+            msghdr m{};
+            m.msg_iov = parts;
+            m.msg_iovlen = 2;
+            const ssize_t n = sendmsg(sender, &m, 0);
+            assert(n > 0);
+            at += size_t(n);
+        }
+        ended(child);
+    }
 }
 
 int main() {
@@ -157,7 +197,14 @@ int main() {
     const int far = accept(listener, nullptr, nullptr);
     assert(far >= 0);
     timeouts(timed, far);
-    assert(close(timed) == 0 && close(far) == 0 && close(listener) == 0);
+    assert(close(timed) == 0 && close(far) == 0);
+
+    const int bulk = socket(AF_INET, SOCK_STREAM, 0);
+    assert(bulk >= 0 && connect(bulk, name(at), sizeof at) == 0);
+    const int sink = accept(listener, nullptr, nullptr);
+    assert(sink >= 0);
+    large(bulk, sink);
+    assert(close(bulk) == 0 && close(sink) == 0 && close(listener) == 0);
 
     const int box = socket(AF_INET, SOCK_DGRAM, 0);
     sockaddr_in to = loopback();
@@ -170,6 +217,9 @@ int main() {
     length = sizeof from;
     assert(recvfrom(box, got, sizeof got, 0, name(from), &length) == 5 && memcmp(got, "dgram", 5) == 0);
     assert(from.sin_family == AF_INET && from.sin_addr.s_addr == htonl(INADDR_LOOPBACK) && from.sin_port != 0);
+    static char huge[70000];
+    errno = 0;
+    assert(sendto(sender, huge, sizeof huge, 0, name(to), sizeof to) == -1 && errno == EMSGSIZE);
     timeout(box, SO_RCVTIMEO, 50000);
     timesOut([&] { return recvfrom(box, got, sizeof got, 0, nullptr, nullptr); });
     assert(close(sender) == 0 && close(box) == 0);

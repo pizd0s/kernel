@@ -212,7 +212,8 @@ static uint32_t addressOf(const char* text) {
 // ---- handing a socket to a stack ---------------------------------------------
 
 // A call of a socket on no stack, handed to a stack with what sockmgr kept
-// of the socket, answered where reply is, the rights before it.
+// of the socket, answered where reply is, the rights before it. A SEND's
+// datagram that leaves the HAND no room in a packet is EMSGSIZE.
 static int hand(const Stack& s, const Socket& h, const Header& call, const void* body, size_t size, const int* fds, size_t count) {
     unsigned char head[6 * 4 + sizeof(sockaddr_in)];
     size_t n = 0;
@@ -239,7 +240,10 @@ static int hand(const Stack& s, const Socket& h, const Header& call, const void*
     }
     const Header hh{opHand, call.op, call.uid, call.gid, call.pgrp, call.sid};
     const iovec parts[] = {{const_cast<Header*>(&hh), sizeof hh}, {head, n}, {options, m}, {const_cast<void*>(body), size}};
-    return sendPacket(s.fd, parts, 4, fds, count, MSG_DONTWAIT) < 0 ? EIO : 0;
+    if (sendPacket(s.fd, parts, 4, fds, count, MSG_DONTWAIT) < 0) {
+        return errno == EMSGSIZE ? EMSGSIZE : EIO;
+    }
+    return 0;
 }
 
 // A listener of a socket's on a stack: LISTEN handed to it, its answer
