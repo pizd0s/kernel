@@ -84,22 +84,19 @@ static void writeAll(int fd, const void* data, usize length) {
 // native build, with no kernel to link it: its start is its own, over the
 // kernel's Go alone, which gets the places it keeps current and gives the
 // arguments; main's end is the process's, with nothing to run or flush.
-extern "C" void __kernel_begin(int*, char***, int*, char***, char**, long*, int*)
+extern "C" void __kernel_begin(int*, char***, int*, char***)
     __attribute__((__import_module__("kernel"), __import_name__("__kernel_begin")));
 extern "C" int __main_argc_argv(int, char**);
 
 namespace {
     int errorValue;
     char** environment;
-    char* zoneNames[2];
-    long zoneOffset;
-    int zoneDaylight;
 }
 
 extern "C" __attribute__((__export_name__("_start"))) void _start() {
     int count = 0;
     char** arguments = nullptr;
-    __kernel_begin(&errorValue, &environment, &count, &arguments, zoneNames, &zoneOffset, &zoneDaylight);
+    __kernel_begin(&errorValue, &environment, &count, &arguments);
     _exit(__main_argc_argv(count, arguments));
 }
 #endif

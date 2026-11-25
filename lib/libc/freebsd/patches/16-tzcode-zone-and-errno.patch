@@ -1,0 +1,98 @@
+Two of tzcode's localtime.c's:
+- an empty TZ's zone, UTC, is of its one type, so that tzset names it: of
+  none tzname was wildabbr's "   ", where a time's tm_zone was "UTC";
+- mktime and timegm keep errno where they succeed, and fail with
+  EOVERFLOW, POSIX's, where they do not: the zone's loading left the
+  errno of the files it tried, the search of the time EOVERFLOW of the
+  times it passed by, and a time of no year of an int failed of no errno.
+
+--- a/contrib/tzcode/localtime.c
++++ b/contrib/tzcode/localtime.c
+@@ -1412,8 +1412,8 @@
+     */
+     sp->leapcnt = 0;		/* so, we're off a little */
+     sp->timecnt = 0;
+-    sp->typecnt = 0;
+-    sp->charcnt = 0;
++    sp->typecnt = 1;
++    sp->charcnt = sizeof utc;
+     sp->goback = sp->goahead = false;
+     init_ttinfo(&sp->ttis[0], 0, false, 0);
+     strcpy(sp->chars, utc);
+@@ -2328,6 +2328,7 @@
+ 	char				seen[TZ_MAX_TYPES];
+ 	unsigned char			types[TZ_MAX_TYPES];
+ 	bool				okay;
++	int				saved = errno;
+ 
+ 	if (tmp == NULL) {
+ 		errno = EINVAL;
+@@ -2337,8 +2338,10 @@
+ 	if (tmp->tm_isdst > 1)
+ 		tmp->tm_isdst = 1;
+ 	t = time2(tmp, funcp, sp, offset, &okay);
+-	if (okay)
++	if (okay) {
++		errno = saved;
+ 		return t;
++	}
+ 	if (tmp->tm_isdst < 0)
+ #ifdef PCTS
+ 		/*
+@@ -2354,8 +2357,10 @@
+ 	** We try to divine the type they started from and adjust to the
+ 	** type they need.
+ 	*/
+-	if (sp == NULL)
++	if (sp == NULL) {
++		errno = EOVERFLOW;
+ 		return WRONG;
++	}
+ 	for (i = 0; i < sp->typecnt; ++i)
+ 		seen[i] = false;
+ 	nseen = 0;
+@@ -2376,13 +2381,16 @@
+ 					- sp->ttis[samei].tt_utoff);
+ 			tmp->tm_isdst = !tmp->tm_isdst;
+ 			t = time2(tmp, funcp, sp, offset, &okay);
+-			if (okay)
++			if (okay) {
++				errno = saved;
+ 				return t;
++			}
+ 			tmp->tm_sec -= (sp->ttis[otheri].tt_utoff
+ 					- sp->ttis[samei].tt_utoff);
+ 			tmp->tm_isdst = !tmp->tm_isdst;
+ 		}
+ 	}
++	errno = EOVERFLOW;
+ 	return WRONG;
+ }
+ 
+@@ -2411,12 +2419,14 @@
+ mktime(struct tm *tmp)
+ {
+   time_t t;
++  int saved = errno;
+   int err = lock();
+   if (err) {
+     errno = err;
+     return -1;
+   }
+   tzset_unlocked();
++  errno = saved;
+   t = mktime_tzname(lclptr, tmp, true);
+   unlock();
+   return t;
+@@ -2446,9 +2456,11 @@
+ EXTERN_TIMEOFF time_t
+ timeoff(struct tm *tmp, long offset)
+ {
++  int saved = errno;
+   if (tmp)
+     tmp->tm_isdst = 0;
+   _once(&gmt_once, gmtcheck);
++  errno = saved;
+   return time1(tmp, gmtsub, gmtptr, offset);
+ }
+ 

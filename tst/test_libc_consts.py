@@ -72,7 +72,6 @@ TYPES = {
     "sizeofTimespec": "struct timespec",
     "sizeofTimeval": "struct timeval",
     "sizeofTimezone": "struct timezone",
-    "sizeofTm": "struct tm",
     "sizeofTms": "struct tms",
     "sizeofUtimbuf": "struct utimbuf",
     "sizeofUtsname": "struct utsname",

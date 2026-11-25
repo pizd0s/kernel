@@ -66,7 +66,7 @@ def program(name, args, returns, reserve, error=None):
 
 def main():
     vm, native, wazero = sys.argv[1:]
-    startup = ("__kernel_begin", list(range(1024, 1052, 4)), False)
+    startup = ("__kernel_begin", list(range(1024, 1040, 4)), False)
     cases = [("startup-array", *startup, False, None), ("startup-string", *startup, True, None),
              # strtok's place is the static area's, ctermid's text a constant.
              ("static-result", "strtok", [0, 0], True, False, None), ("constant-string", "ctermid", [0], True, False, None),

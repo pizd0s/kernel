@@ -34,9 +34,12 @@ def program(template, reference=False):
     checks, count = [], 0
     for first in (0, 1 << 63, bits(13.25), 0x7ff8000000000123):
         for later, earlier in ((0, 0), (17, -3), (-17, 3), ((1 << 63) - 1, -(1 << 63)),
-                               (1 << 53, (1 << 53) + 1), (-(1 << 63), -(1 << 63) + 4096)):
+                               (1 << 53, (1 << 53) + 2), (-(1 << 63), -(1 << 63) + 4096)):
             arguments = f"(f64.reinterpret_i64 (i64.const {signed(first)})) (i64.const {later}) (i64.const {earlier})"
-            difference = bits(float(later) - float(earlier))
+            # tzcode's difftime is the exact difference, rounded once; the
+            # model's is of the times rounded, the same of these times.
+            difference = bits(float(later - earlier))
+            assert difference == bits(float(later) - float(earlier))
             calls = [(f"(call $relay {arguments})", difference)]
             for condition in (0, 1):
                 other = 0xfff8000000000456

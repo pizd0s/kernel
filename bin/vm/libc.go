@@ -1,31 +1,11 @@
 package main
 
-func libc__kernel_zone(name, data, size uint32) uint32 {
-	return proc().libc__kernel_zone(name, data, size)
-}
-
-func libc__kernel_tolocal(t, at, size uint32) uint32 {
-	p := proc()
-
-	p.sized("localtime_r", size, sizeofTm)
-
-	return p.localtime(t, at)
-}
-
-func libc__kernel_fromlocal(at, size uint32) uint64 {
-	p := proc()
-
-	p.sized("mktime", size, sizeofTm)
-
-	return p.libcMktime(at)
-}
-
 func libc__errno_location() uint32 {
 	return proc().libc__errno_location()
 }
 
-func libc__kernel_begin(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt uint32) {
-	proc().libc__kernel_begin(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt)
+func libc__kernel_begin(errnoAt, environAt, argcAt, argvAt uint32) {
+	proc().libc__kernel_begin(errnoAt, environAt, argcAt, argvAt)
 }
 
 func libc__kernel_name() uint32 {

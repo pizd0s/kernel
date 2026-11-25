@@ -333,7 +333,6 @@ const (
 	sizeofItimerspec                  = 32
 	sizeofTimeval                     = 16
 	sizeofTimezone                    = 8
-	sizeofTm                          = 44
 	sizeofTms                         = 32
 	sizeofUtimbuf                     = 16
 	sizeofUtsname                     = 390

@@ -22,7 +22,7 @@ void __kernel_start(const struct __start* start, size_t size) {
     sized("start", size, sizeof *start);
 
     __program = start;
-    __kernel_begin(start->errnoAt, start->environAt, &argc, &argv, start->tznameAt, start->timezoneAt, start->daylightAt);
+    __kernel_begin(start->errnoAt, start->environAt, &argc, &argv);
     start->constructors();
     exit(start->main(argc, argv));
 }

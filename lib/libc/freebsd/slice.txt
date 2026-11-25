@@ -6,7 +6,7 @@
 # the wide strings' functions, the numbers' conversions, gdtoa's among
 # them, the random numbers', the environment's, the paths', the temporary
 # files', IPv4's and IPv6's addresses' and the rest; libcrypt with libmd's
-# and sha2's hashes; and the copyright.
+# and sha2's hashes; tzcode's time zones; and the copyright.
 COPYRIGHT
 lib/libc/regex
 lib/msun/src
@@ -164,3 +164,9 @@ sys/crypto/sha2/sha512c.c
 sys/crypto/sha2/sha512c_impl.h
 sys/crypto/sha2/sha512t.h
 lib/libc/gen/fnmatch.c
+contrib/tzcode/localtime.c
+contrib/tzcode/asctime.c
+contrib/tzcode/difftime.c
+contrib/tzcode/private.h
+contrib/tzcode/tzfile.h
+contrib/tzcode/tzdir.h

@@ -87,8 +87,7 @@ def main():
               ("search-at-end", "memmem", [65520, 16, 65524, 12], {"expected": 65520}, 0, ""),
               ("search-empty-ranges", "memmem", [65536, 0, 65536, 0], {"expected": 65536}, 0, ""),
               ("empty-write-bound", "write", [1, 65536, 0], {"expected": 0}, 0, "")]
-    cases += [("timezone-without-CRT", "__kernel_zone", [0, 0, 0], {"expected": 0}, 0, ""),
-              ("no-linear-memory", "getpid", [], {"memory": False, "expected": 1}, 0, ""),
+    cases += [("no-linear-memory", "getpid", [], {"memory": False, "expected": 1}, 0, ""),
               ("exec-without-CRT", "execve", [4096, 4096, 0], {"expected": 0xffffffff}, 0, "")]
     # In the system a program has its path; without a root, as vm's first
     # process, it has none. The process without linear memory is the first

@@ -3,11 +3,11 @@
 /*
  * What FreeBSD's sources take of its sys/cdefs.h, for the parts of its
  * libc and msun that libc.wasm builds (make.py), which includes it first in
- * each: their markers, which say nothing here, __DECONST, __min_size, and
- * weak and strong aliases, the long double names of the double functions
- * among them; and of its machine types, which its sys/types.h brings: the
- * types float and double expressions are evaluated in, as FLT_EVAL_METHOD
- * 0 has them.
+ * each: their markers, which say nothing here, as no symbol has versions,
+ * __DECONST, __min_size, and weak and strong aliases, the long double
+ * names of the double functions among them; and of its machine types,
+ * which its sys/types.h brings: the types float and double expressions
+ * are evaluated in, as FLT_EVAL_METHOD 0 has them.
  */
 #define __FBSDID(s)
 #define __SCCSID(s)
@@ -26,6 +26,7 @@
 #define __weak_reference(sym, alias) __weak_reference_(sym, alias)
 #define __weak_reference_(sym, alias) extern __typeof(alias) alias __attribute__((__weak__, __alias__(#sym)))
 #define __warn_references(sym, msg)
+#define __sym_compat(sym, impl, version)
 #define __noinline __attribute__((__noinline__))
 #define __hidden __attribute__((__visibility__("hidden")))
 #define __DECONST(type, var) ((type)(__UINTPTR_TYPE__)(const void*)(var))

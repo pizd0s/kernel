@@ -134,7 +134,6 @@ type Process struct {
 
 	errnoAt   uint32
 	environAt uint32
-	tzAt      [3]uint32
 	nameAt    uint32
 
 	heap   *Heap
@@ -169,7 +168,6 @@ type Process struct {
 	constants map[string]uint32
 	siginfo   uint32
 
-	zone     *time.Location
 	mappings map[uint32]Mapping
 
 	timers [3]Itimer
@@ -456,7 +454,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 
 		i.attach(p)
 		p.heap, p.stack, p.static, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0
-		p.tzAt, p.nameAt, p.zone = [3]uint32{}, 0, nil
+		p.nameAt = 0
 		p.constants = map[string]uint32{}
 		p.iconvs, p.spawnFiles = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
@@ -678,9 +676,8 @@ func (p *Process) libc__errno_location() uint32 {
 	return p.errnoAt
 }
 
-func (p *Process) libc__kernel_begin(errnoAt, environAt, argcAt, argvAt, tznameAt, timezoneAt, daylightAt uint32) {
+func (p *Process) libc__kernel_begin(errnoAt, environAt, argcAt, argvAt uint32) {
 	p.errnoAt, p.environAt = errnoAt, environAt
-	p.tzAt = [3]uint32{tznameAt, timezoneAt, daylightAt}
 
 	argv := p.stringArray(p.image.argv)
 	env := p.stringArray(p.image.envp)
@@ -3246,7 +3243,7 @@ func (p *Process) startVfork() uint32 {
 	c.spawnFiles, c.nextSpawnFiles = p.spawnFiles, p.nextSpawnFiles
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
 	c.defaultStack, c.defaultGuard = p.defaultStack, p.defaultGuard
-	c.mappings, c.tzAt, c.zone = p.mappings, p.tzAt, p.zone
+	c.mappings = p.mappings
 	c.nameAt = p.nameAt
 	c.token.Store(p.token.Load())
 	c.inherit(p)
@@ -3297,7 +3294,7 @@ func (p *Process) fork() (int32, error) {
 	inst.attach(c)
 	c.image = p.image
 	c.heap, c.stack, c.static, c.errnoAt, c.environAt, c.siginfo = p.heap.clone(), p.stack.clone(), p.static, p.errnoAt, p.environAt, p.siginfo
-	c.stackAt, c.tzAt, c.zone = p.stackAt, p.tzAt, p.zone
+	c.stackAt = p.stackAt
 	c.nameAt = p.nameAt
 	c.constants, c.jumps = map[string]uint32{}, map[uint32]*JmpBuf{}
 	c.iconvs, c.nextIconv = map[uint32]*Iconv{}, p.nextIconv
@@ -9933,90 +9930,6 @@ func (p *Process) stopTimers() {
 	}
 }
 
-func (p *Process) location() *time.Location {
-	if p.zone == nil {
-		return time.UTC
-	}
-
-	return p.zone
-}
-
-func (p *Process) libc__kernel_zone(name, data, size uint32) uint32 {
-	tz, loc := p.str(name), time.UTC
-
-	switch {
-	case data != 0:
-		l, err := time.LoadLocationFromTZData(tz, bytes.Clone(p.span(data, size)))
-
-		if err != nil {
-			return ^uint32(0)
-		}
-
-		loc = l
-	case tz != "":
-		loc = posixZone(tz)
-	}
-
-	p.zone = loc
-	p.tzset()
-
-	return 0
-}
-
-func (p *Process) tzset() {
-	if p.tzAt[0] == 0 {
-		return
-	}
-
-	loc := p.location()
-	year := time.Now().In(loc).Year()
-	std, stdOffset := time.Date(year, time.January, 1, 0, 0, 0, 0, loc).Zone()
-	dst, dstOffset := time.Date(year, time.July, 1, 0, 0, 0, 0, loc).Zone()
-
-	if time.Date(year, time.January, 1, 0, 0, 0, 0, loc).IsDST() {
-		std, stdOffset, dst, dstOffset = dst, dstOffset, std, stdOffset
-	}
-
-	p.put32(p.tzAt[0], p.constant(std))
-	p.put32(p.tzAt[0]+4, p.constant(dst))
-	p.put32(p.tzAt[1], uint32(int32(-stdOffset)))
-	p.put32(p.tzAt[2], bit(stdOffset != dstOffset))
-}
-
-func (p *Process) readTm(at uint32) TmFields {
-	b := p.span(at, 44)
-
-	f := func(i int) int {
-		return int(int32(binary.LittleEndian.Uint32(b[4*i:])))
-	}
-
-	tm := TmFields{f(0), f(1), f(2), f(3), f(4), f(5), f(6), f(7), f(8), f(9), ""}
-
-	if zone := binary.LittleEndian.Uint32(b[40:]); zone != 0 {
-		tm.zone = p.str(zone)
-	}
-
-	return tm
-}
-
-func (p *Process) writeTm(at uint32, t time.Time) bool {
-	tm := tmOf(t)
-
-	if tm.year != int(int32(tm.year)) {
-		return false
-	}
-
-	b := p.span(at, 44)
-
-	for i, v := range []int{tm.sec, tm.min, tm.hour, tm.mday, tm.mon, tm.year, tm.wday, tm.yday, tm.isdst, tm.gmtoff} {
-		binary.LittleEndian.PutUint32(b[4*i:], uint32(int32(v)))
-	}
-
-	p.put32(at+40, p.constant(tm.zone))
-
-	return true
-}
-
 func (p *Process) libcTime(at uint32) uint64 {
 	now := time.Now().Unix()
 
@@ -10036,18 +9949,6 @@ func (p *Process) libcGettimeofday(tv, tz uint32) uint32 {
 	}
 
 	return 0
-}
-
-func (p *Process) localtime(t, at uint32) uint32 {
-	p.tzset()
-
-	if !p.writeTm(at, time.Unix(int64(p.u64(t)), 0).In(p.location())) {
-		p.setErrno(EOVERFLOW)
-
-		return 0
-	}
-
-	return at
 }
 
 func (p *Process) libcUsleep(us uint32) uint32 {
@@ -10159,21 +10060,6 @@ func (p *Process) libcAlarm(seconds uint32) uint32 {
 	left, _ := p.setTimer(ITIMER_REAL, time.Duration(seconds)*time.Second, 0)
 
 	return uint32((left + time.Second - 1) / time.Second)
-}
-
-func (p *Process) libcMktime(at uint32) uint64 {
-	p.tzset()
-
-	tm := p.readTm(at)
-	t := time.Date(tm.year+1900, time.Month(tm.mon+1), tm.mday, tm.hour, tm.min, tm.sec, 0, p.location())
-
-	if !p.writeTm(at, t) {
-		p.setErrno(EOVERFLOW)
-
-		return math.MaxUint64
-	}
-
-	return uint64(t.Unix())
 }
 
 func (p *Process) libcTimes(at uint32) uint64 {

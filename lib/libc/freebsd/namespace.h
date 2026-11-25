@@ -38,6 +38,10 @@ struct _pthread_cleanup_info {
 #define ___pthread_cleanup_pop_imp(execute) ((void)0)
 
 #define _pthread_mutex_lock(m) pthread_mutex_lock(m)
+#define _pthread_once(once, init) pthread_once(once, init)
+#define _pthread_key_create(key, destructor) pthread_key_create(key, destructor)
+#define _pthread_getspecific(key) pthread_getspecific(key)
+#define _pthread_setspecific(key, value) pthread_setspecific(key, value)
 #define _pthread_mutex_unlock(m) pthread_mutex_unlock(m)
 
 static inline const char* _getprogname(void) {

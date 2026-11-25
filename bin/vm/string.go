@@ -57,10 +57,6 @@ func lowerBytes(s []byte) []byte {
 	return out
 }
 
-func isDigit(c byte) bool {
-	return c >= '0' && c <= '9'
-}
-
 func cmp(a, b int) uint32 {
 	return uint32(int32(a - b))
 }

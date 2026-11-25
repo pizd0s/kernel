@@ -328,3 +328,9 @@ lib/libmd/md4c.c
 lib/libmd/md5c.c
 sys/crypto/sha2/sha256c.c
 sys/crypto/sha2/sha512c.c
+# The time zones and the calendar: tzcode's tzset, localtime, mktime,
+# gmtime, timegm, ctime, asctime and difftime, of TZ's zone, its file's
+# or its rule's.
+contrib/tzcode/localtime.c -include tzconfig.h -DALL_STATE -DTHREAD_SAFE
+contrib/tzcode/asctime.c -include tzconfig.h
+contrib/tzcode/difftime.c -include tzconfig.h

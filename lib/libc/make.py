@@ -74,10 +74,12 @@ import wasm  # noqa: E402
 INCLUDE = ["-isystem", str(LIBC / "include")]
 FORWARDER_FLAGS = ["-O2", "-std=c99", "-D_XOPEN_SOURCE=700", "-w", "-I", str(LIBC / "src"), *INCLUDE]
 FLAGS = ["-O2", "-std=c11", "-D_GNU_SOURCE", "-Wall", "-Werror", "-I", str(LIBC / "src"), *INCLUDE]
-# What other places FreeBSD's Makefiles give libcrypt's files to include
-# of, as their .PATH and CFLAGS have them: libmd's hashes and sys/md5.h,
-# the kernel's sha2, libcrypt's own crypt.h for crypt-des.c.
+# What other places FreeBSD's Makefiles give libcrypt's and tzcode's files
+# to include of, as their .PATH and CFLAGS have them: libmd's hashes and
+# sys/md5.h, the kernel's sha2, libcrypt's own crypt.h for crypt-des.c,
+# tzcode's own headers.
 INCLUDES = {
+    "contrib/tzcode/": ["contrib/tzcode"],
     "lib/libcrypt/": ["lib/libmd", "sys/crypto/sha2", "sys"],
     "secure/lib/libcrypt/": ["lib/libcrypt"],
     "lib/libmd/": ["sys"],

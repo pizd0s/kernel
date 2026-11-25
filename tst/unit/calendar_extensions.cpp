@@ -42,10 +42,10 @@ int main() {
     formatted(value, "prefix%E", "prefix");
     formatted(value, "prefix%O", "prefix");
 
+    // asctime's text longer than 26 bytes POSIX leaves undefined; asctime_r
+    // fails with EOVERFLOW.
     value.tm_year = 8100;
     char text[32];
-    errno = 0;
-    assert(asctime(&value) == nullptr && errno == EOVERFLOW);
     errno = 0;
     assert(asctime_r(&value, text) == nullptr && errno == EOVERFLOW);
     const char* malformed[] = {"%E", "%O", "%EO", "%EEEE"};
