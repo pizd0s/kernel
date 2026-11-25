@@ -7,7 +7,11 @@
  * libc.wasm builds (make.py):
  * - a process of lib/c's has one thread, so no stream and no list of
  *   streams is locked, and a thread has no cleanup handlers to push;
- * - exit calls __cleanup, which stdio sets, to flush the streams.
+ * - exit calls __cleanup, which stdio sets, to flush the streams;
+ * - _once is pthread_once.
  */
+#include <pthread.h>
+
 #define __isthreaded 0
+#define _once(once, init) pthread_once(once, init)
 extern void (*__cleanup)(void);

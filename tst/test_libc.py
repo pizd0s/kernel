@@ -38,7 +38,7 @@ difftime 6 clock_getres 0 cpu 1 nanosleep 0
 tzset EST EDT 18000 1
 setenv 0 1 0 1 0 3 0 unset -1 1
 getsubopt 0:- 1:10 2:-
-random 262836907 2022765545 1318479596 1 rand_r 1993684161 1388323688
+random 1408992891 1638182910 694272427 1 rand_r 33613 564950497
 memalign 0 1 1 1 usable 1 reallocarray 1 1 mmap 0 0 0 0
 openat 1 pwrite 6 pread cde copy_file_range 4 5 bcde fstatat 0 6 faccessat 0 renameat 0 linkat 0 symlinkat 0 readlinkat 1 g truncate 0 2 unlinkat 0 0
 mkfifo 0 1 statvfs 0 1 flock 0 lockf 0 0

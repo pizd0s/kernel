@@ -33,13 +33,6 @@ var (
 	devctlValues   = map[uint32]bool{TCFLSH: true, TCXONC: true, TCSBRK: true}
 )
 
-var randomInit = [32]uint32{
-	0x00000000, 0x5851f42d, 0xc0b18ccf, 0xcbb5f646, 0xc7033129, 0x30705b04, 0x20fd5db4, 0x9a8b7f78,
-	0x502959d8, 0xab894868, 0x6c0356a7, 0x88cdb7ff, 0xb477d43f, 0x70a3a52b, 0xa8e4baf1, 0xfd8341fc,
-	0x8ae16fd9, 0x742d2f7a, 0x0d1f0796, 0x76035e09, 0x40f7702c, 0x6fa72ca5, 0xaaa84157, 0x58a0df74,
-	0xc74a0364, 0xae533cc4, 0x04185faf, 0x6de3b115, 0x0cab8628, 0xf043bfa4, 0x398150e9, 0x37521657,
-}
-
 var hostRlimits = [RLIM_NLIMITS]int{
 	RLIMIT_CPU:        syscall.RLIMIT_CPU,
 	RLIMIT_FSIZE:      syscall.RLIMIT_FSIZE,
@@ -73,8 +66,6 @@ const (
 	staticStrerror   = 88
 	staticStrsignal  = 184
 	staticStrtok     = 256
-	staticRandom     = 260
-	staticRandomInit = 264
 	staticNtoa       = 392
 	staticCrypt      = 408
 	staticSize       = 412
@@ -1321,16 +1312,6 @@ func (p *Process) libcUmask(mask uint32) uint32 {
 	p.umask = mask & 0o777
 
 	return old
-}
-
-func (p *Process) libcRand() uint32 {
-	p.seed = 6364136223846793005*p.seed + 1
-
-	return uint32(p.seed >> 33)
-}
-
-func (p *Process) libcSrand(seed uint32) {
-	p.seed = uint64(seed) - 1
 }
 
 func (p *Process) libcGetenv(name uint32) uint32 {
@@ -11113,96 +11094,6 @@ func (p *Process) libcTtyname_r(fd, buf, n uint32) uint32 {
 	return 0
 }
 
-func (p *Process) randomState() uint32 {
-	slot := p.staticAt(staticRandom)
-
-	if at := p.u32(slot); at != 0 {
-		return at
-	}
-
-	at := p.staticAt(staticRandomInit)
-
-	for i, v := range randomInit {
-		p.put32(at+4*uint32(i), v)
-	}
-
-	p.put32(at, 31<<16|3<<8)
-	p.put32(slot, at)
-
-	return at
-}
-
-func (p *Process) srandom(state, seed uint32) {
-	n := p.u32(state) >> 16
-	x := state + 4
-
-	if n == 0 {
-		p.put32(x, seed)
-
-		return
-	}
-
-	i := uint32(1)
-
-	if n == 31 || n == 7 {
-		i = 3
-	}
-
-	s := uint64(seed)
-
-	for k := range n {
-		s = 6364136223846793005*s + 1
-		p.put32(x+4*k, uint32(s>>32))
-	}
-
-	p.put32(x, p.u32(x)|1)
-	p.put32(state, n<<16|i<<8)
-}
-
-func (p *Process) random() uint32 {
-	state := p.randomState()
-	h := p.u32(state)
-	n, i, j := h>>16, h>>8&0xff, h&0xff
-	x := state + 4
-
-	if n == 0 {
-		v := (1103515245*p.u32(x) + 12345) & 0x7fffffff
-
-		p.put32(x, v)
-
-		return v
-	}
-
-	if i >= n || j >= n {
-		i, j = 0, 0
-	}
-
-	p.put32(x+4*i, p.u32(x+4*i)+p.u32(x+4*j))
-
-	k := p.u32(x+4*i) >> 1
-
-	if i++; i == n {
-		i = 0
-	}
-
-	if j++; j == n {
-		j = 0
-	}
-
-	p.put32(state, n<<16|i<<8|j)
-
-	return k
-}
-
-func temper(x uint32) uint32 {
-	x ^= x >> 11
-	x ^= x << 7 & 0x9d2c5680
-	x ^= x << 15 & 0xefc60000
-	x ^= x >> 18
-
-	return x
-}
-
 func (p *Process) getsubopt(opt, keys, val uint32) uint32 {
 	s := p.u32(opt)
 
@@ -11308,54 +11199,6 @@ func (p *Process) prctl(option, va uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) libcSrandom(seed uint32) {
-	p.srandom(p.randomState(), seed)
-}
-
-func (p *Process) libcInitstate(seed, state, size uint32) uint32 {
-	if size < 8 {
-		return 0
-	}
-
-	old := p.randomState()
-	n := uint32(63)
-
-	switch {
-	case size < 32:
-		n = 0
-	case size < 64:
-		n = 7
-	case size < 128:
-		n = 15
-	case size < 256:
-		n = 31
-	}
-
-	p.span(state, 4*(n+1))
-	p.put32(state, n<<16)
-	p.srandom(state, seed)
-	p.put32(p.staticAt(staticRandom), state)
-
-	return old
-}
-
-func (p *Process) libcSetstate(state uint32) uint32 {
-	old := p.randomState()
-
-	p.span(state, 4*(p.u32(state)>>16+1))
-	p.put32(p.staticAt(staticRandom), state)
-
-	return old
-}
-
-func (p *Process) libcRand_r(seed uint32) uint32 {
-	s := p.u32(seed)*1103515245 + 12345
-
-	p.put32(seed, s)
-
-	return temper(s) / 2
-}
-
 func (p *Process) libcSecure_getenv(name uint32) uint32 {
 	_, value, _ := p.lookupEnv(p.cstr(name))
 
@@ -11402,10 +11245,6 @@ func (p *Process) complain(prefix uint32, msg string) {
 	if t, err := p.fd(2); err == nil {
 		p.fileWrite(t, bytesFile([]byte(msg+"\n")), len(msg)+1, IoMode{})
 	}
-}
-
-func (p *Process) libcRandom() uint32 {
-	return p.random()
 }
 
 func (p *Process) libcGetsubopt(opt, keys, val uint32) uint32 {

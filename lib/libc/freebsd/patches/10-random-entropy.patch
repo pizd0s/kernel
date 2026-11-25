@@ -1,0 +1,100 @@
+rand and random of no sysctl: srandomdev's bytes are getentropy's, of
+POSIX's, and rand.c has no functions of FreeBSD 12's compatibility,
+which libc.wasm has no symbols' versions for; its u_long, which lib/c
+has not, is unsigned long.
+
+--- a/lib/libc/stdlib/rand.c
++++ b/lib/libc/stdlib/rand.c
+@@ -36,12 +36,10 @@
+ #endif /* LIBC_SCCS and not lint */
+ #include "namespace.h"
+ #include <sys/param.h>
+-#include <sys/sysctl.h>
+ #include <assert.h>
+ #include <pthread.h>
+ #include <stdbool.h>
+ #include <stdlib.h>
+-#include <syslog.h>
+ #include "un-namespace.h"
+ 
+ #include "libc_private.h"
+@@ -124,7 +122,7 @@
+ int
+ rand_r(unsigned *ctx)
+ {
+-	u_long val;
++	unsigned long val;
+ 	int r;
+ 
+ 	val = *ctx;
+@@ -132,34 +130,3 @@
+ 	*ctx = (unsigned)val;
+ 	return (r);
+ }
+-
+-static u_long next = 1;
+-
+-int __rand_fbsd12(void);
+-int
+-__rand_fbsd12(void)
+-{
+-	return (do_rand(&next));
+-}
+-__sym_compat(rand, __rand_fbsd12, FBSD_1.0);
+-
+-void __srand_fbsd12(unsigned seed);
+-void
+-__srand_fbsd12(unsigned seed)
+-{
+-	next = seed;
+-}
+-__sym_compat(srand, __srand_fbsd12, FBSD_1.0);
+-
+-void __sranddev_fbsd12(void);
+-void
+-__sranddev_fbsd12(void)
+-{
+-	static bool warned = false;
+-
+-	if (!warned) {
+-		syslog(LOG_DEBUG, "Deprecated function sranddev() called");
+-		warned = true;
+-	}
+-}
+-__sym_compat(sranddev, __sranddev_fbsd12, FBSD_1.0);
+--- a/lib/libc/stdlib/random.c
++++ b/lib/libc/stdlib/random.c
+@@ -34,10 +34,10 @@
+ #endif /* LIBC_SCCS and not lint */
+ #include "namespace.h"
+ #include <sys/param.h>
+-#include <sys/sysctl.h>
+ #include <errno.h>
+ #include <stdint.h>
+ #include <stdlib.h>
++#include <unistd.h>
+ #include "un-namespace.h"
+ 
+ #include "random.h"
+@@ -249,19 +249,14 @@
+ void
+ srandomdev_r(struct __random_state *estate)
+ {
+-	int mib[2];
+-	size_t expected, len;
++	size_t len;
+ 
+ 	if (estate->rst_type == TYPE_0)
+ 		len = sizeof(estate->rst_state[0]);
+ 	else
+ 		len = estate->rst_deg * sizeof(estate->rst_state[0]);
+-	expected = len;
+ 
+-	mib[0] = CTL_KERN;
+-	mib[1] = KERN_ARND;
+-	if (sysctl(mib, 2, estate->rst_state, &len, NULL, 0) == -1 ||
+-	    len != expected) {
++	if (getentropy(estate->rst_state, len) == -1) {
+ 		/*
+ 		 * The sysctl cannot fail. If it does fail on some FreeBSD
+ 		 * derivative or after some future change, just abort so that

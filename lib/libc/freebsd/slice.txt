@@ -3,8 +3,8 @@
 # complex functions; of its libc the stdio, the multibyte functions, the
 # trees, getopt, the drand48 family, quick_exit and popen, the
 # declarations of their functions of a locale, the regex with its header,
-# the wide strings' functions and the numbers' conversions, gdtoa's among
-# them; and the copyright.
+# the wide strings' functions, the numbers' conversions, gdtoa's among
+# them, and the random numbers'; and the copyright.
 COPYRIGHT
 lib/libc/regex
 lib/msun/src
@@ -126,3 +126,6 @@ lib/libc/locale/wcstoumax.c
 lib/libc/locale/wcstod.c
 lib/libc/locale/wcstof.c
 lib/libc/locale/wcstold.c
+lib/libc/stdlib/rand.c
+lib/libc/stdlib/random.c
+lib/libc/stdlib/random.h

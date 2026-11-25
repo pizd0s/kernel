@@ -295,3 +295,7 @@ lib/libc/locale/wcstoumax.c
 lib/libc/locale/wcstod.c
 lib/libc/locale/wcstof.c
 lib/libc/locale/wcstold.c
+# The random numbers: rand, rand_r and srand, random, srandom, initstate
+# and setstate.
+lib/libc/stdlib/rand.c
+lib/libc/stdlib/random.c

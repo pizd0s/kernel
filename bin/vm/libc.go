@@ -1246,14 +1246,6 @@ func libcUmask(mask uint32) uint32 {
 	return proc().libcUmask(mask)
 }
 
-func libcRand() uint32 {
-	return proc().libcRand()
-}
-
-func libcSrand(seed uint32) {
-	proc().libcSrand(seed)
-}
-
 func libcGetenv(name uint32) uint32 {
 	return proc().libcGetenv(name)
 }
@@ -1816,26 +1808,6 @@ func libcGlobfree(out, outSize uint32) {
 	p.sized("globfree", outSize, sizeofGlob)
 
 	p.libcGlobfree(out)
-}
-
-func libcRandom() uint32 {
-	return proc().libcRandom()
-}
-
-func libcSrandom(seed uint32) {
-	proc().libcSrandom(seed)
-}
-
-func libcInitstate(seed, state, size uint32) uint32 {
-	return proc().libcInitstate(seed, state, size)
-}
-
-func libcSetstate(state uint32) uint32 {
-	return proc().libcSetstate(state)
-}
-
-func libcRand_r(seed uint32) uint32 {
-	return proc().libcRand_r(seed)
 }
 
 func libcSecure_getenv(name uint32) uint32 {
