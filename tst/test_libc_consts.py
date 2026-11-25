@@ -26,13 +26,11 @@ from pathlib import Path
 
 # The C type each size of the kernel's is of.
 TYPES = {
-    "sizeofAddrinfo": "struct addrinfo",
     "sizeofDirent": "struct dirent",
     "sizeofEpollEvent": "struct epoll_event",
     "sizeofFdSet": "fd_set",
     "sizeofFlock": "struct flock",
     "sizeofGlob": "glob_t",
-    "sizeofIfNameindex": "struct if_nameindex",
     "sizeofInAddr": "struct in_addr",
     "sizeofIovec": "struct iovec",
     "sizeofItimerval": "struct itimerval",
@@ -41,9 +39,6 @@ TYPES = {
     "sizeofJmpBuf": "jmp_buf",
     "sizeofMsghdr": "struct msghdr",
     "sizeofMmsghdr": "struct mmsghdr",
-    "sizeofIfaddrs": "struct ifaddrs",
-    "sizeofSockaddrLl": "struct sockaddr_ll",
-    "sizeofSockaddrIn": "struct sockaddr_in",
     "sizeofPollfd": "struct pollfd",
     "sizeofRlimit": "struct rlimit",
     "sizeofRusage": "struct rusage",

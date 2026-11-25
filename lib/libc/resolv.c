@@ -3,9 +3,8 @@
  * the system's name servers, whose answers /dev/dns/message gives, a
  * question written to it and the answer read back.
  *
- * res_init's state: the servers are the cards' (each /dev/net card's
- * last "dns" line of its iface/status, the loopback's first, then by
- * name), at most MAXNS; the search list /etc/resolv.conf's domain or
+ * res_init's state: the servers are the cards' (interfaces.h), at most
+ * MAXNS; the search list /etc/resolv.conf's domain or
  * search line, else the host name's domain, LOCALDOMAIN's where it is set,
  * and RES_OPTIONS' ndots over the file's options. A function of a state
  * not yet made makes it first. res_query's answer is the message, its
@@ -23,10 +22,11 @@
  * ns_name_uncompress's ".". A message that leaves its bounds, or loops,
  * is EMSGSIZE.
  */
+#include "interfaces.h"
+
 #include <arpa/inet.h>
 #include <arpa/nameser.h>
 #include <ctype.h>
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -587,63 +587,18 @@ static void small(const char* path, char* buf, size_t size) {
     buf[n] = 0;
 }
 
-static int cardOrder(const void* a, const void* b) {
-    const char* x = *(const char* const*)a;
-    const char* y = *(const char* const*)b;
-
-    return strcmp(x, "lo") == 0 ? -(strcmp(y, "lo") != 0) : strcmp(y, "lo") == 0 ? 1 : strcmp(x, y);
-}
-
 // The cards' name servers, at most MAXNS, in their order.
 static int servers(struct in_addr out[MAXNS]) {
-    DIR* dir = opendir("/dev/net");
-    char* names[64];
-    int count = 0, found = 0;
+    struct Interface* cards;
+    int count = __interfaces(&cards), found = 0;
 
-    for (struct dirent* d; dir && count < 64 && (d = readdir(dir));) {
-        if (strcmp(d->d_name, ".") && strcmp(d->d_name, "..") && (names[count] = strdup(d->d_name))) {
-            count++;
+    for (int i = 0; i < count && found < MAXNS; i++) {
+        if (cards[i].named) {
+            out[found++] = cards[i].dns;
         }
     }
 
-    if (dir) {
-        closedir(dir);
-    }
-
-    qsort(names, count, sizeof *names, cardOrder);
-
-    for (int i = 0; i < count; i++) {
-        char path[300], status[4096];
-        struct in_addr a;
-        int named = 0;
-
-        snprintf(path, sizeof path, "/dev/net/%s/ctl", names[i]);
-
-        int ctl = open(path, O_RDONLY | O_CLOEXEC);
-
-        if (ctl >= 0) {
-            close(ctl);
-            snprintf(path, sizeof path, "/dev/net/%s/iface/status", names[i]);
-            small(path, status, sizeof status);
-
-            for (char *line = status, *end; line; line = end ? end + 1 : NULL) {
-                end = strchr(line, '\n');
-
-                if (end) {
-                    *end = 0;
-                }
-
-                if (found < MAXNS && strncmp(line, "dns ", 4) == 0 && inet_aton(line + 4, &a)) {
-                    named = 1;
-                    out[found] = a;
-                }
-            }
-
-            found += named;
-        }
-
-        free(names[i]);
-    }
+    free(cards);
 
     return found;
 }

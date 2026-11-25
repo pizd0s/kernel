@@ -2,67 +2,6 @@
 
 package main
 
-import (
-	"encoding/binary"
-	"net/netip"
-	"strconv"
-	"strings"
-)
-
-func numericHost(s string, indexOf func(string) uint32) (netip.Addr, uint32, bool) {
-	if a, ok := inetAton(s); ok {
-		return netip.AddrFrom4(a), 0, true
-	}
-
-	host, zone, _ := strings.Cut(s, "%")
-	addr, err := netip.ParseAddr(host)
-
-	if err != nil || !addr.Is6() {
-		return netip.Addr{}, 0, false
-	}
-
-	scope := uint32(0)
-
-	if zone != "" {
-		if n, err := strconv.ParseUint(zone, 10, 32); err == nil {
-			scope = uint32(n)
-		} else if index := indexOf(zone); index != 0 {
-			scope = index
-		} else {
-			return netip.Addr{}, 0, false
-		}
-	}
-
-	return addr, scope, true
-}
-
-func sockaddr(addr netip.Addr, port int, scope uint32) []byte {
-	if addr.Is4() {
-		b := make([]byte, 16)
-
-		binary.LittleEndian.PutUint16(b, AF_INET)
-		binary.BigEndian.PutUint16(b[2:], uint16(port))
-
-		a := addr.As4()
-
-		copy(b[4:], a[:])
-
-		return b
-	}
-
-	b := make([]byte, 28)
-
-	binary.LittleEndian.PutUint16(b, AF_INET6)
-	binary.BigEndian.PutUint16(b[2:], uint16(port))
-
-	a := addr.As16()
-
-	copy(b[8:], a[:])
-	binary.LittleEndian.PutUint32(b[24:], scope)
-
-	return b
-}
-
 func strtoulPart(s string) (uint64, bool) {
 	base, digits := uint64(10), s
 

@@ -9,9 +9,15 @@
  * is passed over. Where /etc/services or /etc/protocols cannot be read,
  * the well-known ones are.
  *
- * gethostbyname and its kind find a host as getaddrinfo does, its
- * addresses of the family, with no aliases, its name the canonical one;
- * gethostbyaddr finds it in /etc/hosts. getservbyname and the rest give
+ * getaddrinfo finds a host by its numbers, IPv4's as inet_aton reads them
+ * or IPv6's with a scope, else in /etc/hosts, of a name in any case, else
+ * by the system's name servers, whose answers /dev/dns/query gives; a
+ * service by its number or in /etc/services; AI_ADDRCONFIG keeps the
+ * families the system has sockets of. getnameinfo finds a name in
+ * /etc/hosts, else gives the numbers. gethostbyname and its kind find a
+ * host as getaddrinfo does, its addresses of the family, with no
+ * aliases, its name the canonical one; gethostbyaddr finds it in
+ * /etc/hosts. getservbyname and the rest give
  * the first entry that matches; get*ent go on from the last one they
  * gave, set and end start again. A result is of the heap, the one before
  * it freed: ENOMEM where there is no room; none found leaves errno and the
@@ -22,9 +28,11 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -381,7 +389,9 @@ static int findService(enum Match match, const char* name, int port, const char*
 
         if (match == byName ? same && (strcmp(s->line.name, name) == 0 || aliased(&s->line, name))
                             : match == byNumber ? same && s->port == port : i++ == *index) {
-            *index += match == next;
+            if (match == next) {
+                ++*index;
+            }
 
             return 0;
         }
@@ -519,7 +529,9 @@ static int findNumbered(int networks, enum Match match, const char* name, long l
 
     while (networks ? nextNetwork(&at, n) : nextProtocol(&at, n)) {
         if (match == byName ? strcmp(n->line.name, name) == 0 || aliased(&n->line, name) : match == byNumber ? n->number == number : i++ == *index) {
-            *index += match == next;
+            if (match == next) {
+                ++*index;
+            }
 
             return 0;
         }
@@ -880,7 +892,9 @@ static int hostEntry(const unsigned char* address, int family, size_t* index, ch
         }
 
         if (address ? f == family && memcmp(storage, address, length(f)) == 0 : i++ == *index) {
-            *index += !address;
+            if (!address) {
+                ++*index;
+            }
             *h = (struct Host){l.value, address ? NULL : l.rest, f, 1, storage};
 
             return 0;
@@ -958,4 +972,617 @@ const char* __kernel_hstrerror(int code) {
     static const char* const messages[] = {"Host not found", "Try again", "Non-recoverable error", "Address not available"};
 
     return code >= 1 && code <= 4 ? messages[code - 1] : "Unknown error";
+}
+
+// getaddrinfo and getnameinfo.
+
+// An address of a host: its family's bytes, and an IPv6 one's scope.
+struct Address {
+    int family;
+    unsigned char bytes[16];
+    uint32_t scope;
+};
+
+// A list of addresses and the name they are of, on the heap.
+struct Found {
+    struct Address* addresses;
+    size_t count;
+    size_t room;
+    char* canonical;
+};
+
+static int added(struct Found* f, const struct Address* a) {
+    if (f->count == f->room) {
+        struct Address* more = realloc(f->addresses, (f->room = f->room ? 2 * f->room : 4) * sizeof *more);
+
+        if (!more) {
+            return 0;
+        }
+
+        f->addresses = more;
+    }
+
+    f->addresses[f->count++] = *a;
+
+    return 1;
+}
+
+static int named(struct Found* f, const char* name) {
+    return f->canonical || (f->canonical = strdup(name)) != NULL;
+}
+
+static void forget(struct Found* f) {
+    free(f->addresses);
+    free(f->canonical);
+}
+
+// An IPv4-mapped IPv6 address as the IPv4 one.
+static void unmapped(struct Address* a) {
+    static const unsigned char prefix[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+
+    if (a->family == AF_INET6 && memcmp(a->bytes, prefix, 12) == 0) {
+        memmove(a->bytes, a->bytes + 12, 4);
+        a->family = AF_INET;
+    }
+}
+
+// A host's address as numbers: IPv4's as inet_aton reads it, or IPv6's
+// with a scope, a number or a card's name, after a %.
+static int numeric(const char* name, struct Address* a) {
+    struct in_addr v4;
+    const char* percent = strchr(name, '%');
+    size_t n = percent ? (size_t)(percent - name) : strlen(name);
+    char host[64];
+
+    *a = (struct Address){0};
+
+    if (inet_aton(name, &v4)) {
+        a->family = AF_INET;
+        memcpy(a->bytes, &v4, 4);
+
+        return 1;
+    }
+
+    if (n >= sizeof host) {
+        return 0;
+    }
+
+    memcpy(host, name, n);
+    host[n] = 0;
+
+    if (inet_pton(AF_INET6, host, a->bytes) != 1) {
+        return 0;
+    }
+
+    a->family = AF_INET6;
+
+    if (percent && percent[1]) {
+        const char* zone = percent + 1;
+        uint64_t v = 0;
+        size_t digits = strspn(zone, "0123456789");
+
+        for (size_t i = 0; i < digits && v <= UINT32_MAX; i++) {
+            v = v * 10 + (zone[i] - '0');
+        }
+
+        if (zone[digits] == 0 && v <= UINT32_MAX) {
+            a->scope = v;
+        } else if (!(a->scope = if_nametoindex(zone))) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+// The addresses of /etc/hosts' entries a name of which is the name, in
+// any case, the first one's name its canonical one: 0, EAI_NONAME, or
+// EAI_MEMORY.
+static int hostsOf(const char* name, struct Found* f) {
+    int e;
+    char* text = database("/etc/hosts", NULL, &e);
+    char* at = text;
+    struct Line l;
+
+    if (!text) {
+        return e ? EAI_MEMORY : EAI_NONAME;
+    }
+
+    while (nextLine(&at, &l)) {
+        struct Address a = {0};
+        const char* other;
+        const char* rest = l.rest;
+        int same = strcasecmp(l.value, name) == 0;
+
+        for (size_t n; !same && (n = alias(&rest, &other));) {
+            same = n == strlen(name) && strncasecmp(other, name, n) == 0;
+        }
+
+        if (same && hostAddress(l.name, a.bytes, &a.family) && (!added(f, &a) || !named(f, l.value))) {
+            free(text);
+
+            return EAI_MEMORY;
+        }
+    }
+
+    free(text);
+
+    return f->count ? 0 : EAI_NONAME;
+}
+
+// The addresses the system's name servers give a name: /dev/dns/query
+// answers "name a\n" with lines of the name, "a" and an address.
+static int lookup(const char* name, struct Found* f) {
+    size_t n = strlen(name);
+
+    if (n == 0 || n - (name[n - 1] == '.') > 253) {
+        return EAI_NONAME;
+    }
+
+    for (const char* c = name; *c; c++) {
+        if ((unsigned char)*c <= ' ' || *c == 0x7f) {
+            return EAI_NONAME;
+        }
+    }
+
+    int fd = open("/dev/dns/query", O_RDWR | O_CLOEXEC);
+
+    if (fd < 0) {
+        return EAI_FAIL;
+    }
+
+    char* question = malloc(n + 3);
+
+    if (!question) {
+        close(fd);
+
+        return EAI_MEMORY;
+    }
+
+    memcpy(question, name, n);
+    memcpy(question + n, " a\n", 3);
+
+    ssize_t wrote = write(fd, question, n + 3);
+    int e = errno;
+
+    free(question);
+
+    if (wrote < 0) {
+        close(fd);
+
+        return e == ENOENT ? EAI_NONAME : e == ETIMEDOUT || e == ENETUNREACH || e == EINTR ? EAI_AGAIN : EAI_FAIL;
+    }
+
+    char* text = NULL;
+    size_t size = 0, room = 0;
+    int code = 0;
+
+    while (size < LARGEST) {
+        if (size + 1 >= room) {
+            char* more = realloc(text, room = room ? 2 * room : 4096);
+
+            if (!more) {
+                code = EAI_MEMORY;
+
+                break;
+            }
+
+            text = more;
+        }
+
+        ssize_t got = read(fd, text + size, room - size - 1);
+
+        if (got < 0) {
+            code = EAI_FAIL;
+        }
+
+        if (got <= 0) {
+            break;
+        }
+
+        size += got;
+    }
+
+    close(fd);
+
+    if (code) {
+        free(text);
+
+        return code;
+    }
+
+    text[size] = 0;
+
+    char* at = text;
+    struct Line l;
+
+    while (nextLine(&at, &l)) {
+        const char* rest = l.rest;
+        const char* address;
+        size_t length = alias(&rest, &address);
+        const char* more;
+        struct Address a = {0};
+        char copy[64];
+
+        if (strcmp(l.value, "a") != 0 || !length || length >= sizeof copy || alias(&rest, &more)) {
+            continue;
+        }
+
+        memcpy(copy, address, length);
+        copy[length] = 0;
+
+        if (!hostAddress(copy, a.bytes, &a.family)) {
+            continue;
+        }
+
+        unmapped(&a);
+
+        if (!added(f, &a) || !named(f, l.name)) {
+            free(text);
+
+            return EAI_MEMORY;
+        }
+    }
+
+    free(text);
+
+    return f->count ? 0 : EAI_NONAME;
+}
+
+// Whether the system has sockets of the family, as AI_ADDRCONFIG asks.
+static int configured(int family) {
+    int s = socket(family, SOCK_DGRAM, 0);
+
+    if (s >= 0) {
+        close(s);
+    }
+
+    return s >= 0;
+}
+
+struct Kind {
+    int socktype;
+    int protocol;
+};
+
+static int number16(const char* s, int* port) {
+    long v = 0;
+
+    if (!*s) {
+        return 0;
+    }
+
+    for (; *s; s++) {
+        if (*s < '0' || *s > '9' || (v = v * 10 + (*s - '0')) > 65535) {
+            return 0;
+        }
+    }
+
+    *port = v;
+
+    return 1;
+}
+
+static struct addrinfo* made(int flags, const struct Address* a, int port, const struct Kind* k, const char* canonical) {
+    size_t length = a->family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
+    size_t name = canonical && *canonical ? strlen(canonical) + 1 : 0;
+    struct addrinfo* ai = calloc(1, sizeof *ai + length + name);
+
+    if (!ai) {
+        return NULL;
+    }
+
+    char* addr = (char*)(ai + 1);
+
+    *ai = (struct addrinfo){flags, a->family, k->socktype, k->protocol, length, (struct sockaddr*)addr, name ? addr + length : NULL, NULL};
+
+    if (a->family == AF_INET) {
+        struct sockaddr_in* in = (struct sockaddr_in*)addr;
+
+        in->sin_family = AF_INET;
+        in->sin_port = htons(port);
+        memcpy(&in->sin_addr, a->bytes, 4);
+    } else {
+        struct sockaddr_in6* in6 = (struct sockaddr_in6*)addr;
+
+        in6->sin6_family = AF_INET6;
+        in6->sin6_port = htons(port);
+        memcpy(&in6->sin6_addr, a->bytes, 16);
+        in6->sin6_scope_id = a->scope;
+    }
+
+    if (name) {
+        strcpy(addr + length, canonical);
+    }
+
+    return ai;
+}
+
+void __kernel_freeaddrinfo(struct addrinfo* ai, size_t size) {
+    while (ai) {
+        struct addrinfo* next = ai->ai_next;
+
+        free(ai);
+        ai = next;
+    }
+}
+
+static int addrinfo(const char* node, const char* service, const struct addrinfo* hints, struct addrinfo** res) {
+    int flags = hints ? hints->ai_flags : 0, family = hints ? hints->ai_family : 0;
+    int socktype = hints ? hints->ai_socktype : 0, protocol = hints ? hints->ai_protocol : 0;
+    const int known = AI_PASSIVE | AI_CANONNAME | AI_NUMERICHOST | AI_V4MAPPED | AI_ALL | AI_ADDRCONFIG | AI_NUMERICSERV;
+
+    if (!node && !service) {
+        return EAI_NONAME;
+    }
+
+    if (flags & ~known) {
+        return EAI_BADFLAGS;
+    }
+
+    if (family != 0 && family != AF_INET && family != AF_INET6) {
+        return EAI_FAMILY;
+    }
+
+    if (socktype != 0 && socktype != SOCK_STREAM && socktype != SOCK_DGRAM && socktype != SOCK_RAW) {
+        return EAI_SOCKTYPE;
+    }
+
+    const struct Kind all[] = {{SOCK_STREAM, IPPROTO_TCP}, {SOCK_DGRAM, IPPROTO_UDP}, {SOCK_RAW, protocol}};
+    struct Kind kinds[3];
+    int count = 0;
+
+    for (int i = 0; i < (socktype || protocol ? 3 : 2); i++) {
+        if ((socktype == 0 || all[i].socktype == socktype) && (protocol == 0 || all[i].protocol == protocol)) {
+            kinds[count++] = all[i];
+        }
+    }
+
+    if (!count) {
+        return EAI_SOCKTYPE;
+    }
+
+    int port = 0;
+
+    if (service && !number16(service, &port)) {
+        int kept = 0;
+
+        if (flags & AI_NUMERICSERV) {
+            return EAI_NONAME;
+        }
+
+        for (int i = 0; i < count; i++) {
+            char* text;
+            struct Service s;
+            int e = findService(byName, service, 0, kinds[i].socktype == SOCK_DGRAM ? "udp" : "tcp", NULL, &text, &s);
+
+            if (e == ENOMEM) {
+                return EAI_MEMORY;
+            }
+
+            if (!e && kinds[i].socktype != SOCK_RAW) {
+                port = s.port;
+                kinds[kept++] = kinds[i];
+            }
+
+            free(text);
+        }
+
+        if (!kept) {
+            return EAI_SERVICE;
+        }
+
+        count = kept;
+    }
+
+    struct Found f = {0};
+    struct Address a;
+    int code = 0;
+
+    if (!node) {
+        struct Address any4 = {AF_INET, {0}, 0}, any6 = {AF_INET6, {0}, 0};
+
+        if (!(flags & AI_PASSIVE)) {
+            any4.bytes[0] = 127;
+            any4.bytes[3] = 1;
+            any6.bytes[15] = 1;
+        }
+
+        code = added(&f, &any4) && added(&f, &any6) ? 0 : EAI_MEMORY;
+    } else if (numeric(node, &a)) {
+        code = added(&f, &a) && named(&f, node) ? 0 : EAI_MEMORY;
+    } else if (flags & AI_NUMERICHOST) {
+        code = EAI_NONAME;
+    } else if ((code = hostsOf(node, &f)) == EAI_NONAME) {
+        code = lookup(node, &f);
+    }
+
+    if (code) {
+        forget(&f);
+
+        return code;
+    }
+
+    int have6 = 0, usable4 = 1, usable6 = 1;
+    struct addrinfo *first = NULL, *last = NULL;
+
+    for (size_t i = 0; i < f.count; i++) {
+        have6 |= f.addresses[i].family == AF_INET6;
+    }
+
+    if (flags & AI_ADDRCONFIG) {
+        usable4 = configured(AF_INET);
+        usable6 = configured(AF_INET6);
+    }
+
+    for (size_t i = 0; i < f.count; i++) {
+        struct Address kept = f.addresses[i];
+        int v4 = kept.family == AF_INET;
+
+        if (family == AF_INET && !v4) {
+            continue;
+        }
+
+        if (family == AF_INET6 && v4) {
+            if (!(flags & AI_V4MAPPED) || (have6 && !(flags & AI_ALL))) {
+                continue;
+            }
+
+            memmove(kept.bytes + 12, kept.bytes, 4);
+            memset(kept.bytes, 0, 10);
+            kept.bytes[10] = kept.bytes[11] = 0xff;
+            kept.family = AF_INET6;
+            kept.scope = 0;
+        } else if ((v4 && !usable4) || (!v4 && !usable6)) {
+            continue;
+        }
+
+        for (int k = 0; k < count; k++) {
+            struct addrinfo* ai = made(flags, &kept, port, &kinds[k], !first && flags & AI_CANONNAME ? f.canonical : NULL);
+
+            if (!ai) {
+                __kernel_freeaddrinfo(first, sizeof *first);
+                forget(&f);
+
+                return EAI_MEMORY;
+            }
+
+            if (last) {
+                last->ai_next = ai;
+            } else {
+                first = ai;
+            }
+
+            last = ai;
+        }
+    }
+
+    forget(&f);
+
+    if (!first) {
+        return EAI_NONAME;
+    }
+
+    *res = first;
+
+    return 0;
+}
+
+int __kernel_getaddrinfo(const char* restrict node, const char* restrict service, const struct addrinfo* restrict hints, size_t hintsSize,
+                         struct addrinfo** restrict res, size_t resSize) {
+    int saved = errno;
+    int code = addrinfo(node, service, hints, res);
+
+    errno = saved;
+
+    return code;
+}
+
+const char* __kernel_gai_strerror(int code) {
+    static const char* const messages[] = {"Invalid flags",
+                                           "Name does not resolve",
+                                           "Try again",
+                                           "Non-recoverable error",
+                                           "Name has no usable address",
+                                           "Unrecognized address family or invalid length",
+                                           "Unrecognized socket type",
+                                           "Unrecognized service",
+                                           "Unknown error",
+                                           "Out of memory",
+                                           "System error",
+                                           "Overflow"};
+
+    return code <= -1 && code >= -12 ? messages[-code - 1] : "Unknown error";
+}
+
+static int nameinfo(const struct sockaddr* sa, socklen_t length, char* host, socklen_t hostSize, char* serv, socklen_t servSize, int flags) {
+    struct Address a = {0};
+
+    if (length < 2) {
+        return EAI_FAMILY;
+    }
+
+    if (sa->sa_family == AF_INET && length >= sizeof(struct sockaddr_in)) {
+        a.family = AF_INET;
+        memcpy(a.bytes, &((const struct sockaddr_in*)sa)->sin_addr, 4);
+    } else if (sa->sa_family == AF_INET6 && length >= sizeof(struct sockaddr_in6)) {
+        a.family = AF_INET6;
+        memcpy(a.bytes, &((const struct sockaddr_in6*)sa)->sin6_addr, 16);
+        a.scope = ((const struct sockaddr_in6*)sa)->sin6_scope_id;
+    } else {
+        return EAI_FAMILY;
+    }
+
+    if (host && hostSize > 0) {
+        char name[NI_MAXHOST + 16];
+        char* text = NULL;
+        struct Host h;
+        unsigned char storage[16];
+        int code = flags & NI_NUMERICHOST ? HOST_NOT_FOUND : hostEntry(a.bytes, a.family, NULL, &text, &h, storage);
+
+        if (code < 0) {
+            return EAI_MEMORY;
+        }
+
+        if (!code) {
+            snprintf(name, sizeof name, "%s", h.name);
+
+            if (flags & NI_NOFQDN) {
+                name[strcspn(name, ".")] = 0;
+            }
+        }
+
+        free(text);
+
+        if (code) {
+            if (flags & NI_NAMEREQD) {
+                return EAI_NONAME;
+            }
+
+            inet_ntop(a.family, a.bytes, name, sizeof name);
+
+            if (a.scope) {
+                snprintf(name + strlen(name), sizeof name - strlen(name), "%%%u", (unsigned)a.scope);
+            }
+        }
+
+        if (strlen(name) >= hostSize) {
+            return EAI_OVERFLOW;
+        }
+
+        strcpy(host, name);
+    }
+
+    if (serv && servSize > 0) {
+        int port = ntohs(((const struct sockaddr_in*)sa)->sin_port);
+        char name[NI_MAXSERV + 16];
+        char* text = NULL;
+        struct Service s;
+
+        snprintf(name, sizeof name, "%d", port);
+
+        if (!(flags & NI_NUMERICSERV) && findService(byNumber, NULL, port, flags & NI_DGRAM ? "udp" : "tcp", NULL, &text, &s) == 0) {
+            snprintf(name, sizeof name, "%s", s.line.name);
+        }
+
+        free(text);
+
+        if (strlen(name) >= servSize) {
+            return EAI_OVERFLOW;
+        }
+
+        strcpy(serv, name);
+    }
+
+    return 0;
+}
+
+int __kernel_getnameinfo(const struct sockaddr* restrict sa, socklen_t length, char* restrict host, socklen_t hostSize, char* restrict serv,
+                         socklen_t servSize, int flags) {
+    int saved = errno;
+    int code = nameinfo(sa, length, host, hostSize, serv, servSize, flags);
+
+    errno = saved;
+
+    return code;
 }

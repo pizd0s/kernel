@@ -2310,30 +2310,6 @@ func libcSockatmark(fd uint32) uint32 {
 	return proc().libcSockatmark(fd)
 }
 
-func libcGetaddrinfo(node, service, hints, hintsSize, res, resSize uint32) uint32 {
-	p := proc()
-
-	p.sized("getaddrinfo", hintsSize, sizeofAddrinfo, resSize, sizeofAddrinfo)
-
-	return p.libcGetaddrinfo(node, service, hints, res)
-}
-
-func libcFreeaddrinfo(res, resSize uint32) {
-	p := proc()
-
-	p.sized("freeaddrinfo", resSize, sizeofAddrinfo)
-
-	p.libcFreeaddrinfo(res)
-}
-
-func libcGai_strerror(code uint32) uint32 {
-	return proc().libcGai_strerror(code)
-}
-
-func libcGetnameinfo(sa, salen, host, hostlen, serv, servlen, flags uint32) uint32 {
-	return proc().libcGetnameinfo(sa, salen, host, hostlen, serv, servlen, flags)
-}
-
 func libcInet_aton(s, at, atSize uint32) uint32 {
 	p := proc()
 
@@ -2352,42 +2328,6 @@ func libcInet_pton(family, s, dst uint32) uint32 {
 
 func libcInet_ntop(family, src, dst, size uint32) uint32 {
 	return proc().libcInet_ntop(family, src, dst, size)
-}
-
-func libcIf_nametoindex(name uint32) uint32 {
-	return proc().libcIf_nametoindex(name)
-}
-
-func libcIf_indextoname(index, buf uint32) uint32 {
-	return proc().libcIf_indextoname(index, buf)
-}
-
-func libcIf_nameindex(size uint32) uint32 {
-	p := proc()
-
-	p.sized("if_nameindex", size, sizeofIfNameindex)
-
-	return p.libcIf_nameindex()
-}
-
-func libcIf_freenameindex(block, blockSize uint32) {
-	p := proc()
-
-	p.sized("if_freenameindex", blockSize, sizeofIfNameindex)
-
-	p.libcIf_freenameindex(block)
-}
-
-func libcGetifaddrs(out, size uint32) uint32 {
-	p := proc()
-
-	p.sized("getifaddrs", size, sizeofIfaddrs)
-
-	return p.libcGetifaddrs(out)
-}
-
-func libcFreeifaddrs(list uint32) {
-	proc().libcFreeifaddrs(list)
 }
 
 func libcCrypt(key, setting uint32) uint32 {
