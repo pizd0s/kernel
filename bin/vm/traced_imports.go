@@ -16,8 +16,7 @@ var libraryCalls = func() map[string]bool {
 		putenv rand rand_r random realloc reallocarray rindex secure_getenv setenv setstate sigaddset sigandset sigdelset sigemptyset
 		sigfillset sigisemptyset sigismember sigorset srand srandom stpcpy stpncpy strcasecmp strcasestr strcat strchr strchrnul strcmp
 		strcpy strcspn strdup strerror strerror_r strlcat strlcpy strlen strncasecmp strncat strncmp strncpy strndup strnlen strpbrk
-		strrchr strsep strsignal strspn strstr strtok strtok_r strverscmp swab timegm unsetenv versionsort wcscat wcschr wcscmp wcscpy
-		wcscspn wcsdup wcslen wcsncmp wcsncpy wcsnlen wcspbrk wcsrchr wcsspn wcsstr wcstok wmemchr wmemcmp wmemcpy wmemmove wmemset
+		strrchr strsep strsignal strspn strstr strtok strtok_r strverscmp swab timegm unsetenv versionsort
 	`)
 
 	out := make(map[string]bool, len(names))
@@ -126,11 +125,8 @@ var callFormats = func() map[string]string {
 		timer_getoverrun:dd timer_gettime:ddpd timer_settime:dddpdpd timerfd_create:ddd timerfd_gettime:ddpd timerfd_settime:dddpdpd
 		times:dpd timespec_get:dpdd truncate:dsd tss_create:dpd tss_delete:vd tss_get:pd tss_set:ddp ttyname:sd ttyname_r:ddpd umask:oo
 		umount:ds umount2:dsd uname:dpd unlink:ds unlinkat:ddsd unlockpt:dd unsetenv:ds usleep:dd utime:dspd utimensat:ddspdd utimes:dspd
-		versionsort:dpdpd vfork:d wait:dp wait3:dpdpd wait4:ddpdpd waitid:dddpdd waitpid:ddpd watchdir:ddd wcpcpy:ppp wcpncpy:pppd
-		wcscasecmp:dpp wcscat:ppp wcschr:ppd wcscmp:dpp wcscpy:ppp wcscspn:dpp wcsdup:pp wcslcat:dppd wcslcpy:dppd wcslen:dp
-		wcsncasecmp:dppd wcsncat:pppd wcsncmp:dppd wcsncpy:pppd wcsnlen:dpd wcspbrk:ppp wcsrchr:ppd wcsspn:dpp wcsstr:ppp wcstod:fpp
-		wcstof:fpp wcstoimax:dppd wcstok:pppp wcstol:dppd wcstold:fpp wcstoll:dppd wcstoul:dppd wcstoull:dppd wcstoumax:dppd wmemchr:ppdd
-		wmemcmp:dppd wmemcpy:pppd wmemmove:pppd wmemset:ppdd write:ddpd writev:ddpdd
+		versionsort:dpdpd vfork:d wait:dp wait3:dpdpd wait4:ddpdpd waitid:dddpdd waitpid:ddpd watchdir:ddd wcstod:fpp wcstof:fpp
+		wcstoimax:dppd wcstol:dppd wcstold:fpp wcstoll:dppd wcstoul:dppd wcstoull:dppd wcstoumax:dppd write:ddpd writev:ddpdd
 `) {
 		name, format, _ := strings.Cut(word, ":")
 

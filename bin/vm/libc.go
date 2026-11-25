@@ -1658,86 +1658,6 @@ func libcWaitid(idtype, id, info, infoSize, options uint32) uint32 {
 	return p.libcWaitid(idtype, id, info, options)
 }
 
-func libcWcslen(s uint32) uint32 {
-	return proc().libcWcslen(s)
-}
-
-func libcWcsnlen(s, n uint32) uint32 {
-	return proc().libcWcsnlen(s, n)
-}
-
-func libcWcscpy(d, s uint32) uint32 {
-	return proc().libcWcscpy(d, s)
-}
-
-func libcWcsncpy(d, s, n uint32) uint32 {
-	return proc().libcWcsncpy(d, s, n)
-}
-
-func libcWcscat(d, s uint32) uint32 {
-	return proc().libcWcscat(d, s)
-}
-
-func libcWcscmp(a, b uint32) uint32 {
-	return proc().libcWcscmp(a, b)
-}
-
-func libcWcsncmp(a, b, n uint32) uint32 {
-	return proc().libcWcsncmp(a, b, n)
-}
-
-func libcWcschr(s, c uint32) uint32 {
-	return proc().libcWcschr(s, c)
-}
-
-func libcWcsrchr(s, c uint32) uint32 {
-	return proc().libcWcsrchr(s, c)
-}
-
-func libcWcsstr(h, n uint32) uint32 {
-	return proc().libcWcsstr(h, n)
-}
-
-func libcWcspbrk(s, set uint32) uint32 {
-	return proc().libcWcspbrk(s, set)
-}
-
-func libcWcsspn(s, set uint32) uint32 {
-	return proc().libcWcsspn(s, set)
-}
-
-func libcWcscspn(s, set uint32) uint32 {
-	return proc().libcWcscspn(s, set)
-}
-
-func libcWcstok(s, sep, save uint32) uint32 {
-	return proc().libcWcstok(s, sep, save)
-}
-
-func libcWcsdup(s uint32) uint32 {
-	return proc().libcWcsdup(s)
-}
-
-func libcWmemchr(s, c, n uint32) uint32 {
-	return proc().libcWmemchr(s, c, n)
-}
-
-func libcWmemcmp(a, b, n uint32) uint32 {
-	return proc().libcWmemcmp(a, b, n)
-}
-
-func libcWmemcpy(d, s, n uint32) uint32 {
-	return proc().libcWmemcpy(d, s, n)
-}
-
-func libcWmemmove(d, s, n uint32) uint32 {
-	return proc().libcWmemmove(d, s, n)
-}
-
-func libcWmemset(d, c, n uint32) uint32 {
-	return proc().libcWmemset(d, c, n)
-}
-
 func libcSetuid(uid uint32) uint32 {
 	return proc().libcSetuid(uid)
 }
@@ -3299,26 +3219,6 @@ func libcIssetugid() uint32 {
 	return proc().libcIssetugid()
 }
 
-func libcWcsncat(d, s, n uint32) uint32 {
-	return proc().libcWcsncat(d, s, n)
-}
-
-func libcWcpcpy(d, s uint32) uint32 {
-	return proc().libcWcpcpy(d, s)
-}
-
-func libcWcpncpy(d, s, n uint32) uint32 {
-	return proc().libcWcpncpy(d, s, n)
-}
-
-func libcWcscasecmp(a, b uint32) uint32 {
-	return proc().libcWcscasecmp(a, b)
-}
-
-func libcWcsncasecmp(a, b, n uint32) uint32 {
-	return proc().libcWcsncasecmp(a, b, n)
-}
-
 func libcTimespec_get(ts, tsSize, base uint32) uint32 {
 	p := proc()
 
@@ -3481,14 +3381,6 @@ func libcTcsetwinsize(fd, size, sizeSize uint32) uint32 {
 	p.sized("tcsetwinsize", sizeSize, sizeofWinsize)
 
 	return p.libcTcsetwinsize(fd, size)
-}
-
-func libcWcslcpy(d, s, n uint32) uint32 {
-	return proc().libcWcslcpy(d, s, n)
-}
-
-func libcWcslcat(d, s, n uint32) uint32 {
-	return proc().libcWcslcat(d, s, n)
 }
 
 func libcPosix_getdents(fd, buf, n, flags uint32) uint32 {

@@ -224,3 +224,31 @@ lib/libc/regex/regcomp.c -DLIBREGEX -include runetype.h  # the encoding it asks 
 lib/libc/regex/regexec.c -DLIBREGEX
 lib/libc/regex/regerror.c -DLIBREGEX
 lib/libc/regex/regfree.c -DLIBREGEX
+# The wide strings' functions.
+lib/libc/string/wcpcpy.c
+lib/libc/string/wcpncpy.c
+lib/libc/string/wcscasecmp.c
+lib/libc/string/wcscat.c
+lib/libc/string/wcschr.c
+lib/libc/string/wcscmp.c
+lib/libc/string/wcscpy.c
+lib/libc/string/wcscspn.c
+lib/libc/string/wcsdup.c
+lib/libc/string/wcslcat.c
+lib/libc/string/wcslcpy.c
+lib/libc/string/wcslen.c
+lib/libc/string/wcsncasecmp.c
+lib/libc/string/wcsncat.c
+lib/libc/string/wcsncmp.c
+lib/libc/string/wcsncpy.c
+lib/libc/string/wcsnlen.c
+lib/libc/string/wcspbrk.c
+lib/libc/string/wcsrchr.c
+lib/libc/string/wcsspn.c
+lib/libc/string/wcsstr.c
+lib/libc/string/wcstok.c
+lib/libc/string/wmemchr.c
+lib/libc/string/wmemcmp.c
+lib/libc/string/wmemcpy.c
+lib/libc/string/wmemmove.c
+lib/libc/string/wmemset.c

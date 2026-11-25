@@ -2,8 +2,8 @@
 # src.txz once after the download (dev/slice.py): msun, its math and
 # complex functions; of its libc the stdio, the multibyte functions, the
 # trees, getopt, the drand48 family, quick_exit and popen, the
-# declarations of their functions of a locale, and the regex with its
-# header; and the copyright.
+# declarations of their functions of a locale, the regex with its header
+# and the wide strings' functions; and the copyright.
 COPYRIGHT
 lib/libc/regex
 lib/msun/src
@@ -55,3 +55,30 @@ include/regex.h
 include/xlocale/_stdio.h
 include/xlocale/_uchar.h
 include/xlocale/_wchar.h
+lib/libc/string/wcpcpy.c
+lib/libc/string/wcpncpy.c
+lib/libc/string/wcscasecmp.c
+lib/libc/string/wcscat.c
+lib/libc/string/wcschr.c
+lib/libc/string/wcscmp.c
+lib/libc/string/wcscpy.c
+lib/libc/string/wcscspn.c
+lib/libc/string/wcsdup.c
+lib/libc/string/wcslcat.c
+lib/libc/string/wcslcpy.c
+lib/libc/string/wcslen.c
+lib/libc/string/wcsncasecmp.c
+lib/libc/string/wcsncat.c
+lib/libc/string/wcsncmp.c
+lib/libc/string/wcsncpy.c
+lib/libc/string/wcsnlen.c
+lib/libc/string/wcspbrk.c
+lib/libc/string/wcsrchr.c
+lib/libc/string/wcsspn.c
+lib/libc/string/wcsstr.c
+lib/libc/string/wcstok.c
+lib/libc/string/wmemchr.c
+lib/libc/string/wmemcmp.c
+lib/libc/string/wmemcpy.c
+lib/libc/string/wmemmove.c
+lib/libc/string/wmemset.c
