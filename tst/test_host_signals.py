@@ -45,12 +45,14 @@ def check(value, expected):
 
 
 def program(mode):
-    # sigprocmask and sigwaitinfo take the size of each structure after its
-    # pointer: 8 for a sigset_t, 44 for a siginfo_t.
-    imports = [("write", 1), ("raise", 2), ("sigprocmask", 5), ("sigwaitinfo", 6), ("signal", 3)]
+    # sigprocmask, sigwaitinfo and sigaction take the size of each structure
+    # after its pointer: 8 for a sigset_t, 44 for a siginfo_t, 24 for a
+    # struct sigaction, whose handler, 1, restarts what it interrupts, at
+    # 4128; kill of 0 is of the process's group, its own.
+    imports = [("write", 1), ("kill", 3), ("sigprocmask", 5), ("sigwaitinfo", 6), ("sigaction", 7)]
     types = [b"\x60\0\0", b"\x60\3\x7f\x7f\x7f\1\x7f", b"\x60\1\x7f\1\x7f",
              b"\x60\2\x7f\x7f\1\x7f", b"\x60\2\x7f\x7f\0",
-             b"\x60\5" + b"\x7f" * 5 + b"\1\x7f", b"\x60\4" + b"\x7f" * 4 + b"\1\x7f"]
+             b"\x60\5" + b"\x7f" * 5 + b"\1\x7f", b"\x60\4" + b"\x7f" * 4 + b"\1\x7f", b"\x60\6" + b"\x7f" * 6 + b"\1\x7f"]
     def write(at):
         return check(constant(1) + constant(at) + constant(1) + b"\x10\0", 1)
 
@@ -58,12 +60,12 @@ def program(mode):
     if mode == "wait":
         entry += check(constant(0) + constant(4096) + constant(8) + constant(0) + constant(8) + b"\x10\2", 0)
     elif mode in ("handler", "missing-stack"):
-        entry += check(constant(10) + constant(1) + b"\x10\4", 0)
+        entry += check(constant(10) + constant(4128) + constant(24) + constant(0) + constant(24) + constant(44) + b"\x10\4", 0)
     entry += write(4112)
     if mode == "loop":
         entry += b"\x03\x40\x0c\0\x0b"
     elif mode == "stop":
-        entry += check(constant(19) + b"\x10\1", 0) + write(4113)
+        entry += check(constant(0) + constant(19) + b"\x10\1", 0) + write(4113)
     elif mode == "wait":
         entry += check(constant(4096) + constant(8) + constant(0) + constant(44) + b"\x10\3", 10) + write(4113)
     else:
@@ -84,7 +86,8 @@ def program(mode):
     module += section(7, bytes([3 if mode == "handler" else 2]) + exports)
     bodies = [b"\0" + body + b"\x0b" for body in (entry, callback)]
     module += section(10, b"\2" + b"".join(leb(len(body)) + body for body in bodies))
-    image = (1 << 9).to_bytes(8, "little") + bytes(8) + b"RCH"
+    image = (1 << 9).to_bytes(8, "little") + bytes(8) + b"RCH" + bytes(13)
+    image += (1).to_bytes(8, "little") + bytes(8) + (0x10000000).to_bytes(8, "little")
     return module + section(11, b"\1\0" + constant(4096) + b"\x0b" + leb(len(image)) + image)
 
 

@@ -51,12 +51,13 @@ def probes(count):
 def program():
     code = probes(20) + b"\x10\0\x22\0\x45\x04\x40"
     code += probes(3) + constant(17) + b"\x10\1\0\x05" + probes(1)
-    code += b"\x20\0" + constant(49152) + constant(0) + b"\x10\2\x20\0\x47\x04\x40\0\x0b"
+    code += b"\x20\0" + constant(49152) + constant(0) + constant(0) + constant(88) + b"\x10\2\x20\0\x47\x04\x40\0\x0b"
     code += constant(49152) + b"\x28\2\0" + constant(17 << 8) + b"\x47\x04\x40\0\x0b"
     code += constant(0) + b"\x10\1\0\x0b"
-    types = [b"\x60\0\1\x7f", b"\x60\1\x7f\0", b"\x60\3\x7f\x7f\x7f\1\x7f", b"\x60\0\0", b"\x60\1\x7f\1\x7f"]
+    types = [b"\x60\0\1\x7f", b"\x60\1\x7f\0", b"\x60\5" + b"\x7f" * 5 + b"\1\x7f", b"\x60\0\0", b"\x60\1\x7f\1\x7f"]
     module = b"\0asm\1\0\0\0" + section(1, leb(len(types)) + b"".join(types))
-    imports = [("_Fork", 0), ("_exit", 1), ("waitpid", 2)]
+    # wait4 takes the size of a struct rusage after its pointer, 88.
+    imports = [("_Fork", 0), ("_exit", 1), ("wait4", 2)]
     module += section(2, leb(len(imports)) + b"".join(text("kernel") + text(name) + b"\0" + leb(typ) for name, typ in imports))
     module += section(3, b"\2\3\4") + section(5, b"\1\1\1\2")
     module += section(6, b"\2\x7f\1" + constant(32768) + b"\x0b\x7f\0" + constant(65536) + b"\x0b")

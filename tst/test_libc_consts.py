@@ -73,7 +73,6 @@ TYPES = {
     "sizeofTimeval": "struct timeval",
     "sizeofTimezone": "struct timezone",
     "sizeofTms": "struct tms",
-    "sizeofUtimbuf": "struct utimbuf",
     "sizeofUtsname": "struct utsname",
     "sizeofWinsize": "struct winsize",
     "sizeofUcred": "struct ucred",

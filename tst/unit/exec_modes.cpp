@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
         const char* const lines[] = {
             "exec \"/tests/unit/exec_modes\"",
             "open(\"/run/none\", ...) = -1 ENOENT (no such file or directory)",
-            "waitpid(...",
+            "wait4(...",
             "signal SIGUSR1",
         };
         assert(has(text, child, lines, 4));

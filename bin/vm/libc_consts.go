@@ -167,7 +167,6 @@ const (
 	IEXTEN                            = 0o100000
 	VTIME                             = 5
 	VMIN                              = 6
-	CBAUD                             = 0o010017
 	UMOUNT_NOFOLLOW                   = 8
 	TIOCSCTTY                         = 0x540e
 	TIOCOUTQ                          = 0x5411
@@ -175,7 +174,6 @@ const (
 	TIOCGSID                          = 0x5429
 	TIOCGPTN                          = 0x80045430
 	TIOCSPTLCK                        = 0x40045431
-	ITIMER_REAL                       = 0
 	ITIMER_PROF                       = 2
 	PR_SET_PDEATHSIG                  = 1
 	PR_GET_PDEATHSIG                  = 2
@@ -334,7 +332,6 @@ const (
 	sizeofTimeval                     = 16
 	sizeofTimezone                    = 8
 	sizeofTms                         = 32
-	sizeofUtimbuf                     = 16
 	sizeofUtsname                     = 390
 	sizeofWinsize                     = 8
 	EPERM                       Errno = 1

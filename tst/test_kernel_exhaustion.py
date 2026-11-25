@@ -68,8 +68,8 @@ def main():
     vm, native, wazero = sys.argv[1:]
     startup = ("__kernel_begin", list(range(1024, 1040, 4)), False)
     cases = [("startup-array", *startup, False, None), ("startup-string", *startup, True, None),
-             # strtok's place is the static area's, ctermid's text a constant.
-             ("static-result", "strtok", [0, 0], True, False, None), ("constant-string", "ctermid", [0], True, False, None),
+             # strtok's place is the static area's.
+             ("static-result", "strtok", [0, 0], True, False, None),
              ("working-directory", "getcwd", [0, 0], True, False, 12),
              ("large-allocation", "malloc", [4194304], True, False, 12),
              ("growing-allocation", "realloc", [0, 4194304], True, False, 12)]
