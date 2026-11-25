@@ -1,5 +1,3 @@
-//go:build linux && amd64
-
 package main
 
 func libc__kernel_zone(name, data, size uint32) uint32 {
