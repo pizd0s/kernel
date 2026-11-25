@@ -802,14 +802,6 @@ func libcWcstold(s, end uint32) float64 {
 	return proc().libcWcstod(s, end)
 }
 
-func libcA64l(s uint32) uint32 {
-	return proc().libcA64l(s)
-}
-
-func libcL64a(v uint32) uint32 {
-	return proc().libcL64a(v)
-}
-
 func libcIconv_open(to, from uint32) uint32 {
 	return proc().libcIconv_open(to, from)
 }
@@ -2350,10 +2342,6 @@ func libcPrctl(option, va uint32) uint32 {
 	return proc().libcPrctl(option, va)
 }
 
-func libcGetpass(prompt uint32) uint32 {
-	return proc().libcGetpass(prompt)
-}
-
 func libcGetusershell() uint32 {
 	return proc().libcGetusershell()
 }
@@ -2630,14 +2618,6 @@ func libcInet_aton(s, at, atSize uint32) uint32 {
 	return p.libcInet_aton(s, at)
 }
 
-func libcInet_addr(s uint32) uint32 {
-	return proc().libcInet_addr(s)
-}
-
-func libcInet_network(s uint32) uint32 {
-	return proc().libcInet_network(s)
-}
-
 func libcInet_ntoa(in uint32) uint32 {
 	return proc().libcInet_ntoa(in)
 }
@@ -2648,18 +2628,6 @@ func libcInet_pton(family, s, dst uint32) uint32 {
 
 func libcInet_ntop(family, src, dst, size uint32) uint32 {
 	return proc().libcInet_ntop(family, src, dst, size)
-}
-
-func libcInet_makeaddr(n, h uint32) uint32 {
-	return proc().libcInet_makeaddr(n, h)
-}
-
-func libcInet_lnaof(in uint32) uint32 {
-	return proc().libcInet_lnaof(in)
-}
-
-func libcInet_netof(in uint32) uint32 {
-	return proc().libcInet_netof(in)
 }
 
 func libcIf_nametoindex(name uint32) uint32 {
@@ -4009,14 +3977,6 @@ func libcMkostemps(template, suffix, flags uint32) uint32 {
 	return proc().libcMkostemps(template, suffix, flags)
 }
 
-func libcSetkey(key uint32) {
-	proc().libcSetkey(key)
-}
-
-func libcEncrypt(block, decrypt uint32) {
-	proc().libcEncrypt(block, decrypt)
-}
-
 func libcStrerror_l(e, locale uint32) uint32 {
 	return proc().libcStrerror_l(e, locale)
 }
@@ -4513,46 +4473,6 @@ func libcSemctl(id, num, cmd, va, dsSize uint32) uint32 {
 	return p.libcSemctl(id, num, cmd, va)
 }
 
-func libcSetutxent() {
-	proc().libcSetutxent()
-}
-
-func libcEndutxent() {
-	proc().libcEndutxent()
-}
-
-func libcGetutxent(size uint32) uint32 {
-	p := proc()
-
-	p.sized("getutxent", size, sizeofUtmpx)
-
-	return p.libcGetutxent()
-}
-
-func libcGetutxid(id, idSize, size uint32) uint32 {
-	p := proc()
-
-	p.sized("getutxid", idSize, sizeofUtmpx, size, sizeofUtmpx)
-
-	return p.libcGetutxid(id)
-}
-
-func libcGetutxline(line, lineSize, size uint32) uint32 {
-	p := proc()
-
-	p.sized("getutxline", lineSize, sizeofUtmpx, size, sizeofUtmpx)
-
-	return p.libcGetutxline(line)
-}
-
-func libcPututxline(ut, utSize, size uint32) uint32 {
-	p := proc()
-
-	p.sized("pututxline", utSize, sizeofUtmpx, size, sizeofUtmpx)
-
-	return p.libcPututxline(ut)
-}
-
 func libcAio_read(cb, cbSize uint32) uint32 {
 	p := proc()
 
@@ -4623,51 +4543,4 @@ func libcGetrandom(buf, n, flags uint32) uint32 {
 
 func libcPosix_madvise(addr, n, advice uint32) uint32 {
 	return proc().libcPosix_madvise(addr, n, advice)
-}
-
-func libcFmtmsg(classification, label, severity, text, action, tag uint32) uint32 {
-	return proc().libcFmtmsg(classification, label, severity, text, action, tag)
-}
-
-func libcEther_ntoa(addr uint32) uint32 {
-	return proc().libcEther_ntoa(addr)
-}
-
-func libcEther_ntoa_r(addr, buf uint32) uint32 {
-	return proc().libcEther_ntoa_r(addr, buf)
-}
-
-func libcEther_aton(text uint32) uint32 {
-	return proc().libcEther_aton(text)
-}
-
-func libcEther_aton_r(text, addr uint32) uint32 {
-	return proc().libcEther_aton_r(text, addr)
-}
-
-func libcEther_ntohost(host, addr uint32) uint32 {
-	return proc().libcEther_ntohost(host, addr)
-}
-
-func libcEther_hostton(host, addr uint32) uint32 {
-	return proc().libcEther_hostton(host, addr)
-}
-
-func libcEther_line(line, addr, host uint32) uint32 {
-	return proc().libcEther_line(line, addr, host)
-}
-
-func libcWordexp(words, we, weSize, flags uint32) uint32 {
-	p := proc()
-
-	p.sized("wordexp", weSize, sizeofWordexp)
-
-	return p.libcWordexp(words, we, flags)
-}
-
-func libcWordfree(we, weSize uint32) {
-	p := proc()
-
-	p.sized("wordfree", weSize, sizeofWordexp)
-	p.libcWordfree(we)
 }

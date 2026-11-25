@@ -4,7 +4,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/des"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -38,7 +37,6 @@ var (
 	localeVars     = [LC_ALL]string{"LC_CTYPE", "LC_NUMERIC", "LC_TIME", "LC_COLLATE", "LC_MONETARY", "LC_MESSAGES"}
 	wcClassNames   = []string{"alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"}
 	devctlValues   = map[uint32]bool{TCFLSH: true, TCXONC: true, TCSBRK: true}
-	severities     = map[uint32]string{MM_HALT: "HALT", MM_ERROR: "ERROR", MM_WARNING: "WARNING", MM_INFO: "INFO"}
 )
 
 var randomInit = [32]uint32{
@@ -138,16 +136,11 @@ const (
 	staticProtoent   = 528
 	staticNtoa       = 532
 	staticCrypt      = 548
-	staticL64a       = 552
 	staticCuserid    = 560
 	staticNetent     = 580
 	staticServIndex  = 584
 	staticProtoIndex = 588
 	staticNetIndex   = 592
-	staticUtmpx      = 596
-	staticUtmpIndex  = 600
-	staticEther      = 604
-	staticEtherText  = 612
 	staticRes        = 632
 	staticSize       = 1144
 	resRetrans       = 0
@@ -187,7 +180,6 @@ const (
 	dirIndex         = 12
 	dirBuf           = 16
 	dirBufLen        = 4096
-	passwordSize     = 128
 	zoneMax          = 1 << 20
 	logIdentSize     = 32
 	utsSysname       = "pizdos"
@@ -200,7 +192,6 @@ const (
 	packetRoomKept   = 4096
 	localeNameMax    = 23
 	traceStringMax   = 64
-	utmpxPath        = "/run/utmp"
 )
 
 const (
@@ -247,11 +238,10 @@ type Process struct {
 	cwd   Object
 	umask uint32
 
-	errnoAt    uint32
-	environAt  uint32
-	tzAt       [3]uint32
-	nameAt     uint32
-	passwordAt uint32
+	errnoAt   uint32
+	environAt uint32
+	tzAt      [3]uint32
+	nameAt    uint32
 
 	heap   *Heap
 	stack  *Stack
@@ -276,7 +266,6 @@ type Process struct {
 	semUndo        map[*SemSet]bool
 	aios           map[uint32]*AioOp
 
-	desKey       [8]byte
 	posixTimers  map[int32]*PosixTimer
 	syncs        map[int32]Object
 	nextSync     int32
@@ -578,11 +567,11 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 
 		i.attach(p)
 		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
-		p.tzAt, p.nameAt, p.passwordAt = [3]uint32{}, 0, 0
+		p.tzAt, p.nameAt = [3]uint32{}, 0
 		p.constants, p.locale = map[string]uint32{}, [LC_ALL]string{}
 		p.iconvs, p.spawnFiles, p.locales = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}, map[uint32][LC_ALL]string{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
-		p.defaultStack, p.defaultGuard, p.desKey = 0, 0, [8]byte{}
+		p.defaultStack, p.defaultGuard = 0, 0
 
 		for _, t := range p.posixTimers {
 			p.disarmPosix(t)
@@ -2975,136 +2964,6 @@ func (p *Process) semSetValues(s *SemSet, from int, values []int32) error {
 	return nil
 }
 
-func (p *Process) utmpRecords() [][]byte {
-	data, _ := p.readPath(utmpxPath, databaseMax)
-
-	var out [][]byte
-
-	for len(data) >= sizeofUtmpx {
-		out, data = append(out, data[:sizeofUtmpx]), data[sizeofUtmpx:]
-	}
-
-	return out
-}
-
-func utmpType(rec []byte) int16 {
-	return int16(binary.LittleEndian.Uint16(rec))
-}
-
-func utmpField(rec []byte, at, n int) []byte {
-	b, _, _ := bytes.Cut(rec[at:at+n], []byte{0})
-
-	return b
-}
-
-func utmpProcess(t int16) bool {
-	return t == INIT_PROCESS || t == LOGIN_PROCESS || t == USER_PROCESS || t == DEAD_PROCESS
-}
-
-func utmpSameId(rec, id []byte) bool {
-	switch t := utmpType(id); {
-	case t == RUN_LVL || t == BOOT_TIME || t == OLD_TIME || t == NEW_TIME:
-		return utmpType(rec) == t
-	case utmpProcess(t):
-		return utmpProcess(utmpType(rec)) && bytes.Equal(rec[40:44], id[40:44])
-	}
-
-	return false
-}
-
-func utmpSameLine(rec, line []byte) bool {
-	t := utmpType(rec)
-
-	return (t == LOGIN_PROCESS || t == USER_PROCESS) && bytes.Equal(utmpField(rec, 8, 32), utmpField(line, 8, 32))
-}
-
-func (p *Process) utmpResult(rec []byte) uint32 {
-	block := p.staticResult(staticUtmpx, sizeofUtmpx)
-
-	if block != 0 {
-		copy(p.span(block, sizeofUtmpx), rec)
-	}
-
-	return block
-}
-
-func (p *Process) utmpSearch(match func(rec []byte) bool) uint32 {
-	at := p.staticAt(staticUtmpIndex)
-	recs := p.utmpRecords()
-
-	for i := int(p.u32(at)); i < len(recs); i++ {
-		if match(recs[i]) {
-			p.put32(at, uint32(i+1))
-
-			return p.utmpResult(recs[i])
-		}
-	}
-
-	p.put32(at, uint32(len(recs)))
-
-	return 0
-}
-
-func (p *Process) libcSetutxent() {
-	p.rewind(staticUtmpIndex)
-}
-
-func (p *Process) libcEndutxent() {
-	p.rewind(staticUtmpIndex)
-}
-
-func (p *Process) libcGetutxent() uint32 {
-	return p.utmpSearch(func([]byte) bool { return true })
-}
-
-func (p *Process) libcGetutxid(id uint32) uint32 {
-	want := bytes.Clone(p.span(id, sizeofUtmpx))
-
-	return p.utmpSearch(func(rec []byte) bool { return utmpSameId(rec, want) })
-}
-
-func (p *Process) libcGetutxline(line uint32) uint32 {
-	want := bytes.Clone(p.span(line, sizeofUtmpx))
-
-	return p.utmpSearch(func(rec []byte) bool { return utmpSameLine(rec, want) })
-}
-
-func (p *Process) libcPututxline(ut uint32) uint32 {
-	rec := bytes.Clone(p.span(ut, sizeofUtmpx))
-	f, err := p.openPath(utmpxPath, O_RDWR|O_CREAT, 0o644)
-
-	if err != nil {
-		return p.pointer(0, err)
-	}
-
-	defer f.unref()
-
-	at := p.staticAt(staticUtmpIndex)
-	recs := p.utmpRecords()
-	from := min(max(int(p.u32(at))-1, 0), len(recs))
-	slot := len(recs)
-
-	for k := range recs {
-		if i := (from + k) % len(recs); utmpSameId(recs[i], rec) {
-			slot = i
-
-			break
-		}
-	}
-
-	if n, err := p.filePwrite(f, bytesFile(rec), sizeofUtmpx, int64(slot)*sizeofUtmpx); err != nil || n != sizeofUtmpx {
-		if err == nil {
-			err = EIO
-		}
-
-		return p.pointer(0, err)
-	}
-
-	p.put32(at, uint32(slot+1))
-
-	return p.utmpResult(rec)
-}
-
 func (p *Process) sigEvent(at uint32) (SigEvent, error) {
 	e := SigEvent{value: p.u32(at), signal: int(p.u32(at + 4)), kind: p.u32(at + 8)}
 
@@ -3506,472 +3365,6 @@ func (p *Process) libcPosix_madvise(addr, n, advice uint32) uint32 {
 	}
 
 	return 0
-}
-
-func fmtmsgText(parts [5]string, use [5]bool) string {
-	var first []string
-
-	for i := range 3 {
-		if use[i] {
-			first = append(first, parts[i])
-		}
-	}
-
-	second := ""
-
-	if use[3] {
-		second = "TO FIX: " + parts[3]
-	}
-
-	if use[4] {
-		if second != "" {
-			second += " "
-		}
-
-		second += parts[4]
-	}
-
-	line := strings.Join(first, ": ")
-
-	switch {
-	case line != "" && second != "":
-		return line + "\n" + second + "\n"
-	case line != "" || second != "":
-		return line + second + "\n"
-	}
-
-	return ""
-}
-
-func (p *Process) msgverb() [5]bool {
-	all := [5]bool{true, true, true, true, true}
-	env, ok := p.getenv("MSGVERB")
-
-	if !ok || env == "" {
-		return all
-	}
-
-	var use [5]bool
-
-	for _, word := range strings.Split(env, ":") {
-		i := slices.Index([]string{"label", "severity", "text", "action", "tag"}, word)
-
-		if i < 0 {
-			return all
-		}
-
-		use[i] = true
-	}
-
-	return use
-}
-
-func (p *Process) libcFmtmsg(classification, label, severity, text, action, tag uint32) uint32 {
-	var parts [5]string
-	var given [5]bool
-
-	for i, at := range []uint32{label, 0, text, action, tag} {
-		if at != 0 {
-			parts[i], given[i] = p.str(at), true
-		}
-	}
-
-	parts[1], given[1] = severities[severity]
-
-	result := int32(MM_OK)
-
-	if classification&MM_PRINT != 0 {
-		verb := p.msgverb()
-
-		var use [5]bool
-
-		for i := range use {
-			use[i] = given[i] && verb[i]
-		}
-
-		if msg := fmtmsgText(parts, use); msg != "" {
-			t, err := p.fd(2)
-
-			if err == nil {
-				_, err = p.fileWrite(t, bytesFile([]byte(msg)), len(msg), IoMode{})
-			}
-
-			if err != nil {
-				result = MM_NOMSG
-			}
-		}
-	}
-
-	if classification&MM_CONSOLE != 0 {
-		if msg := fmtmsgText(parts, given); msg != "" && p.consoleWrite(msg) != nil {
-			if result == MM_NOMSG {
-				result = MM_NOTOK
-			} else {
-				result = MM_NOCON
-			}
-		}
-	}
-
-	return uint32(result)
-}
-
-func (p *Process) etherAt(at uint32) [ETHER_ADDR_LEN]byte {
-	return [ETHER_ADDR_LEN]byte(p.span(at, ETHER_ADDR_LEN))
-}
-
-func (p *Process) putEther(at uint32, a [ETHER_ADDR_LEN]byte) uint32 {
-	copy(p.span(at, ETHER_ADDR_LEN), a[:])
-
-	return at
-}
-
-func (p *Process) etherEntries() []EtherEntry {
-	lines, _ := p.fileLines("/etc/ethers")
-
-	var out []EtherEntry
-
-	for _, line := range lines {
-		if e, ok := etherLine(line); ok {
-			out = append(out, e)
-		}
-	}
-
-	return out
-}
-
-func (p *Process) libcEther_aton(text uint32) uint32 {
-	return p.libcEther_aton_r(text, p.staticAt(staticEther))
-}
-
-func (p *Process) libcEther_aton_r(text, addr uint32) uint32 {
-	a, _, ok := etherParse(p.str(text))
-
-	if !ok {
-		return 0
-	}
-
-	return p.putEther(addr, a)
-}
-
-func (p *Process) libcEther_ntoa(addr uint32) uint32 {
-	return p.libcEther_ntoa_r(addr, p.staticAt(staticEtherText))
-}
-
-func (p *Process) libcEther_ntoa_r(addr, buf uint32) uint32 {
-	p.putString(buf, etherText(p.etherAt(addr)))
-
-	return buf
-}
-
-func (p *Process) libcEther_ntohost(host, addr uint32) uint32 {
-	a := p.etherAt(addr)
-
-	for _, e := range p.etherEntries() {
-		if e.addr == a {
-			p.putString(host, e.name)
-
-			return 0
-		}
-	}
-
-	return ^uint32(0)
-}
-
-func (p *Process) libcEther_hostton(host, addr uint32) uint32 {
-	name := p.str(host)
-
-	for _, e := range p.etherEntries() {
-		if e.name == name {
-			p.putEther(addr, e.addr)
-
-			return 0
-		}
-	}
-
-	return ^uint32(0)
-}
-
-func (p *Process) libcEther_line(line, addr, host uint32) uint32 {
-	e, ok := etherLine(p.str(line))
-
-	if !ok {
-		return ^uint32(0)
-	}
-
-	p.putEther(addr, e.addr)
-	p.putString(host, e.name)
-
-	return 0
-}
-
-func wordexpCheck(s string, nocmd bool) uint32 {
-	frames := []WordFrame{{}}
-	sq := false
-
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		f := &frames[len(frames)-1]
-
-		if sq {
-			sq = c != '\''
-
-			continue
-		}
-
-		switch {
-		case c == '\\':
-			if i++; i >= len(s) {
-				return WRDE_SYNTAX
-			}
-		case c == '\'' && !f.dq:
-			sq = true
-		case c == '"':
-			f.dq = !f.dq
-		case c == '`':
-			if nocmd {
-				return WRDE_CMDSUB
-			}
-
-			if f.kind == '`' {
-				frames = frames[:len(frames)-1]
-			} else {
-				frames = append(frames, WordFrame{kind: '`'})
-			}
-		case c == '$' && strings.HasPrefix(s[i:], "$(("):
-			frames = append(frames, WordFrame{kind: 'a'})
-			i += 2
-		case c == '$' && strings.HasPrefix(s[i:], "$("):
-			if nocmd {
-				return WRDE_CMDSUB
-			}
-
-			frames = append(frames, WordFrame{kind: '('})
-			i++
-		case c == '$' && strings.HasPrefix(s[i:], "${"):
-			frames = append(frames, WordFrame{kind: '{'})
-			i++
-		case f.dq || f.kind == '`':
-		case f.kind == '(' || f.kind == 'a':
-			switch {
-			case c == '(':
-				f.depth++
-			case c == ')' && f.depth > 0:
-				f.depth--
-			case c == ')' && f.kind == 'a' && (i+1 >= len(s) || s[i+1] != ')'):
-				return WRDE_SYNTAX
-			case c == ')':
-				if f.kind == 'a' {
-					i++
-				}
-
-				frames = frames[:len(frames)-1]
-			}
-		case f.kind == '{':
-			if c == '}' {
-				frames = frames[:len(frames)-1]
-			}
-		case strings.IndexByte("\n|&;<>(){}", c) >= 0:
-			return WRDE_BADCHAR
-		}
-	}
-
-	if sq || len(frames) > 1 || frames[0].dq {
-		return WRDE_SYNTAX
-	}
-
-	return 0
-}
-
-func wordexpFields(out []byte) ([]string, bool) {
-	rest, ok := bytes.CutPrefix(out, []byte("x\x00"))
-
-	if !ok {
-		return nil, false
-	}
-
-	fields := strings.Split(string(rest), "\x00")
-
-	return fields[:len(fields)-1], true
-}
-
-func (p *Process) shellWords(text string, flags uint32) []byte {
-	script := `eval "printf %s\\\\0 x $1"`
-
-	if flags&WRDE_UNDEF != 0 {
-		script = "set -u; " + script
-	}
-
-	img, err := p.loadProgram("/bin/sh", []string{"sh", "-c", script, "sh", text})
-
-	if err != nil {
-		return nil
-	}
-
-	img.envp = p.environment()
-
-	c, err := p.k.newProcess(p)
-
-	if err != nil {
-		return nil
-	}
-
-	c.inherit(p)
-
-	out := newCapture(nil)
-
-	out.ref()
-	c.closeFd(1)
-	c.files.put(1, out, false)
-
-	if flags&WRDE_SHOWERR == 0 {
-		c.closeFd(2)
-
-		if null, err := c.openPath("/dev/null", O_WRONLY, 0); err == nil {
-			c.files.put(2, null, false)
-		}
-	}
-
-	c.execReset()
-
-	var ended atomic.Bool
-
-	go func() {
-		c.run(img)
-		ended.Store(true)
-		p.post(&p.own.child)
-	}()
-
-	mask := p.setMask(p.mask() | sigBit(SIGCHLD))
-
-	p.wait(time.Time{}, func(*Event) (bool, error) {
-		return ended.Load(), nil
-	})
-
-	p.setMask(mask)
-	p.k.mu.Lock()
-	delete(p.k.procs, c.pid)
-	p.k.mu.Unlock()
-
-	data := out.bytes()
-
-	out.unref()
-
-	return data
-}
-
-func (p *Process) wordexpFailed(we, flags, e uint32) uint32 {
-	if flags&WRDE_APPEND == 0 {
-		p.put32(we, 0)
-		p.put32(we+4, 0)
-	}
-
-	return e
-}
-
-func (p *Process) libcWordexp(words, we, flags uint32) uint32 {
-	text := p.str(words)
-
-	if e := wordexpCheck(text, flags&WRDE_NOCMD != 0); e != 0 {
-		return p.wordexpFailed(we, flags, e)
-	}
-
-	if flags&WRDE_REUSE != 0 {
-		p.libcWordfree(we)
-		flags &^= WRDE_APPEND
-	}
-
-	fields, ok := wordexpFields(p.shellWords(text, flags))
-
-	if !ok {
-		e := uint32(WRDE_SYNTAX)
-
-		if _, plain := wordexpFields(p.shellWords(text, flags&^WRDE_UNDEF)); plain && flags&WRDE_UNDEF != 0 {
-			e = WRDE_BADVAL
-		}
-
-		return p.wordexpFailed(we, flags, e)
-	}
-
-	offs := uint32(0)
-
-	if flags&WRDE_DOOFFS != 0 {
-		offs = p.u32(we + 8)
-	} else {
-		p.put32(we+8, 0)
-	}
-
-	var words2 []uint32
-
-	if old := p.u32(we + 4); flags&WRDE_APPEND != 0 && old != 0 {
-		for i := range p.u32(we) {
-			words2 = append(words2, p.u32(old+4*(offs+i)))
-		}
-	}
-
-	if offs > 1<<26 {
-		return WRDE_NOSPACE
-	}
-
-	vec := p.malloc(4 * (offs + uint32(len(words2)+len(fields)) + 1))
-
-	if vec == 0 {
-		return WRDE_NOSPACE
-	}
-
-	var made []uint32
-
-	for _, f := range fields {
-		at := p.malloc(uint32(len(f)) + 1)
-
-		if at == 0 {
-			for _, m := range made {
-				p.free(m)
-			}
-
-			p.free(vec)
-
-			return WRDE_NOSPACE
-		}
-
-		p.putString(at, f)
-		made = append(made, at)
-	}
-
-	all := append(append(make([]uint32, offs), words2...), made...)
-
-	for i, w := range append(all, 0) {
-		p.put32(vec+4*uint32(i), w)
-	}
-
-	if old := p.u32(we + 4); flags&WRDE_APPEND != 0 && old != 0 {
-		p.free(old)
-	}
-
-	p.put32(we, uint32(len(words2)+len(made)))
-	p.put32(we+4, vec)
-
-	return 0
-}
-
-func (p *Process) libcWordfree(we uint32) {
-	vec := p.u32(we + 4)
-
-	if vec == 0 {
-		return
-	}
-
-	for at := vec + 4*p.u32(we+8); ; at += 4 {
-		w := p.u32(at)
-
-		if w == 0 {
-			break
-		}
-
-		p.free(w)
-	}
-
-	p.free(vec)
-	p.put32(we+4, 0)
 }
 
 func (p *Process) libcExecl(path, arg0, va uint32) uint32 {
@@ -4556,8 +3949,8 @@ func (p *Process) startVfork() uint32 {
 	c.spawnFiles, c.nextSpawnFiles = p.spawnFiles, p.nextSpawnFiles
 	c.locales, c.nextLocale = p.locales, p.nextLocale
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
-	c.defaultStack, c.defaultGuard, c.desKey = p.defaultStack, p.defaultGuard, p.desKey
-	c.locale, c.envStrings, c.mappings, c.tzAt, c.passwordAt = p.locale, p.envStrings, p.mappings, p.tzAt, p.passwordAt
+	c.defaultStack, c.defaultGuard = p.defaultStack, p.defaultGuard
+	c.locale, c.envStrings, c.mappings, c.tzAt = p.locale, p.envStrings, p.mappings, p.tzAt
 	c.nameAt = p.nameAt
 	c.token.Store(p.token.Load())
 	c.inherit(p)
@@ -4608,7 +4001,7 @@ func (p *Process) fork() (int32, error) {
 	inst.attach(c)
 	c.image = p.image
 	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap.clone(), p.stack.clone(), p.static, p.env, p.errnoAt, p.environAt, p.siginfo
-	c.stackAt, c.locale, c.tzAt, c.passwordAt = p.stackAt, p.locale, p.tzAt, p.passwordAt
+	c.stackAt, c.locale, c.tzAt = p.stackAt, p.locale, p.tzAt
 	c.nameAt = p.nameAt
 	c.constants, c.jumps = map[string]uint32{}, map[uint32]*JmpBuf{}
 	c.iconvs, c.nextIconv = map[uint32]*Iconv{}, p.nextIconv
@@ -4628,7 +4021,7 @@ func (p *Process) fork() (int32, error) {
 	}
 
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = map[int32]Object{}, p.nextSync, map[string]*SemOpen{}, p.keys, p.thread
-	c.defaultStack, c.defaultGuard, c.desKey = p.defaultStack, p.defaultGuard, p.desKey
+	c.defaultStack, c.defaultGuard = p.defaultStack, p.defaultGuard
 
 	for h, o := range p.syncs {
 		r := SyncCopy{}
@@ -11347,83 +10740,6 @@ func (p *Process) libcOpenpty(amaster, aslave, name, termp, winp uint32) uint32 
 	return 0
 }
 
-func (p *Process) libcGetpass(prompt uint32) uint32 {
-	fd, err := p.open(AT_FDCWD, "/dev/tty", O_RDWR|O_NOCTTY|O_CLOEXEC, 0)
-
-	if err != nil {
-		p.setErrno(errnoOf(err))
-
-		return 0
-	}
-
-	defer p.closeFd(fd)
-
-	t, err := p.fd(uint32(fd))
-
-	if err != nil {
-		p.setErrno(errnoOf(err))
-
-		return 0
-	}
-
-	if p.passwordAt == 0 {
-		p.passwordAt = p.malloc(passwordSize + 1)
-	}
-
-	if p.passwordAt == 0 {
-		p.setErrno(ENOMEM)
-
-		return 0
-	}
-
-	at := p.passwordAt
-	saved, err := p.ttyGetattr(t)
-
-	if err != nil {
-		p.setErrno(errnoOf(err))
-
-		return 0
-	}
-
-	quiet := append([]byte(nil), saved...)
-	le := binary.LittleEndian
-
-	le.PutUint32(quiet, le.Uint32(quiet)&^(INLCR|IGNCR)|ICRNL)
-	le.PutUint32(quiet[12:], le.Uint32(quiet[12:])&^(ECHO|ISIG)|ICANON)
-	p.ttySetattr(t, 2, quiet)
-
-	asked := uint32(len(p.str(prompt)))
-	shown := p.memory(prompt, asked, O_RDONLY)
-
-	p.fileWrite(t, shown, int(asked), IoMode{})
-	p.memoryDone(shown)
-
-	typed := p.memory(at, passwordSize, O_WRONLY)
-	n, err := p.fileRead(t, typed, passwordSize, IoMode{})
-
-	p.memoryDone(typed)
-
-	if err == nil {
-		if n > 0 && p.span(at, passwordSize)[n-1] == '\n' || n == passwordSize {
-			n--
-		}
-
-		p.span(at, passwordSize)[n] = 0
-	}
-
-	p.ttySetattr(t, 2, saved)
-
-	p.fileWrite(t, bytesFile([]byte{'\n'}), 1, IoMode{})
-
-	if err != nil {
-		p.setErrno(errnoOf(err))
-
-		return 0
-	}
-
-	return at
-}
-
 func (p *Process) putTimespec(at uint32, d time.Duration) {
 	p.put64(at, uint64(d/time.Second))
 	p.put32(at+8, uint32(d%time.Second))
@@ -14326,26 +13642,6 @@ func (p *Process) libcInet_aton(s, at uint32) uint32 {
 	return bit(ok)
 }
 
-func (p *Process) libcInet_addr(s uint32) uint32 {
-	a, ok := inetAton(p.str(s))
-
-	if !ok {
-		return 0xffffffff
-	}
-
-	return binary.LittleEndian.Uint32(a[:])
-}
-
-func (p *Process) libcInet_network(s uint32) uint32 {
-	a, ok := inetAton(p.str(s))
-
-	if !ok {
-		return 0xffffffff
-	}
-
-	return binary.BigEndian.Uint32(a[:])
-}
-
 func (p *Process) libcInet_ntoa(in uint32) uint32 {
 	var b [4]byte
 	binary.LittleEndian.PutUint32(b[:], in)
@@ -14413,47 +13709,6 @@ func (p *Process) libcInet_ntop(family, src, dst, size uint32) uint32 {
 	p.putString(dst, text)
 
 	return dst
-}
-
-func (p *Process) libcInet_makeaddr(n, h uint32) uint32 {
-	switch {
-	case n < 256:
-		h = h&0xffffff | n<<24
-	case n < 65536:
-		h = h&0xffff | n<<16
-	case n < 1<<24:
-		h = h&0xff | n<<8
-	default:
-		h |= n
-	}
-
-	return bits.ReverseBytes32(h)
-}
-
-func (p *Process) libcInet_lnaof(in uint32) uint32 {
-	in = bits.ReverseBytes32(in)
-
-	switch {
-	case in>>24 < 128:
-		return in & 0xffffff
-	case in>>24 < 192:
-		return in & 0xffff
-	}
-
-	return in & 0xff
-}
-
-func (p *Process) libcInet_netof(in uint32) uint32 {
-	in = bits.ReverseBytes32(in)
-
-	switch {
-	case in>>24 < 128:
-		return in >> 24
-	case in>>24 < 192:
-		return in >> 16
-	}
-
-	return in >> 8
 }
 
 func (p *Process) netInterfaces() []NetInterface {
@@ -16194,18 +15449,6 @@ func (p *Process) libc__hdtoa(v float64, xdigits, n, decpt, sign, end uint32) ui
 	}
 
 	return p.digitsOut(text, point, math.Signbit(v), decpt, sign, end)
-}
-
-func (p *Process) libcA64l(s uint32) uint32 {
-	return radix64Value(p.limited(s, 6))
-}
-
-func (p *Process) libcL64a(v uint32) uint32 {
-	at := p.staticAt(staticL64a)
-
-	p.putString(at, radix64Text(v))
-
-	return at
 }
 
 func (p *Process) libcAbs(n uint32) uint32 {
@@ -19163,50 +18406,6 @@ func errnoOrNil(code uint32) error {
 
 func (p *Process) libcMkostemps(template, suffix, flags uint32) uint32 {
 	return p.mkstemp(template, suffix, flags)
-}
-
-func (p *Process) libcSetkey(key uint32) {
-	k := p.span(key, 64)
-
-	for i := range p.desKey {
-		b := byte(0)
-
-		for j := range 8 {
-			b = b<<1 | k[8*i+j]&1
-		}
-
-		p.desKey[i] = b
-	}
-}
-
-func (p *Process) libcEncrypt(block, decrypt uint32) {
-	b := p.span(block, 64)
-
-	var data [8]byte
-
-	for i := range data {
-		for j := range 8 {
-			data[i] = data[i]<<1 | b[8*i+j]&1
-		}
-	}
-
-	c, err := des.NewCipher(p.desKey[:])
-
-	if err != nil {
-		return
-	}
-
-	if decrypt != 0 {
-		c.Decrypt(data[:], data[:])
-	} else {
-		c.Encrypt(data[:], data[:])
-	}
-
-	for i := range data {
-		for j := range 8 {
-			b[8*i+j] = data[i] >> (7 - j) & 1
-		}
-	}
 }
 
 func (p *Process) libcStrerror_l(e, locale uint32) uint32 {
