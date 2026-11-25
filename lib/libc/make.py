@@ -24,7 +24,9 @@ of the kernel's Go is its import, one of libc.wasm's own __kernel_X that
 function. libc.wasm's forwarders are strong, as no program's function
 takes their place there, but those of a name a source defines: they are
 weak, #pragma weak, and linked after, so the source's function is the
-one, its __kernel_X beside it. A
+one, its __kernel_X beside it. All libc.wasm defines but the __kernel_
+functions and its exports is __libc_'s at last, printf __libc_printf, as
+it is of nothing but libc.wasm itself. A
 function a source here exports (export_name) the kernel links into every
 program and exports from it by its name: the kernel calls the program's
 functions through them (start.c).
@@ -281,6 +283,7 @@ def main():
     functions.write_bytes(symbols.named(functions.read_bytes(), forwarders[1].read_bytes(), own))
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     relocatable(ld, Path(output), [functions, runtime[1]])
+    Path(output).write_bytes(symbols.Object(Path(output).read_bytes()).with_prefix("__libc_"))
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ SECTION = 3
 UNDEFINED = 0x10
 LOCAL = 0x2
 HIDDEN = 0x4
+EXPORTED = 0x20
 EXPLICIT_NAME = 0x40
 SYMBOL_TABLE = 8
 
@@ -248,6 +249,39 @@ class Object:
                 entries += bytes([FUNCTION]) + uleb(flags | EXPLICIT_NAME) + uleb(index) + uleb(len(named)) + named.encode()
             else:
                 entries += data[begin:stop]
+
+        payload = uleb(count) + entries + data[self.spans[-1][1] if self.spans else first:end]
+        table = bytes([SYMBOL_TABLE]) + uleb(len(payload)) + payload
+        section_at = next(s for s in self.sections if s[2] == self.linking[0])
+        body = data[section_at[2]:at] + table + data[end:section_at[3]]
+
+        return data[:section_at[1]] + bytes([0]) + uleb(len(body)) + body + data[section_at[3]:]
+
+    def with_prefix(self, prefix):
+        """The object with every function and data it defines named with the
+        prefix, and what refers to them, but the kernel's functions
+        (__kernel_X) and its exports: names of its own, which nothing
+        outside it binds to."""
+        data = self.data
+        at, start, end = self.table
+        count, first = self.count
+        renamed = {name for kind, flags, name, index in self.symbols
+                   if kind in (FUNCTION, DATA) and name and not flags & (UNDEFINED | LOCAL | EXPORTED) and not name.startswith("__kernel_")}
+        taken = {name for kind, flags, name, index in self.symbols if name}
+
+        if any(prefix + name in taken for name in renamed):
+            raise SystemExit(f"a name of {prefix} is there already")
+
+        entries = bytearray()
+
+        for (kind, flags, name, index), (begin, stop) in zip(self.symbols, self.spans):
+            if name not in renamed or flags & LOCAL or (kind == FUNCTION and flags & UNDEFINED and not flags & EXPLICIT_NAME):
+                entries += data[begin:stop]
+            elif kind == FUNCTION:
+                entries += bytes([kind]) + uleb(flags) + uleb(index) + uleb(len(prefix + name)) + (prefix + name).encode()
+            else:
+                _, after = string(data, leb(data, begin + 1)[1])
+                entries += bytes([kind]) + uleb(flags) + uleb(len(prefix + name)) + (prefix + name).encode() + data[after:stop]
 
         payload = uleb(count) + entries + data[self.spans[-1][1] if self.spans else first:end]
         table = bytes([SYMBOL_TABLE]) + uleb(len(payload)) + payload
