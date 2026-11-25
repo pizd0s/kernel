@@ -11277,48 +11277,6 @@ func (p *Process) getsubopt(opt, keys, val uint32) uint32 {
 	}
 }
 
-func (p *Process) daemon() uint32 {
-	k := p.k
-
-	if p == k.first {
-		return p.result(0, nil)
-	}
-
-	k.mu.Lock()
-
-	parent := k.procs[p.ppid]
-	old := p.pid
-
-	k.lastPid++
-	delete(k.procs, old)
-	p.pid, p.ppid = k.lastPid, k.first.pid
-	p.pgid.Store(k.lastPid)
-	p.sid.Store(k.lastPid)
-	k.procs[p.pid] = p
-
-	for _, q := range k.procs {
-		if q.ppid == old {
-			q.ppid = k.first.pid
-		}
-	}
-
-	k.mu.Unlock()
-
-	if parent != nil && !parent.discardsChildren() {
-		k.mu.Lock()
-
-		zombie := &Process{k: k, pid: old, ppid: parent.pid, zombie: true}
-
-		zombie.pgid.Store(parent.pgid.Load())
-		zombie.sid.Store(parent.sid.Load())
-		k.procs[old] = zombie
-		k.mu.Unlock()
-		parent.childChanged(SIGCHLD)
-	}
-
-	return p.result(0, nil)
-}
-
 func (p *Process) name() string {
 	if p.comm != nil {
 		return *p.comm
@@ -11484,10 +11442,6 @@ func (p *Process) libcRandom() uint32 {
 
 func (p *Process) libcGetsubopt(opt, keys, val uint32) uint32 {
 	return p.getsubopt(opt, keys, val)
-}
-
-func (p *Process) libc__daemon() uint32 {
-	return p.daemon()
 }
 
 func (p *Process) libcPrctl(option, va uint32) uint32 {

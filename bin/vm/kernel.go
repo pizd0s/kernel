@@ -1035,7 +1035,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"rand_r":                                libcRand_r,
 		"secure_getenv":                         libcSecure_getenv,
 		"getsubopt":                             libcGetsubopt,
-		"__daemon":                              libc__daemon,
 		"prctl":                                 libcPrctl,
 		"gethostname":                           libcGethostname,
 		"getentropy":                            libcGetentropy,

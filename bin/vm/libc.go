@@ -2094,10 +2094,6 @@ func libcGetsubopt(opt, keys, val uint32) uint32 {
 	return proc().libcGetsubopt(opt, keys, val)
 }
 
-func libc__daemon() uint32 {
-	return proc().libc__daemon()
-}
-
 func libcPrctl(option, va uint32) uint32 {
 	return proc().libcPrctl(option, va)
 }

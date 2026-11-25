@@ -4,8 +4,10 @@
  * the shell has as they were; a shell that cannot be run is as one that
  * exits 127. system(NULL) says whether /bin/sh may be run. daemon moves
  * the process to /, its standard input, output and error to /dev/null,
- * where it is not asked not to, then makes it the system's, of a session
- * of its own, as the kernel's __daemon does without fork.
+ * where it is not asked not to, then goes on in a child of fork that
+ * leads a session of its own, its parent's exit, 0, the system's first
+ * process its parent once it returns. The first process itself stays, as
+ * the system ends with it.
  */
 #include "kernel.h"
 
@@ -15,9 +17,8 @@
 #include <spawn.h>
 #include <stdlib.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
-
-int __daemon(void);
 
 int __kernel_system(const char* command) {
     if (!command) {
@@ -92,5 +93,29 @@ int __kernel_daemon(int nochdir, int noclose) {
         }
     }
 
-    return __daemon();
+    pid_t parent = getpid();
+
+    if (parent == 1) {
+        return 0;
+    }
+
+    pid_t child = fork();
+
+    if (child < 0) {
+        return -1;
+    }
+
+    if (child > 0) {
+        _exit(0);
+    }
+
+    if (setsid() < 0) {
+        return -1;
+    }
+
+    while (getppid() == parent) {
+        nanosleep(&(struct timespec){0, 1000000}, NULL);
+    }
+
+    return 0;
 }
