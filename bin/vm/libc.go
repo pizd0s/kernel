@@ -1794,10 +1794,6 @@ func libcSockatmark(fd uint32) uint32 {
 	return proc().libcSockatmark(fd)
 }
 
-func libcCrypt(key, setting uint32) uint32 {
-	return proc().libcCrypt(key, setting)
-}
-
 func libcEpoll_create(size uint32) uint32 {
 	return proc().libcEpoll_create(size)
 }

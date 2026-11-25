@@ -9,7 +9,7 @@ import (
 
 var libraryCalls = func() map[string]bool {
 	names := strings.Fields(`
-		abs aligned_alloc bcmp bcopy bzero calloc cfgetispeed cfgetospeed cfmakeraw cfsetispeed cfsetospeed cfsetspeed crypt div
+		abs aligned_alloc bcmp bcopy bzero calloc cfgetispeed cfgetospeed cfmakeraw cfsetispeed cfsetospeed cfsetspeed div
 		explicit_bzero ffs ffsl ffsll fnmatch free getpagesize globfree imaxabs imaxdiv index labs ldiv llabs lldiv malloc
 		malloc_usable_size mallopt memalign memccpy memchr memcmp memcpy memmem memmove mempcpy memrchr memset posix_memalign realloc
 		reallocarray rindex sigaddset sigandset sigdelset sigemptyset sigfillset sigisemptyset sigismember sigorset stpcpy stpncpy
@@ -42,7 +42,7 @@ var callFormats = func() map[string]string {
 		cfmakeraw:vpd cfsetispeed:dpdd cfsetospeed:dpdd cfsetspeed:dpdd chdir:ds chmod:dso chown:dsdd chroot:ds clock:d
 		clock_getcpuclockid:ddp clock_getres:ddpd clock_gettime:ddpd clock_nanosleep:dddpdpd clock_settime:ddpd close:dd closedir:dp
 		cnd_broadcast:dpd cnd_destroy:vpd cnd_init:dpd cnd_signal:dpd cnd_timedwait:dpdpdpd cnd_wait:dpdpd confstr:ddpd connect:ddpd
-		copy_file_range:ddpdpdd creat:dso crypt:sss ctermid:sp dirfd:dp div:ddd dup:dd dup2:ddd dup3:dddd eaccess:dsd epoll_create:dd
+		copy_file_range:ddpdpdd creat:dso ctermid:sp dirfd:dp div:ddd dup:dd dup2:ddd dup3:dddd eaccess:dsd epoll_create:dd
 		epoll_create1:dd epoll_ctl:ddddpd epoll_pwait:ddpdddpd epoll_wait:ddpddd eventfd:ddd eventfd_read:ddp eventfd_write:ddd
 		execmode:dddd execve:dspp explicit_bzero:vpd faccessat:ddsdd fchdir:dd fchmod:ddo fchmodat:ddsod fchown:dddd fchownat:ddsddd
 		fcntl:dddpd fdatasync:dd fdopendir:pd fexecve:ddpp ffs:dd ffsl:dd ffsll:dd flock:ddd fnmatch:dssd fpathconf:ddd free:vp fstat:ddpd

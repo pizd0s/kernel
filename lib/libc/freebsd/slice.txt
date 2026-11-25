@@ -5,7 +5,8 @@
 # declarations of their functions of a locale, the regex with its header,
 # the wide strings' functions, the numbers' conversions, gdtoa's among
 # them, the random numbers', the environment's, the paths', the temporary
-# files', IPv4's and IPv6's addresses' and the rest; and the copyright.
+# files', IPv4's and IPv6's addresses' and the rest; libcrypt with libmd's
+# and sha2's hashes; and the copyright.
 COPYRIGHT
 lib/libc/regex
 lib/msun/src
@@ -140,3 +141,25 @@ lib/libc/inet/inet_addr.c
 lib/libc/inet/inet_ntoa.c
 lib/libc/inet/inet_ntop.c
 lib/libc/inet/inet_pton.c
+lib/libcrypt/crypt.c
+lib/libcrypt/crypt.h
+lib/libcrypt/misc.c
+lib/libcrypt/crypt-md5.c
+lib/libcrypt/crypt-nthash.c
+lib/libcrypt/crypt-sha256.c
+lib/libcrypt/crypt-sha512.c
+secure/lib/libcrypt/crypt-des.c
+lib/libmd/md4.h
+lib/libmd/md4c.c
+lib/libmd/md5.h
+lib/libmd/md5c.c
+sys/sys/md5.h
+sys/crypto/sha2/sha224.h
+sys/crypto/sha2/sha256.h
+sys/crypto/sha2/sha256c.c
+sys/crypto/sha2/sha256c_impl.h
+sys/crypto/sha2/sha384.h
+sys/crypto/sha2/sha512.h
+sys/crypto/sha2/sha512c.c
+sys/crypto/sha2/sha512c_impl.h
+sys/crypto/sha2/sha512t.h

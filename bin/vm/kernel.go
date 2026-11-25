@@ -940,7 +940,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"recvmmsg":                              libcRecvmmsg,
 		"shutdown":                              libcShutdown,
 		"sockatmark":                            libcSockatmark,
-		"crypt":                                 libcCrypt,
 		"pthread_create":                        libcPthread_create,
 		"pthread_join":                          libcPthread_join,
 		"pthread_detach":                        libcPthread_detach,

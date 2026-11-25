@@ -74,6 +74,15 @@ import wasm  # noqa: E402
 INCLUDE = ["-isystem", str(LIBC / "include")]
 FORWARDER_FLAGS = ["-O2", "-std=c99", "-D_XOPEN_SOURCE=700", "-w", "-I", str(LIBC / "src"), *INCLUDE]
 FLAGS = ["-O2", "-std=c11", "-D_GNU_SOURCE", "-Wall", "-Werror", "-I", str(LIBC / "src"), *INCLUDE]
+# What other places FreeBSD's Makefiles give libcrypt's files to include
+# of, as their .PATH and CFLAGS have them: libmd's hashes and sys/md5.h,
+# the kernel's sha2, libcrypt's own crypt.h for crypt-des.c.
+INCLUDES = {
+    "lib/libcrypt/": ["lib/libmd", "sys/crypto/sha2", "sys"],
+    "secure/lib/libcrypt/": ["lib/libcrypt"],
+    "lib/libmd/": ["sys"],
+    "sys/crypto/sha2/": [],
+}
 FREEBSD_FLAGS = ["-O2", "-std=c11", "-w", "-include", str(ROOT / "freebsd" / "sys" / "cdefs.h"), "-I", str(ROOT / "freebsd")]
 LLVM_FLAGS = ["-O2", "-std=c++17", "-fno-exceptions", "-fno-rtti", "-nostdinc++", "-w", "-DLIBC_NAMESPACE=__llvm_libc"]
 ARM_FLAGS = ["-O2", "-std=c11", "-w", "-DWANT_ROUNDING=0", "-DWANT_ERRNO=0", "-DUSE_GLIBC_ABI=0"]
@@ -223,8 +232,12 @@ def main():
 
     for line in listed(ROOT / "freebsd" / "files.txt"):
         path, *flags = shlex.split(line)
+        directories = next((places for prefix, places in INCLUDES.items() if path.startswith(prefix)), None)
 
-        if path.startswith(("lib/libc/", "contrib/gdtoa/")):
+        if directories is not None:
+            units.append((freebsd / path, objects / "freebsd" / "-".join(Path(path).with_suffix(".o").parts),
+                          bsd[:-len(INCLUDE)] + [a for d in directories for a in ("-I", str(freebsd / d))] + INCLUDE + flags))
+        elif path.startswith(("lib/libc/", "contrib/gdtoa/")):
             # Named by the path, as its files of one name are of more than one place.
             parts = Path(path).with_suffix(".o").parts
             units.append((freebsd / path, objects / "freebsd" / "-".join(parts[2:] if path.startswith("lib/") else parts[1:]), bsd + flags))

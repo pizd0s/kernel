@@ -314,3 +314,16 @@ lib/libc/inet/inet_addr.c
 lib/libc/inet/inet_ntoa.c
 lib/libc/inet/inet_ntop.c
 lib/libc/inet/inet_pton.c
+# crypt and crypt_r: libcrypt's MD5 ($1$), NT hash ($3$), SHA-256 ($5$),
+# SHA-512 ($6$) and DES (of two salt characters or of _), and its hashes.
+lib/libcrypt/crypt.c -DHAS_DES
+lib/libcrypt/misc.c
+lib/libcrypt/crypt-md5.c
+lib/libcrypt/crypt-nthash.c
+lib/libcrypt/crypt-sha256.c
+lib/libcrypt/crypt-sha512.c
+secure/lib/libcrypt/crypt-des.c
+lib/libmd/md4c.c
+lib/libmd/md5c.c
+sys/crypto/sha2/sha256c.c
+sys/crypto/sha2/sha512c.c

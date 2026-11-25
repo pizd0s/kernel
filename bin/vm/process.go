@@ -57,8 +57,7 @@ var devctlData = map[uint32]uint32{
 
 const (
 	staticStrtok     = 0
-	staticCrypt      = 4
-	staticSize       = 8
+	staticSize       = 4
 	niceMin          = -20
 	niceMax          = 19
 	ngroupsMax       = 65536
@@ -10787,25 +10786,6 @@ func (p *Process) setName(to *string, name, n uint32) error {
 	return nil
 }
 
-func (p *Process) staticResult(slot, size uint32) uint32 {
-	at := p.staticAt(slot)
-
-	p.free(p.u32(at))
-	p.put32(at, 0)
-
-	block := p.malloc(size)
-
-	if block == 0 {
-		p.setErrno(ENOMEM)
-
-		return 0
-	}
-
-	p.put32(at, block)
-
-	return block
-}
-
 func (p *Process) bounded(at, n uint32) []byte {
 	m := p.mem()
 
@@ -11546,39 +11526,6 @@ func (p *Process) libcGlobfree(out uint32) {
 
 func (p *Process) libc__glob_home(pattern, flags, errfunc, out, home uint32) uint32 {
 	return p.glob(pattern, flags, errfunc, out, home)
-}
-
-func (p *Process) libcCrypt(key, setting uint32) uint32 {
-	pw, s := p.str(key), p.str(setting)
-
-	var out string
-
-	ok := false
-
-	switch {
-	case strings.HasPrefix(s, "$1$"):
-		out, ok = md5crypt(pw, s)
-	case strings.HasPrefix(s, "$5$"):
-		out, ok = shacrypt(pw, s, 32)
-	case strings.HasPrefix(s, "$6$"):
-		out, ok = shacrypt(pw, s, 64)
-	case !strings.HasPrefix(s, "$") && !strings.HasPrefix(s, "_"):
-		out, ok = descrypt(pw, s)
-	}
-
-	if !ok {
-		p.setErrno(EINVAL)
-
-		return 0
-	}
-
-	block := p.staticResult(staticCrypt, uint32(len(out))+1)
-
-	if block != 0 {
-		p.putString(block, out)
-	}
-
-	return block
 }
 
 func (p *Process) sized(call string, sizes ...uint32) {
