@@ -16,6 +16,8 @@
  * %C with %y is the century, %s the local time of the seconds. It changes
  * the fields up to tm_isdst it parses, and leaves the rest.
  */
+#include "sized.h"
+
 #include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -295,6 +297,8 @@ static void format(struct Out* o, const char* f, const struct tm* tm) {
 }
 
 size_t __kernel_strftime(char* restrict s, size_t max, const char* restrict f, const struct tm* restrict tm, size_t size) {
+    sized("strftime", size, sizeof(struct tm));
+
     struct Out o = {0};
 
     format(&o, f, tm);
@@ -369,6 +373,8 @@ static void encode(struct Out* o, uint32_t c) {
 }
 
 size_t __kernel_wcsftime(wchar_t* restrict s, size_t max, const wchar_t* restrict f, const struct tm* restrict tm, size_t size) {
+    sized("wcsftime", size, sizeof(struct tm));
+
     struct Out narrow = {0}, o = {0};
 
     for (const wchar_t* c = f; *c; c++) {
@@ -405,6 +411,8 @@ size_t __kernel_wcsftime(wchar_t* restrict s, size_t max, const wchar_t* restric
 }
 
 size_t __kernel_wcsftime_l(wchar_t* restrict s, size_t max, const wchar_t* restrict f, const struct tm* restrict tm, size_t size, locale_t locale) {
+    sized("wcsftime_l", size, sizeof(struct tm));
+
     return __kernel_wcsftime(s, max, f, tm, size);
 }
 
@@ -616,6 +624,8 @@ static int parsed(const unsigned char* s, const char* f, struct tm* tm, size_t* 
 }
 
 char* __kernel_strptime(const char* restrict s, const char* restrict f, struct tm* restrict tm, size_t size) {
+    sized("strptime", size, sizeof(struct tm));
+
     struct tm fields = *tm;
     size_t at = 0;
 

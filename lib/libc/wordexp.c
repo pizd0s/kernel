@@ -9,6 +9,7 @@
  * without. Its standard error is /dev/null but with WRDE_SHOWERR.
  */
 #include "kernel.h"
+#include "sized.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -183,6 +184,8 @@ static int failure(wordexp_t* we, int flags, int e) {
 }
 
 void __kernel_wordfree(wordexp_t* we, size_t size) {
+    sized("wordfree", size, sizeof(wordexp_t));
+
     if (!we->we_wordv) {
         return;
     }
@@ -196,6 +199,8 @@ void __kernel_wordfree(wordexp_t* we, size_t size) {
 }
 
 int __kernel_wordexp(const char* restrict text, wordexp_t* restrict we, size_t size, int flags) {
+    sized("wordexp", size, sizeof(wordexp_t));
+
     int e = checked(text, flags & WRDE_NOCMD);
 
     if (e) {

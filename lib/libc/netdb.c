@@ -24,6 +24,8 @@
  * one before as they were. The _r functions write it into the buffer,
  * ERANGE where it is too small; of a host, they say why there is none.
  */
+#include "sized.h"
+
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
@@ -438,6 +440,8 @@ static int serviceInto(int e, char* text, struct Service* s, struct servent* out
 static size_t serviceIndex;
 
 struct servent* __kernel_getservbyname(const char* name, const char* proto, size_t size) {
+    sized("getservbyname", size, sizeof(struct servent));
+
     char* text;
     struct Service s;
     int e = findService(byName, name, 0, proto, NULL, &text, &s);
@@ -446,6 +450,8 @@ struct servent* __kernel_getservbyname(const char* name, const char* proto, size
 }
 
 struct servent* __kernel_getservbyport(int port, const char* proto, size_t size) {
+    sized("getservbyport", size, sizeof(struct servent));
+
     char* text;
     struct Service s;
     int e = findService(byNumber, NULL, ntohs((uint16_t)port), proto, NULL, &text, &s);
@@ -454,6 +460,8 @@ struct servent* __kernel_getservbyport(int port, const char* proto, size_t size)
 }
 
 struct servent* __kernel_getservent(size_t size) {
+    sized("getservent", size, sizeof(struct servent));
+
     char* text;
     struct Service s;
     int e = findService(next, NULL, 0, NULL, &serviceIndex, &text, &s);
@@ -471,6 +479,9 @@ void __kernel_endservent(void) {
 
 int __kernel_getservbyname_r(const char* restrict name, const char* restrict proto, struct servent* restrict out, size_t outSize,
                              char* restrict buf, size_t size, struct servent** restrict result, size_t resultSize) {
+    sized("getservbyname_r", outSize, sizeof(struct servent));
+    sized("getservbyname_r", resultSize, sizeof(struct servent));
+
     char* text;
     struct Service s;
     int e = findService(byName, name, 0, proto, NULL, &text, &s);
@@ -480,6 +491,9 @@ int __kernel_getservbyname_r(const char* restrict name, const char* restrict pro
 
 int __kernel_getservbyport_r(int port, const char* restrict proto, struct servent* restrict out, size_t outSize, char* restrict buf,
                              size_t size, struct servent** restrict result, size_t resultSize) {
+    sized("getservbyport_r", outSize, sizeof(struct servent));
+    sized("getservbyport_r", resultSize, sizeof(struct servent));
+
     char* text;
     struct Service s;
     int e = findService(byNumber, NULL, ntohs((uint16_t)port), proto, NULL, &text, &s);
@@ -589,6 +603,8 @@ static struct netent* networkResult(int e, char* text, const struct Numbered* n)
 static size_t protocolIndex, networkIndex;
 
 struct protoent* __kernel_getprotobyname(const char* name, size_t size) {
+    sized("getprotobyname", size, sizeof(struct protoent));
+
     char* text;
     struct Numbered n;
     int e = findNumbered(0, byName, name, 0, NULL, &text, &n);
@@ -597,6 +613,8 @@ struct protoent* __kernel_getprotobyname(const char* name, size_t size) {
 }
 
 struct protoent* __kernel_getprotobynumber(int number, size_t size) {
+    sized("getprotobynumber", size, sizeof(struct protoent));
+
     char* text;
     struct Numbered n;
     int e = findNumbered(0, byNumber, NULL, number, NULL, &text, &n);
@@ -605,6 +623,8 @@ struct protoent* __kernel_getprotobynumber(int number, size_t size) {
 }
 
 struct protoent* __kernel_getprotoent(size_t size) {
+    sized("getprotoent", size, sizeof(struct protoent));
+
     char* text;
     struct Numbered n;
     int e = findNumbered(0, next, NULL, 0, &protocolIndex, &text, &n);
@@ -621,6 +641,8 @@ void __kernel_endprotoent(void) {
 }
 
 struct netent* __kernel_getnetbyname(const char* name, size_t size) {
+    sized("getnetbyname", size, sizeof(struct netent));
+
     char* text;
     struct Numbered n;
     int e = findNumbered(1, byName, name, 0, NULL, &text, &n);
@@ -629,6 +651,8 @@ struct netent* __kernel_getnetbyname(const char* name, size_t size) {
 }
 
 struct netent* __kernel_getnetbyaddr(uint32_t net, int family, size_t size) {
+    sized("getnetbyaddr", size, sizeof(struct netent));
+
     char* text = NULL;
     struct Numbered n;
     int e = family == AF_INET ? findNumbered(1, byNumber, NULL, net, NULL, &text, &n) : ENOENT;
@@ -637,6 +661,8 @@ struct netent* __kernel_getnetbyaddr(uint32_t net, int family, size_t size) {
 }
 
 struct netent* __kernel_getnetent(size_t size) {
+    sized("getnetent", size, sizeof(struct netent));
+
     char* text;
     struct Numbered n;
     int e = findNumbered(1, next, NULL, 0, &networkIndex, &text, &n);
@@ -833,12 +859,16 @@ static struct hostent* hostOf(int code, struct Host* h) {
 }
 
 struct hostent* __kernel_gethostbyname(const char* name, size_t size) {
+    sized("gethostbyname", size, sizeof(struct hostent));
+
     struct Host h;
 
     return hostOf(hostByName(name, AF_INET, &h), &h);
 }
 
 struct hostent* __kernel_gethostbyname2(const char* name, int family, size_t size) {
+    sized("gethostbyname2", size, sizeof(struct hostent));
+
     struct Host h;
 
     return hostOf(hostByName(name, family, &h), &h);
@@ -846,6 +876,9 @@ struct hostent* __kernel_gethostbyname2(const char* name, int family, size_t siz
 
 int __kernel_gethostbyname_r(const char* restrict name, struct hostent* restrict out, size_t outSize, char* restrict buf, size_t size,
                              struct hostent** restrict result, size_t resultSize, int* restrict error) {
+    sized("gethostbyname_r", outSize, sizeof(struct hostent));
+    sized("gethostbyname_r", resultSize, sizeof(struct hostent));
+
     struct Host h;
     int code = hostByName(name, AF_INET, &h);
     int e = hostInto(code, &h, out, buf, size, result, error);
@@ -859,6 +892,9 @@ int __kernel_gethostbyname_r(const char* restrict name, struct hostent* restrict
 
 int __kernel_gethostbyname2_r(const char* restrict name, int family, struct hostent* restrict out, size_t outSize, char* restrict buf,
                               size_t size, struct hostent** restrict result, size_t resultSize, int* restrict error) {
+    sized("gethostbyname2_r", outSize, sizeof(struct hostent));
+    sized("gethostbyname2_r", resultSize, sizeof(struct hostent));
+
     struct Host h;
     int code = hostByName(name, family, &h);
     int e = hostInto(code, &h, out, buf, size, result, error);
@@ -915,6 +951,8 @@ static int hostByAddress(const void* address, socklen_t n, int family, char** te
 }
 
 struct hostent* __kernel_gethostbyaddr(const void* address, socklen_t n, int family, size_t size) {
+    sized("gethostbyaddr", size, sizeof(struct hostent));
+
     char* text;
     struct Host h;
     unsigned char storage[16];
@@ -932,6 +970,9 @@ struct hostent* __kernel_gethostbyaddr(const void* address, socklen_t n, int fam
 
 int __kernel_gethostbyaddr_r(const void* restrict address, socklen_t n, int family, struct hostent* restrict out, size_t outSize,
                              char* restrict buf, size_t size, struct hostent** restrict result, size_t resultSize, int* restrict error) {
+    sized("gethostbyaddr_r", outSize, sizeof(struct hostent));
+    sized("gethostbyaddr_r", resultSize, sizeof(struct hostent));
+
     char* text;
     struct Host h;
     unsigned char storage[16];
@@ -945,6 +986,8 @@ int __kernel_gethostbyaddr_r(const void* restrict address, socklen_t n, int fami
 static size_t hostIndex;
 
 struct hostent* __kernel_gethostent(size_t size) {
+    sized("gethostent", size, sizeof(struct hostent));
+
     char* text;
     struct Host h;
     unsigned char storage[16];
@@ -1299,6 +1342,8 @@ static struct addrinfo* made(int flags, const struct Address* a, int port, const
 }
 
 void __kernel_freeaddrinfo(struct addrinfo* ai, size_t size) {
+    sized("freeaddrinfo", size, sizeof(struct addrinfo));
+
     while (ai) {
         struct addrinfo* next = ai->ai_next;
 
@@ -1470,6 +1515,9 @@ static int addrinfo(const char* node, const char* service, const struct addrinfo
 
 int __kernel_getaddrinfo(const char* restrict node, const char* restrict service, const struct addrinfo* restrict hints, size_t hintsSize,
                          struct addrinfo** restrict res, size_t resSize) {
+    sized("getaddrinfo", hintsSize, sizeof(struct addrinfo));
+    sized("getaddrinfo", resSize, sizeof(struct addrinfo));
+
     int saved = errno;
     int code = addrinfo(node, service, hints, res);
 

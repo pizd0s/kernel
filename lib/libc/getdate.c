@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "sized.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -331,6 +332,8 @@ static int resolve(const Fields* f, struct tm* t) {
 }
 
 struct tm* __kernel_getdate(const char* string, size_t returned) {
+    sized("getdate", returned, sizeof(struct tm));
+
     static struct tm result;
     const char* mask = getenv("DATEMSK");
 

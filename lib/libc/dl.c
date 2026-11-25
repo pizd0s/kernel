@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "sized.h"
 
 #include <dlfcn.h>
 #include <limits.h>
@@ -24,6 +25,8 @@ void* __kernel_dlsym(void* restrict handle, const char* restrict name) {
 }
 
 int __kernel_dladdr(const void* address, Dl_info* info, size_t size) {
+    sized("dladdr", size, sizeof(Dl_info));
+
     static char path[PATH_MAX];
 
     if (!__kernel_program(path, sizeof path)) {

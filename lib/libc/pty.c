@@ -8,6 +8,8 @@
  * parent keeps the master. The terminal's settings and size come with
  * their sizes, the one layout each has had.
  */
+#include "sized.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <pty.h>
@@ -23,6 +25,9 @@ int __kernel_posix_openpt(int flags) {
 
 int __kernel_openpty(int* master, int* terminal, char* name, const struct termios* term, size_t termSize, const struct winsize* window,
                      size_t windowSize) {
+    sized("openpty", termSize, sizeof(struct termios));
+    sized("openpty", windowSize, sizeof(struct winsize));
+
     char path[32];
     int primary = open("/dev/ptmx", O_RDWR | O_NOCTTY), secondary = -1;
     int named = primary >= 0 ? ptsname_r(primary, path, sizeof path) : -1;
@@ -62,6 +67,9 @@ int __kernel_openpty(int* master, int* terminal, char* name, const struct termio
 
 pid_t __kernel_forkpty(int* master, char* name, const struct termios* term, size_t termSize, const struct winsize* window,
                        size_t windowSize) {
+    sized("forkpty", termSize, sizeof(struct termios));
+    sized("forkpty", windowSize, sizeof(struct winsize));
+
     int primary, terminal;
 
     if (__kernel_openpty(&primary, &terminal, name, term, termSize, window, windowSize) < 0) {

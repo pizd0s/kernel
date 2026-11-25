@@ -8,6 +8,7 @@
  * them.
  */
 #include "kernel.h"
+#include "sized.h"
 
 #include <errno.h>
 #include <spawn.h>
@@ -121,6 +122,9 @@ static int spawned(const char* path, void* data) {
 
 int __kernel_posix_spawnp(pid_t* restrict pid, const char* restrict file, const posix_spawn_file_actions_t* actions, size_t actionsSize,
                           const posix_spawnattr_t* restrict attr, size_t attrSize, char* const argv[], char* const envp[]) {
+    sized("posix_spawnp", actionsSize, sizeof(posix_spawn_file_actions_t));
+    sized("posix_spawnp", attrSize, sizeof(posix_spawnattr_t));
+
     struct Spawn s = {pid, actions, attr, argv, envp};
 
     return searched(file, spawned, &s);

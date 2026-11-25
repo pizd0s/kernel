@@ -8,6 +8,8 @@
  * error or signal of none, and of a real-time signal, is formatted, in a
  * room of its function's own.
  */
+#include "sized.h"
+
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
@@ -296,7 +298,7 @@ void __kernel_psignal(int sig, const char* prefix) {
 }
 
 void __kernel_psiginfo(const siginfo_t* info, size_t size, const char* prefix) {
-    (void)size;
+    sized("psiginfo", size, sizeof(siginfo_t));
     __kernel_psignal(info->si_signo, prefix);
 }
 

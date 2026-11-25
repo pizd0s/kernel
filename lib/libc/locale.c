@@ -1,4 +1,6 @@
 #include <ctype.h>
+#include "sized.h"
+
 #include <errno.h>
 #include <langinfo.h>
 #include <limits.h>
@@ -290,6 +292,8 @@ const char* __kernel_getlocalename_l(int category, locale_t locale) {
 }
 
 struct lconv* __kernel_localeconv(size_t size) {
+    sized("localeconv", size, sizeof(struct lconv));
+
     static struct lconv c;
 
     c = (struct lconv){".", "", "", "", "", "", "", "", "", ""};
@@ -496,6 +500,8 @@ size_t __kernel_wcsxfrm_l(wchar_t* restrict d, const wchar_t* restrict s, size_t
 }
 
 size_t __kernel_strftime_l(char* restrict s, size_t n, const char* restrict format, const struct tm* restrict tm, size_t size, locale_t locale) {
+    sized("strftime_l", size, sizeof(struct tm));
+
     return __kernel_strftime(s, n, format, tm, size);
 }
 

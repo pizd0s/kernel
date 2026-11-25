@@ -10,6 +10,7 @@
  * structures do, the one layout it has had.
  */
 #include "kernel.h"
+#include "sized.h"
 
 #include <getopt.h>
 #include <unistd.h>
@@ -41,12 +42,16 @@ int __kernel_getopt(int argc, char* const* argv, const char* options) {
 }
 
 int __kernel_getopt_long(int argc, char* const* argv, const char* options, const struct option* longs, size_t size, int* index) {
+    sized("getopt_long", size, sizeof(struct option));
+
     begin();
 
     return end(getopt_long(argc, argv, options, longs, index));
 }
 
 int __kernel_getopt_long_only(int argc, char* const* argv, const char* options, const struct option* longs, size_t size, int* index) {
+    sized("getopt_long_only", size, sizeof(struct option));
+
     begin();
 
     return end(getopt_long_only(argc, argv, options, longs, index));

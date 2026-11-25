@@ -1,4 +1,6 @@
 #include <mntent.h>
+#include "sized.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -25,6 +27,9 @@ int __kernel_endmntent(FILE* f) {
 }
 
 struct mntent* __kernel_getmntent_r(FILE* f, struct mntent* entry, size_t entrySize, char* line, int size, size_t returned) {
+    sized("getmntent_r", entrySize, sizeof(struct mntent));
+    sized("getmntent_r", returned, sizeof(struct mntent));
+
     int fields[8];
 
     for (;;) {
@@ -70,6 +75,8 @@ struct mntent* __kernel_getmntent_r(FILE* f, struct mntent* entry, size_t entryS
 }
 
 struct mntent* __kernel_getmntent(FILE* f, size_t returned) {
+    sized("getmntent", returned, sizeof(struct mntent));
+
     static char line[lineSize];
     static struct mntent entry;
 
@@ -77,6 +84,8 @@ struct mntent* __kernel_getmntent(FILE* f, size_t returned) {
 }
 
 int __kernel_addmntent(FILE* f, const struct mntent* entry, size_t entrySize) {
+    sized("addmntent", entrySize, sizeof(struct mntent));
+
     if (fseek(f, 0, SEEK_END)) {
         return 1;
     }
@@ -86,5 +95,7 @@ int __kernel_addmntent(FILE* f, const struct mntent* entry, size_t entrySize) {
 }
 
 char* __kernel_hasmntopt(const struct mntent* entry, size_t entrySize, const char* option) {
+    sized("hasmntopt", entrySize, sizeof(struct mntent));
+
     return strstr(entry->mnt_opts, option);
 }

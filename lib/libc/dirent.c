@@ -1,4 +1,6 @@
 #include <dirent.h>
+#include "sized.h"
+
 #include <errno.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -11,6 +13,8 @@
  */
 int __kernel_scandir(const char* path, struct dirent*** list, size_t size, int (*filter)(const struct dirent*),
                      int (*compare)(const struct dirent**, const struct dirent**)) {
+    sized("scandir", size, sizeof(struct dirent));
+
     DIR* dir = opendir(path);
 
     if (!dir) {

@@ -1,4 +1,6 @@
 #include <errno.h>
+#include "sized.h"
+
 #include <limits.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -23,6 +25,8 @@ void* __pthread_key_take(pthread_key_t*, void (**)(void*));
 static struct __ptcb* cleanups;
 
 void __kernel__pthread_cleanup_push(struct __ptcb* cb, size_t size, void (*f)(void*), void* x) {
+    sized("_pthread_cleanup_push", size, sizeof(struct __ptcb));
+
     cb->__f = f;
     cb->__x = x;
     cb->__next = cleanups;
@@ -30,6 +34,8 @@ void __kernel__pthread_cleanup_push(struct __ptcb* cb, size_t size, void (*f)(vo
 }
 
 void __kernel__pthread_cleanup_pop(struct __ptcb* cb, size_t size, int run) {
+    sized("_pthread_cleanup_pop", size, sizeof(struct __ptcb));
+
     cleanups = cb->__next;
 
     if (run) {

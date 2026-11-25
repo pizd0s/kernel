@@ -13,6 +13,8 @@
  * no room; none found leaves errno and the one before as they were. The _r functions write it into the buffer, ERANGE where it is
  * too small, and pass on an error of reading the file.
  */
+#include "sized.h"
+
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -411,18 +413,24 @@ static int groupInto(struct Found f, const struct Group* g, struct group* gr, ch
 static size_t userIndex, groupIndex;
 
 struct passwd* __kernel_getpwnam(const char* name, size_t size) {
+    sized("getpwnam", size, sizeof(struct passwd));
+
     struct User u;
 
     return userResult(findUser(byName, name, 0, NULL, &u), &u);
 }
 
 struct passwd* __kernel_getpwuid(uid_t uid, size_t size) {
+    sized("getpwuid", size, sizeof(struct passwd));
+
     struct User u;
 
     return userResult(findUser(byId, NULL, uid, NULL, &u), &u);
 }
 
 struct passwd* __kernel_getpwent(size_t size) {
+    sized("getpwent", size, sizeof(struct passwd));
+
     struct User u;
 
     return userResult(findUser(next, NULL, 0, &userIndex, &u), &u);
@@ -437,30 +445,42 @@ void __kernel_endpwent(void) {
 }
 
 int __kernel_getpwnam_r(const char* name, struct passwd* pw, size_t pwSize, char* buf, size_t size, struct passwd** out, size_t outSize) {
+    sized("getpwnam_r", pwSize, sizeof(struct passwd));
+    sized("getpwnam_r", outSize, sizeof(struct passwd));
+
     struct User u;
 
     return userInto(findUser(byName, name, 0, NULL, &u), &u, pw, buf, size, out);
 }
 
 int __kernel_getpwuid_r(uid_t uid, struct passwd* pw, size_t pwSize, char* buf, size_t size, struct passwd** out, size_t outSize) {
+    sized("getpwuid_r", pwSize, sizeof(struct passwd));
+    sized("getpwuid_r", outSize, sizeof(struct passwd));
+
     struct User u;
 
     return userInto(findUser(byId, NULL, uid, NULL, &u), &u, pw, buf, size, out);
 }
 
 struct group* __kernel_getgrnam(const char* name, size_t size) {
+    sized("getgrnam", size, sizeof(struct group));
+
     struct Group g;
 
     return groupResult(findGroup(byName, name, 0, NULL, &g), &g);
 }
 
 struct group* __kernel_getgrgid(gid_t gid, size_t size) {
+    sized("getgrgid", size, sizeof(struct group));
+
     struct Group g;
 
     return groupResult(findGroup(byId, NULL, gid, NULL, &g), &g);
 }
 
 struct group* __kernel_getgrent(size_t size) {
+    sized("getgrent", size, sizeof(struct group));
+
     struct Group g;
 
     return groupResult(findGroup(next, NULL, 0, &groupIndex, &g), &g);
@@ -475,12 +495,18 @@ void __kernel_endgrent(void) {
 }
 
 int __kernel_getgrnam_r(const char* name, struct group* gr, size_t grSize, char* buf, size_t size, struct group** out, size_t outSize) {
+    sized("getgrnam_r", grSize, sizeof(struct group));
+    sized("getgrnam_r", outSize, sizeof(struct group));
+
     struct Group g;
 
     return groupInto(findGroup(byName, name, 0, NULL, &g), &g, gr, buf, size, out);
 }
 
 int __kernel_getgrgid_r(gid_t gid, struct group* gr, size_t grSize, char* buf, size_t size, struct group** out, size_t outSize) {
+    sized("getgrgid_r", grSize, sizeof(struct group));
+    sized("getgrgid_r", outSize, sizeof(struct group));
+
     struct Group g;
 
     return groupInto(findGroup(byId, NULL, gid, NULL, &g), &g, gr, buf, size, out);

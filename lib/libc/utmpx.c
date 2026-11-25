@@ -6,6 +6,8 @@
  * one at the end. Each function reads the file as it is then; a result is
  * a copy of the record, the same place every time.
  */
+#include "sized.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
@@ -105,18 +107,29 @@ void __kernel_endutxent(void) {
 }
 
 struct utmpx* __kernel_getutxent(size_t size) {
+    sized("getutxent", size, sizeof(struct utmpx));
+
     return search(NULL, any);
 }
 
 struct utmpx* __kernel_getutxid(const struct utmpx* id, size_t idSize, size_t size) {
+    sized("getutxid", idSize, sizeof(struct utmpx));
+    sized("getutxid", size, sizeof(struct utmpx));
+
     return search(id, byId);
 }
 
 struct utmpx* __kernel_getutxline(const struct utmpx* line, size_t lineSize, size_t size) {
+    sized("getutxline", lineSize, sizeof(struct utmpx));
+    sized("getutxline", size, sizeof(struct utmpx));
+
     return search(line, byLine);
 }
 
 struct utmpx* __kernel_pututxline(const struct utmpx* ut, size_t utSize, size_t size) {
+    sized("pututxline", utSize, sizeof(struct utmpx));
+    sized("pututxline", size, sizeof(struct utmpx));
+
     struct utmpx record = *ut;
     int fd = open(UTMPX_FILE, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
 

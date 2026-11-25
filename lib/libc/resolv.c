@@ -22,6 +22,8 @@
  * ns_name_uncompress's ".". A message that leaves its bounds, or loops,
  * is EMSGSIZE.
  */
+#include "sized.h"
+
 #include "interfaces.h"
 
 #include <arpa/inet.h>
@@ -40,6 +42,8 @@
 static struct __res_state global;
 
 struct __res_state* __kernel___res_state(size_t size) {
+    sized("__res_state", size, sizeof(struct __res_state));
+
     return &global;
 }
 
@@ -440,6 +444,8 @@ static void sectionOf(ns_msg* handle, int section) {
 }
 
 int __kernel_ns_initparse(const unsigned char* msg, int size, ns_msg* handle, size_t handleSize) {
+    sized("ns_initparse", handleSize, sizeof(ns_msg));
+
     size_t at = NS_HFIXEDSZ;
     uint16_t counts[ns_s_max];
     const unsigned char* sections[ns_s_max] = {NULL};
@@ -489,6 +495,9 @@ int __kernel_ns_initparse(const unsigned char* msg, int size, ns_msg* handle, si
 }
 
 int __kernel_ns_parserr(ns_msg* handle, size_t handleSize, ns_sect section, int number, ns_rr* rr, size_t rrSize) {
+    sized("ns_parserr", handleSize, sizeof(ns_msg));
+    sized("ns_parserr", rrSize, sizeof(ns_rr));
+
     if ((unsigned)section >= ns_s_max) {
         errno = ENODEV;
 
@@ -977,12 +986,15 @@ int __kernel_res_init(void) {
 }
 
 int __kernel_res_ninit(res_state state, size_t size) {
+    sized("res_ninit", size, sizeof(struct __res_state));
+
     init(state);
 
     return 0;
 }
 
 void __kernel_res_nclose(res_state state, size_t size) {
+    sized("res_nclose", size, sizeof(struct __res_state));
 }
 
 int __kernel_res_query(const char* name, int class, int type, unsigned char* answer, int room) {
@@ -992,6 +1004,8 @@ int __kernel_res_query(const char* name, int class, int type, unsigned char* ans
 }
 
 int __kernel_res_nquery(res_state state, size_t size, const char* name, int class, int type, unsigned char* answer, int room) {
+    sized("res_nquery", size, sizeof(struct __res_state));
+
     ready(state);
 
     return query(state, name, class, type, answer, room);
@@ -1005,6 +1019,8 @@ int __kernel_res_querydomain(const char* name, const char* domain, int class, in
 
 int __kernel_res_nquerydomain(res_state state, size_t size, const char* name, const char* domain, int class, int type, unsigned char* answer,
                               int room) {
+    sized("res_nquerydomain", size, sizeof(struct __res_state));
+
     ready(state);
 
     return querydomain(state, name, domain, class, type, answer, room);
@@ -1017,6 +1033,8 @@ int __kernel_res_search(const char* name, int class, int type, unsigned char* an
 }
 
 int __kernel_res_nsearch(res_state state, size_t size, const char* name, int class, int type, unsigned char* answer, int room) {
+    sized("res_nsearch", size, sizeof(struct __res_state));
+
     ready(state);
 
     return search(state, name, class, type, answer, room);
@@ -1029,6 +1047,8 @@ int __kernel_res_mkquery(int op, const char* name, int class, int type, const un
 
 int __kernel_res_nmkquery(res_state state, size_t size, int op, const char* name, int class, int type, const unsigned char* data, int length,
                           const unsigned char* newrr, unsigned char* buf, int room) {
+    sized("res_nmkquery", size, sizeof(struct __res_state));
+
     return mkquery(state, op, name, class, type, buf, room);
 }
 
@@ -1037,5 +1057,7 @@ int __kernel_res_send(const unsigned char* msg, int length, unsigned char* answe
 }
 
 int __kernel_res_nsend(res_state state, size_t size, const unsigned char* msg, int length, unsigned char* answer, int room) {
+    sized("res_nsend", size, sizeof(struct __res_state));
+
     return transmit(state, msg, length, answer, room);
 }

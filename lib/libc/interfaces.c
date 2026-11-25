@@ -5,6 +5,8 @@
  * each IPv4 address with its mask and broadcast address, all in one block
  * of the heap, as if_nameindex's list is.
  */
+#include "sized.h"
+
 #include "interfaces.h"
 
 #include <arpa/inet.h>
@@ -248,6 +250,8 @@ char* __kernel_if_indextoname(unsigned index, char* buf) {
 }
 
 struct if_nameindex* __kernel_if_nameindex(size_t size) {
+    sized("if_nameindex", size, sizeof(struct if_nameindex));
+
     struct Interface* cards;
     int count = __interfaces(&cards);
     size_t room = sizeof(struct if_nameindex) * (count + 1);
@@ -279,6 +283,8 @@ struct if_nameindex* __kernel_if_nameindex(size_t size) {
 }
 
 void __kernel_if_freenameindex(struct if_nameindex* list, size_t size) {
+    sized("if_freenameindex", size, sizeof(struct if_nameindex));
+
     free(list);
 }
 
@@ -308,6 +314,8 @@ static struct sockaddr* inetAddress(char** data, struct in_addr a) {
 }
 
 int __kernel_getifaddrs(struct ifaddrs** out, size_t size) {
+    sized("getifaddrs", size, sizeof(struct ifaddrs));
+
     struct Interface* cards;
     int count = __interfaces(&cards);
     size_t entries = 0, room = 0;

@@ -7,6 +7,7 @@
  * of no file that can be read is UTC.
  */
 #include "kernel.h"
+#include "sized.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -110,18 +111,25 @@ void __kernel_tzset(void) {
 }
 
 struct tm* __kernel_localtime_r(const time_t* restrict t, struct tm* restrict tm, size_t tmSize, size_t size) {
+    sized("localtime_r", tmSize, sizeof(struct tm));
+    sized("localtime_r", size, sizeof(struct tm));
+
     zone(0);
 
     return __kernel_tolocal(t, tm, size);
 }
 
 struct tm* __kernel_localtime(const time_t* t, size_t size) {
+    sized("localtime", size, sizeof(struct tm));
+
     static struct tm tm;
 
     return __kernel_localtime_r(t, &tm, sizeof tm, size);
 }
 
 time_t __kernel_mktime(struct tm* tm, size_t size) {
+    sized("mktime", size, sizeof(struct tm));
+
     zone(0);
 
     return __kernel_fromlocal(tm, size);

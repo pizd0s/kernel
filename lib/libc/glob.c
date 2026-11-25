@@ -3,6 +3,8 @@
  * GLOB_TILDE or GLOB_TILDE_CHECK: HOME's for ~ alone, the user's of
  * /etc/passwd for ~user, none for a user there is not.
  */
+#include "sized.h"
+
 #include <errno.h>
 #include <glob.h>
 #include <pwd.h>
@@ -12,6 +14,8 @@
 int __glob_home(const char* restrict, int, int (*)(const char*, int), glob_t* restrict, const char*);
 
 int __kernel_glob(const char* restrict pattern, int flags, int (*errfunc)(const char*, int), glob_t* restrict g, size_t size) {
+    sized("glob", size, sizeof(glob_t));
+
     const char* home = NULL;
     char* user = NULL;
     int saved = errno;
