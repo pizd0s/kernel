@@ -41,7 +41,6 @@ struct Opened {
     uint32_t access;
     uint64_t dev;
     uint64_t ino;
-    uint64_t id;
     uint32_t events;
 };
 
@@ -197,7 +196,7 @@ static int channel;
 // An open file of a dev and ino, served by nobody: a lock is no request.
 static int file(uint64_t dev, uint64_t ino) {
     int end;
-    const int fd = opened(channel, {openedFile, O_RDWR, dev, ino, 0, POLLIN | POLLOUT}, end);
+    const int fd = opened(channel, {openedFile, O_RDWR, dev, ino, POLLIN | POLLOUT}, end);
     assert(fd >= 0);
     return fd;
 }

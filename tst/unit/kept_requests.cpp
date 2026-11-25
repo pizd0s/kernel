@@ -46,7 +46,6 @@ struct Opened {
     uint32_t access;
     uint64_t dev;
     uint64_t ino;
-    uint64_t id;
     uint32_t events;
 };
 
@@ -336,7 +335,7 @@ int main() {
     alarm(60);
     int sv[2];
     const int channel = device("kept_requests");
-    sv[1] = opened(channel, {openedFile, O_RDWR, 0, 0, 0, POLLIN | POLLOUT}, sv[0]);
+    sv[1] = opened(channel, {openedFile, O_RDWR, 0, 0, POLLIN | POLLOUT}, sv[0]);
     assert(sv[1] >= 0 && pipe(control) == 0 && pipe(report) == 0);
     fflush(stdout);
     const pid_t server = fork();
@@ -409,7 +408,7 @@ int main() {
     struct {
         Header h;
         Opened what;
-    } ok{{opOk, 0, 0, 0, 0, 0}, {openedFile, O_RDWR, 0, 0, 0, POLLIN | POLLOUT}};
+    } ok{{opOk, 0, 0, 0, 0, 0}, {openedFile, O_RDWR, 0, 0, POLLIN | POLLOUT}};
 
     sendWith(reply, &ok, sizeof ok, pair[1]);
     close(pair[1]);

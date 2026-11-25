@@ -713,9 +713,17 @@ static sigset_t waitMask;
 static bool waitMasked;
 static volatile sig_atomic_t childEnded = 1;
 
-// The handles, by id; the ids given out.
+// The handles, by id: their pairs', the kernel's, which no one else
+// gives a descriptor of.
 static OpenTable<Endpoint> handles;
-static u64 handleIds;
+
+static u64 pairId(int fd) {
+    unsigned long long id = 0;
+    if (fdid(fd, &id) != 0) {
+        fatal("rootfs: fdid: errno %d", errno);
+    }
+    return id;
+}
 
 static u32 hashId(u64 id) {
     return finish(id);
@@ -1441,7 +1449,7 @@ static bool eventsCall(const Header& h, Body body, int fd, const Place& at) {
         in->end->events = in;
         in->end->reads = true;
         in->end->nonblock = (h.arg & O_NONBLOCK) != 0;
-        const Opened what{openedFile, O_RDONLY, 0, in->id, 0, 0, 0};
+        const Opened what{openedFile, O_RDONLY, 0, in->id, 0, 0};
         const iovec said = part(&what, sizeof what);
         reply(fd, opOk, 0, &said, 1, &pair[1], 1);
         close(pair[1]);
@@ -2112,9 +2120,9 @@ Answer Ask::await_resume() const noexcept {
 // A handle's open, answered on fd: a new handle at the place, a pair
 // whose first end is the handle's endpoint and whose second goes with the
 // OK to who asked, a directory's or of what O_PATH opened that is no
-// directory, its id the next. The place's dev and ino go with it, its
-// file system's, which the kernel keeps a directory's locks by: none of a
-// place whose file system has not said its stat yet.
+// directory, its id its pair's, the kernel's. The place's dev and ino go
+// with it, its file system's, which the kernel keeps a directory's locks
+// by: none of a place whose file system has not said its stat yet.
 static void openHandle(int fd, const Place& at, int flags) {
     const u64 ino = at.st.dev != 0 ? at.st.ino : 0;
     int pair[2];
@@ -2122,8 +2130,8 @@ static void openHandle(int fd, const Place& at, int flags) {
         error(fd, errno);
         return;
     }
-    const u64 id = ++handleIds;
-    const Opened what{u32(isDir(at) ? openedDir : openedPath), u32(flags) & (O_ACCMODE | O_PATH), at.st.dev, ino, id, POLLIN | POLLOUT};
+    const u64 id = pairId(pair[0]);
+    const Opened what{u32(isDir(at) ? openedDir : openedPath), u32(flags) & (O_ACCMODE | O_PATH), at.st.dev, ino, POLLIN | POLLOUT};
     listenHandle(pair[0], at, flags, id);
     const iovec said = part(&what, sizeof what);
     reply(fd, opOk, 0, &said, 1, &pair[1], 1);
@@ -3441,7 +3449,7 @@ static Task watchCall(Header h, int fd, Place at) {
     w->end->watcher = w;
     w->end->reads = true;
     w->end->nonblock = (h.arg & O_NONBLOCK) != 0;
-    const Opened what{openedFile, O_RDONLY, at.st.dev, 0, 0, u32(POLLIN | (w->gone ? POLLHUP : 0)), 0};
+    const Opened what{openedFile, O_RDONLY, at.st.dev, 0, u32(POLLIN | (w->gone ? POLLHUP : 0)), 0};
     const iovec said = part(&what, sizeof what);
     reply(fd, opOk, 0, &said, 1, &pair[1], 1);
     close(pair[1]);
@@ -4299,14 +4307,13 @@ static Task boot() {
         rootMount->fs->cached = !nocacheIn(a);
     }
     // The root of the processes rootfs starts: a pair, whose first end is
-    // the handle of id 0, at the root, and a directory over whose second
-    // (attach) each of them makes its working directory and its root
-    // (spawn).
+    // the handle at the root, and a directory over whose second (attach)
+    // each of them makes its working directory and its root (spawn).
     int root[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, root) != 0) {
         fatal("rootfs: a pair for the root: errno %d", errno);
     }
-    listenHandle(root[0], rootOf(rootMount), O_RDONLY, 0);
+    listenHandle(root[0], rootOf(rootMount), O_RDONLY, pairId(root[0]));
     rootEnd = attach(root[1]);
     if (rootEnd < 0 || fcntl(rootEnd, F_SETFD, FD_CLOEXEC) != 0) {
         fatal("rootfs: attach: errno %d", errno);

@@ -96,7 +96,7 @@ namespace {
             return answer(fd, opOk, 0, data, size);
         }
         const Header h{opOk, 0, 0, 0, 0, 0};
-        const Opened what{openedFile, O_RDWR, 0, 0, 0, POLLOUT};
+        const Opened what{openedFile, O_RDWR, 0, 0, POLLOUT};
         const iovec parts[] = {{const_cast<Header*>(&h), sizeof h}, {const_cast<Opened*>(&what), sizeof what},
                                {const_cast<void*>(data), size}};
         sendPacket(fd, parts, 3, &end, 1);

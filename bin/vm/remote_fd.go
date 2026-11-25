@@ -13,7 +13,6 @@ type RemoteFD struct {
 
 	mu       sync.Mutex
 	watchers Subscribers
-	id       uint64
 	key      FileKey
 	access   int
 	ready    int16
@@ -102,7 +101,7 @@ func (f *RemoteFD) exchange(p *Process, data []byte, files []Object, interruptib
 func (f *RemoteFD) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileIdentity:
-		r.id, r.key, r.access = f.id, f.key, f.access
+		r.id, r.key, r.access = f.objectID(), f.key, f.access
 
 		return false, nil
 	case *FileRead:

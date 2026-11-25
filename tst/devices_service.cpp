@@ -206,7 +206,7 @@ static void writeKept(const Endpoint& e, const Request& r) {
 static void handle(Endpoint& e, Request& r) {
     if (e.channel) {
         if (!mailbox) {
-            answerOpen(epoll, r, {openedFile, 0, 0, 0, 0, POLLIN | POLLOUT}, e.of);
+            answerOpen(epoll, r, {openedFile, 0, 0, 0, POLLIN | POLLOUT}, e.of);
             return;
         }
         if (openCount == sizeof opens / sizeof opens[0]) {
@@ -214,7 +214,7 @@ static void handle(Endpoint& e, Request& r) {
             return;
         }
         const uint32_t events = POLLOUT | (mailLength > 0 ? POLLIN : 0);
-        if (const Endpoint* opened = answerOpen(epoll, r, {openedFile, 0, 0, 0, 0, events}, e.of)) {
+        if (const Endpoint* opened = answerOpen(epoll, r, {openedFile, 0, 0, 0, events}, e.of)) {
             opens[openCount++] = opened->fd;
         }
         return;

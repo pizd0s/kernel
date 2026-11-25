@@ -9,7 +9,7 @@ const (
 	openedTerminal        = 2
 	openedDir             = 3
 	openedPath            = 4
-	sizeofOpened          = 40
+	sizeofOpened          = 32
 	sockmgrSocket         = "/dev/sockmgr/socket"
 	rOk            uint32 = 128
 	rErr           uint32 = 129
@@ -100,7 +100,7 @@ const (
 	vPath
 )
 
-func served(p *Process, kind uint32, access int, dev, ino, id uint64, events uint32, end Object) (*RemoteFD, error) {
+func served(p *Process, kind uint32, access int, dev, ino uint64, events uint32, end Object) (*RemoteFD, error) {
 	if kind != openedFile && kind != openedTerminal && kind != openedDir && kind != openedPath {
 		return nil, EINVAL
 	}
@@ -109,7 +109,7 @@ func served(p *Process, kind uint32, access int, dev, ino, id uint64, events uin
 		access |= O_PATH
 	}
 
-	f := &RemoteFD{end: end, id: id, key: FileKey{dev, ino}, access: access & (O_ACCMODE | O_PATH), ready: readiness(events)}
+	f := &RemoteFD{end: end, key: FileKey{dev, ino}, access: access & (O_ACCMODE | O_PATH), ready: readiness(events)}
 
 	if ino != 0 {
 		f.locks = &p.k.locks

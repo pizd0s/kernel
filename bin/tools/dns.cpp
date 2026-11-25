@@ -704,7 +704,7 @@ static void handle(Endpoint& e, Request& r) {
         q->deadline = -1;
         q->raw = e.of == &messagesTag;
         const Device& d = q->raw ? messages : device;
-        q->end = answerOpen(epoll, r, {openedFile, 0, d.st.dev, d.st.ino, 0, POLLIN | POLLOUT}, q);
+        q->end = answerOpen(epoll, r, {openedFile, 0, d.st.dev, d.st.ino, POLLIN | POLLOUT}, q);
         if (!q->end) {
             free(q);
             return;

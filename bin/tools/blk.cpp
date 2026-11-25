@@ -117,7 +117,7 @@ static void writeBlocks(const Area& a, Endpoint& e, const Request& r) {
 // endpoint's of is the area.
 static void handle(Endpoint& e, Request& r) {
     if (e.channel) {
-        answerOpen(epoll, r, {openedFile, 0, 0, 0, 0, POLLIN | POLLOUT}, e.of);
+        answerOpen(epoll, r, {openedFile, 0, 0, 0, POLLIN | POLLOUT}, e.of);
         return;
     }
     const Area& a = *static_cast<const Area*>(e.of);

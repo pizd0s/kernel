@@ -49,7 +49,6 @@ struct Opened {
     uint32_t access;
     uint64_t dev;
     uint64_t ino;
-    uint64_t id;
     uint32_t events;
 };
 
@@ -425,11 +424,11 @@ int main() {
     const int channel = device("served_pairs");
     int end;
     errno = 0;
-    assert(opened(channel, {99, O_RDWR, 0, 0, 0, POLLIN | POLLOUT}, end) == -1);
+    assert(opened(channel, {99, O_RDWR, 0, 0, POLLIN | POLLOUT}, end) == -1);
     printf("a kind the kernel does not know: %s\n", errorName(errno));
 
     // Writable as it opens, nothing to read; then the server says there is.
-    int file = opened(channel, {openedFile, O_RDWR, 0, 0, 0, POLLOUT}, end);
+    int file = opened(channel, {openedFile, O_RDWR, 0, 0, POLLOUT}, end);
     assert(file >= 0);
     pollfd ready{file, POLLIN | POLLOUT, 0};
     assert(poll(&ready, 1, 0) == 1);
@@ -445,7 +444,7 @@ int main() {
     close(file);
 
     // A read of the file is a READ sent on the server's end.
-    file = opened(channel, {openedFile, O_RDWR, 0, 0, 0, POLLIN | POLLOUT}, end);
+    file = opened(channel, {openedFile, O_RDWR, 0, 0, POLLIN | POLLOUT}, end);
     assert(file >= 0);
     pid_t child = server(end, "hello");
     char got[16] = {};
@@ -456,7 +455,7 @@ int main() {
     close(file);
 
     // Passed on to another process, the file is still a file there.
-    file = opened(channel, {openedFile, O_RDWR, 0, 0, 0, POLLIN | POLLOUT}, end);
+    file = opened(channel, {openedFile, O_RDWR, 0, 0, POLLIN | POLLOUT}, end);
     assert(file >= 0);
     int carrier[2];
     assert(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, carrier) == 0);
@@ -481,7 +480,7 @@ int main() {
     waitFor(child);
 
     // A send and a recv on an open file go to its server.
-    file = opened(channel, {openedFile, O_RDWR, 0, 0, 0, POLLIN | POLLOUT}, end);
+    file = opened(channel, {openedFile, O_RDWR, 0, 0, POLLIN | POLLOUT}, end);
     assert(file >= 0);
     child = socketServer(end);
     assert(send(file, "ping", 4, 0) == 4);
@@ -498,8 +497,8 @@ int main() {
     int pathEnd;
     int fileEnd;
     int stream[2];
-    const int path = opened(channel, {openedPath, O_RDWR, 0, 0, 0, POLLIN | POLLOUT}, pathEnd);
-    file = opened(channel, {openedFile, O_RDWR, 0, 0, 0, POLLIN | POLLOUT}, fileEnd);
+    const int path = opened(channel, {openedPath, O_RDWR, 0, 0, POLLIN | POLLOUT}, pathEnd);
+    file = opened(channel, {openedFile, O_RDWR, 0, 0, POLLIN | POLLOUT}, fileEnd);
     assert(path >= 0 && file >= 0 && socketpair(AF_UNIX, SOCK_STREAM, 0, stream) == 0);
     const pid_t none = noDirectories(pathEnd, fileEnd, path, file);
     const int a = fchdir(path) == -1 ? errno : 0;

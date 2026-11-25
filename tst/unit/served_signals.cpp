@@ -39,7 +39,6 @@ struct Opened {
     uint32_t access;
     uint64_t dev;
     uint64_t ino;
-    uint64_t id;
     uint32_t events;
 };
 
@@ -196,7 +195,7 @@ static int channel;
 
 // An open file of ours: its endpoint first, the open file second.
 static int servedFile(int sv[2]) {
-    sv[1] = opened(channel, {openedFile, O_RDWR, 0, 0, 0, POLLIN | POLLOUT}, sv[0]);
+    sv[1] = opened(channel, {openedFile, O_RDWR, 0, 0, POLLIN | POLLOUT}, sv[0]);
     return sv[1] >= 0 ? 0 : -1;
 }
 

@@ -321,7 +321,7 @@ namespace {
         }
         Entry& f = *static_cast<Entry*>(e.of);
         if (e.channel) {
-            answerOpen(epoll, r, {openedFile, 0, f.device.st.dev, f.device.st.ino, 0, POLLIN | POLLOUT}, e.of);
+            answerOpen(epoll, r, {openedFile, 0, f.device.st.dev, f.device.st.ino, POLLIN | POLLOUT}, e.of);
             return;
         }
         switch (r.h.op) {

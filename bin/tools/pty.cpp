@@ -1265,7 +1265,7 @@ static void opened(Terminal& t, bool master, Request& r) {
             o = {&t, master, access != O_WRONLY, access != O_RDONLY, -1, 0};
             ++(master ? t.masters : t.slaves);
             o.told = eventsOf(o);
-            const Endpoint* e = answerOpen(epoll, r, {openedTerminal, 0, st.dev, st.ino, 0, o.told}, &o);
+            const Endpoint* e = answerOpen(epoll, r, {openedTerminal, 0, st.dev, st.ino, o.told}, &o);
             if (!e) {
                 --(master ? t.masters : t.slaves);
                 o = {};

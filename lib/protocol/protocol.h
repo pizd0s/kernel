@@ -21,9 +21,10 @@
 // Opened: a file, a terminal's, a handle of a directory or of what O_PATH
 // opened. The kernel makes it that open file for its process. An OK with
 // no Opened brings the end as it is, a socket to its opener. And attach
-// (lib/c) makes a directory of an end of a pair, the handle of id 0: the
-// root of the server behind it, which rootfs makes the root of the
-// processes it starts so.
+// (lib/c) makes a directory of an end of a pair: the root of the server
+// behind it, which rootfs makes the root of the processes it starts so.
+// A handle is named by its pair's id, the kernel's (fdid, unistd.h),
+// which the server asks of its end and no one else gives.
 //
 // A call on an open file is a request sent on the open file's endpoint:
 // a packet, its descriptors with it, the last of them where the request
@@ -58,9 +59,9 @@
 //   The VFS's, on a handle: a directory of the VFS's tree, or what O_PATH
 //   opened; the root, the working directory and the directory descriptors
 //   of a process are handles. A path walks from the handle, or from the
-//   root when it is absolute: root is the id of the process's root, which
-//   rootfs gave the handle as it made it (its Opened's id), 0 for the
-//   root rootfs gives the processes it starts. A call
+//   root when it is absolute: root is the id of the process's root, its
+//   pair's, the kernel's, as rootfs asked it of its end of the handle. A
+//   call
 //   follows a last link as Linux's does, and checks what Linux checks
 //   before the file system.
 //     OPEN      arg flags   root u64, mode u32, path
@@ -379,8 +380,8 @@
 //
 //   replies: OK, ERR with arg the errno, BACKGROUND with arg the signal
 //   of a call out of the foreground (a terminal's)
-//   opened { kind u32, access u32, dev u64, ino u64, id u64, events u32,
-//            made u32 }   kind:
+//   opened { kind u32, access u32, dev u64, ino u64, events u32, made u32 }
+//          kind:
 //          openedFile, an open file; openedTerminal, a terminal's, which
 //          takes a terminal's calls too; openedDir, a handle of a directory
 //          of the VFS's, which calls with a path go to; openedPath, a handle
@@ -396,9 +397,8 @@
 //          they name it to the kernel, which keeps the locks of flock and
 //          fcntl by them, so the open files given one dev and ino are one
 //          file to lock, and a file of ino 0 has no locks; two opens of a
-//          terminal are one terminal by them. id is a handle's, which calls
-//          with a path name the root by. made is CREATE's: 1 when it made
-//          the file
+//          terminal are one terminal by them. made is CREATE's: 1 when
+//          it made the file
 //   io { off u64, flags u32 }   flags: ioAt, at off as pread and
 //          pwrite ask, ESPIPE from what cannot seek
 //   stat { ino u64, size u64, mtime u64 nanoseconds, mode u32, nlink u32,
@@ -564,7 +564,6 @@ struct Opened {
     uint32_t access;
     uint64_t dev;
     uint64_t ino;
-    uint64_t id;
     uint32_t events;
     uint32_t made = 0;
 };
@@ -605,7 +604,7 @@ struct [[gnu::packed]] Statfs {
 };
 
 static_assert(sizeof(Header) == 24);
-static_assert(sizeof(Opened) == 40);
+static_assert(sizeof(Opened) == 32);
 static_assert(sizeof(Io) == 12);
 static_assert(sizeof(Stat) == 64 && offsetof(Stat, atime) == 40);
 static_assert(sizeof(Statfs) == 52);

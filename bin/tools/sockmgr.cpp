@@ -949,7 +949,7 @@ static void opened(Entry& f, const Request& r) {
             if (!h) {
                 fatal("sockmgr: out of memory");
             }
-            h->end = answerOpen(epoll, r, {openedFile, 0, 0, 0, 0, POLLOUT}, h);
+            h->end = answerOpen(epoll, r, {openedFile, 0, 0, 0, POLLOUT}, h);
             if (!h->end) {
                 free(h);
                 return;
@@ -959,7 +959,7 @@ static void opened(Entry& f, const Request& r) {
             return;
         }
         case File::Ctl:
-            answerOpen(epoll, r, {openedFile, 0, 0, 0, 0, POLLIN | POLLOUT}, &ctlTag);
+            answerOpen(epoll, r, {openedFile, 0, 0, 0, POLLIN | POLLOUT}, &ctlTag);
             return;
     }
 }

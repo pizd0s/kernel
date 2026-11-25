@@ -7408,7 +7408,7 @@ func (p *Process) libcAttach(fd uint32) uint32 {
 
 	obj.ref()
 
-	d, err := served(p, openedDir, O_RDONLY, 0, 0, 0, POLLIN|POLLOUT, obj)
+	d, err := served(p, openedDir, O_RDONLY, 0, 0, POLLIN|POLLOUT, obj)
 
 	if err != nil {
 		obj.unref()
@@ -8909,7 +8909,7 @@ func (p *Process) opened(pk *Packet) (Object, bool, error) {
 
 func (p *Process) servedOf(end Object, b []byte) (Object, error) {
 	obj, err := served(p, binary.LittleEndian.Uint32(b), int(binary.LittleEndian.Uint32(b[4:])), binary.LittleEndian.Uint64(b[8:]),
-		binary.LittleEndian.Uint64(b[16:]), binary.LittleEndian.Uint64(b[24:]), binary.LittleEndian.Uint32(b[32:]), end)
+		binary.LittleEndian.Uint64(b[16:]), binary.LittleEndian.Uint32(b[24:]), end)
 
 	if err != nil {
 		end.unref()
