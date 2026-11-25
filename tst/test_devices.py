@@ -117,7 +117,6 @@ random
 sockmgr
 tty
 urandom
-vfs
 zero
 character special file 600
 character special file 666

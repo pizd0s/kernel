@@ -7,9 +7,7 @@
 // the open file from then on; the files of text the services serve so;
 // and sockets, which a service binds its socket to as it registered them,
 // the kernel keeping what is bound (bind(2), connect(2)). Only REGISTER
-// makes a name in /dev, but vfs/watch, rootfs's, whose opens go on to
-// the end of a pair rootfs gives devfs as it starts it, watch: inotify's
-// and watchdir's files. devfs keeps a file's name, its mode and its
+// makes a name in /dev. devfs keeps a file's name, its mode and its
 // owner, and lets the name go when the service's end of the pair closes,
 // whatever the file is. A name may be in a directory of /dev, pts/0: the
 // directory comes with the first name in it and goes with the last.
@@ -21,7 +19,7 @@
 // of its network, named net/<name>, and ends when rootfs lets go of its
 // channel.
 //
-//     devfs [-r fd] <channel> <watch> [<disk> <fd>]... [net/<name> <fd>]...
+//     devfs [-r fd] <channel> [<disk> <fd>]... [net/<name> <fd>]...
 //
 // -r: a descriptor to close once the devices are there, which the
 // services get too: rootfs starts the shell when the last holder has.
@@ -520,8 +518,8 @@ static void start(const char* path, char* const* argv, int disk) {
 int devfsMain(int argc, char** argv) {
     int at;
     const int ready = readyDescriptor(argc, argv, at);
-    if (argc - at < 2 || (argc - at - 2) % 2 != 0) {
-        dprintf(STDERR_FILENO, "usage: devfs [-r fd] <channel> <watch> [<disk> <fd>]... [net/<name> <fd>]...\n");
+    if (argc - at < 1 || (argc - at - 1) % 2 != 0) {
+        dprintf(STDERR_FILENO, "usage: devfs [-r fd] <channel> [<disk> <fd>]... [net/<name> <fd>]...\n");
         return 2;
     }
     channel = atoi(argv[at]);
@@ -535,17 +533,13 @@ int devfsMain(int argc, char** argv) {
     root.parent = &root;
     Node* init = add(root, "init", 4, Kind::Dir, S_IFDIR | 0755, uint32_t(geteuid()), uint32_t(getegid()));
     add(*init, "ctl", 3, Kind::Registry, S_IFCHR | 0600, uint32_t(geteuid()), uint32_t(getegid()));
-    Node* vfs = add(root, "vfs", 3, Kind::Dir, S_IFDIR | 0755, uint32_t(geteuid()), uint32_t(getegid()));
-    Node* watches = add(*vfs, "watch", 5, Kind::Device, S_IFCHR | 0666, uint32_t(geteuid()), uint32_t(getegid()));
-    watches->fd = atoi(argv[at + 1]);
     epoll = epoll_create1(EPOLL_CLOEXEC);
-    if (epoll < 0 || fcntl(channel, F_SETFD, FD_CLOEXEC) != 0 || fcntl(watches->fd, F_SETFD, FD_CLOEXEC) != 0) {
+    if (epoll < 0 || fcntl(channel, F_SETFD, FD_CLOEXEC) != 0) {
         fatal("devfs: errno %d", errno);
     }
     watch(epoll, {channel, false, true, true, &channelTag});
-    watch(epoll, {watches->fd, false, false, false, watches});
     signal(SIGCHLD, SIG_IGN);
-    for (int i = at + 3; i < argc; i += 2) {
+    for (int i = at + 2; i < argc; i += 2) {
         fcntl(atoi(argv[i]), F_SETFD, FD_CLOEXEC);
     }
     char readyText[12];
@@ -573,7 +567,7 @@ int devfsMain(int argc, char** argv) {
     char* const loopbackArgv[] = {inetName, option, readyText, loopback, nullptr};
     char* const bareLoopback[] = {inetName, loopback, nullptr};
     start("/bin/inet", ready >= 0 ? loopbackArgv : bareLoopback, -1);
-    for (int i = at + 2; i < argc; i += 2) {
+    for (int i = at + 1; i < argc; i += 2) {
         if (strncmp(argv[i], "net/", 4) == 0) {
             char* const inetArgv[] = {inetName, option, readyText, argv[i] + 4, argv[i + 1], nullptr};
             char* const bareInet[] = {inetName, argv[i] + 4, argv[i + 1], nullptr};

@@ -1,14 +1,15 @@
 /*
- * The watches of directories, rootfs's, the VFS's: an open file of
- * /dev/vfs/watch is an events file, inotify's instance, and a SEND of it,
- * sendmsg here, a call of how and a value, its rights a directory, which
- * rootfs knows by its id (lib/protocol). inotify_init1 opens one;
- * inotify_add_watch marks the directory of the path, opened as a
- * directory, not following its last link with IN_DONT_FOLLOW, of which
- * no directory is ENOTDIR, and gives the mark's number, which rootfs
- * sends on a pair of ours; inotify_rm_watch takes the mark away; watchdir
- * opens one and makes it the directory's watcher. A socket is no events
- * file, nor is what takes no SEND: EINVAL.
+ * The watches of directories, rootfs's, the VFS's (lib/protocol): a SEND,
+ * sendmsg here, is a call of how and a value, its rights a directory,
+ * which rootfs knows by its id, and an ACCEPT of a handle gives a file of
+ * rootfs's. watchdir's is an ACCEPT of the directory: its watcher; of
+ * what is no handle of rootfs's, ENOTDIR. inotify_init1 opens the root
+ * and asks an events file of it, inotify's instance, which the ACCEPT
+ * after gives; inotify_add_watch marks the directory of the path, opened
+ * as a directory, not following its last link with IN_DONT_FOLLOW, of
+ * which no directory is ENOTDIR, and gives the mark's number, which
+ * rootfs sends on a pair of ours; inotify_rm_watch takes the mark away. A
+ * socket is no events file, nor is what takes no SEND: EINVAL.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -20,9 +21,7 @@
 #include <sys/watchdir.h>
 #include <unistd.h>
 
-enum { watchEventsAdd = 1, watchEventsRemove = 2, watchDirectory = 3 };
-
-static const char watches[] = "/dev/vfs/watch";
+enum { watchEventsNew = 1, watchEventsAdd = 2, watchEventsRemove = 3 };
 
 // An events file's call, its rights count descriptors: 0, or -1 and errno.
 static int call(int fd, uint32_t how, uint32_t value, const int* fds, int count) {
@@ -74,6 +73,11 @@ static void closeKeeping(int fd) {
     errno = saved;
 }
 
+// accept4's flags of open's O_CLOEXEC and O_NONBLOCK.
+static int acceptFlags(int flags) {
+    return (flags & O_CLOEXEC ? SOCK_CLOEXEC : 0) | (flags & O_NONBLOCK ? SOCK_NONBLOCK : 0);
+}
+
 int __kernel_inotify_init1(int flags) {
     if (flags & ~(IN_CLOEXEC | IN_NONBLOCK)) {
         errno = EINVAL;
@@ -81,7 +85,17 @@ int __kernel_inotify_init1(int flags) {
         return -1;
     }
 
-    return open(watches, O_RDONLY | flags);
+    int root = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+
+    if (root < 0) {
+        return -1;
+    }
+
+    int fd = call(root, watchEventsNew, 0, NULL, 0) == 0 ? accept4(root, NULL, NULL, acceptFlags(flags)) : -1;
+
+    closeKeeping(root);
+
+    return fd;
 }
 
 int __kernel_inotify_init(void) {
@@ -134,18 +148,22 @@ int __kernel_inotify_rm_watch(int fd, int wd) {
 }
 
 int __kernel_watchdir(int dirfd, int flags) {
-    if (flags & ~(O_CLOEXEC | O_NONBLOCK)) {
-        errno = EINVAL;
+    struct stat st;
+
+    if (fstat(dirfd, &st) != 0) {
+        return -1;
+    }
+
+    if (flags & ~(O_CLOEXEC | O_NONBLOCK) || S_ISSOCK(st.st_mode)) {
+        errno = flags & ~(O_CLOEXEC | O_NONBLOCK) ? EINVAL : ENOTDIR;
 
         return -1;
     }
 
-    int fd = open(watches, O_RDONLY | flags);
+    int fd = accept4(dirfd, NULL, NULL, acceptFlags(flags));
 
-    if (fd >= 0 && call(fd, watchDirectory, 0, &dirfd, 1) != 0) {
-        closeKeeping(fd);
-
-        return -1;
+    if (fd < 0 && errno == ENOTSOCK) {
+        errno = ENOTDIR;
     }
 
     return fd;

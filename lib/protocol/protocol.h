@@ -337,33 +337,38 @@
 //                                         bind(2) its socket to; only
 //                                         REGISTER makes a name in /dev
 //
-//   rootfs's, on an open file of /dev/vfs/watch, devfs's name of a pair
-//   rootfs gives it as it starts it: an events file, inotify's instance,
-//   whose READ gives struct inotify_event's as inotify(7) has them, as
-//   many as fit, waiting for one but of O_NONBLOCK, and whose INQ is the
-//   bytes queued. A SEND of it is a call of how u32, value u32, its
-//   rights a directory, a handle, which rootfs knows by its id, the
-//   kernel's (fdid), and what else the call says:
-//     SEND      watchEventsAdd, mask      fds a directory, then where the
-//                                         mark's number goes: its events to
-//                                         the file's; wd u32 there, then
-//                                         OK count
-//     SEND      watchEventsRemove, wd     the mark taken away
-//     SEND      watchDirectory, 0         fds a directory: the file, of no
-//                                         marks yet, is the directory's
-//                                         watcher from then on, answered
-//                                         once it listed it: its READ gives
-//                                         records of its names, kind u8,
-//                                         name, 0, as many as fit:
-//                                         watchExisting of each name there,
-//                                         then watchIdle once, then
+//   rootfs's, of inotify and watchdir. A SEND, sendmsg's, is a call of
+//   how u32, value u32 and its rights; an ACCEPT of a handle gives a file
+//   of rootfs's, OK opened, fds[0] the file.
+//     SEND      watchEventsNew, 0         on a handle: its next ACCEPT
+//                                         gives an events file, inotify's
+//                                         instance, whose READ gives struct
+//                                         inotify_event's as inotify(7) has
+//                                         them, as many as fit, waiting for
+//                                         one but of O_NONBLOCK, and whose
+//                                         INQ is the bytes queued
+//     ACCEPT    arg flags                 on a handle of a directory, of no
+//                                         SEND before: the directory's
+//                                         watcher, of the flags' O_NONBLOCK,
+//                                         whose READ gives records of its
+//                                         names, kind u8, name, 0, as many
+//                                         as fit: watchExisting of each name
+//                                         there, then watchIdle once, then
 //                                         watchAdded and watchRemoved, each
 //                                         of what changed since the READ
 //                                         before; a name gone and back is
-//                                         another, removed and added. A
-//                                         READ that finds none waits, but of
-//                                         O_NONBLOCK; one of a directory
-//                                         gone is 0
+//                                         another, removed and added. A READ
+//                                         that finds none waits, but of
+//                                         O_NONBLOCK; one of a directory gone
+//                                         is 0
+//     SEND      watchEventsAdd, mask      on an events file, fds a
+//                                         directory, a handle, which rootfs
+//                                         knows by its id, the kernel's
+//                                         (fdid), then where the mark's
+//                                         number goes: its events to the
+//                                         file's; wd u32 there, then OK count
+//     SEND      watchEventsRemove, wd     on an events file: the mark taken
+//                                         away
 //
 //   A file system is a socket of its own, SOCK_SEQPACKET, bound to a path:
 //   mount(2) connects to it and mounts the connection, and every
@@ -533,10 +538,10 @@ constexpr uint8_t watchRemoved = 4;
 // flag of a name that is a directory's.
 constexpr uint8_t noticeGone = 5;
 constexpr uint8_t noticeDirectory = 0x80;
-// A SEND's of /dev/vfs/watch: its how.
-constexpr uint32_t watchEventsAdd = 1;
-constexpr uint32_t watchEventsRemove = 2;
-constexpr uint32_t watchDirectory = 3;
+// A SEND's of inotify's, rootfs's: its how.
+constexpr uint32_t watchEventsNew = 1;
+constexpr uint32_t watchEventsAdd = 2;
+constexpr uint32_t watchEventsRemove = 3;
 
 // The room an entry of a READDIR's takes of struct dirent64, of a name of
 // length.
