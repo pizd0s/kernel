@@ -340,6 +340,8 @@ KERNEL_SIZED(int, getopt_long_only, (int a, char* const* b, const char* c, const
 
 /* glob.h */
 KERNEL_SIZED(int, glob, (const char* __restrict a, int b, int (*c)(const char*, int), glob_t* __restrict d), (const char* __restrict a, int b, int (*c)(const char*, int), glob_t* __restrict d, size_t d_size), (a, b, c, d, sizeof(glob_t)))
+// The kernel's glob, of the home directory a pattern's ~ is, which libc.wasm's glob finds.
+KERNEL_SIZED(int, __glob_home, (const char* __restrict a, int b, int (*c)(const char*, int), glob_t* __restrict d, const char* e), (const char* __restrict a, int b, int (*c)(const char*, int), glob_t* __restrict d, size_t d_size, const char* e), (a, b, c, d, sizeof(glob_t), e))
 KERNEL_VOID_SIZED(globfree, (glob_t* a), (glob_t* a, size_t a_size), (a, sizeof(glob_t)))
 
 /* grp.h */

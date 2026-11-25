@@ -108,7 +108,6 @@ const (
 	utsRelease       = "1"
 	utsVersion       = "#1"
 	utsMachine       = "wasm32"
-	databaseMax      = 16 << 20
 	windowsKept      = 8
 	packetsKept      = 8
 	packetRoomKept   = 4096
@@ -7831,35 +7830,6 @@ func (p *Process) openPath(path string, flags int, mode uint32) (Object, error) 
 	return p.openAt(AT_FDCWD, path, flags, mode)
 }
 
-func (p *Process) readPath(path string, max int) ([]byte, error) {
-	f, err := p.openPath(path, O_RDONLY, 0)
-
-	if err != nil {
-		return nil, err
-	}
-
-	defer f.unref()
-
-	t := f
-
-	var data []byte
-
-	buf := make([]byte, 65536)
-	file := bytesFile(buf)
-
-	for len(data) < max {
-		n, err := p.fileRead(t, file, len(buf), IoMode{})
-
-		if err != nil || n == 0 {
-			break
-		}
-
-		data = append(data, buf[:n]...)
-	}
-
-	return data, nil
-}
-
 func (p *Process) dirNames(path string) ([]string, error) {
 	d, err := p.openPath(path, O_RDONLY|O_DIRECTORY, 0)
 
@@ -11883,12 +11853,6 @@ func (p *Process) setName(to *string, name, n uint32) error {
 	return nil
 }
 
-type PasswdEntry struct {
-	name, passwd      string
-	uid, gid          uint32
-	gecos, dir, shell string
-}
-
 func (p *Process) staticResult(slot, size uint32) uint32 {
 	at := p.staticAt(slot)
 
@@ -11906,55 +11870,6 @@ func (p *Process) staticResult(slot, size uint32) uint32 {
 	p.put32(at, block)
 
 	return block
-}
-
-func (p *Process) databaseLines(path string, fields int) [][]string {
-	data, err := p.readPath(path, databaseMax)
-
-	if err != nil {
-		return nil
-	}
-
-	var out [][]string
-
-	for _, line := range bytes.Split(data, []byte("\n")) {
-		if parts := strings.Split(string(line), ":"); len(parts) == fields {
-			out = append(out, parts)
-		}
-	}
-
-	return out
-}
-
-func parseId(s string) (uint32, bool) {
-	n, err := strconv.ParseUint(s, 10, 32)
-
-	return uint32(n), err == nil
-}
-
-func (p *Process) passwdEntries() []PasswdEntry {
-	var out []PasswdEntry
-
-	for _, f := range p.databaseLines("/etc/passwd", 7) {
-		uid, ok1 := parseId(f[2])
-		gid, ok2 := parseId(f[3])
-
-		if ok1 && ok2 {
-			out = append(out, PasswdEntry{f[0], f[1], uid, gid, f[4], f[5], f[6]})
-		}
-	}
-
-	return out
-}
-
-func (p *Process) passwdBy(match func(*PasswdEntry) bool) *PasswdEntry {
-	entries := p.passwdEntries()
-
-	if i := slices.IndexFunc(entries, func(e PasswdEntry) bool { return match(&e) }); i >= 0 {
-		return &entries[i]
-	}
-
-	return nil
 }
 
 func (p *Process) libcInet_aton(s, at uint32) uint32 {
@@ -13404,8 +13319,13 @@ func (p *Process) libcIconv_close(cd uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) glob(pattern, flags, errfunc, out uint32) uint32 {
+func (p *Process) glob(pattern, flags, errfunc, out, home uint32) uint32 {
 	g := &Globber{p: p, flags: flags, errfunc: errfunc}
+
+	if home != 0 {
+		g.home = p.str(home)
+	}
+
 	offs := uint32(0)
 
 	if flags&GLOB_DOOFFS != 0 {
@@ -13515,8 +13435,8 @@ func (p *Process) libcGlobfree(out uint32) {
 	p.put32(out+4, 0)
 }
 
-func (p *Process) libcGlob(pattern, flags, errfunc, out uint32) uint32 {
-	return p.glob(pattern, flags, errfunc, out)
+func (p *Process) libc__glob_home(pattern, flags, errfunc, out, home uint32) uint32 {
+	return p.glob(pattern, flags, errfunc, out, home)
 }
 
 func (p *Process) libcCrypt(key, setting uint32) uint32 {

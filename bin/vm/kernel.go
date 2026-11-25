@@ -1037,7 +1037,7 @@ func (k *Kernel) functionTable() map[string]any {
 		"ptsname":                               libcPtsname,
 		"ptsname_r":                             libcPtsname_r,
 		"openpty":                               libcOpenpty,
-		"glob":                                  libcGlob,
+		"__glob_home":                           libc__glob_home,
 		"globfree":                              libcGlobfree,
 		"random":                                libcRandom,
 		"srandom":                               libcSrandom,

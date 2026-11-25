@@ -11,6 +11,7 @@ type Globber struct {
 	p       *Process
 	flags   uint32
 	errfunc uint32
+	home    string
 	found   []string
 	aborted bool
 }
@@ -167,14 +168,8 @@ func (g *Globber) tilde(pattern string) (string, bool) {
 		return pattern, true
 	}
 
-	user, rest, slash := strings.Cut(pattern[1:], "/")
-	home := ""
-
-	if user == "" {
-		home, _ = g.p.getenv("HOME")
-	} else if e := g.p.passwdBy(func(e *PasswdEntry) bool { return e.name == user }); e != nil {
-		home = e.dir
-	}
+	_, rest, slash := strings.Cut(pattern[1:], "/")
+	home := g.home
 
 	if home == "" {
 		return pattern, g.flags&GLOB_TILDE_CHECK == 0

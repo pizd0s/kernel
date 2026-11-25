@@ -2102,12 +2102,12 @@ func libcOpenpty(amaster, aslave, name, termp, termpSize, winp, winpSize uint32)
 	return p.libcOpenpty(amaster, aslave, name, termp, winp)
 }
 
-func libcGlob(pattern, flags, errfunc, out, outSize uint32) uint32 {
+func libc__glob_home(pattern, flags, errfunc, out, outSize, home uint32) uint32 {
 	p := proc()
 
 	p.sized("glob", outSize, sizeofGlob)
 
-	return p.libcGlob(pattern, flags, errfunc, out)
+	return p.libc__glob_home(pattern, flags, errfunc, out, home)
 }
 
 func libcGlobfree(out, outSize uint32) {

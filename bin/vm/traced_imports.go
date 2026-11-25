@@ -41,25 +41,25 @@ var callFormats = func() map[string]string {
 	out := map[string]string{}
 
 	for _, word := range strings.Fields(`
-		_Exit:vd _Fork:d __assert_fail:vssds __dtoa:sfddppp __errno_location:p __hdtoa:sfsdppp __hldtoa:sfsdppp __ldtoa:spddppp
-		__pthread_cancelled:dd __pthread_key_take:ppp __pthread_once_begin:dp __pthread_once_end:vp __sched_cpucount:ddp _exit:vd
-		_longjmp:vpdd _setjmp:dpd abort:v abs:dd accept:ddpp accept4:ddppd access:dsd acct:ds adjtime:dpdpd aio_cancel:ddpd aio_error:dpd
-		aio_fsync:ddpd aio_read:dpd aio_return:dpd aio_suspend:dpddpd aio_write:dpd alarm:dd aligned_alloc:pdd alphasort:dpdpd asctime:spd
-		asctime_r:spdp atof:fs atoi:ds atol:ds atoll:ds attach:dd basename:sp bcmp:dppd bcopy:vppd bind:ddpd bzero:vpd calloc:pdd
-		cfgetispeed:dpd cfgetospeed:dpd cfmakeraw:vpd cfsetispeed:dpdd cfsetospeed:dpdd cfsetspeed:dpdd chdir:ds chmod:dso chown:dsdd
-		chroot:ds clearenv:d clock:d clock_getcpuclockid:ddp clock_getres:ddpd clock_gettime:ddpd clock_nanosleep:dddpdpd
-		clock_settime:ddpd close:dd closedir:dp closelog:v cnd_broadcast:dpd cnd_destroy:vpd cnd_init:dpd cnd_signal:dpd
-		cnd_timedwait:dpdpdpd cnd_wait:dpdpd confstr:ddpd connect:ddpd copy_file_range:ddpdpdd creat:dso crypt:sss ctermid:sp daemon:ddd
-		difftime:fdd dirfd:dp dirname:sp div:ddd dup:dd dup2:ddd dup3:dddd eaccess:dsd epoll_create:dd epoll_create1:dd epoll_ctl:ddddpd
-		epoll_pwait:ddpdddpd epoll_wait:ddpddd eventfd:ddd eventfd_read:ddp eventfd_write:ddd execl:dssp execle:dssp execlp:dssp
-		execmode:dddd execv:dsp execve:dspp execvp:dsp execvpe:dspp explicit_bzero:vpd faccessat:ddsdd fchdir:dd fchmod:ddo fchmodat:ddsod
-		fchown:dddd fchownat:ddsddd fcntl:dddpd fdatasync:dd fdopendir:pd fexecve:ddpp ffs:dd ffsl:dd ffsll:dd flock:ddd fnmatch:dssd
-		fpathconf:ddd free:vp fstat:ddpd fstatat:ddspdd fstatfs:ddpd fstatvfs:ddpd fsync:dd ftok:dsd ftruncate:ddd futimens:ddpd
-		futimes:ddpd get_avphys_pages:d get_nprocs:d get_nprocs_conf:d get_phys_pages:d getcwd:spd getdomainname:dpd getdtablesize:d
-		getegid:d getentropy:dpd getenv:ss geteuid:d getgid:d getgroups:ddp gethostid:d gethostname:dpd getitimer:ddpd getloadavg:dpd
-		getlogin:s getlogin_r:dpd getpagesize:d getpeername:ddpp getpgid:dd getpgrp:d getpid:d getppid:d getpriority:ddd getrandom:dpdd
-		getresgid:dppp getresuid:dppp getrlimit:ddpd getrusage:ddpd getsid:dd getsockname:ddpp getsockopt:ddddpp getsubopt:dppp gettid:d
-		gettimeofday:dpdp getuid:d glob:dsdppd globfree:vpd gmtime:ppd gmtime_r:pppdd grantpt:dd iconv:ddpppp iconv_close:dd
+		_Exit:vd _Fork:d __assert_fail:vssds __dtoa:sfddppp __errno_location:p __glob_home:dsdppds __hdtoa:sfsdppp __hldtoa:sfsdppp
+		__ldtoa:spddppp __pthread_cancelled:dd __pthread_key_take:ppp __pthread_once_begin:dp __pthread_once_end:vp __sched_cpucount:ddp
+		_exit:vd _longjmp:vpdd _setjmp:dpd abort:v abs:dd accept:ddpp accept4:ddppd access:dsd acct:ds adjtime:dpdpd aio_cancel:ddpd
+		aio_error:dpd aio_fsync:ddpd aio_read:dpd aio_return:dpd aio_suspend:dpddpd aio_write:dpd alarm:dd aligned_alloc:pdd
+		alphasort:dpdpd asctime:spd asctime_r:spdp atof:fs atoi:ds atol:ds atoll:ds attach:dd basename:sp bcmp:dppd bcopy:vppd bind:ddpd
+		bzero:vpd calloc:pdd cfgetispeed:dpd cfgetospeed:dpd cfmakeraw:vpd cfsetispeed:dpdd cfsetospeed:dpdd cfsetspeed:dpdd chdir:ds
+		chmod:dso chown:dsdd chroot:ds clearenv:d clock:d clock_getcpuclockid:ddp clock_getres:ddpd clock_gettime:ddpd
+		clock_nanosleep:dddpdpd clock_settime:ddpd close:dd closedir:dp closelog:v cnd_broadcast:dpd cnd_destroy:vpd cnd_init:dpd
+		cnd_signal:dpd cnd_timedwait:dpdpdpd cnd_wait:dpdpd confstr:ddpd connect:ddpd copy_file_range:ddpdpdd creat:dso crypt:sss
+		ctermid:sp daemon:ddd difftime:fdd dirfd:dp dirname:sp div:ddd dup:dd dup2:ddd dup3:dddd eaccess:dsd epoll_create:dd
+		epoll_create1:dd epoll_ctl:ddddpd epoll_pwait:ddpdddpd epoll_wait:ddpddd eventfd:ddd eventfd_read:ddp eventfd_write:ddd execl:dssp
+		execle:dssp execlp:dssp execmode:dddd execv:dsp execve:dspp execvp:dsp execvpe:dspp explicit_bzero:vpd faccessat:ddsdd fchdir:dd
+		fchmod:ddo fchmodat:ddsod fchown:dddd fchownat:ddsddd fcntl:dddpd fdatasync:dd fdopendir:pd fexecve:ddpp ffs:dd ffsl:dd ffsll:dd
+		flock:ddd fnmatch:dssd fpathconf:ddd free:vp fstat:ddpd fstatat:ddspdd fstatfs:ddpd fstatvfs:ddpd fsync:dd ftok:dsd ftruncate:ddd
+		futimens:ddpd futimes:ddpd get_avphys_pages:d get_nprocs:d get_nprocs_conf:d get_phys_pages:d getcwd:spd getdomainname:dpd
+		getdtablesize:d getegid:d getentropy:dpd getenv:ss geteuid:d getgid:d getgroups:ddp gethostid:d gethostname:dpd getitimer:ddpd
+		getloadavg:dpd getlogin:s getlogin_r:dpd getpagesize:d getpeername:ddpp getpgid:dd getpgrp:d getpid:d getppid:d getpriority:ddd
+		getrandom:dpdd getresgid:dppp getresuid:dppp getrlimit:ddpd getrusage:ddpd getsid:dd getsockname:ddpp getsockopt:ddddpp
+		getsubopt:dppp gettid:d gettimeofday:dpdp getuid:d globfree:vpd gmtime:ppd gmtime_r:pppdd grantpt:dd iconv:ddpppp iconv_close:dd
 		iconv_open:dss imaxabs:dd imaxdiv:ddd index:ssd inet_aton:dspd inet_ntoa:sd inet_ntop:sdppd inet_pton:ddsp initstate:sdpd
 		inotify_add_watch:ddsd inotify_init:d inotify_init1:dd inotify_rm_watch:ddd ioctl:dddpd isalnum:dd isalpha:dd isascii:dd isatty:dd
 		isblank:dd iscntrl:dd isdigit:dd isgraph:dd islower:dd isprint:dd ispunct:dd issetugid:d isspace:dd isupper:dd iswalnum:dd
