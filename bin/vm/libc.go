@@ -890,34 +890,6 @@ func libcClock_settime(clock, ts, tsSize uint32) uint32 {
 	return p.libcClock_settime(clock, ts)
 }
 
-func libcAsctime(tm, tmSize uint32) uint32 {
-	p := proc()
-
-	p.sized("asctime", tmSize, sizeofTm)
-
-	return p.libcAsctime(tm)
-}
-
-func libcAsctime_r(tm, tmSize, buf uint32) uint32 {
-	p := proc()
-
-	p.sized("asctime_r", tmSize, sizeofTm)
-
-	return p.libcAsctime_r(tm, buf)
-}
-
-func libcDifftime(t1, t0 uint64) float64 {
-	return proc().libcDifftime(t1, t0)
-}
-
-func libcTimegm(at, atSize uint32) uint64 {
-	p := proc()
-
-	p.sized("timegm", atSize, sizeofTm)
-
-	return p.libcTimegm(at)
-}
-
 func libcSettimeofday(tv, tvSize, tz, tzSize uint32) uint32 {
 	p := proc()
 
@@ -936,22 +908,6 @@ func libcAdjtime(delta, deltaSize, old, oldSize uint32) uint32 {
 
 func libcUsleep(us uint32) uint32 {
 	return proc().libcUsleep(us)
-}
-
-func libcGmtime(t, size uint32) uint32 {
-	p := proc()
-
-	p.sized("gmtime", size, sizeofTm)
-
-	return p.libcGmtime(t)
-}
-
-func libcGmtime_r(t, at, atSize, size uint32) uint32 {
-	p := proc()
-
-	p.sized("gmtime_r", atSize, sizeofTm, size, sizeofTm)
-
-	return p.libcGmtime_r(t, at)
 }
 
 func libcClock() uint64 {

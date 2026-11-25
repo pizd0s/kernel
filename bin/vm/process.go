@@ -61,8 +61,6 @@ var devctlData = map[uint32]uint32{
 const (
 	staticDot        = 0
 	staticSlash      = 2
-	staticTm         = 8
-	staticCtime      = 56
 	staticStrtok     = 256
 	staticNtoa       = 392
 	staticCrypt      = 408
@@ -10435,53 +10433,6 @@ func (p *Process) localtime(t, at uint32) uint32 {
 	return at
 }
 
-func (p *Process) libcAsctime(tm uint32) uint32 {
-	s, ok := asctime(p.readTm(tm))
-
-	if !ok {
-		p.setErrno(EOVERFLOW)
-
-		return 0
-	}
-
-	at := p.staticAt(staticCtime)
-
-	p.putString(at, s)
-
-	return at
-}
-
-func (p *Process) libcAsctime_r(tm, buf uint32) uint32 {
-	s, ok := asctime(p.readTm(tm))
-
-	if !ok {
-		p.setErrno(EOVERFLOW)
-
-		return 0
-	}
-
-	p.putString(buf, s)
-
-	return buf
-}
-
-func (p *Process) libcDifftime(t1, t0 uint64) float64 {
-	return float64(int64(t1)) - float64(int64(t0))
-}
-
-func (p *Process) libcTimegm(at uint32) uint64 {
-	tm := p.readTm(at)
-	t := time.Date(tm.year+1900, time.Month(tm.mon+1), tm.mday, tm.hour, tm.min, tm.sec, 0, time.UTC)
-
-	if !p.writeTm(at, t) {
-		p.setErrno(EOVERFLOW)
-
-		return math.MaxUint64
-	}
-
-	return uint64(t.Unix())
-}
-
 func (p *Process) libcUsleep(us uint32) uint32 {
 	left := p.sleep(time.Duration(us) * time.Microsecond)
 
@@ -10490,10 +10441,6 @@ func (p *Process) libcUsleep(us uint32) uint32 {
 	}
 
 	return p.result(0, nil)
-}
-
-func (p *Process) libcGmtime(t uint32) uint32 {
-	return p.gmtime(t, p.staticAt(staticTm))
 }
 
 func (p *Process) libcClock() uint64 {
@@ -10717,19 +10664,6 @@ func (p *Process) libcNanosleep(req, rem uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) gmtime(t, at uint32) uint32 {
-	sec := int64(p.u64(t))
-	u := time.Unix(sec, 0).UTC()
-
-	if !p.writeTm(at, u) {
-		p.setErrno(EOVERFLOW)
-
-		return 0
-	}
-
-	return at
-}
-
 func (p *Process) sleep(d time.Duration) time.Duration {
 	end := time.Now().Add(d)
 
@@ -10758,10 +10692,6 @@ func (p *Process) libcSettimeofday(tv, tz uint32) uint32 {
 
 func (p *Process) libcAdjtime(delta, old uint32) uint32 {
 	return p.result(0, EPERM)
-}
-
-func (p *Process) libcGmtime_r(t, at uint32) uint32 {
-	return p.gmtime(t, at)
 }
 
 func (p *Process) pathconf(name uint32) uint32 {

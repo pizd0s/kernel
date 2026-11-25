@@ -4,17 +4,11 @@ package main
 
 import (
 	"encoding/binary"
-	"fmt"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 	"unsafe"
-)
-
-var (
-	weekdays = []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
-	months   = []string{"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"}
 )
 
 var hostClocks = map[uint32]uintptr{
@@ -124,13 +118,6 @@ func footerZone(tz string) (*time.Location, error) {
 	return time.LoadLocationFromTZData(tz, append(append(append(data, '\n'), tz...), '\n'))
 }
 
-func asctime(tm TmFields) (string, bool) {
-	s := fmt.Sprintf("%.3s %.3s%3d %.2d:%.2d:%.2d %d\n", calendarName(weekdays, tm.wday, true), calendarName(months, tm.mon, true),
-		tm.mday, tm.hour, tm.min, tm.sec, tm.year+1900)
-
-	return s, len(s) < 26
-}
-
 type TmFields struct {
 	sec, min, hour, mday, mon, year, wday, yday, isdst, gmtoff int
 	zone                                                       string
@@ -145,16 +132,4 @@ func tmOf(t time.Time) TmFields {
 	}
 
 	return tm
-}
-
-func calendarName(list []string, i int, short bool) string {
-	if i < 0 || i >= len(list) {
-		return "?"
-	}
-
-	if short {
-		return list[i][:3]
-	}
-
-	return list[i]
 }
