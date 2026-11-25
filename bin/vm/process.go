@@ -261,7 +261,7 @@ func (p *Process) traces(class uint32) bool {
 
 func (p *Process) sinkWrite(b []byte) {
 	for p.sink != nil {
-		_, err := p.fileWrite(p.sink.object(), bytesFile(b), len(b), IoMode{quiet: true})
+		_, err := p.fileWrite(p.sink.object(), bytesFile(b), len(b), IoMode{quiet: true, nonblock: p.sink.nonblock.Load()})
 
 		if err == nil || err == EAGAIN {
 			return
@@ -4142,8 +4142,8 @@ func (p *Process) stderrReport(msg string, stack []uintptr) {
 		fmt.Fprintf(&b, "%s[%d]:     %s\n", name, p.pid, line)
 	}
 
-	if t, err := p.fd(2); err == nil {
-		p.fileWrite(t, bytesFile([]byte(b.String())), b.Len(), IoMode{quiet: true})
+	if d, err := p.description(2); err == nil {
+		p.fileWrite(d.object(), bytesFile([]byte(b.String())), b.Len(), IoMode{quiet: true, nonblock: d.nonblock.Load()})
 	}
 }
 
@@ -5048,12 +5048,13 @@ func (p *Process) gatherIn(small []byte, iovs, count uint32, max int) ([]byte, e
 }
 
 func (p *Process) vectored(fd, iovs, count uint32, events int16, positioned bool, off uint64) uint32 {
-	t, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
+	t := d.object()
 	spans, err := p.ioSpans(iovs, count)
 
 	if err != nil || len(spans) == 0 {
@@ -5077,7 +5078,7 @@ func (p *Process) vectored(fd, iovs, count uint32, events int16, positioned bool
 			return p.result(p.filePwrite(t, bytesFile(buf), len(buf), int64(off)))
 		}
 
-		return p.result(p.fileWrite(t, bytesFile(buf), len(buf), IoMode{}))
+		return p.result(p.fileWrite(t, bytesFile(buf), len(buf), d.mode()))
 	}
 
 	buf = buf[:total]
@@ -5086,7 +5087,7 @@ func (p *Process) vectored(fd, iovs, count uint32, events int16, positioned bool
 	if positioned {
 		n, err = p.filePread(t, bytesFile(buf), total, int64(off))
 	} else {
-		n, err = p.fileRead(t, bytesFile(buf), total, IoMode{})
+		n, err = p.fileRead(t, bytesFile(buf), total, d.mode())
 	}
 
 	spans, _ = p.ioSpans(iovs, count)
@@ -5219,14 +5220,14 @@ func (p *Process) withMask(mask uint32, wait func() (int, error)) (int, error) {
 }
 
 func (p *Process) libcRead(fd, buf, n uint32) uint32 {
-	t, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
 	w := p.memory(buf, n, O_WRONLY)
-	count, err := p.fileRead(t, w, int(n), IoMode{})
+	count, err := p.fileRead(d.object(), w, int(n), d.mode())
 
 	p.memoryDone(w)
 
@@ -5234,14 +5235,14 @@ func (p *Process) libcRead(fd, buf, n uint32) uint32 {
 }
 
 func (p *Process) libcWrite(fd, buf, n uint32) uint32 {
-	t, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
 	w := p.memory(buf, n, O_RDONLY)
-	count, err := p.fileWrite(t, w, int(n), IoMode{})
+	count, err := p.fileWrite(d.object(), w, int(n), d.mode())
 
 	p.memoryDone(w)
 
@@ -5674,7 +5675,7 @@ func (p *Process) varArg(va uint32, i uint32) uint32 {
 }
 
 func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
-	obj, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5687,8 +5688,6 @@ func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
 		if uint64(min) >= p.limits[RLIMIT_NOFILE].cur {
 			return p.result(0, EINVAL)
 		}
-
-		d, _ := p.description(fd)
 
 		d.hold()
 
@@ -5704,17 +5703,11 @@ func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
 
 		return p.result(0, nil)
 	case F_GETFL:
-		return p.result(p.fileFlags(obj))
+		return p.result(p.descFlags(d))
 	case F_GETLK, F_SETLK, F_SETLKW:
-		l, err := p.description(fd)
-
-		if err != nil {
-			return p.result(0, err)
-		}
-
-		return p.result(0, p.recordLock(l, cmd, p.varArg(va, 0)))
+		return p.result(0, p.recordLock(d, cmd, p.varArg(va, 0)))
 	case F_SETFL:
-		return p.result(0, p.fileSetFlags(obj, int(p.varArg(va, 0))))
+		return p.result(0, p.setDescFlags(d, int(p.varArg(va, 0))))
 	}
 
 	return p.result(0, EINVAL)
@@ -5870,7 +5863,8 @@ func (p *Process) libc__kernel_fdioctl(fd, req, arg uint32) uint32 {
 
 	switch req {
 	case FIONBIO:
-		fl, err := p.fileFlags(obj)
+		d, _ := p.description(fd)
+		fl, err := p.descFlags(d)
 
 		if err != nil {
 			return p.result(0, err)
@@ -5882,7 +5876,7 @@ func (p *Process) libc__kernel_fdioctl(fd, req, arg uint32) uint32 {
 			fl |= O_NONBLOCK
 		}
 
-		return p.result(0, p.fileSetFlags(obj, fl))
+		return p.result(0, p.setDescFlags(d, fl))
 	case FIOCLEX, FIONCLEX:
 		p.files.slots[fd].cloexec = req == FIOCLEX
 
@@ -6072,31 +6066,37 @@ func (p *Process) ctlCall(o Object, r *Ctl, restarts bool) error {
 	return err
 }
 
-func (p *Process) ctlOpened(opened []byte, files []*Description, flags uint32) (*Description, []*Description, error) {
-	kind, access := binary.LittleEndian.Uint32(opened), int(binary.LittleEndian.Uint32(opened[4:]))
+func (p *Process) ctlOpened(what []byte, files []*Description, flags uint32) (*Description, []*Description, error) {
+	kind, access := binary.LittleEndian.Uint32(what), int(binary.LittleEndian.Uint32(what[4:]))
 
 	if kind == openedFifo {
-		st := Stat{Dev: binary.LittleEndian.Uint64(opened[8:]), Ino: binary.LittleEndian.Uint64(opened[16:]), Mode: binary.LittleEndian.Uint32(opened[24:])}
+		st := Stat{Dev: binary.LittleEndian.Uint64(what[8:]), Ino: binary.LittleEndian.Uint64(what[16:]), Mode: binary.LittleEndian.Uint32(what[24:])}
 		obj, err := p.openFifo(&st, access&O_ACCMODE|int(flags&O_NONBLOCK))
 
 		if err != nil {
 			return nil, files, err
 		}
 
-		return held(obj), files, nil
+		return opened(obj, flags&O_NONBLOCK != 0), files, nil
 	}
 
 	if len(files) == 0 {
 		return nil, files, EIO
 	}
 
-	d, err := p.servedOf(files[0], opened)
+	d, err := p.servedOf(files[0], what)
 
-	if err == nil && kind == openedTerminal && flags&O_NOCTTY == 0 {
+	if err != nil {
+		return nil, files[1:], err
+	}
+
+	d.nonblock.Store(flags&O_NONBLOCK != 0)
+
+	if kind == openedTerminal && flags&O_NOCTTY == 0 {
 		p.acquire(d)
 	}
 
-	return d, files[1:], err
+	return d, files[1:], nil
 }
 
 func (p *Process) ctlAnswer(at uint32, r *Ctl, flags uint32) error {
@@ -6286,8 +6286,6 @@ func (p *Process) openFifo(st *Stat, flags int) (Object, error) {
 
 	e := &PipeEnd{pipe: pp, reads: reads, writes: writes}
 
-	e.nonblock.Store(nonblock)
-
 	if nonblock || reads && writes {
 		return e, nil
 	}
@@ -6318,9 +6316,7 @@ func (p *Process) pipe(at, flags uint32) uint32 {
 	var fds [2]int
 
 	for i, e := range ends {
-		e.nonblock.Store(flags&O_NONBLOCK != 0)
-
-		fd, err := p.install(e, 0, cloexec)
+		fd, err := p.installDesc(opened(e, flags&O_NONBLOCK != 0), 0, cloexec)
 
 		if err != nil {
 			if i == 1 {
@@ -6396,9 +6392,9 @@ func (p *Process) socket(domain, kind, protocol uint32) uint32 {
 
 	switch kind & sockTypeMask {
 	case SOCK_STREAM, SOCK_SEQPACKET:
-		return p.result(p.install(newUnixSocket(int(kind&sockTypeMask), nonblock), 0, cloexec))
+		return p.result(p.installDesc(opened(newUnixSocket(int(kind&sockTypeMask)), nonblock), 0, cloexec))
 	case SOCK_DGRAM, SOCK_RAW:
-		return p.result(p.install(newUnixDgram(nonblock), 0, cloexec))
+		return p.result(p.installDesc(opened(newUnixDgram(), nonblock), 0, cloexec))
 	}
 
 	return p.result(0, ESOCKTNOSUPPORT)
@@ -6425,7 +6421,7 @@ func (p *Process) libc__kernel_socketon(fd, domain, kind, protocol uint32) uint3
 
 	d.hold()
 
-	return p.result(p.install(newIndirect(d), 0, kind&SOCK_CLOEXEC != 0))
+	return p.result(p.installDesc(opened(newIndirect(d), kind&SOCK_NONBLOCK != 0), 0, kind&SOCK_CLOEXEC != 0))
 }
 
 func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
@@ -6451,9 +6447,9 @@ func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 		return p.result(0, ESOCKTNOSUPPORT)
 	}
 
-	a, b := newPairOf(base, kind&SOCK_NONBLOCK != 0)
-	cloexec := kind&SOCK_CLOEXEC != 0
-	x, err := p.install(a, 0, cloexec)
+	a, b := newPairOf(base)
+	nonblock, cloexec := kind&SOCK_NONBLOCK != 0, kind&SOCK_CLOEXEC != 0
+	x, err := p.installDesc(opened(a, nonblock), 0, cloexec)
 
 	if err != nil {
 		b.closed()
@@ -6461,7 +6457,7 @@ func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	y, err := p.install(b, 0, cloexec)
+	y, err := p.installDesc(opened(b, nonblock), 0, cloexec)
 
 	if err != nil {
 		p.closeFd(x)
@@ -6504,13 +6500,13 @@ func (p *Process) libc__kernel_bindat(fd, node, addr, n uint32) uint32 {
 }
 
 func (p *Process) libc__kernel_connectat(fd, node, addr, n uint32) uint32 {
-	s, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err == nil {
 		var a Address
 
 		if a, err = p.nodeAddress(int32(node), addr, n); err == nil {
-			err = p.request(s, &SockConnect{addr: a})
+			err = p.request(d.object(), &SockConnect{addr: a, nonblock: d.nonblock.Load()})
 		}
 	}
 
@@ -6617,11 +6613,15 @@ func (p *Process) libc__kernel_sendmsgat(fd, node, msg, flags uint32) uint32 {
 }
 
 func (p *Process) sendmsg(fd uint32, node int32, msg, flags uint32) (int, error) {
-	s, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return 0, err
 	}
+
+	s := d.object()
+
+	flags |= d.dontwait()
 
 	h := p.span(msg, sizeofMsghdr)
 	to := p.destination(binary.LittleEndian.Uint32(h), binary.LittleEndian.Uint32(h[4:]))
@@ -6697,11 +6697,15 @@ func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
 func (p *Process) recvmsg(fd, msg, flags uint32) (int, error) {
 	var few [4][]byte
 
-	s, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return 0, err
 	}
+
+	s := d.object()
+
+	flags |= d.dontwait()
 
 	h := p.span(msg, sizeofMsghdr)
 	name, nameRoom := binary.LittleEndian.Uint32(h), binary.LittleEndian.Uint32(h[4:])
@@ -6845,7 +6849,7 @@ func (p *Process) libcSockatmark(fd uint32) uint32 {
 }
 
 func (p *Process) socketAccept(fd, addr, lenAt, flags uint32) uint32 {
-	s, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6859,11 +6863,13 @@ func (p *Process) socketAccept(fd, addr, lenAt, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	conn, peer, err := p.sockAccept(s, flags)
+	conn, peer, err := p.sockAccept(d, flags)
 
 	if err != nil {
 		return p.result(0, err)
 	}
+
+	conn.nonblock.Store(flags&SOCK_NONBLOCK != 0)
 
 	guest, err := p.installDesc(conn, 0, flags&SOCK_CLOEXEC != 0)
 
@@ -6877,7 +6883,7 @@ func (p *Process) socketAccept(fd, addr, lenAt, flags uint32) uint32 {
 }
 
 func (p *Process) socketSend(fd, buf, n, flags, addr, alen uint32) uint32 {
-	s, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6885,11 +6891,11 @@ func (p *Process) socketSend(fd, buf, n, flags, addr, alen uint32) uint32 {
 
 	to := p.destination(addr, alen)
 
-	return p.result(p.sockSend(s, &Packet{data: slices.Clone(p.span(buf, n))}, to, sendMode(flags)))
+	return p.result(p.sockSend(d.object(), &Packet{data: slices.Clone(p.span(buf, n))}, to, sendMode(flags|d.dontwait())))
 }
 
 func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
-	s, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6899,8 +6905,8 @@ func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 
 	defer p.recvs.put(r)
 
-	r.into, r.want, r.flags = Into{p: p, at: buf, n: n}, int(n), flags
-	err = p.request(s, r)
+	r.into, r.want, r.flags = Into{p: p, at: buf, n: n}, int(n), flags|d.dontwait()
+	err = p.request(d.object(), r)
 
 	dropFiles(r.files)
 
@@ -8803,9 +8809,9 @@ func (p *Process) sockSend(s Object, pk *Packet, to Address, mode IoMode) (int, 
 	return n, err
 }
 
-func (p *Process) sockAccept(s Object, flags uint32) (*Description, []byte, error) {
-	r := SockAccept{flags: flags}
-	err := p.request(s, &r)
+func (p *Process) sockAccept(d *Description, flags uint32) (*Description, []byte, error) {
+	r := SockAccept{flags: flags, nonblock: d.nonblock.Load()}
+	err := p.request(d.object(), &r)
 
 	return r.conn, r.peer, err
 }
@@ -8937,6 +8943,22 @@ func (p *Process) fileFlags(o Object) (int, error) {
 
 func (p *Process) fileSetFlags(o Object, fl int) error {
 	return p.request(o, &FileSetfl{flags: fl})
+}
+
+func (p *Process) descFlags(d *Description) (int, error) {
+	fl, err := p.fileFlags(d.object())
+
+	return fl&^O_NONBLOCK | int(bit(d.nonblock.Load()))*O_NONBLOCK, err
+}
+
+func (p *Process) setDescFlags(d *Description, fl int) error {
+	if err := p.fileSetFlags(d.object(), fl); err != nil {
+		return err
+	}
+
+	d.nonblock.Store(fl&O_NONBLOCK != 0)
+
+	return nil
 }
 
 func (p *Process) fileCopyTo(o, out Object, from, to int64, n int) (int, error) {
@@ -9974,8 +9996,8 @@ func (p *Process) libcPthread_cond_broadcast(cond uint32) uint32 {
 func (p *Process) condWaitForever(call string) {
 	msg := call + ": no other thread to signal\n"
 
-	if t, err := p.fd(2); err == nil {
-		p.fileWrite(t, bytesFile([]byte(msg)), len(msg), IoMode{})
+	if d, err := p.description(2); err == nil {
+		p.fileWrite(d.object(), bytesFile([]byte(msg)), len(msg), d.mode())
 	}
 
 	p.abort()
@@ -10484,9 +10506,9 @@ func (p *Process) libcEventfd(count, flags uint32) uint32 {
 		return p.result(0, EINVAL)
 	}
 
-	e := newEventFd(uint64(count), flags&EFD_SEMAPHORE != 0, flags&O_NONBLOCK != 0)
+	e := newEventFd(uint64(count), flags&EFD_SEMAPHORE != 0)
 
-	return p.result(p.install(e, 0, flags&O_CLOEXEC != 0))
+	return p.result(p.installDesc(opened(e, flags&O_NONBLOCK != 0), 0, flags&O_CLOEXEC != 0))
 }
 
 func (p *Process) libcEventfd_read(fd, value uint32) uint32 {
@@ -10498,13 +10520,13 @@ func (p *Process) libcEventfd_read(fd, value uint32) uint32 {
 }
 
 func (p *Process) libcEventfd_write(fd uint32, value uint64) uint32 {
-	t, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	n, err := p.fileWrite(t, bytesFile(binary.LittleEndian.AppendUint64(nil, value)), 8, IoMode{})
+	n, err := p.fileWrite(d.object(), bytesFile(binary.LittleEndian.AppendUint64(nil, value)), 8, d.mode())
 
 	if err == nil && n != 8 {
 		err = EIO
@@ -10518,7 +10540,7 @@ func (p *Process) libcTimerfd_create(clock, flags uint32) uint32 {
 		return p.result(0, EINVAL)
 	}
 
-	return p.result(p.install(newTimerFd(clock, flags&O_NONBLOCK != 0), 0, flags&O_CLOEXEC != 0))
+	return p.result(p.installDesc(opened(newTimerFd(clock), flags&O_NONBLOCK != 0), 0, flags&O_CLOEXEC != 0))
 }
 
 func (p *Process) libcTimerfd_settime(fd, flags, value, old uint32) uint32 {

@@ -59,8 +59,8 @@ static const char* queueName(const char* name) {
 }
 
 // A control's call, of size bytes, a descriptor of its answer's into got
-// but for null: 0, or -1 and errno.
-static int controlCall(const void* call, size_t size, int* got) {
+// but for null, of O_NONBLOCK of flags: 0, or -1 and errno.
+static int controlCall(const void* call, size_t size, int* got, int flags) {
     int c = open(control, O_RDWR | O_CLOEXEC);
 
     if (c < 0) {
@@ -68,7 +68,7 @@ static int controlCall(const void* call, size_t size, int* got) {
     }
 
     struct ctl x = {call, size, NULL, 0, NULL, 0, got, got != NULL};
-    int r = ctl(c, &x, O_CLOEXEC);
+    int r = ctl(c, &x, O_CLOEXEC | (flags & O_NONBLOCK));
     int saved = errno;
 
     close(c);
@@ -142,7 +142,7 @@ mqd_t __kernel_mq_open(const char* name, int flags, va_list ap, size_t size) {
 
     memcpy(o.name, key, n + 1);
 
-    return controlCall(&o, offsetof(__typeof__(o), name) + n + 1, &q) == 0 ? q : -1;
+    return controlCall(&o, offsetof(__typeof__(o), name) + n + 1, &q, flags) == 0 ? q : -1;
 }
 
 int __kernel_mq_unlink(const char* name) {
@@ -160,7 +160,7 @@ int __kernel_mq_unlink(const char* name) {
 
     memcpy(o.name, key, n + 1);
 
-    return controlCall(&o, sizeof o.call + n + 1, NULL);
+    return controlCall(&o, sizeof o.call + n + 1, NULL, 0);
 }
 
 // The attributes: maxmsg, msgsize, curmsgs and the description's flags.

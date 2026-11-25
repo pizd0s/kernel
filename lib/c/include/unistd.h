@@ -195,7 +195,8 @@ int fdid(int, unsigned long long*);
  * kernel says, and the answer's come back, its bytes into out, as many as
  * room holds, room then the answer's size, and its descriptors into got,
  * as many as ngot holds, ngot then their count, a server's files of them
- * as the server says, O_CLOEXEC of flags. It fails with the server's
+ * as the server says, O_CLOEXEC of flags, and the server's files of
+ * O_NONBLOCK of flags as they open. It fails with the server's
  * errno, ENOTTY of a file no server serves. A signal ends a call that
  * waits, EINTR, or restarts it with CTL_RESTART where its handler has
  * SA_RESTART. At most 3 descriptors go.

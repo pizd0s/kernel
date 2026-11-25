@@ -22,15 +22,58 @@ func (f *RemoteFD) closed() {
 }
 
 func (f *RemoteFD) subscribe(s *Subscription, events int16) {
+	in, out := ioSides(events)
+
 	f.mu.Lock()
-	f.watchers.add(&s.in)
+
+	if in {
+		f.watchers.add(&s.in)
+	}
+
+	if out {
+		f.watchers.add(&s.out)
+	}
+
 	f.mu.Unlock()
 }
 
 func (f *RemoteFD) unsubscribe(s *Subscription) {
 	f.mu.Lock()
 	f.watchers.remove(&s.in)
+	f.watchers.remove(&s.out)
 	f.mu.Unlock()
+}
+
+func (f *RemoteFD) move(to *Description) {
+	d, obj := f.desc, to.object()
+
+	d.mu.Lock()
+	f.mu.Lock()
+
+	hooks := f.watchers.hooks(nil)
+
+	for _, h := range hooks {
+		f.watchers.remove(h)
+	}
+
+	f.mu.Unlock()
+
+	for _, h := range hooks {
+		if h == &h.sub.in {
+			obj.subscribe(h.sub, POLLIN)
+		} else {
+			obj.subscribe(h.sub, POLLOUT)
+		}
+	}
+
+	d.swap(to)
+	f.desc = to
+	d.mu.Unlock()
+	to.release()
+
+	for _, h := range hooks {
+		h.sub.to.wake(h)
+	}
 }
 
 func (f *RemoteFD) poll(events int16, through []*Epoll) int16 {
@@ -54,7 +97,7 @@ func (f *RemoteFD) deliver(pk *Packet) {
 	}
 
 	if len(pk.data) >= remoteHeader && binary.LittleEndian.Uint32(pk.data) == rMove && len(pk.files) == 1 {
-		f.desc.adopt(pk.files[0])
+		f.move(pk.files[0])
 
 		return
 	}

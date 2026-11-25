@@ -2,13 +2,11 @@ package main
 
 import (
 	"sync"
-	"sync/atomic"
 )
 
 type UnixDgram struct {
 	ObjectIdent
 
-	nonblock     atomic.Bool
 	inbox, mouth *PairEnd
 	mu           sync.Mutex
 	name, peer   string
@@ -19,11 +17,10 @@ type UnixDgram struct {
 	inner   Subscription
 }
 
-func newUnixDgram(nonblock bool) *UnixDgram {
+func newUnixDgram() *UnixDgram {
 	s := &UnixDgram{ObjectIdent: newObjectIdent()}
 
-	s.nonblock.Store(nonblock)
-	s.inbox, s.mouth = newPairOf(SOCK_DGRAM, false)
+	s.inbox, s.mouth = newPairOf(SOCK_DGRAM)
 	s.inner.init(s, 0)
 
 	return s
@@ -97,22 +94,6 @@ func (s *UnixDgram) wake(*Hook) {
 	s.mu.Lock()
 	s.writers.tell()
 	s.mu.Unlock()
-}
-
-func (s *UnixDgram) flags(p *Process) (int, error) {
-	fl := O_RDWR
-
-	if s.nonblock.Load() {
-		fl |= O_NONBLOCK
-	}
-
-	return fl, nil
-}
-
-func (s *UnixDgram) setFlags(p *Process, fl int) error {
-	s.nonblock.Store(fl&O_NONBLOCK != 0)
-
-	return nil
 }
 
 func (s *UnixDgram) bind(p *Process, a Address) error {
@@ -254,7 +235,6 @@ func (s *UnixDgram) send(p *Process, r *SockSend) error {
 
 	mode := r.mode
 
-	mode.nonblock = mode.nonblock || s.nonblock.Load()
 	mode.timeout = &s.inbox.options.sndTimeout
 
 	var err error
@@ -265,8 +245,6 @@ func (s *UnixDgram) send(p *Process, r *SockSend) error {
 }
 
 func (s *UnixDgram) recv(p *Process, r *SockRecv) error {
-	r.flags |= s.dontwait()
-
 	return s.inbox.recv(p, r)
 }
 
@@ -274,16 +252,8 @@ func (s *UnixDgram) consume(sink func(pk *Packet)) {
 	s.inbox.consume(sink)
 }
 
-func (s *UnixDgram) dontwait() uint32 {
-	if s.nonblock.Load() {
-		return MSG_DONTWAIT
-	}
-
-	return 0
-}
-
 func (s *UnixDgram) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
-	r := SockRecv{into: Into{p: p, to: into}, want: n, flags: s.dontwait() | bit(mode.nonblock)*MSG_DONTWAIT}
+	r := SockRecv{into: Into{p: p, to: into}, want: n, flags: bit(mode.nonblock) * MSG_DONTWAIT}
 	err := s.inbox.recv(p, &r)
 
 	dropFiles(r.files)
@@ -352,13 +322,11 @@ func (s *UnixDgram) call(p *Process, r Request, group uint32, waits bool) (bool,
 
 		return false, nil
 	case *FileGetfl:
-		var err error
+		r.flags = O_RDWR
 
-		r.flags, err = s.flags(p)
-
-		return false, err
+		return false, nil
 	case *FileSetfl:
-		return false, s.setFlags(p, r.flags)
+		return false, nil
 	case *FileRead:
 		if r.explicit {
 			return false, errUnserved

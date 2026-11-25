@@ -25,7 +25,7 @@ static int fileOf(int fd, uint32_t call, int flags) {
     int got = -1;
     struct ctl c = {in, sizeof in, NULL, 0, NULL, 0, &got, 1};
 
-    if (ctl(fd, &c, flags & O_CLOEXEC) != 0) {
+    if (ctl(fd, &c, flags & (O_CLOEXEC | O_NONBLOCK)) != 0) {
         return -1;
     }
 

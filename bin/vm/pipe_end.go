@@ -1,16 +1,14 @@
 package main
 
 import (
-	"sync/atomic"
 	"time"
 	"unsafe"
 )
 
 type PipeEnd struct {
-	pipe     *Pipe
-	reads    bool
-	writes   bool
-	nonblock atomic.Bool
+	pipe   *Pipe
+	reads  bool
+	writes bool
 }
 
 func (e *PipeEnd) closed() {
@@ -125,17 +123,7 @@ func (e *PipeEnd) flags(p *Process) (int, error) {
 		fl = O_WRONLY
 	}
 
-	if e.nonblock.Load() {
-		fl |= O_NONBLOCK
-	}
-
 	return fl, nil
-}
-
-func (e *PipeEnd) setFlags(p *Process, fl int) error {
-	e.nonblock.Store(fl&O_NONBLOCK != 0)
-
-	return nil
 }
 
 func (e *PipeEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
@@ -182,7 +170,7 @@ func (e *PipeEnd) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, er
 			return got, err
 		}
 
-		if mode.nonblock || e.nonblock.Load() {
+		if mode.nonblock {
 			pp.mu.Unlock()
 
 			return 0, EAGAIN
@@ -234,7 +222,7 @@ func (e *PipeEnd) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, e
 			if put == 0 {
 				n = total
 			}
-		case mode.nonblock || e.nonblock.Load():
+		case mode.nonblock:
 			err = EAGAIN
 		default:
 			_, err = p.watch(&pp.mu, &pp.watchers, true, time.Time{}, restarts)
@@ -265,7 +253,7 @@ func (e *PipeEnd) call(p *Process, r Request, group uint32, waits bool) (bool, e
 
 		return false, err
 	case *FileSetfl:
-		return false, e.setFlags(p, r.flags)
+		return false, nil
 	case *FileRead:
 		if r.explicit {
 			return false, errUnserved

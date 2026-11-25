@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/binary"
-	"sync/atomic"
 	"unsafe"
 )
 
@@ -14,8 +13,7 @@ const (
 type ConsoleEnd struct {
 	ObjectIdent
 
-	in, out  *PipeEnd
-	nonblock atomic.Bool
+	in, out *PipeEnd
 }
 
 func newConsoleEnd(in, out *PipeEnd) *ConsoleEnd {
@@ -68,28 +66,10 @@ func (c *ConsoleEnd) unsubscribe(s *Subscription) {
 	}
 }
 
-func (c *ConsoleEnd) flags(p *Process) (int, error) {
-	fl := O_RDWR
-
-	if c.nonblock.Load() {
-		fl |= O_NONBLOCK
-	}
-
-	return fl, nil
-}
-
-func (c *ConsoleEnd) setFlags(p *Process, fl int) error {
-	c.nonblock.Store(fl&O_NONBLOCK != 0)
-
-	return nil
-}
-
 func (c *ConsoleEnd) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
 	if c.in == nil {
 		return 0, EBADF
 	}
-
-	mode.nonblock = mode.nonblock || c.nonblock.Load()
 
 	return c.in.read(p, into, n, mode)
 }
@@ -98,8 +78,6 @@ func (c *ConsoleEnd) write(p *Process, from *MemfdFile, n int, mode IoMode) (int
 	if c.out == nil {
 		return 0, EBADF
 	}
-
-	mode.nonblock = mode.nonblock || c.nonblock.Load()
 
 	return c.out.write(p, from, n, mode)
 }
@@ -150,13 +128,11 @@ func (c *ConsoleEnd) call(p *Process, r Request, group uint32, waits bool) (bool
 	case *Ctl:
 		return false, c.ctl(p, r)
 	case *FileGetfl:
-		var err error
+		r.flags = O_RDWR
 
-		r.flags, err = c.flags(p)
-
-		return false, err
+		return false, nil
 	case *FileSetfl:
-		return false, c.setFlags(p, r.flags)
+		return false, nil
 	case *FileRead:
 		if r.explicit {
 			return false, errUnserved

@@ -1,19 +1,17 @@
 package main
 
 import (
-	"slices"
 	"sync"
 	"sync/atomic"
 )
 
 type Description struct {
-	holders atomic.Int32
-	obj     atomic.Pointer[Object]
-	locks   atomic.Pointer[LockTable]
+	holders  atomic.Int32
+	obj      atomic.Pointer[Object]
+	locks    atomic.Pointer[LockTable]
+	nonblock atomic.Bool
 
-	mu    sync.Mutex
-	subs  []Subscribed
-	under *Description
+	mu sync.Mutex
 }
 
 func newDescription(obj Object) *Description {
@@ -28,6 +26,14 @@ func held(obj Object) *Description {
 	d := newDescription(obj)
 
 	d.holders.Store(1)
+
+	return d
+}
+
+func opened(obj Object, nonblock bool) *Description {
+	d := held(obj)
+
+	d.nonblock.Store(nonblock)
 
 	return d
 }
@@ -49,68 +55,37 @@ func (d *Description) release() {
 		t.forget(d)
 	}
 
-	d.mu.Lock()
-
-	under := d.under
-
-	d.mu.Unlock()
-
-	if under != nil {
-		under.release()
-
-		return
-	}
-
 	d.object().closed()
+}
+
+func (d *Description) mode() IoMode {
+	return IoMode{nonblock: d.nonblock.Load()}
+}
+
+func (d *Description) dontwait() uint32 {
+	return bit(d.nonblock.Load()) * MSG_DONTWAIT
 }
 
 func (d *Description) subscribe(s *Subscription, events int16) {
 	d.mu.Lock()
-	d.subs = append(d.subs, Subscribed{s: s, events: events})
 	d.object().subscribe(s, events)
 	d.mu.Unlock()
 }
 
 func (d *Description) unsubscribe(s *Subscription) {
 	d.mu.Lock()
-
-	d.subs = slices.DeleteFunc(d.subs, func(x Subscribed) bool {
-		return x.s == s
-	})
-
 	d.object().unsubscribe(s)
 	d.mu.Unlock()
 }
 
-func (d *Description) adopt(to *Description) {
-	d.mu.Lock()
+func (d *Description) swap(with *Description) {
+	with.mu.Lock()
 
-	if d.under != nil {
-		d.mu.Unlock()
-		to.release()
+	a, b := d.object(), with.object()
 
-		return
-	}
-
-	old, obj := d.object(), to.object()
-
-	for _, s := range d.subs {
-		old.unsubscribe(s.s)
-		obj.subscribe(s.s, s.events)
-	}
-
-	d.obj.Store(&obj)
-	d.under = to
-
-	subs := slices.Clone(d.subs)
-
-	d.mu.Unlock()
-	old.closed()
-
-	for _, s := range subs {
-		s.s.to.wake(&s.s.in)
-		s.s.to.wake(&s.s.out)
-	}
+	d.obj.Store(&b)
+	with.obj.Store(&a)
+	with.mu.Unlock()
 }
 
 func dropFiles(files []*Description) {

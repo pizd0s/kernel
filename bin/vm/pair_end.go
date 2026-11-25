@@ -18,8 +18,6 @@ type PairEnd struct {
 	shared *PairState
 	peer   *PairEnd
 
-	nonblock atomic.Bool
-
 	dead    atomic.Bool
 	noWrite atomic.Bool
 	noRead  atomic.Bool
@@ -33,19 +31,15 @@ type PairEnd struct {
 	options SockOptions
 }
 
-func newPair(nonblock bool) (*PairEnd, *PairEnd) {
-	return newPairOf(SOCK_SEQPACKET, nonblock)
+func newPair() (*PairEnd, *PairEnd) {
+	return newPairOf(SOCK_SEQPACKET)
 }
 
-func newPairOf(kind int, nonblock bool) (*PairEnd, *PairEnd) {
+func newPairOf(kind int) (*PairEnd, *PairEnd) {
 	s := &PairState{ObjectIdent: newObjectIdent(), ino: pairInodes.Add(1), made: time.Now(), kind: kind}
 	a, b := &PairEnd{shared: s}, &PairEnd{shared: s}
 
 	a.peer, b.peer = b, a
-
-	for _, e := range []*PairEnd{a, b} {
-		e.nonblock.Store(nonblock)
-	}
 
 	return a, b
 }
@@ -189,22 +183,6 @@ func (e *PairEnd) poll(events int16, through []*Epoll) int16 {
 	return mask & (events | POLLERR | POLLHUP)
 }
 
-func (e *PairEnd) flags(p *Process) (int, error) {
-	fl := O_RDWR
-
-	if e.nonblock.Load() {
-		fl |= O_NONBLOCK
-	}
-
-	return fl, nil
-}
-
-func (e *PairEnd) setFlags(p *Process, fl int) error {
-	e.nonblock.Store(fl&O_NONBLOCK != 0)
-
-	return nil
-}
-
 func (e *PairEnd) send(p *Process, r *SockSend) error {
 	if r.to.given {
 		return EISCONN
@@ -246,7 +224,7 @@ func (e *PairEnd) deliver(p *Process, pk *Packet, mode IoMode) error {
 		end, how = until(timeout)
 	}
 
-	err := e.queueAs(p, pk, !mode.kernel && (mode.nonblock || e.nonblock.Load()), end, how)
+	err := e.queueAs(p, pk, !mode.kernel && mode.nonblock, end, how)
 
 	if err != nil {
 		dropFiles(pk.files)
@@ -339,8 +317,6 @@ func (e *PairEnd) queueAs(p *Process, pk *Packet, nonblock bool, end time.Time, 
 }
 
 func (e *PairEnd) take(p *Process, nonblock, peek bool) (*Packet, error) {
-	nonblock = nonblock || e.nonblock.Load()
-
 	e.mu.Lock()
 
 	for {
@@ -437,7 +413,7 @@ func (e *PairEnd) recv(p *Process, r *SockRecv) error {
 }
 
 func (e *PairEnd) receiveStream(p *Process, r *SockRecv) error {
-	nonblock := r.flags&MSG_DONTWAIT != 0 || e.nonblock.Load()
+	nonblock := r.flags&MSG_DONTWAIT != 0
 	want := r.want
 
 	if want == 0 {
@@ -563,7 +539,7 @@ func (e *PairEnd) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, er
 		return 0, EIO
 	}
 
-	r := SockRecv{into: Into{p: p, to: into}, want: n}
+	r := SockRecv{into: Into{p: p, to: into}, want: n, flags: bit(mode.nonblock) * MSG_DONTWAIT}
 	err := e.recv(p, &r)
 
 	dropFiles(r.files)
@@ -712,13 +688,11 @@ func (e *PairEnd) call(p *Process, r Request, group uint32, waits bool) (bool, e
 	case *SockKnock:
 		return false, EPROTOTYPE
 	case *FileGetfl:
-		var err error
+		r.flags = O_RDWR
 
-		r.flags, err = e.flags(p)
-
-		return false, err
+		return false, nil
 	case *FileSetfl:
-		return false, e.setFlags(p, r.flags)
+		return false, nil
 	case *FileRead:
 		if r.explicit {
 			return false, errUnserved

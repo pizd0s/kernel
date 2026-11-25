@@ -228,7 +228,7 @@ func (l *UnixListener) knock(p *Process, kind int, nonblock bool, timeout *atomi
 		return nil, EPROTOTYPE
 	}
 
-	mine, theirs := newPairOf(kind, nonblock)
+	mine, theirs := newPairOf(kind)
 
 	for {
 		queued, refused := l.push(theirs)

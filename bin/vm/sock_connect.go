@@ -5,8 +5,9 @@ import (
 )
 
 type SockConnect struct {
-	addr  Address
-	moved *Description
+	addr     Address
+	nonblock bool
+	moved    *Description
 }
 
 func (r *SockConnect) op() uint32 {

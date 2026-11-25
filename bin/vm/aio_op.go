@@ -44,7 +44,7 @@ func (op *AioOp) transfer(a *Process) (int, error) {
 		n, err := a.filePread(op.file.object(), bytesFile(buf), op.n, op.offset)
 
 		if err == ESPIPE {
-			n, err = a.fileRead(op.file.object(), bytesFile(buf), op.n, IoMode{})
+			n, err = a.fileRead(op.file.object(), bytesFile(buf), op.n, op.file.mode())
 		}
 
 		op.data = buf[:max(n, 0)]
@@ -59,7 +59,7 @@ func (op *AioOp) transfer(a *Process) (int, error) {
 			}
 		}
 
-		return a.fileWrite(op.file.object(), bytesFile(op.data), len(op.data), IoMode{})
+		return a.fileWrite(op.file.object(), bytesFile(op.data), len(op.data), op.file.mode())
 	}
 
 	return 0, a.request(op.file.object(), &FileSync{data: op.kind == aioDataSync})

@@ -179,7 +179,7 @@ func runKernel(k *Kernel, path string, argv []string, asan, network bool, data [
 	}
 
 	if network {
-		guest, link := newPair(false)
+		guest, link := newPair()
 
 		p.files.put(max(p.files.size(), 3), held(guest), false)
 		startNet(link)

@@ -25,10 +25,8 @@ type TimerFd struct {
 	made     time.Time
 }
 
-func newTimerFd(clock uint32, nonblock bool) *TimerFd {
+func newTimerFd(clock uint32) *TimerFd {
 	t := &TimerFd{ObjectIdent: newObjectIdent(), clock: clock, ino: timerFdInodes.Add(1), made: time.Now()}
-
-	t.nonblock.Store(nonblock)
 
 	return t
 }
@@ -166,7 +164,7 @@ func (t *TimerFd) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, er
 	t.mu.Lock()
 
 	for t.ticks == 0 {
-		if mode.nonblock || t.nonblock.Load() {
+		if mode.nonblock {
 			t.mu.Unlock()
 
 			return 0, EAGAIN
@@ -203,14 +201,8 @@ func (t *TimerFd) call(p *Process, r Request, group uint32, waits bool) (bool, e
 	case *FileGetfl:
 		r.flags = O_RDWR
 
-		if t.nonblock.Load() {
-			r.flags |= O_NONBLOCK
-		}
-
 		return false, nil
 	case *FileSetfl:
-		t.nonblock.Store(r.flags&O_NONBLOCK != 0)
-
 		return false, nil
 	case *FileRead:
 		if r.explicit {

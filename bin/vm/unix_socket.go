@@ -3,13 +3,11 @@ package main
 import (
 	"encoding/binary"
 	"sync"
-	"sync/atomic"
 )
 
 type UnixSocket struct {
 	ObjectIdent
 
-	nonblock atomic.Bool
 	kind     int
 	mu       sync.Mutex
 	name     string
@@ -24,10 +22,9 @@ type UnixSocket struct {
 	options SockOptions
 }
 
-func newUnixSocket(kind int, nonblock bool) *UnixSocket {
+func newUnixSocket(kind int) *UnixSocket {
 	s := &UnixSocket{ObjectIdent: newObjectIdent(), kind: kind}
 
-	s.nonblock.Store(nonblock)
 	s.inner.init(s, 0)
 
 	return s
@@ -129,26 +126,6 @@ func (s *UnixSocket) wake(l *Hook) {
 	s.mu.Unlock()
 }
 
-func (s *UnixSocket) flags(p *Process) (int, error) {
-	fl := O_RDWR
-
-	if s.nonblock.Load() {
-		fl |= O_NONBLOCK
-	}
-
-	return fl, nil
-}
-
-func (s *UnixSocket) setFlags(p *Process, fl int) error {
-	s.nonblock.Store(fl&O_NONBLOCK != 0)
-
-	if _, c := s.state(); c != nil {
-		return c.setFlags(p, fl)
-	}
-
-	return nil
-}
-
 func (s *UnixSocket) bind(p *Process, a Address) error {
 	path, err := a.path, a.err
 
@@ -187,26 +164,25 @@ func (s *UnixSocket) listen(backlog int) error {
 	return nil
 }
 
-func (s *UnixSocket) accept(p *Process, flags uint32) (*Description, []byte, error) {
+func (s *UnixSocket) accept(p *Process, flags uint32, nonblock bool) (*Description, []byte, error) {
 	l, _ := s.state()
 
 	if l == nil {
 		return nil, nil, EINVAL
 	}
 
-	e, err := l.next(p, s.nonblock.Load())
+	e, err := l.next(p, nonblock)
 
 	if err != nil {
 		return nil, nil, err
 	}
 
-	e.nonblock.Store(flags&SOCK_NONBLOCK != 0)
 	e.options.copyOptions(&s.options)
 
 	return held(e), unixAddress(nil), nil
 }
 
-func (s *UnixSocket) connect(p *Process, a Address) error {
+func (s *UnixSocket) connect(p *Process, a Address, nonblock bool) error {
 	path, err := a.path, a.err
 
 	if err != nil {
@@ -219,7 +195,7 @@ func (s *UnixSocket) connect(p *Process, a Address) error {
 		return EINVAL
 	}
 
-	conn, err := p.connectUnix(a.node, s.kind, s.nonblock.Load(), &s.options.sndTimeout)
+	conn, err := p.connectUnix(a.node, s.kind, nonblock, &s.options.sndTimeout)
 
 	if err != nil {
 		return err
@@ -352,13 +328,13 @@ func (s *UnixSocket) call(p *Process, r Request, group uint32, waits bool) (bool
 	case *SockBind:
 		return false, s.bind(p, r.addr)
 	case *SockConnect:
-		return false, s.connect(p, r.addr)
+		return false, s.connect(p, r.addr, r.nonblock)
 	case *SockListen:
 		return false, s.listen(r.backlog)
 	case *SockAccept:
 		var err error
 
-		r.conn, r.peer, err = s.accept(p, r.flags)
+		r.conn, r.peer, err = s.accept(p, r.flags, r.nonblock)
 
 		return false, err
 	case *SockSend:
@@ -394,13 +370,11 @@ func (s *UnixSocket) call(p *Process, r Request, group uint32, waits bool) (bool
 
 		return false, nil
 	case *FileGetfl:
-		var err error
+		r.flags = O_RDWR
 
-		r.flags, err = s.flags(p)
-
-		return false, err
+		return false, nil
 	case *FileSetfl:
-		return false, s.setFlags(p, r.flags)
+		return false, nil
 	case *FileRead:
 		if r.explicit {
 			return false, errUnserved

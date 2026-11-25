@@ -23,10 +23,8 @@ type EventFd struct {
 	made      time.Time
 }
 
-func newEventFd(count uint64, semaphore, nonblock bool) *EventFd {
+func newEventFd(count uint64, semaphore bool) *EventFd {
 	e := &EventFd{ObjectIdent: newObjectIdent(), count: count, semaphore: semaphore, ino: eventFdInodes.Add(1), made: time.Now()}
-
-	e.nonblock.Store(nonblock)
 
 	return e
 }
@@ -83,14 +81,6 @@ func (e *EventFd) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (e *EventFd) flags() int {
-	if e.nonblock.Load() {
-		return O_RDWR | O_NONBLOCK
-	}
-
-	return O_RDWR
-}
-
 func (e *EventFd) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
 	if n < 8 {
 		return 0, EINVAL
@@ -99,7 +89,7 @@ func (e *EventFd) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, er
 	e.mu.Lock()
 
 	for e.count == 0 {
-		if mode.nonblock || e.nonblock.Load() {
+		if mode.nonblock {
 			e.mu.Unlock()
 
 			return 0, EAGAIN
@@ -156,7 +146,7 @@ func (e *EventFd) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, e
 	e.mu.Lock()
 
 	for eventFdMax-e.count < value {
-		if mode.nonblock || e.nonblock.Load() {
+		if mode.nonblock {
 			e.mu.Unlock()
 
 			return 0, EAGAIN
@@ -185,12 +175,10 @@ func (e *EventFd) call(p *Process, r Request, group uint32, waits bool) (bool, e
 	case *FileStat:
 		return false, e.stat(p, r.st)
 	case *FileGetfl:
-		r.flags = e.flags()
+		r.flags = O_RDWR
 
 		return false, nil
 	case *FileSetfl:
-		e.nonblock.Store(r.flags&O_NONBLOCK != 0)
-
 		return false, nil
 	case *FileRead:
 		if r.explicit {
