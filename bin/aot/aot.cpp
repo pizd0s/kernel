@@ -4160,14 +4160,16 @@ namespace {
         Int initFn{};
         i32 dataInitTable = -1;
         // importSyms are the imported functions' symbols by function index,
-        // importIntrinsics those of them the code compiles at their direct
-        // calls, importCode those with code, an adapter, that a pointer
-        // can reach.
+        // importIntrinsics the kernel's functions the code compiles at
+        // their direct calls, an import's or a function of libc.wasm's of
+        // the module (kernelName), importCode the imports with code, an
+        // adapter, that a pointer can reach.
         Slice<String> importSyms{};
         Slice<Int> importIntrinsics{};
         Slice<bool> importCode{};
-        // forwards are, by function index, the import a function of the
-        // module only calls with its own arguments, or -1 (objCodeForward).
+        // forwards are, by function index, the kernel's function a function
+        // of the module only calls with its own arguments, or -1
+        // (objCodeForward).
         Slice<i32> forwards{};
         // allocator is the kernel's malloc among the imports, or -1.
         i32 allocator = -1;
@@ -6391,6 +6393,7 @@ static bool returnsTwice(String name);
 static Int intrinsicOf(Import imp, FuncType* t);
 
 static i32 objCodeForward(Module* m, Int index);
+static String kernelName(Module* m, Int index);
 
 static bool intrinsicTyped(FuncType* t, String text);
 
@@ -15100,15 +15103,15 @@ static void lowererAlu(Lowerer* l, i32 v, Op op, i32 a, i32 b, u8 size) {
 // one that returns twice through its adapter, which writes the jump
 // frame.
 static void lowererCall(Lowerer* l, i32 v, Int index, Span<const i32> args) {
-    // A function that only calls an import is that import to who calls
-    // it (objCodeForward). In such a function itself the import is
-    // called, the kernel's: a pointer to the function reaches that.
+    // A function that only calls one of the kernel's is that function to
+    // who calls it (objCodeForward). In such a function itself the
+    // kernel's is called: a pointer to the function reaches that.
     if (l->oc->forwards[index] >= 0) {
         index = l->oc->forwards[index];
     }
     const bool compiles = l->oc->forwards[l->f->index] < 0;
     FuncType* t = moduleFuncType(l->m, convert<u32>(index));
-    if (index < l->m->importedFuncs && compiles && l->oc->importIntrinsics[index] != intrinsicNone && lowererIntrinsic(l, v, l->oc->importIntrinsics[index], args)) {
+    if (compiles && l->oc->importIntrinsics[index] != intrinsicNone && lowererIntrinsic(l, v, l->oc->importIntrinsics[index], args)) {
         return;
     }
     if (index < l->m->importedFuncs && !l->m->funcs[index].returnsTwice) {
@@ -20072,6 +20075,12 @@ static Amem objCodeGotMem(ObjCode* oc, String sym) {
 static void objCodeImportAdapters(ObjCode* oc) {
     Module* m = oc->m;
     Slice<bool> named = objCodeNamedFunctions(oc);
+    for (Int i = m->importedFuncs; i < length(m->funcs); ++i) {
+        String name = kernelName(m, i);
+        if (length(name) > 0) {
+            oc->importIntrinsics[i] = intrinsicOf(Import{String("kernel"), name, u8(externFunc), convert<u32>(i)}, moduleFuncType(m, convert<u32>(i)));
+        }
+    }
     auto imports = m->imports;
     for (Int i = 0; i < length(imports); ++i) {
         Import imp = imports[i];
@@ -25521,13 +25530,14 @@ static Slice<VReg> resultRegs(Slice<ValType> results) {
     return regs;
 }
 
-// forward is the import a function of the module only calls, or -1: its
-// code no local of its own, each of its parameters in their order, the
-// call of an import of its own type and the end. lib/c's functions over
-// the kernel's are such (lib/c/src/kernel.c), and a direct call of one
-// is a call of the kernel's: of the import as Go calls it, without the
-// function between, or of what the code compiles for it (intrinsicOf).
-// An import that returns twice is called by none.
+// forward is the kernel's function a function of the module only calls,
+// or -1: its code no local of its own, each of its parameters in their
+// order, the call of an import or of a function of libc.wasm's
+// (kernelName) of its own type and the end. lib/c's functions over the
+// kernel's are such (lib/c/src/kernel.c), and a direct call of one is a
+// call of the kernel's: of the import as Go calls it, or of libc.wasm's
+// function, without the function between, or of what the code compiles
+// for it (intrinsicOf). An import that returns twice is called by none.
 static i32 objCodeForward(Module* m, Int index) {
     Func* fn = &m->funcs[index];
     if (fn->imported) {
@@ -25551,7 +25561,8 @@ static i32 objCodeForward(Module* m, Int index) {
     }
     Reader r = Reader{subslice(body, at + 1, length(body)), {}};
     const u32 target = readerU32(&r);
-    if (r.pos + 1 != length(r.data) || r.data[r.pos] != 0x0b || convert<i64>(target) >= m->importedFuncs) {
+    if (r.pos + 1 != length(r.data) || r.data[r.pos] != 0x0b || convert<i64>(target) >= length(m->funcs) ||
+        (convert<i64>(target) >= m->importedFuncs && length(kernelName(m, convert<Int>(target))) == 0)) {
         return -1;
     }
     Func* callee = &m->funcs[target];
@@ -25570,6 +25581,26 @@ static i32 objCodeForward(Module* m, Int index) {
         }
     }
     return convert<i32>(target);
+}
+
+// kernelName is the kernel's function a function of the module is, by
+// its name, libc.wasm's __kernel_X that the kernel linked in: X, or empty
+// for an import or another function.
+static String kernelName(Module* m, Int index) {
+    const String prefix("__kernel_");
+    if (index < m->importedFuncs || index >= length(m->funcs)) {
+        return {};
+    }
+    String name = m->funcs[index].name;
+    if (length(name) <= length(prefix)) {
+        return {};
+    }
+    for (Int i = 0; i < length(prefix); ++i) {
+        if (name[i] != prefix[i]) {
+            return {};
+        }
+    }
+    return String(name.data + length(prefix), usize(length(name) - length(prefix)));
 }
 
 // intrinsicOf tells the kernel's functions the code compiles at their
@@ -25629,6 +25660,7 @@ static Int intrinsicOf(Import imp, FuncType* t) {
         {String("bzero"), String("ii>"), intrinsicBzero},
         {String("explicit_bzero"), String("ii>"), intrinsicBzero},
         {String("strpbrk"), String("ii>i"), intrinsicStrpbrk},
+        {String("strcoll"), String("ii>i"), intrinsicStrcmp},
         {String("strchr"), String("ii>i"), intrinsicStrchr},
         {String("index"), String("ii>i"), intrinsicStrchr},
         {String("strchrnul"), String("ii>i"), intrinsicStrchrnul},
@@ -26978,7 +27010,7 @@ static void compileWithOptions(CompileOptions options) {
     instanceDistance = distanceOf(code->lay->size);
     code->funcAt = makeSlice<i32>(length(module->funcs));
     code->importSyms = makeSlice<String>(module->importedFuncs);
-    code->importIntrinsics = makeSlice<Int>(module->importedFuncs);
+    code->importIntrinsics = makeSlice<Int>(length(module->funcs));
     code->importCode = makeSlice<bool>(module->importedFuncs);
     code->forwards = makeSlice<i32>(length(module->funcs));
     for (Int i = 0; i < length(module->funcs); ++i) {

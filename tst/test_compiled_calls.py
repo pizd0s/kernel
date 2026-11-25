@@ -393,7 +393,7 @@ FUNCTIONS = {
     "strnlen": ("ii>i", "sn", strnlen), "strcpy": ("ii>i", "ds", strcpy), "stpcpy": ("ii>i", "ds", stpcpy),
     "strcat": ("ii>i", "Ds", strcat), "strncpy": ("iii>i", "dsn", strncpy), "stpncpy": ("iii>i", "dsn", stpncpy),
     "strncat": ("iii>i", "Dsn", strncat), "strlcpy": ("iii>i", "dsn", strlcpy), "strlcat": ("iii>i", "Dsn", strlcat),
-    "strcmp": ("ii>i", "ss", strcmp), "strncmp": ("iii>i", "ssn", strncmp),
+    "strcmp": ("ii>i", "ss", strcmp), "strcoll": ("ii>i", "ss", strcmp), "strncmp": ("iii>i", "ssn", strncmp),
     "strspn": ("ii>i", "ss", strspn), "strcspn": ("ii>i", "ss", strcspn), "strpbrk": ("ii>i", "ss", strpbrk),
     "strstr": ("ii>i", "ss", strstr), "strchr": ("ii>i", "sc", strchr), "index": ("ii>i", "sc", strchr),
     "strchrnul": ("ii>i", "sc", strchrnul), "strdup": ("i>i", "s", strdup),
@@ -589,9 +589,10 @@ def module(name, path, body, *, locals_=0, data=(), allocator=False, forwarder=N
     result += section(5, b"\1\0\1" if allocator else b"\1\1\1\1")
     exports = [text("_start") + b"\0" + leb(len(imports) + (path == "forward"))]
 
-    if allocator:
-        result += section(6, vector([bytes([I32, 0]) + constant(PAGE) + b"\x0b"]))
-        exports.append(text("__heap_base") + b"\3\0")
+    # The heap begins at the page's end, as a program says by __heap_base,
+    # where the kernel's linker puts libc.wasm's data of its functions.
+    result += section(6, vector([bytes([I32, 0]) + constant(PAGE) + b"\x0b"]))
+    exports.append(text("__heap_base") + b"\3\0")
 
     result += section(7, vector(exports))
 
@@ -719,7 +720,7 @@ HEAP = {
                 ([bytes(4), STRING], (A, B, 4))],
     "strlcat": [([PREFIX, STRING], (A, B, 8)), ([PREFIX, STRING], (A, B, 9)), ([PREFIX, BYTES], (A, B, 8)), ([BYTES, STRING], (A, B, 8)),
                 ([BYTES, STRING], (A, B, 9))],
-    "strcmp": PAIRS,
+    "strcmp": PAIRS, "strcoll": PAIRS,
     "strncmp": [([BYTES, BYTES], (A, B, 8)), ([BYTES, BYTES], (A, B, 9)), ([STRING, STRING], (A, B, 100)), ([b"x" + BYTES, b"y"], (A, B, 1))],
     "strspn": PAIRS, "strcspn": SEARCHED, "strpbrk": SEARCHED, "strstr": SEARCHED,
     "strchr": FOUND, "index": FOUND, "strchrnul": FOUND, "strdup": [([STRING], (A,)), ([BYTES], (A,)), ([b"\0"], (A,))],
@@ -801,6 +802,13 @@ def objects(vm, work, name, modules):
     """The object of each path's module has the kernel's function where a
     pointer finds it and nowhere else, for one the compiler has code for."""
     refs = {path: compiled(vm, work, data) for path, data in modules.items()}
+
+    if any(function.endswith(":__kernel_" + name) for function in refs["pointer"]):
+        # libc.wasm's function, which the kernel links into the module: a
+        # call of it is of a function of the object's own, no symbol it
+        # refers to, and what its calls are, the results tell.
+        return
+
     allocator = name == "strdup"
     forward, start = f"f{2 + allocator}", f"f{3 + allocator}"
 

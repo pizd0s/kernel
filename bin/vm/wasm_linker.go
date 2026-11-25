@@ -144,14 +144,21 @@ func (l *WasmLinker) link() []byte {
 		}
 	}
 
+	named := false
+
 	for _, s := range l.sections {
 		switch {
 		case s.id != 0, s.name == "linking", strings.HasPrefix(s.name, "reloc."), moved && strings.HasPrefix(s.name, ".debug_"):
 		case s.name == "name":
 			out = appendWasmSection(out, 0, l.names(s.body))
+			named = true
 		default:
 			out = appendWasmSection(out, 0, s.body)
 		}
+	}
+
+	if !named {
+		out = appendWasmSection(out, 0, l.names(appendWasmSection(appendWasmName(nil, "name"), 1, appendLeb(nil, 0))))
 	}
 
 	return out

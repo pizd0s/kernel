@@ -275,7 +275,7 @@ func (o *WasmObject) exports() {
 			throwFmt("libc.wasm: function %s of %d", sym.name, sym.index)
 		}
 
-		if _, ok := o.names[sym.index]; !ok {
+		if name, ok := o.names[sym.index]; !ok || strings.HasPrefix(sym.name, "__kernel_") && !strings.HasPrefix(name, "__kernel_") {
 			o.names[sym.index] = sym.name
 		}
 
