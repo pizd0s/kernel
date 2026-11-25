@@ -188,6 +188,22 @@ namespace {
         return s;
     }
 
+    // A read that took what the socket had: POLLIN is told no more, before
+    // the read is answered, else a poll after the read finds the socket
+    // ready still, and a read after the poll waits for what may never
+    // come. What is left, or the end, a peek finds.
+    void drained(Socket& s) {
+        if ((s.told & POLLIN) == 0) {
+            return;
+        }
+        unsigned char next;
+        if (ff_recvfrom(s.ff, &next, 1, MSG_PEEK, nullptr, nullptr) < 0 && errno == EAGAIN) {
+            s.ready &= ~uint32_t(POLLIN);
+            s.told &= ~uint32_t(POLLIN);
+            tell(s.end->fd, s.told);
+        }
+    }
+
     void release(Socket& s, int side) {
         Waiting* w = s.waiting[side];
         if (!w) {
@@ -306,6 +322,9 @@ namespace {
                 if (s.type == SOCK_STREAM) {
                     fromLength = 0;
                 }
+                if ((flags & MSG_PEEK) == 0) {
+                    drained(s);
+                }
                 const uint32_t outFlags = 0, addrLength = fromLength;
                 unsigned char* p = out + head - 8 - fromLength;
                 memcpy(p, &outFlags, 4);
@@ -326,6 +345,7 @@ namespace {
                 if (n > 0 && pwrite(memfd, buffer, size_t(n), 0) != n) {
                     return done(EIO);
                 }
+                drained(s);
                 const uint32_t count = uint32_t(n);
                 return done(0, &count, sizeof count);
             }
