@@ -68,7 +68,9 @@ int main() {
     assert(unsetenv("PIZDOS_SUPPLIED") == 0 && getenv("PIZDOS_SUPPLIED") == nullptr);
     assert(clearenv() == 0);
 
-    char options[] = "one=1,on,one,nope=4,,two=";
+    // An empty suboption, of two commas, POSIX says nothing of: FreeBSD's
+    // getsubopt passes over it, and others take it as one of no token.
+    char options[] = "one=1,on,one,nope=4,two=";
     char on[] = "on", one[] = "one", two[] = "two";
     char* keys[] = {on, one, two, nullptr};
     char* next = options;
@@ -76,7 +78,6 @@ int main() {
     assert(getsubopt(&next, keys, &argument) == 1 && strcmp(argument, "1") == 0);
     assert(getsubopt(&next, keys, &argument) == 0 && argument == nullptr);
     assert(getsubopt(&next, keys, &argument) == 1 && argument == nullptr);
-    assert(getsubopt(&next, keys, &argument) == -1);
     assert(getsubopt(&next, keys, &argument) == -1);
     assert(getsubopt(&next, keys, &argument) == 2 && argument && argument[0] == 0 && next[0] == 0);
     puts("environment: ok");

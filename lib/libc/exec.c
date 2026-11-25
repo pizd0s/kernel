@@ -1,6 +1,7 @@
 /*
- * execvp, execvpe, execlp and posix_spawnp: a file of no slash is looked
- * for in each directory of PATH, an empty one the working directory, and
+ * execv, execl and execle are execve's, of environ or of execle's own
+ * environment; execvp, execvpe, execlp and posix_spawnp: a file of no
+ * slash is looked for in each directory of PATH, an empty one the working directory, and
  * of /usr/local/bin:/bin:/usr/bin where PATH is unset. One that is not
  * there, ENOENT or ENOTDIR, is passed over, and so is one that may not be
  * run, EACCES, which is the error where none is found; any other error
@@ -82,8 +83,12 @@ int __kernel_execvp(const char* file, char* const argv[]) {
     return __kernel_execvpe(file, argv, *__program->environAt);
 }
 
-// execlp takes its va_list, as a program's forwarder passes it.
-int __kernel_execlp(const char* file, const char* arg0, va_list args) {
+int __kernel_execv(const char* path, char* const argv[]) {
+    return execve(path, argv, *__program->environAt);
+}
+
+// The count of the arguments from arg0 to the null of a va_list.
+static size_t arguments(const char* arg0, va_list args) {
     va_list counted;
     size_t n = arg0 != NULL;
 
@@ -95,13 +100,45 @@ int __kernel_execlp(const char* file, const char* arg0, va_list args) {
 
     va_end(counted);
 
-    char* argv[n + 1];
+    return n;
+}
 
-    for (size_t i = 0; i < n; i++) {
-        argv[i] = i ? va_arg(args, char*) : (char*)arg0;
+// The n arguments in argv, then its null; args is past their null after.
+static void collect(char** argv, size_t n, const char* arg0, va_list* args) {
+    for (size_t i = 1; i < n; i++) {
+        argv[i] = va_arg(*args, char*);
+    }
+
+    if (n) {
+        argv[0] = (char*)arg0;
+        va_arg(*args, char*);
     }
 
     argv[n] = NULL;
+}
+
+// execl, execle and execlp take their va_list, as a program's forwarder
+// passes it.
+int __kernel_execl(const char* path, const char* arg0, va_list args) {
+    char* argv[arguments(arg0, args) + 1];
+
+    collect(argv, sizeof argv / sizeof argv[0] - 1, arg0, &args);
+
+    return execve(path, argv, *__program->environAt);
+}
+
+int __kernel_execle(const char* path, const char* arg0, va_list args) {
+    char* argv[arguments(arg0, args) + 1];
+
+    collect(argv, sizeof argv / sizeof argv[0] - 1, arg0, &args);
+
+    return execve(path, argv, va_arg(args, char* const*));
+}
+
+int __kernel_execlp(const char* file, const char* arg0, va_list args) {
+    char* argv[arguments(arg0, args) + 1];
+
+    collect(argv, sizeof argv / sizeof argv[0] - 1, arg0, &args);
 
     return __kernel_execvp(file, argv);
 }

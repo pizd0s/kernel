@@ -260,7 +260,6 @@ const (
 	sizeofFdSet                       = 128
 	sizeofFlock                       = 32
 	sizeofGlob                        = 12
-	sizeofInAddr                      = 4
 	sizeofIovec                       = 8
 	sizeofItimerval                   = 32
 	sizeofJmpBuf                      = 4

@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
-	mathrand "math/rand/v2"
-	"net/netip"
 	"os"
 	"path"
 	"reflect"
@@ -58,12 +56,9 @@ var devctlData = map[uint32]uint32{
 }
 
 const (
-	staticDot        = 0
-	staticSlash      = 2
-	staticStrtok     = 256
-	staticNtoa       = 392
-	staticCrypt      = 408
-	staticSize       = 412
+	staticStrtok     = 0
+	staticCrypt      = 4
+	staticSize       = 8
 	niceMin          = -20
 	niceMax          = 19
 	ngroupsMax       = 65536
@@ -78,7 +73,6 @@ const (
 	sysCopyFileRange = 326
 	pollInSet        = POLLIN | POLLHUP | POLLERR
 	pollOutSet       = POLLOUT | POLLERR
-	tempLetters      = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 	dirFd            = 0
 	dirPos           = 4
 	dirEnd           = 8
@@ -933,8 +927,6 @@ func (p *Process) staticAt(off uint32) uint32 {
 		}
 
 		clear(p.span(p.static, staticSize))
-		p.putString(p.static+staticDot, ".")
-		p.putString(p.static+staticSlash, "/")
 	}
 
 	return p.static + off
@@ -1105,56 +1097,6 @@ func (p *Process) execReset() {
 	p.comm = nil
 }
 
-func (p *Process) environment() []string {
-	if p.environAt == 0 {
-		return nil
-	}
-
-	env := p.u32(p.environAt)
-
-	if env == 0 {
-		return nil
-	}
-
-	return p.strings(env)
-}
-
-func (p *Process) lookupEnv(name []byte) (uint32, uint32, bool) {
-	if p.environAt == 0 {
-		return 0, 0, false
-	}
-
-	env := p.u32(p.environAt)
-
-	if env == 0 {
-		return 0, 0, false
-	}
-
-	for at := env; ; at += 4 {
-		s := p.u32(at)
-
-		if s == 0 {
-			return 0, 0, false
-		}
-
-		entry := p.cstr(s)
-
-		if len(entry) > len(name) && entry[len(name)] == '=' && bytes.Equal(entry[:len(name)], name) {
-			return at, s + uint32(len(name)) + 1, true
-		}
-	}
-}
-
-func (p *Process) getenv(name string) (string, bool) {
-	_, value, ok := p.lookupEnv([]byte(name))
-
-	if !ok {
-		return "", false
-	}
-
-	return p.str(value), true
-}
-
 func (p *Process) libcGetpid() uint32 {
 	return uint32(p.pid)
 }
@@ -1241,21 +1183,6 @@ func (p *Process) libcUmask(mask uint32) uint32 {
 
 func (p *Process) libcExecve(path, argv, envp uint32) uint32 {
 	return p.result(0, p.exec(p.str(path), p.strings(argv), p.strings(envp)))
-}
-
-func (p *Process) libcExecv(path, argv uint32) uint32 {
-	return p.result(0, p.exec(p.str(path), p.strings(argv), p.environment()))
-}
-
-func (p *Process) libcExecle(path, arg0, va uint32) uint32 {
-	argv := p.argList(arg0, va)
-	envp := p.varArg(va, uint32(max(len(argv), 1)))
-
-	if arg0 == 0 {
-		envp = p.varArg(va, 0)
-	}
-
-	return p.result(0, p.exec(p.str(path), argv, p.strings(envp)))
 }
 
 func (p *Process) libcFexecve(fd, argv, envp uint32) uint32 {
@@ -2829,34 +2756,12 @@ func (p *Process) libcPosix_madvise(addr, n, advice uint32) uint32 {
 	return 0
 }
 
-func (p *Process) libcExecl(path, arg0, va uint32) uint32 {
-	return p.result(0, p.exec(p.str(path), p.argList(arg0, va), p.environment()))
-}
-
 func (p *Process) libc_exit(code uint32) {
 	p.exitWith(int(code&0xff) << 8)
 }
 
 func (p *Process) libc_Exit(code uint32) {
 	p.exitWith(int(code&0xff) << 8)
-}
-
-func (p *Process) argList(arg0, va uint32) []string {
-	if arg0 == 0 {
-		return nil
-	}
-
-	args := []string{p.str(arg0)}
-
-	for i := uint32(0); ; i++ {
-		s := p.varArg(va, i)
-
-		if s == 0 {
-			return args
-		}
-
-		args = append(args, p.str(s))
-	}
 }
 
 func (p *Process) groupExists(pgid int32) bool {
@@ -8177,39 +8082,6 @@ func (p *Process) libcSeekdir(dir, at uint32) {
 	}
 }
 
-func (p *Process) libcMkdtemp(template uint32) uint32 {
-	err := p.temporary(template, 0, func(path string) error {
-		return p.mkdir(AT_FDCWD, path, 0o700)
-	})
-
-	return p.pointer(template, err)
-}
-
-func (p *Process) libcMktemp(template uint32) uint32 {
-	err := p.temporary(template, 0, func(path string) error {
-		var st Stat
-
-		err := p.statPath(path, false, &st)
-
-		if err == ENOENT {
-			return nil
-		}
-
-		if err == nil {
-			return EEXIST
-		}
-
-		return err
-	})
-
-	if err != nil {
-		p.span(template, 1)[0] = 0
-		p.setErrno(errnoOf(err))
-	}
-
-	return p.pointer(template, nil)
-}
-
 func (p *Process) timevals(at uint32) []Timespec {
 	if at == 0 {
 		return nil
@@ -8249,43 +8121,6 @@ func (p *Process) utimens(dirfd int32, path string, ts []Timespec, follow bool) 
 	return p.onPath(dirfd, path, func(d Object) error {
 		return p.dirUtimes(d, path, ts, follow)
 	})
-}
-
-func (p *Process) temporary(template, suffix uint32, create func(path string) error) error {
-	t := p.cstr(template)
-	end := len(t) - int(suffix)
-
-	if int(suffix) > len(t) || end < 6 || string(t[end-6:end]) != "XXXXXX" {
-		return EINVAL
-	}
-
-	for range 100 {
-		for i := end - 6; i < end; i++ {
-			t[i] = tempLetters[mathrand.IntN(len(tempLetters))]
-		}
-
-		if err := create(string(t)); err != EEXIST {
-			return err
-		}
-	}
-
-	return EEXIST
-}
-
-func (p *Process) mkstemp(template, suffix, flags uint32) uint32 {
-	fd := -1
-
-	err := p.temporary(template, suffix, func(path string) error {
-		f, err := p.openPath(path, O_RDWR|O_CREAT|O_EXCL|int(flags&^O_CLOEXEC), 0o600)
-
-		if err == nil {
-			fd, err = p.install(f, 0, flags&O_CLOEXEC != 0)
-		}
-
-		return err
-	})
-
-	return p.result(fd, err)
 }
 
 func (p *Process) libcOpendir(path uint32) uint32 {
@@ -8363,12 +8198,6 @@ func (p *Process) rewinddir(dir uint32) {
 	p.put32(dir+dirIndex, 0)
 }
 
-func (p *Process) direntCompare(a, b uint32, compare func(x, y []byte) int) uint32 {
-	x, y := p.cstr(p.u32(a)+19), p.cstr(p.u32(b)+19)
-
-	return uint32(int32(compare(x, y)))
-}
-
 func (p *Process) libcReaddir(dir uint32) uint32 {
 	entry, err := p.readdir(dir)
 
@@ -8444,26 +8273,6 @@ func (p *Process) libcDirfd(dir uint32) uint32 {
 
 func (p *Process) libcTelldir(dir uint32) uint32 {
 	return p.u32(dir + dirIndex)
-}
-
-func (p *Process) libcAlphasort(a, b uint32) uint32 {
-	return p.direntCompare(a, b, bytes.Compare)
-}
-
-func (p *Process) libcVersionsort(a, b uint32) uint32 {
-	return p.direntCompare(a, b, strverscmp)
-}
-
-func (p *Process) libcMkstemp(template uint32) uint32 {
-	return p.mkstemp(template, 0, 0)
-}
-
-func (p *Process) libcMkostemp(template, flags uint32) uint32 {
-	return p.mkstemp(template, 0, flags)
-}
-
-func (p *Process) libcMkstemps(template, suffix uint32) uint32 {
-	return p.mkstemp(template, suffix, 0)
 }
 
 func (p *Process) libcRewinddir(dir uint32) {
@@ -10783,27 +10592,6 @@ func (p *Process) libcFpathconf(fd, name uint32) uint32 {
 	return p.pathconf(name)
 }
 
-func (p *Process) libcGetlogin() uint32 {
-	_, value, _ := p.lookupEnv([]byte("LOGNAME"))
-
-	return value
-}
-
-func (p *Process) libcGetlogin_r(buf, n uint32) uint32 {
-	name, ok := p.getenv("LOGNAME")
-
-	switch {
-	case !ok:
-		return uint32(ENXIO)
-	case uint32(len(name)) >= n:
-		return uint32(ERANGE)
-	}
-
-	p.putString(buf, name)
-
-	return 0
-}
-
 func (p *Process) libcCtermid(s uint32) uint32 {
 	if s == 0 {
 		return p.constant("/dev/tty")
@@ -10839,48 +10627,6 @@ func (p *Process) libcTtyname_r(fd, buf, n uint32) uint32 {
 	p.putString(buf, name)
 
 	return 0
-}
-
-func (p *Process) getsubopt(opt, keys, val uint32) uint32 {
-	s := p.u32(opt)
-
-	p.put32(val, 0)
-
-	text := p.cstr(s)
-	n := uint32(len(text))
-
-	if i := bytes.IndexByte(text, ','); i >= 0 {
-		p.span(s+uint32(i), 1)[0] = 0
-		p.put32(opt, s+uint32(i)+1)
-		n = uint32(i)
-	} else {
-		p.put32(opt, s+n)
-	}
-
-	sub := string(p.span(s, n))
-
-	for i := uint32(0); ; i++ {
-		key := p.u32(keys + 4*i)
-
-		if key == 0 {
-			return math.MaxUint32
-		}
-
-		k := p.str(key)
-
-		if !strings.HasPrefix(sub, k) {
-			continue
-		}
-
-		switch {
-		case len(sub) > len(k) && sub[len(k)] == '=':
-			p.put32(val, s+uint32(len(k))+1)
-		case len(sub) > len(k):
-			continue
-		}
-
-		return i
-	}
 }
 
 func (p *Process) name() string {
@@ -10958,20 +10704,6 @@ func (p *Process) libcGetentropy(buf, n uint32) uint32 {
 
 func (p *Process) libcGethostid() uint32 {
 	return 0
-}
-
-func (p *Process) libc__assert_fail(expr, file, line, function uint32) {
-	msg := fmt.Sprintf("Assertion failed: %s (%s: %s: %d)\n", p.str(expr), p.str(file), p.str(function), int32(line))
-
-	if t, err := p.fd(2); err == nil {
-		p.fileWrite(t, bytesFile([]byte(msg)), len(msg), IoMode{})
-	}
-
-	p.abort()
-}
-
-func (p *Process) libcGetsubopt(opt, keys, val uint32) uint32 {
-	return p.getsubopt(opt, keys, val)
 }
 
 func (p *Process) libcPrctl(option, va uint32) uint32 {
@@ -11071,85 +10803,6 @@ func (p *Process) staticResult(slot, size uint32) uint32 {
 	p.put32(at, block)
 
 	return block
-}
-
-func (p *Process) libcInet_aton(s, at uint32) uint32 {
-	a, ok := inetAton(p.str(s))
-
-	if ok {
-		copy(p.span(at, 4), a[:])
-	}
-
-	return bit(ok)
-}
-
-func (p *Process) libcInet_ntoa(in uint32) uint32 {
-	var b [4]byte
-	binary.LittleEndian.PutUint32(b[:], in)
-
-	at := p.staticAt(staticNtoa)
-
-	p.putString(at, fmt.Sprintf("%d.%d.%d.%d", b[0], b[1], b[2], b[3]))
-
-	return at
-}
-
-func (p *Process) libcInet_pton(family, s, dst uint32) uint32 {
-	text := p.str(s)
-
-	switch family {
-	case AF_INET:
-		a, err := netip.ParseAddr(text)
-
-		if err != nil || !a.Is4() {
-			return 0
-		}
-
-		v := a.As4()
-
-		copy(p.span(dst, 4), v[:])
-	case AF_INET6:
-		a, err := netip.ParseAddr(text)
-
-		if err != nil || !a.Is6() || a.Zone() != "" {
-			return 0
-		}
-
-		v := a.As16()
-
-		copy(p.span(dst, 16), v[:])
-	default:
-		p.setErrno(EAFNOSUPPORT)
-
-		return ^uint32(0)
-	}
-
-	return 1
-}
-
-func (p *Process) libcInet_ntop(family, src, dst, size uint32) uint32 {
-	var text string
-
-	switch family {
-	case AF_INET:
-		text = netip.AddrFrom4([4]byte(p.span(src, 4))).String()
-	case AF_INET6:
-		text = netip.AddrFrom16([16]byte(p.span(src, 16))).String()
-	default:
-		p.setErrno(EAFNOSUPPORT)
-
-		return 0
-	}
-
-	if uint32(len(text)) >= size {
-		p.setErrno(ENOSPC)
-
-		return 0
-	}
-
-	p.putString(dst, text)
-
-	return dst
 }
 
 func (p *Process) bounded(at, n uint32) []byte {
@@ -11411,47 +11064,12 @@ func (p *Process) libcStrsep(at, delim uint32) uint32 {
 	return s
 }
 
-func (p *Process) libcStrverscmp(a, b uint32) uint32 {
-	return uint32(int32(strverscmp(p.cstr(a), p.cstr(b))))
-}
-
 func (p *Process) libcAbs(n uint32) uint32 {
 	if int32(n) < 0 {
 		return uint32(-int32(n))
 	}
 
 	return n
-}
-
-func (p *Process) libcDirname(s uint32) uint32 {
-	if s == 0 || p.u8(s) == 0 {
-		return p.staticAt(staticDot)
-	}
-
-	b := p.cstr(s)
-	i := len(b) - 1
-
-	for ; b[i] == '/'; i-- {
-		if i == 0 {
-			return p.staticAt(staticSlash)
-		}
-	}
-
-	for ; b[i] != '/'; i-- {
-		if i == 0 {
-			return p.staticAt(staticDot)
-		}
-	}
-
-	for ; b[i] == '/'; i-- {
-		if i == 0 {
-			return p.staticAt(staticSlash)
-		}
-	}
-
-	p.span(s+uint32(i)+1, 1)[0] = 0
-
-	return s
 }
 
 func (p *Process) libcFnmatch(pattern, s, flags uint32) uint32 {
@@ -11508,24 +11126,6 @@ func (p *Process) libcStrtok(s, delim uint32) uint32 {
 	p.put32(save, next)
 
 	return token
-}
-
-func (p *Process) libcBasename(s uint32) uint32 {
-	if s == 0 || p.u8(s) == 0 {
-		return p.staticAt(staticDot)
-	}
-
-	b := p.cstr(s)
-	i := len(b) - 1
-
-	for ; i > 0 && b[i] == '/'; i-- {
-		b[i] = 0
-	}
-
-	for ; i > 0 && b[i-1] != '/'; i-- {
-	}
-
-	return s + uint32(i)
 }
 
 func (p *Process) libcFfs(x uint32) uint32 {
@@ -13937,10 +13537,6 @@ func errnoOrNil(code uint32) error {
 	}
 
 	return Errno(code)
-}
-
-func (p *Process) libcMkostemps(template, suffix, flags uint32) uint32 {
-	return p.mkstemp(template, suffix, flags)
 }
 
 func (p *Process) libcLchmod(path, mode uint32) uint32 {

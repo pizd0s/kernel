@@ -1,17 +1,21 @@
 /*
- * The addresses of IPv4 as text and of its classes: inet_addr and
- * inet_network read what inet_aton does, in the network's order and the
- * host's; a network of a class and a host on it make an address, and an
- * address is of the class its first byte says (A below 128, B below 192,
- * C the rest).
+ * The addresses of IPv4 as text and of its classes: inet_network reads
+ * what inet_aton does, in the host's order; a network of a class and a
+ * host on it make an address, and an address is of the class its first
+ * byte says (A below 128, B below 192, C the rest).
  */
+#include "sized.h"
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <stddef.h>
 
-in_addr_t __kernel_inet_addr(const char* text) {
-    struct in_addr a;
+// inet_aton of FreeBSD's, as a program's forwarder passes the address's
+// size.
+int __kernel_inet_aton(const char* text, struct in_addr* a, size_t size) {
+    sized("inet_aton", size, sizeof(struct in_addr));
 
-    return inet_aton(text, &a) ? a.s_addr : INADDR_NONE;
+    return inet_aton(text, a);
 }
 
 in_addr_t __kernel_inet_network(const char* text) {

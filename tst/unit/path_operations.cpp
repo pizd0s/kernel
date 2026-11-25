@@ -112,7 +112,10 @@ int main() {
     char bad[] = "invalid";
     assert(mkstemp(bad) == -1 && errno == EINVAL);
     assert(mkdtemp(bad) == nullptr && errno == EINVAL);
-    assert(mktemp(bad) == bad && bad[0] == 0 && errno == EINVAL);
+    // mktemp is POSIX's no more: what it gives of a failure, a null or an
+    // empty template, is the system's.
+    char* none = mktemp(bad);
+    assert(errno == EINVAL && (none == nullptr || (none == bad && bad[0] == 0)));
     char absent[] = "absent/file-XXXXXX";
     assert(mkstemp(absent) == -1 && errno == ENOENT);
     assert(creat("absent/file", 0600) == -1 && errno == ENOENT);
@@ -121,8 +124,8 @@ int main() {
     char notDirectory[256];
     assert(snprintf(notDirectory, sizeof(notDirectory), "%s/name-XXXXXX", file) > 0);
     errno = 0;
-    assert(mktemp(notDirectory) == notDirectory && notDirectory[0] == 0);
-    assert(errno == ENOTDIR);
+    none = mktemp(notDirectory);
+    assert(errno == ENOTDIR && (none == nullptr || (none == notDirectory && notDirectory[0] == 0)));
     char longName[4097];
     memset(longName, 'x', sizeof(longName) - 1);
     longName[sizeof(longName) - 1] = 0;

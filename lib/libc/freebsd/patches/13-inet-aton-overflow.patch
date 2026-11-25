@@ -1,0 +1,25 @@
+inet_aton's number of no more than 32 bits, of a 32-bit u_long too: its value
+is of 64 bits, and one past 32 is no address, where it wrapped to a small
+one, so that inet_addr("4294967296") was 0.0.0.0 and not INADDR_NONE.
+Applied after 12-inet-names.patch.
+
+--- a/lib/libc/inet/inet_addr.c
++++ b/lib/libc/inet/inet_addr.c
+@@ -103,7 +103,7 @@
+  */
+ int
+ inet_aton(const char *cp, struct in_addr *addr) {
+-	u_long val;
++	uint64_t val;
+ 	int base, n;
+ 	char c;
+ 	u_int8_t parts[4];
+@@ -130,6 +130,8 @@
+ 			}
+ 		}
+ 		for (;;) {
++			if (val > 0xffffffffU)
++				return (0);
+ 			if (isascii(c) && isdigit((unsigned char)c)) {
+ 				if (base == 8 && (c == '8' || c == '9'))
+ 					return (0);

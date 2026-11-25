@@ -1,0 +1,28 @@
+A template of fewer than six X's before its suffix is EINVAL, as POSIX's
+mkstemp, mkostemp and mkdtemp fail with it ("does not end in XXXXXX"):
+FreeBSD's fills what X's there are, and of none tries the name itself.
+
+--- a/lib/libc/stdio/mktemp.c
++++ b/lib/libc/stdio/mktemp.c
+@@ -115,7 +115,7 @@
+ static int
+ _gettemp(int dfd, char *path, int *doopen, int domkdir, int slen, int oflags)
+ {
+-	char *start, *trv, *suffp, *carryp;
++	char *start, *trv, *suffp, *carryp, *x;
+ 	char *pad;
+ 	struct stat sbuf;
+ 	uint32_t rand;
+@@ -141,6 +141,12 @@
+ 		errno = EINVAL;
+ 		return (0);
+ 	}
++	for (x = trv; x >= path && *x == 'X'; x--)
++		;
++	if (trv - x < 6) {
++		errno = EINVAL;
++		return (0);
++	}
+ 
+ 	/* Fill space with random characters */
+ 	while (trv >= path && *trv == 'X') {

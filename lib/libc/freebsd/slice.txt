@@ -4,7 +4,8 @@
 # trees, getopt, the drand48 family, quick_exit and popen, the
 # declarations of their functions of a locale, the regex with its header,
 # the wide strings' functions, the numbers' conversions, gdtoa's among
-# them, the random numbers' and the environment's; and the copyright.
+# them, the random numbers', the environment's, the paths', the temporary
+# files', IPv4's and IPv6's addresses' and the rest; and the copyright.
 COPYRIGHT
 lib/libc/regex
 lib/msun/src
@@ -130,3 +131,12 @@ lib/libc/stdlib/rand.c
 lib/libc/stdlib/random.c
 lib/libc/stdlib/random.h
 lib/libc/stdlib/getenv.c
+lib/libc/gen/basename.c
+lib/libc/gen/dirname.c
+lib/libc/stdlib/getsubopt.c
+lib/libc/string/strverscmp.c
+lib/libc/stdio/mktemp.c
+lib/libc/inet/inet_addr.c
+lib/libc/inet/inet_ntoa.c
+lib/libc/inet/inet_ntop.c
+lib/libc/inet/inet_pton.c

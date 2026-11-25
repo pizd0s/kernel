@@ -594,42 +594,6 @@ func libcSeekdir(dir, at uint32) {
 	proc().libcSeekdir(dir, at)
 }
 
-func libcAlphasort(a, aSize, b, bSize uint32) uint32 {
-	p := proc()
-
-	p.sized("alphasort", aSize, sizeofDirent, bSize, sizeofDirent)
-
-	return p.libcAlphasort(a, b)
-}
-
-func libcVersionsort(a, aSize, b, bSize uint32) uint32 {
-	p := proc()
-
-	p.sized("versionsort", aSize, sizeofDirent, bSize, sizeofDirent)
-
-	return p.libcVersionsort(a, b)
-}
-
-func libcMkstemp(template uint32) uint32 {
-	return proc().libcMkstemp(template)
-}
-
-func libcMkostemp(template, flags uint32) uint32 {
-	return proc().libcMkostemp(template, flags)
-}
-
-func libcMkstemps(template, suffix uint32) uint32 {
-	return proc().libcMkstemps(template, suffix)
-}
-
-func libcMkdtemp(template uint32) uint32 {
-	return proc().libcMkdtemp(template)
-}
-
-func libcMktemp(template uint32) uint32 {
-	return proc().libcMktemp(template)
-}
-
 func libcOpendir(path uint32) uint32 {
 	return proc().libcOpendir(path)
 }
@@ -794,10 +758,6 @@ func libcStrsep(at, delim uint32) uint32 {
 	return proc().libcStrsep(at, delim)
 }
 
-func libcStrverscmp(a, b uint32) uint32 {
-	return proc().libcStrverscmp(a, b)
-}
-
 func libcIconv_open(to, from uint32) uint32 {
 	return proc().libcIconv_open(to, from)
 }
@@ -812,10 +772,6 @@ func libcIconv_close(cd uint32) uint32 {
 
 func libcAbs(n uint32) uint32 {
 	return proc().libcAbs(n)
-}
-
-func libcDirname(s uint32) uint32 {
-	return proc().libcDirname(s)
 }
 
 func libcFnmatch(pattern, s, flags uint32) uint32 {
@@ -836,10 +792,6 @@ func libcSwab(s, d, n uint32) {
 
 func libcStrtok(s, delim uint32) uint32 {
 	return proc().libcStrtok(s, delim)
-}
-
-func libcBasename(s uint32) uint32 {
-	return proc().libcBasename(s)
 }
 
 func libcFfs(x uint32) uint32 {
@@ -1194,14 +1146,6 @@ func libcExecve(path, argv, envp uint32) uint32 {
 	return proc().libcExecve(path, argv, envp)
 }
 
-func libcExecv(path, argv uint32) uint32 {
-	return proc().libcExecv(path, argv)
-}
-
-func libcExecle(path, arg0, va uint32) uint32 {
-	return proc().libcExecle(path, arg0, va)
-}
-
 func libcFexecve(fd, argv, envp uint32) uint32 {
 	return proc().libcFexecve(fd, argv, envp)
 }
@@ -1396,10 +1340,6 @@ func libcPosix_spawnattr_setschedparam(attr, attrSize, param, paramSize uint32) 
 	p.sized("posix_spawnattr_setschedparam", attrSize, sizeofPosixSpawnattr, paramSize, sizeofSchedParam)
 
 	return p.libcPosix_spawnattr_setschedparam(attr, param)
-}
-
-func libcExecl(path, arg0, va uint32) uint32 {
-	return proc().libcExecl(path, arg0, va)
 }
 
 func libc_exit(code uint32) {
@@ -1682,14 +1622,6 @@ func libcFpathconf(fd, name uint32) uint32 {
 	return proc().libcFpathconf(fd, name)
 }
 
-func libcGetlogin() uint32 {
-	return proc().libcGetlogin()
-}
-
-func libcGetlogin_r(buf, n uint32) uint32 {
-	return proc().libcGetlogin_r(buf, n)
-}
-
 func libcCtermid(s uint32) uint32 {
 	return proc().libcCtermid(s)
 }
@@ -1734,10 +1666,6 @@ func libcGlobfree(out, outSize uint32) {
 	p.libcGlobfree(out)
 }
 
-func libcGetsubopt(opt, keys, val uint32) uint32 {
-	return proc().libcGetsubopt(opt, keys, val)
-}
-
 func libcPrctl(option, va uint32) uint32 {
 	return proc().libcPrctl(option, va)
 }
@@ -1764,10 +1692,6 @@ func libcSetdomainname(name, n uint32) uint32 {
 
 func libcGethostid() uint32 {
 	return proc().libcGethostid()
-}
-
-func libc__assert_fail(expr, file, line, function uint32) {
-	proc().libc__assert_fail(expr, file, line, function)
 }
 
 func libcSocket(domain, kind, protocol uint32) uint32 {
@@ -1868,26 +1792,6 @@ func libcShutdown(fd, how uint32) uint32 {
 
 func libcSockatmark(fd uint32) uint32 {
 	return proc().libcSockatmark(fd)
-}
-
-func libcInet_aton(s, at, atSize uint32) uint32 {
-	p := proc()
-
-	p.sized("inet_aton", atSize, sizeofInAddr)
-
-	return p.libcInet_aton(s, at)
-}
-
-func libcInet_ntoa(in uint32) uint32 {
-	return proc().libcInet_ntoa(in)
-}
-
-func libcInet_pton(family, s, dst uint32) uint32 {
-	return proc().libcInet_pton(family, s, dst)
-}
-
-func libcInet_ntop(family, src, dst, size uint32) uint32 {
-	return proc().libcInet_ntop(family, src, dst, size)
 }
 
 func libcCrypt(key, setting uint32) uint32 {
@@ -2993,10 +2897,6 @@ func libcSem_open(name, flags, va, semSize uint32) uint32 {
 	p.sized("sem_open", semSize, sizeofSem)
 
 	return p.libcSem_open(name, flags, va)
-}
-
-func libcMkostemps(template, suffix, flags uint32) uint32 {
-	return proc().libcMkostemps(template, suffix, flags)
 }
 
 func libcLchmod(path, mode uint32) uint32 {

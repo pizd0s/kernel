@@ -1,0 +1,67 @@
+No weak aliases of FreeBSD's private __inet_ names, which its arpa/inet.h
+makes of the functions' names and lib/c's does not: the functions are of
+their own names.
+
+--- a/lib/libc/inet/inet_addr.c
++++ b/lib/libc/inet/inet_addr.c
+@@ -201,14 +201,4 @@
+ 		addr->s_addr = htonl(val);
+ 	return (1);
+ }
+-
+-/*
+- * Weak aliases for applications that use certain private entry points,
+- * and fail to include <arpa/inet.h>.
+- */
+-#undef inet_addr
+-__weak_reference(__inet_addr, inet_addr);
+-#undef inet_aton
+-__weak_reference(__inet_aton, inet_aton);
+-
+ /*! \file */
+--- a/lib/libc/inet/inet_ntoa.c
++++ b/lib/libc/inet/inet_ntoa.c
+@@ -65,13 +65,4 @@
+ 	(void) inet_ntop(AF_INET, &in, buf, size);
+ 	return (buf);
+ }
+-
+-/*
+- * Weak aliases for applications that use certain private entry points,
+- * and fail to include <arpa/inet.h>.
+- */
+-#undef inet_ntoa
+-__weak_reference(__inet_ntoa, inet_ntoa);
+-__weak_reference(__inet_ntoa_r, inet_ntoa_r);
+-
+ /*! \file */
+--- a/lib/libc/inet/inet_ntop.c
++++ b/lib/libc/inet/inet_ntop.c
+@@ -192,12 +192,4 @@
+ 	strcpy(dst, tmp);
+ 	return (dst);
+ }
+-
+-/*
+- * Weak aliases for applications that use certain private entry points,
+- * and fail to include <arpa/inet.h>.
+- */
+-#undef inet_ntop
+-__weak_reference(__inet_ntop, inet_ntop);
+-
+ /*! \file */
+--- a/lib/libc/inet/inet_pton.c
++++ b/lib/libc/inet/inet_pton.c
+@@ -212,12 +212,4 @@
+ 	memcpy(dst, tmp, NS_IN6ADDRSZ);
+ 	return (1);
+ }
+-
+-/*
+- * Weak aliases for applications that use certain private entry points,
+- * and fail to include <arpa/inet.h>.
+- */
+-#undef inet_pton
+-__weak_reference(__inet_pton, inet_pton);
+-
+ /*! \file */
