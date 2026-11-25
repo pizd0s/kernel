@@ -73,6 +73,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/inotify.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
@@ -88,6 +89,7 @@
 using u8 = uint8_t;
 using u32 = uint32_t;
 using u64 = uint64_t;
+using i32 = int32_t;
 using i64 = int64_t;
 using usize = size_t;
 
@@ -483,13 +485,16 @@ namespace {
     struct Mount;
     struct Ask;
     struct Watcher;
+    struct Events;
+    struct Mark;
 
     // What an endpoint is to the loop.
     enum class Role : u8 {
         Handle,  // a handle of the VFS's, at a place: its calls come on it, and walk from the place
         Fs,      // ours of the channel of a file system: the answers to its questions come on it
         Watcher, // a watcher's open file: its READs come on it
-        Kept,    // where a READ a watcher keeps is answered: its CANCEL comes on it
+        Kept,    // where a READ a watcher or an events file keeps is answered: its CANCEL comes on it
+        Events,  // an events file's, inotify's: its READs come on it
     };
 
     // A file system of the VFS's, another process's behind the channel
@@ -502,6 +507,7 @@ namespace {
         Ask* waiting = nullptr;      // the questions asked on its channel, to be answered in order
         Ask* lastWaiting = nullptr;
         Watcher* watchers = nullptr; // of its directories
+        Mark* marks = nullptr;       // events files' of its directories
     };
 
     // A mount: a directory of a file system, its root, as a directory of
@@ -550,6 +556,7 @@ namespace {
         bool nonblock;
         Fs* fs;           // a Fs's
         Watcher* watcher; // a Watcher's and a Kept's
+        Events* events;   // an Events's and a Kept's
         Endpoint* next;   // among the free ones
         Endpoint* after;  // among the live ones
         Endpoint* before;
@@ -574,6 +581,40 @@ namespace {
         int memfd = -1;
         u32 length = 0;
         Watcher* next = nullptr; // among its file system's
+    };
+
+    // An events file, inotify's instance (WATCH of watchEventsNew): its
+    // endpoint and id; the events it queued, struct inotify_event's, how
+    // many, and where the last is; its marks and the number of the next;
+    // a READ it keeps, as a watcher's; who made it and when, its FSTAT's.
+    struct Events {
+        Endpoint* end = nullptr;
+        u64 id = 0;
+        Buffer queue;
+        u32 queued = 0;
+        usize last = SIZE_MAX;
+        Mark* marks = nullptr;
+        i32 nextWd = 1;
+        Endpoint* kept = nullptr;
+        int memfd = -1;
+        u32 length = 0;
+        u32 uid = 0;
+        u32 gid = 0;
+        u64 made = 0;
+        Events* next = nullptr; // among all
+    };
+
+    // A mark of an events file's: a directory, a node of a file system,
+    // and its mount, which it holds; its number and mask, inotify's.
+    struct Mark {
+        Events* in = nullptr;
+        i32 wd = 0;
+        u32 mask = 0;
+        Fs* fs = nullptr;
+        u64 node = 0;
+        Mount* m = nullptr;
+        Mark* next = nullptr;    // among its file system's
+        Mark* sibling = nullptr; // among its events file's
     };
 }
 
@@ -758,10 +799,12 @@ static void bury() {
 
 static void gone(Fs* fs);
 static void forgetWatcher(Watcher* w);
+static void forgetEvents(Events* in);
 
 // An endpoint that closes: a handle lets go of its place, a file
 // system's channel of the file system, a watcher's open file of the
-// watcher, and where a watcher's READ is kept of the READ.
+// watcher, an events file's of the events file, and where a watcher's or
+// an events file's READ is kept of the READ.
 static void forget(Endpoint* ep) {
     ep->dead = true;
     switch (ep->role) {
@@ -779,11 +822,20 @@ static void forget(Endpoint* ep) {
             forgetWatcher(ep->watcher);
             break;
         case Role::Kept:
-            if (Watcher* w = ep->watcher; w->kept == ep) {
+            if (Watcher* w = ep->watcher; w && w->kept == ep) {
                 w->kept = nullptr;
                 close(w->memfd);
                 w->memfd = -1;
             }
+            if (Events* in = ep->events; in && in->kept == ep) {
+                in->kept = nullptr;
+                close(in->memfd);
+                in->memfd = -1;
+            }
+            break;
+        case Role::Events:
+            ep->events->end = nullptr;
+            forgetEvents(ep->events);
             break;
     }
     if (ep->before) {
@@ -1179,18 +1231,290 @@ static void listed(Watcher& w, Name name) {
     }
 }
 
-// A name of a directory of a file system's added or removed, for the
-// directory's watchers.
-static void heard(Fs* fs, u64 dir, u8 kind, Name name) {
+// ---- inotify's events -------------------------------------------------------------
+//
+// An events file is inotify's instance, the VFS's (WATCH of
+// watchEventsNew), its marks of directories by number, wd: it queues the
+// events of a mark's directory as struct inotify_event's, IN_CREATE and
+// IN_DELETE of the names its watchers hear, IN_ISDIR of a directory's,
+// IN_DELETE_SELF and then IN_IGNORED of the directory gone, IN_IGNORED of
+// a mark taken away, as IN_ONESHOT's is after its event. An event the
+// same as the last queued is not queued again, and of 16384 the last is
+// IN_Q_OVERFLOW. A READ gives as many whole events as fit, EINVAL of
+// none, or waits as a watcher's does; INQ is the bytes queued. A mark of
+// a directory the file marks already changes its mask: EEXIST with
+// IN_MASK_CREATE, more of it with IN_MASK_ADD. The file is named by its
+// id, random, its FSTAT's ino.
+
+constexpr u32 eventsMax = 16384;
+
+static Events* allEvents;
+
+static Events* eventsOf(u64 id) {
+    for (Events* in = allEvents; in; in = in->next) {
+        if (in->id == id) {
+            return in;
+        }
+    }
+    return nullptr;
+}
+
+static u32 eventField(const Events& in, usize at, usize field) {
+    u32 value;
+    memcpy(&value, static_cast<const u8*>(in.queue.data()) + at + field, sizeof value);
+    return value;
+}
+
+static usize eventSize(const Events& in, usize at) {
+    return 16 + eventField(in, at, 12);
+}
+
+static void queueEvent(Events& in, i32 wd, u32 mask, Name name) {
+    u32 size = name.empty() ? 0 : u32((name.length + 1 + 15) & ~usize(15));
+    if (in.last < in.queue.size()) {
+        const char* last = static_cast<const char*>(in.queue.data()) + in.last + 16;
+        if (eventField(in, in.last, 0) == u32(wd) && eventField(in, in.last, 4) == mask && eventField(in, in.last, 12) == size &&
+            strnlen(last, size) == name.length && memcmp(last, name.at, name.length) == 0) {
+            return;
+        }
+    }
+    if (in.queued >= eventsMax) {
+        return;
+    }
+    if (++in.queued == eventsMax) {
+        wd = -1;
+        mask = IN_Q_OVERFLOW;
+        name = {};
+        size = 0;
+    }
+    static const char zeros[16] = {};
+    const u32 head[4] = {u32(wd), mask, 0, size};
+    in.last = in.queue.size();
+    in.queue.append(head, sizeof head);
+    if (size > 0) {
+        in.queue.append(name.at, name.length);
+        in.queue.append(zeros, size - name.length);
+    }
+}
+
+// Tells the kernel whether an events file is readable (READY).
+static void eventsReady(const Events& in) {
+    if (in.end) {
+        reply(in.end->fd, opReady, in.queue.size() > 0 ? POLLIN : 0, nullptr, 0);
+    }
+}
+
+// The events of a READ into its memfd, as many whole ones as length
+// holds, its count answered on fd: none, EINVAL.
+static void answerEvents(Events& in, int memfd, u32 length, int fd) {
+    usize size = 0;
+    u32 count = 0;
+    while (size < in.queue.size() && size + eventSize(in, size) <= length) {
+        size += eventSize(in, size);
+        ++count;
+    }
+    if (size == 0) {
+        error(fd, EINVAL);
+        return;
+    }
+    if (pwrite(memfd, in.queue.data(), size, 0) != ssize_t(size)) {
+        error(fd, EIO);
+        return;
+    }
+    char* bytes = static_cast<char*>(in.queue.data());
+    memmove(bytes, bytes + size, in.queue.size() - size);
+    in.queue.resize(in.queue.size() - size);
+    in.queued -= count;
+    in.last = SIZE_MAX;
+    for (usize at = 0; at < in.queue.size(); at += eventSize(in, at)) {
+        in.last = at;
+    }
+    const u32 n = u32(size);
+    ok(fd, &n, sizeof n);
+}
+
+// What an events file queued changed: a READ it keeps is answered.
+static void eventsTold(Events& in) {
+    if (in.kept && in.queue.size() > 0) {
+        answerEvents(in, in.memfd, in.length, in.kept->fd);
+        closed(in.kept);
+    }
+    eventsReady(in);
+}
+
+static void dropMark(Mark* k) {
+    for (Mark** at = &k->fs->marks; *at; at = &(*at)->next) {
+        if (*at == k) {
+            *at = k->next;
+            break;
+        }
+    }
+    for (Mark** at = &k->in->marks; *at; at = &(*at)->sibling) {
+        if (*at == k) {
+            *at = k->sibling;
+            break;
+        }
+    }
+    Mount* m = k->m;
+    k->~Mark();
+    free(k);
+    letGo(m);
+}
+
+// An event of a mark's directory, queued where its mask has it, and of
+// IN_ONESHOT's the mark then taken away.
+static void tellMark(Mark* k, u32 mask, Name name) {
+    Events& in = *k->in;
+    if ((k->mask & mask & IN_ALL_EVENTS) == 0) {
+        return;
+    }
+    queueEvent(in, k->wd, mask, name);
+    if ((k->mask & IN_ONESHOT) != 0) {
+        queueEvent(in, k->wd, IN_IGNORED, {});
+        dropMark(k);
+    }
+    eventsTold(in);
+}
+
+// A mark's directory gone, or its file system: IN_DELETE_SELF where its
+// mask has it, IN_IGNORED, and the mark taken away.
+static void markGone(Mark* k) {
+    Events& in = *k->in;
+    if ((k->mask & IN_DELETE_SELF) != 0) {
+        queueEvent(in, k->wd, IN_DELETE_SELF, {});
+    }
+    queueEvent(in, k->wd, IN_IGNORED, {});
+    dropMark(k);
+    eventsTold(in);
+}
+
+static void marksGone(Fs* fs, u64 node, bool all) {
+    for (Mark *k = fs->marks, *next; k; k = next) {
+        next = k->next;
+        if (all || k->node == node) {
+            markGone(k);
+        }
+    }
+}
+
+// An events file whose endpoint closed goes, its marks with it.
+static void forgetEvents(Events* in) {
+    while (in->marks) {
+        dropMark(in->marks);
+    }
+    if (in->kept) {
+        closed(in->kept);
+    }
+    for (Events** at = &allEvents; *at; at = &(*at)->next) {
+        if (*at == in) {
+            *at = in->next;
+            break;
+        }
+    }
+    in->~Events();
+    free(in);
+}
+
+// A WATCH of inotify's of a handle's directory, at, answered on fd.
+static bool eventsCall(const Header& h, Body body, int fd, const Place& at) {
+    if (body.size() < 4) {
+        return error(fd, EINVAL);
+    }
+    const u32 how = body.take<u32>();
+    if (how == watchEventsNew) {
+        int pair[2];
+        if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+            return error(fd, errno);
+        }
+        auto* in = new (allocate(sizeof(Events))) Events();
+        while (in->id == 0 || eventsOf(in->id)) {
+            getentropy(&in->id, sizeof in->id);
+        }
+        timespec now{};
+        clock_gettime(CLOCK_REALTIME, &now);
+        in->made = u64(now.tv_sec) * 1000000000 + u64(now.tv_nsec);
+        in->uid = h.uid;
+        in->gid = h.gid;
+        in->next = allEvents;
+        allEvents = in;
+        in->end = listen(pair[0], Role::Events);
+        in->end->events = in;
+        in->end->reads = true;
+        in->end->nonblock = (h.arg & O_NONBLOCK) != 0;
+        const Opened what{openedFile, O_RDONLY, 0, in->id, 0, 0, 0};
+        const iovec said = part(&what, sizeof what);
+        reply(fd, opOk, 0, &said, 1, &pair[1], 1);
+        close(pair[1]);
+        return false;
+    }
+    if ((how != watchEventsAdd && how != watchEventsRemove) || body.size() != 12) {
+        return error(fd, EINVAL);
+    }
+    const u32 value = body.take<u32>();
+    Events* in = eventsOf(body.take<u64>());
+    if (!in) {
+        return error(fd, EINVAL);
+    }
+    Fs* fs = at.m->fs;
+    for (Mark* k = in->marks; k; k = k->sibling) {
+        if (how == watchEventsRemove && k->wd == i32(value)) {
+            queueEvent(*in, k->wd, IN_IGNORED, {});
+            dropMark(k);
+            eventsTold(*in);
+            ok(fd);
+            return false;
+        }
+        if (how == watchEventsAdd && k->fs == fs && k->node == at.node) {
+            if ((value & IN_MASK_CREATE) != 0) {
+                return error(fd, EEXIST);
+            }
+            k->mask = (value & IN_MASK_ADD) != 0 ? k->mask | (value & ~u32(IN_MASK_ADD)) : value;
+            const u32 wd = u32(k->wd);
+            ok(fd, &wd, sizeof wd);
+            return false;
+        }
+    }
+    if (how == watchEventsRemove) {
+        return error(fd, EINVAL);
+    }
+    auto* k = new (allocate(sizeof(Mark))) Mark();
+    k->in = in;
+    k->wd = in->nextWd++;
+    k->mask = value & ~u32(IN_MASK_ADD | IN_MASK_CREATE);
+    k->fs = fs;
+    k->node = at.node;
+    k->m = at.m;
+    hold(at);
+    k->next = fs->marks;
+    fs->marks = k;
+    k->sibling = in->marks;
+    in->marks = k;
+    const u32 wd = u32(k->wd);
+    ok(fd, &wd, sizeof wd);
+    return false;
+}
+
+// A name of a directory of a file system's added or removed, a
+// directory's or not, for the directory's watchers and marks.
+static void heard(Fs* fs, u64 dir, u8 kind, Name name, bool directory) {
     for (Watcher* w = fs->watchers; w; w = w->next) {
         if (w->node == dir && !w->gone) {
             note(*w, kind, name);
         }
     }
+    if (name.empty() || name.length > NAME_MAX) {
+        return;
+    }
+    for (Mark *k = fs->marks, *next; k; k = next) {
+        next = k->next;
+        if (k->node == dir) {
+            tellMark(k, (kind == watchAdded ? IN_CREATE : IN_DELETE) | (directory ? IN_ISDIR : 0), name);
+        }
+    }
 }
 
-// A directory gone: its watchers tell what is left, then their end. One
-// of the number later is another.
+// A directory gone: its watchers tell what is left, then their end, and
+// its marks go. One of the number later is another.
 static void dirGone(Fs* fs, u64 node) {
     for (Watcher* w = fs->watchers; w; w = w->next) {
         if (w->node == node && !w->gone) {
@@ -1198,6 +1522,7 @@ static void dirGone(Fs* fs, u64 node) {
             told(*w);
         }
     }
+    marksGone(fs, node, false);
 }
 
 static void watchersGone(Fs* fs) {
@@ -1207,22 +1532,26 @@ static void watchersGone(Fs* fs) {
             told(*w);
         }
     }
+    marksGone(fs, 0, true);
 }
 
-// A file system's NOTICE: a change of its names, for its watchers.
+// A file system's NOTICE: a change of its names, for its watchers and
+// marks.
 static void noticed(Fs* fs, u32 kind, Body body) {
     if (body.size() < 8) {
         return;
     }
     const u64 node = body.take<u64>();
+    const bool directory = (kind & noticeDirectory) != 0;
+    kind &= ~u32(noticeDirectory);
     if (kind == noticeGone) {
         dirGone(fs, node);
     } else if (kind == watchAdded || kind == watchRemoved) {
-        heard(fs, node, u8(kind), body.rest());
+        heard(fs, node, u8(kind), body.rest(), directory);
     }
 }
 
-// Whether rootfs asks the changes of a file system it watches a
+// Whether rootfs asks the changes of a file system it watches or marks a
 // directory of, to see their answers: none of one that tells its own.
 static bool watching(const Fs* fs) {
     for (const Watcher* w = fs->watchers; w && fs->cached; w = w->next) {
@@ -1230,14 +1559,19 @@ static bool watching(const Fs* fs) {
             return true;
         }
     }
-    return false;
+    return fs->cached && fs->marks;
 }
 
-// Whether a directory's changes are asked, for its watchers.
+// Whether a directory's changes are asked, for its watchers and marks.
 static bool watched(const Place& dir) {
     const Fs* fs = dir.m->fs;
     for (const Watcher* w = fs->watchers; w && fs->cached; w = w->next) {
         if (w->node == dir.node && !w->gone) {
+            return true;
+        }
+    }
+    for (const Mark* k = fs->marks; k && fs->cached; k = k->next) {
+        if (k->node == dir.node) {
             return true;
         }
     }
@@ -2401,7 +2735,7 @@ static void created(const Place& dir, Name name, const Answer& a, int fd) {
     if (a.body.size() == sizeof what) {
         memcpy(&what, a.body.at, sizeof what);
         if (what.made != 0) {
-            heard(dir.m->fs, dir.node, watchAdded, name);
+            heard(dir.m->fs, dir.node, watchAdded, name, false);
         }
     }
     const iovec body = part(a.body.at, a.body.size());
@@ -2411,12 +2745,13 @@ static void created(const Place& dir, Name name, const Answer& a, int fd) {
     }
 }
 
-// UNLINK's: the name removed, and a directory it was gone.
-static void unlinked(const Place& dir, Name name, const Answer& a) {
+// UNLINK's: the name removed, a directory's of AT_REMOVEDIR, and a
+// directory it was gone.
+static void unlinked(const Place& dir, Name name, bool directory, const Answer& a) {
     if (a.error != 0) {
         return;
     }
-    heard(dir.m->fs, dir.node, watchRemoved, name);
+    heard(dir.m->fs, dir.node, watchRemoved, name, directory);
     u64 removed = 0;
     if (a.body.size() >= sizeof removed) {
         memcpy(&removed, a.body.at, sizeof removed);
@@ -2428,8 +2763,8 @@ static void unlinked(const Place& dir, Name name, const Answer& a) {
 
 // RENAME's: the old name removed and the new one added, a name it
 // replaced removed first, and a directory it replaced gone; nothing of
-// two names of one node.
-static void renamed(const Place& from, Name old, const Place& to, Name name, const Answer& a) {
+// two names of one node. moved and replaced say which are directories.
+static void renamed(const Place& from, Name old, const Place& to, Name name, bool moved, bool replaced, const Answer& a) {
     if (a.error != 0) {
         return;
     }
@@ -2441,12 +2776,12 @@ static void renamed(const Place& from, Name old, const Place& to, Name name, con
         return;
     }
     Fs* fs = from.m->fs;
-    heard(fs, from.node, watchRemoved, old);
+    heard(fs, from.node, watchRemoved, old, moved);
     if (nodes[1] != 0) {
-        heard(fs, to.node, watchRemoved, name);
+        heard(fs, to.node, watchRemoved, name, replaced);
         dirGone(fs, nodes[1]);
     }
-    heard(fs, to.node, watchAdded, name);
+    heard(fs, to.node, watchAdded, name, moved);
 }
 
 // OPEN: what the path names, opened as open(2) opens it.
@@ -2624,7 +2959,7 @@ static Task makeCall(Header h, int fd, Place root, Place from, Name target, Name
     if (watched(w.here)) {
         const Answer a = co_await changeAsk(w.here, h, op, arg, nullptr, 0, made);
         if (a.error == 0) {
-            heard(w.here.m->fs, w.here.node, watchAdded, w.last);
+            heard(w.here.m->fs, w.here.node, watchAdded, w.last, op == fsMkdir);
         }
         answer(fd, a.error);
         co_return;
@@ -2677,7 +3012,7 @@ static Task unlinkCall(Header h, int fd, Place root, Place from, Name path) {
     forgetStat(knownAt(w.here), false);
     if (watched(w.here) || (dir && watching(w.here.m->fs))) {
         const Answer a = co_await changeAsk(w.here, h, fsUnlink, h.arg, nullptr, 0, w.last);
-        unlinked(w.here, w.last, a);
+        unlinked(w.here, w.last, (h.arg & AT_REMOVEDIR) != 0, a);
         answer(fd, a.error);
         co_return;
     }
@@ -2761,7 +3096,7 @@ static Task renameCall(Header h, int fd, Place root, Place from, Place to, Name 
     const Name both{static_cast<const char*>(names.data()), names.size()};
     if (watching(a.here.m->fs)) {
         const Answer got = co_await changeAsk(a.here, h, fsRename, 0, &b.here.node, 8, both);
-        renamed(a.here, a.last, b.here, b.last, got);
+        renamed(a.here, a.last, b.here, b.last, there[0] && S_ISDIR(st[0].mode), there[1] && S_ISDIR(st[1].mode), got);
         answer(fd, got.error);
         co_return;
     }
@@ -2818,7 +3153,7 @@ static Task linkCall(Header h, int fd, Place root, Place from, Place to, Name ol
     if (watched(b.here)) {
         const Answer got = co_await changeAsk(a.target, h, fsLink, 0, &b.here.node, 8, b.last);
         if (got.error == 0) {
-            heard(b.here.m->fs, b.here.node, watchAdded, b.last);
+            heard(b.here.m->fs, b.here.node, watchAdded, b.last, false);
         }
         answer(fd, got.error);
         co_return;
@@ -3254,6 +3589,9 @@ static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
             if (!isDir(at)) {
                 return error(fd, ENOTDIR);
             }
+            if (body.size() > 0) {
+                return eventsCall(h, body, fd, at);
+            }
             watchCall(h, fd, at);
             return true;
         case opSeek:
@@ -3486,8 +3824,70 @@ static bool onWatcher(Endpoint* ep, const Header& h, Body body, int fd) {
     }
 }
 
-// What comes where a watcher's READ is kept: its CANCEL, answered EINTR,
-// or the end of who asked; the READ is done.
+// A request on an events file, answered on fd: READ, its events, or,
+// with none, the READ kept until there are, but of O_NONBLOCK, one at a
+// time; INQ, the bytes queued; FSTAT, of its id and who made it when;
+// GETFL and SETFL of its flags; WRITE, EBADF; what else an open file
+// takes, as the protocol has it of what is none of it. Whether fd is
+// kept.
+static bool onEvents(Endpoint* ep, const Header& h, Body body, int fd) {
+    Events& in = *ep->events;
+    switch (h.op) {
+        case opRead: {
+            Io io;
+            if (packetFdCount < 2 || body.size() != sizeof io) {
+                return error(fd, EINVAL);
+            }
+            memcpy(&io, body.at, sizeof io);
+            if ((io.flags & ioAt) != 0) {
+                return error(fd, ESPIPE);
+            }
+            if (in.queue.size() > 0) {
+                answerEvents(in, packetFds[0], h.arg, fd);
+                eventsReady(in);
+                return false;
+            }
+            if (ep->nonblock) {
+                return error(fd, EAGAIN);
+            }
+            if (in.kept) {
+                return error(fd, EBUSY);
+            }
+            in.kept = listen(fd, Role::Kept);
+            in.kept->events = &in;
+            in.memfd = packetFds[0];
+            packetFds[0] = -1;
+            in.length = h.arg;
+            return true;
+        }
+        case opWrite:
+            return error(fd, EBADF);
+        case opInq: {
+            const u32 n = u32(in.queue.size());
+            ok(fd, &n, sizeof n);
+            return false;
+        }
+        case opFstat: {
+            const Stat st{in.id, 0, in.made, 0600, 1, in.uid, in.gid, in.made, 0, in.made};
+            ok(fd, &st, sizeof st);
+            return false;
+        }
+        case opGetfl: {
+            const u32 flags = O_RDONLY | (ep->nonblock ? O_NONBLOCK : 0);
+            ok(fd, &flags, sizeof flags);
+            return false;
+        }
+        case opSetfl:
+            ep->nonblock = (h.arg & O_NONBLOCK) != 0;
+            ok(fd);
+            return false;
+        default:
+            return error(fd, unserved(h.op));
+    }
+}
+
+// What comes where a watcher's or an events file's READ is kept: its
+// CANCEL, answered EINTR, or the end of who asked; the READ is done.
 static void keptHeard(Endpoint* ep, ssize_t n) {
     for (usize i = 0; i < packetFdCount; ++i) {
         close(packetFds[i]);
@@ -3535,7 +3935,9 @@ static void handle(Endpoint* ep, ssize_t n) {
         // it waits for came, and closed then, which ends the answer.
         const Body body{packet + sizeof(Header), packet + n};
         const usize last = packetFdCount - 1;
-        const bool kept = ep->role == Role::Watcher ? onWatcher(ep, h, body, packetFds[last]) : onHandle(ep, h, body, packetFds[last]);
+        const bool kept = ep->role == Role::Watcher  ? onWatcher(ep, h, body, packetFds[last])
+                          : ep->role == Role::Events ? onEvents(ep, h, body, packetFds[last])
+                                                     : onHandle(ep, h, body, packetFds[last]);
         if (kept) {
             packetFds[last] = -1;
         }

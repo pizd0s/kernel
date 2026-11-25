@@ -7013,7 +7013,16 @@ func (p *Process) ioctl(fd, req, arg uint32) uint32 {
 	case FIONREAD:
 		var n int32
 
-		if err := p.fileIoctl(obj, FIONREAD, unsafe.Pointer(&n)); err == ENOTTY {
+		err := p.fileIoctl(obj, FIONREAD, unsafe.Pointer(&n))
+
+		if err == ENOTTY {
+			var queued uint32
+
+			queued, err = p.ttyPending(obj)
+			n = int32(queued)
+		}
+
+		if err == ENOTTY {
 			break
 		} else if err != nil {
 			return p.result(0, err)
@@ -7133,10 +7142,6 @@ func (p *Process) open(dirfd int32, path string, flags, va uint32) (int, error) 
 	}
 
 	return p.install(f, 0, flags&O_CLOEXEC != 0)
-}
-
-func (p *Process) openPath(path string, flags int, mode uint32) (Object, error) {
-	return p.openAt(AT_FDCWD, path, flags, mode)
 }
 
 func (p *Process) mkdir(dirfd int32, path string, mode uint32) error {
@@ -7414,8 +7419,8 @@ func (p *Process) libcAttach(fd uint32) uint32 {
 	return p.result(p.install(d, 0, false))
 }
 
-func (p *Process) libcWatchdir(fd, flags uint32) uint32 {
-	if flags&^(O_CLOEXEC|O_NONBLOCK) != 0 {
+func (p *Process) libc__kernel_watch(fd, flags, body, size uint32) uint32 {
+	if flags&^(O_CLOEXEC|O_NONBLOCK) != 0 || size > watchBodyMax {
 		return p.result(0, EINVAL)
 	}
 
@@ -7425,10 +7430,14 @@ func (p *Process) libcWatchdir(fd, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	r := DirWatch{flags: O_RDONLY | flags&O_NONBLOCK}
+	r := DirWatch{flags: O_RDONLY | flags&O_NONBLOCK, body: bytes.Clone(p.span(body, size))}
 
 	if err := p.request(obj, &r); err != nil {
 		return p.result(0, err)
+	}
+
+	if r.file == nil {
+		return p.result(int(int32(r.value)), nil)
 	}
 
 	return p.result(p.install(r.file, 0, flags&O_CLOEXEC != 0))
@@ -12750,46 +12759,6 @@ func (p *Process) libcTimerfd_gettime(fd, at uint32) uint32 {
 	p.putTimespec(at+sizeofTimespec, r.left)
 
 	return p.result(0, nil)
-}
-
-func (p *Process) libcInotify_init() uint32 {
-	return p.libcInotify_init1(0)
-}
-
-func (p *Process) libcInotify_init1(flags uint32) uint32 {
-	if flags&^(O_CLOEXEC|O_NONBLOCK) != 0 {
-		return p.result(0, EINVAL)
-	}
-
-	return p.result(p.install(newInotify(flags&O_NONBLOCK != 0), 0, flags&O_CLOEXEC != 0))
-}
-
-func (p *Process) libcInotify_add_watch(fd, path, mask uint32) uint32 {
-	if mask&IN_ALL_EVENTS == 0 || mask&IN_MASK_ADD != 0 && mask&IN_MASK_CREATE != 0 {
-		return p.result(0, EINVAL)
-	}
-
-	in, err := p.fd(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	r := InotifyAdd{path: p.str(path), mask: mask}
-
-	err = p.request(in, &r)
-
-	return p.result(int(r.wd), err)
-}
-
-func (p *Process) libcInotify_rm_watch(fd, wd uint32) uint32 {
-	in, err := p.fd(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	return p.result(0, p.request(in, &InotifyRemove{wd: int32(wd)}))
 }
 
 func (p *Process) libcTimer_create(clock, event, at uint32) uint32 {

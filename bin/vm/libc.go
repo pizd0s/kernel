@@ -304,8 +304,8 @@ func libcAttach(fd uint32) uint32 {
 	return proc().libcAttach(fd)
 }
 
-func libcWatchdir(fd, flags uint32) uint32 {
-	return proc().libcWatchdir(fd, flags)
+func libc__kernel_watch(fd, flags, body, size uint32) uint32 {
+	return proc().libc__kernel_watch(fd, flags, body, size)
 }
 
 func libcChroot(path uint32) uint32 {
@@ -2604,22 +2604,6 @@ func libcTimerfd_gettime(fd, at, size uint32) uint32 {
 	p.sized("timerfd_gettime", size, sizeofItimerspec)
 
 	return p.libcTimerfd_gettime(fd, at)
-}
-
-func libcInotify_init() uint32 {
-	return proc().libcInotify_init()
-}
-
-func libcInotify_init1(flags uint32) uint32 {
-	return proc().libcInotify_init1(flags)
-}
-
-func libcInotify_add_watch(fd, path, mask uint32) uint32 {
-	return proc().libcInotify_add_watch(fd, path, mask)
-}
-
-func libcInotify_rm_watch(fd, wd uint32) uint32 {
-	return proc().libcInotify_rm_watch(fd, wd)
 }
 
 func libcTimer_create(clock, event, eventSize, at uint32) uint32 {

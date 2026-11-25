@@ -182,7 +182,8 @@ static Node* nodeOf(uint64_t ino) {
 
 // Tells rootfs a change of a directory's names, which REGISTER and a
 // service's going make and rootfs does not see (NOTICE): a name added or
-// removed, or the directory gone.
+// removed, noticeDirectory with it of a directory's, or the directory
+// gone.
 static void notice(uint8_t kind, const Node& dir, const char* name) {
     const Header h{fsNotice, kind, 0, 0, 0, 0};
     const iovec parts[] = {{const_cast<Header*>(&h), sizeof h}, {const_cast<uint64_t*>(&dir.ino), sizeof dir.ino}, {const_cast<char*>(name), strlen(name)}};
@@ -213,7 +214,7 @@ static void unregister(Node* n) {
     if (n->kind == Kind::Dir) {
         notice(noticeGone, *n, "");
     }
-    notice(watchRemoved, *dir, n->name);
+    notice(watchRemoved | (n->kind == Kind::Dir ? noticeDirectory : 0), *dir, n->name);
     free(n);
     if (dir != &root && !dir->entries) {
         unregister(dir);
@@ -460,7 +461,7 @@ static void registerName(const Endpoint& e, Request& r) {
         }
         if (!in) {
             in = add(*dir, name, part, Kind::Dir, S_IFDIR | 0755, 0, 0);
-            notice(watchAdded, *dir, in->name);
+            notice(watchAdded | noticeDirectory, *dir, in->name);
         }
         dir = in;
         length -= part + 1;

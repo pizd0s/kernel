@@ -147,9 +147,10 @@
 //   change of its names as it makes it, in order with its answers, which
 //   rootfs's watchers of its directories hear: no answer.
 //     NOTICE    arg kind    node u64, name    watchAdded or watchRemoved
-//                                         of a name of the directory node;
-//                                         noticeGone, no name: the
-//                                         directory node is gone
+//                                         of a name of the directory node,
+//                                         noticeDirectory added to it of a
+//                                         directory's name; noticeGone, no
+//                                         name: the directory node is gone
 //
 //   An open file's, on a connection to it. The open file keeps its
 //   position and its flags, the OPEN's, as an open file description does:
@@ -196,7 +197,19 @@
 //                                         is another, removed and added. A
 //                                         READ that finds none waits, but
 //                                         of O_NONBLOCK; one of a directory
-//                                         gone is 0
+//                                         gone is 0. With a body, inotify's,
+//                                         how u32, then: watchEventsNew,
+//                                         nothing, of any directory: OK
+//                                         opened, fds[0] an events file of
+//                                         rootfs's of the flags, whose READ
+//                                         gives struct inotify_event's as
+//                                         inotify(7) has them, whose INQ is
+//                                         the bytes queued and whose FSTAT's
+//                                         ino is its id; watchEventsAdd,
+//                                         mask u32, id u64: the directory's
+//                                         events to the file's: OK wd u32;
+//                                         watchEventsRemove, wd u32, id u64:
+//                                         the mark taken away
 //     FSTAT                               OK stat
 //     FCHMOD    arg mode
 //     FCHOWN                uid u32 gid u32
@@ -516,8 +529,14 @@ constexpr uint8_t watchExisting = 1;
 constexpr uint8_t watchIdle = 2;
 constexpr uint8_t watchAdded = 3;
 constexpr uint8_t watchRemoved = 4;
-// NOTICE's kind of a directory gone, past the records' kinds.
+// NOTICE's kind of a directory gone, past the records' kinds, and its
+// flag of a name that is a directory's.
 constexpr uint8_t noticeGone = 5;
+constexpr uint8_t noticeDirectory = 0x80;
+// A WATCH's of inotify's events: its body's how.
+constexpr uint32_t watchEventsNew = 1;
+constexpr uint32_t watchEventsAdd = 2;
+constexpr uint32_t watchEventsRemove = 3;
 
 // The room an entry of a READDIR's takes of struct dirent64, of a name of
 // length.
