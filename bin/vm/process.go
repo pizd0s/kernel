@@ -971,6 +971,10 @@ func (p *Process) exec(path string, argv, envp []string) error {
 func (p *Process) execFrom(path string, f Object, argv, envp []string) error {
 	img, err := p.loadFrom(path, f, argv)
 
+	for err == EINTR && p.interrupts(false) {
+		img, err = p.loadFrom(path, f, argv)
+	}
+
 	if err != nil {
 		return err
 	}
