@@ -94,7 +94,7 @@ def main():
               ("wide-empty-span", "wmemchr", [65536, 0, 0], {"expected": 0}, 0, ""),
               ("wide-early-match", "wmemchr", [65520, 0x41414141, 4], {"expected": 65520}, 0, ""),
               ("empty-write-bound", "write", [1, 65536, 0], {"expected": 0}, 0, "")]
-    cases += [("timezone-without-CRT", "tzset", [], {"returns": False, "expected": 0}, 0, ""),
+    cases += [("timezone-without-CRT", "__kernel_zone", [0, 0, 0], {"expected": 0}, 0, ""),
               ("no-linear-memory", "getpid", [], {"memory": False, "expected": 1}, 0, ""),
               ("environment-without-CRT", "getenv", [4096], {"expected": 0}, 0, ""),
               ("exec-without-CRT", "execv", [4096, 4096], {"expected": 0xffffffff}, 0, "")]
