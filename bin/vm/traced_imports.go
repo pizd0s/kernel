@@ -14,9 +14,9 @@ var libraryCalls = func() map[string]bool {
 		getsubopt globfree gmtime gmtime_r imaxabs imaxdiv index inet_aton inet_ntoa inet_ntop inet_pton labs ldiv llabs lldiv malloc
 		malloc_usable_size mallopt memalign memccpy memchr memcmp memcpy memmem memmove mempcpy memrchr memset posix_memalign putenv
 		realloc reallocarray rindex secure_getenv setenv sigaddset sigandset sigdelset sigemptyset sigfillset sigisemptyset sigismember
-		sigorset stpcpy stpncpy strcasecmp strcasestr strcat strchr strchrnul strcmp strcpy strcspn strdup strerror strerror_r strlcat
-		strlcpy strlen strncasecmp strncat strncmp strncpy strndup strnlen strpbrk strrchr strsep strsignal strspn strstr strtok
-		strtok_r strverscmp swab timegm unsetenv versionsort
+		sigorset stpcpy stpncpy strcasecmp strcasestr strcat strchr strchrnul strcmp strcpy strcspn strdup strlcat strlcpy strlen
+		strncasecmp strncat strncmp strncpy strndup strnlen strpbrk strrchr strsep strspn strstr strtok strtok_r strverscmp swab timegm
+		unsetenv versionsort
 	`)
 
 	out := make(map[string]bool, len(names))
@@ -74,56 +74,55 @@ var callFormats = func() map[string]string {
 		posix_spawnattr_getsigmask:dpdpd posix_spawnattr_init:dpd posix_spawnattr_setflags:dpdd posix_spawnattr_setpgroup:dpdd
 		posix_spawnattr_setschedparam:dpdpd posix_spawnattr_setschedpolicy:dpdd posix_spawnattr_setsigdefault:dpdpd
 		posix_spawnattr_setsigmask:dpdpd ppoll:dpddpdpd prctl:ddp pread:ddpdd preadv:ddpddd prlimit:dddpdpd pselect:ddpdpdpdpdpd
-		psiginfo:vpds psignal:vds pthread_attr_destroy:dpd pthread_attr_getdetachstate:dpdp pthread_attr_getguardsize:dpdp
-		pthread_attr_getinheritsched:dpdp pthread_attr_getschedparam:dpdpd pthread_attr_getschedpolicy:dpdp pthread_attr_getscope:dpdp
-		pthread_attr_getstack:dpdpp pthread_attr_getstacksize:dpdp pthread_attr_init:dpd pthread_attr_setdetachstate:dpdd
-		pthread_attr_setguardsize:dpdd pthread_attr_setinheritsched:dpdd pthread_attr_setschedparam:dpdpd pthread_attr_setschedpolicy:dpdd
-		pthread_attr_setscope:dpdd pthread_attr_setstack:dpdpd pthread_attr_setstacksize:dpdd pthread_barrier_destroy:dpd
-		pthread_barrier_init:dpdpdd pthread_barrier_wait:dpd pthread_barrierattr_destroy:dpd pthread_barrierattr_getpshared:dpdp
-		pthread_barrierattr_init:dpd pthread_barrierattr_setpshared:dpdd pthread_cancel:dd pthread_cond_broadcast:dpd
-		pthread_cond_clockwait:dpdpddpd pthread_cond_destroy:dpd pthread_cond_init:dpdpd pthread_cond_signal:dpd
-		pthread_cond_timedwait:dpdpdpd pthread_cond_wait:dpdpd pthread_condattr_destroy:dpd pthread_condattr_getclock:dpdp
-		pthread_condattr_getpshared:dpdp pthread_condattr_init:dpd pthread_condattr_setclock:dpdd pthread_condattr_setpshared:dpdd
-		pthread_create:dppdpp pthread_detach:dd pthread_equal:ddd pthread_getaffinity_np:dddp pthread_getattr_np:ddpd
-		pthread_getcpuclockid:ddp pthread_getname_np:ddpd pthread_getschedparam:ddppd pthread_getspecific:pd pthread_join:ddp
-		pthread_key_create:dpp pthread_key_delete:dd pthread_kill:ddd pthread_mutex_clocklock:dpddpd pthread_mutex_consistent:dpd
-		pthread_mutex_destroy:dpd pthread_mutex_getprioceiling:dpdp pthread_mutex_init:dpdpd pthread_mutex_lock:dpd
-		pthread_mutex_setprioceiling:dpddp pthread_mutex_timedlock:dpdpd pthread_mutex_trylock:dpd pthread_mutex_unlock:dpd
-		pthread_mutexattr_destroy:dpd pthread_mutexattr_getprioceiling:dpdp pthread_mutexattr_getprotocol:dpdp
-		pthread_mutexattr_getpshared:dpdp pthread_mutexattr_getrobust:dpdp pthread_mutexattr_gettype:dpdp pthread_mutexattr_init:dpd
-		pthread_mutexattr_setprioceiling:dpdd pthread_mutexattr_setprotocol:dpdd pthread_mutexattr_setpshared:dpdd
-		pthread_mutexattr_setrobust:dpdd pthread_mutexattr_settype:dpdd pthread_rwlock_clockrdlock:dpddpd
-		pthread_rwlock_clockwrlock:dpddpd pthread_rwlock_destroy:dpd pthread_rwlock_init:dpdpd pthread_rwlock_rdlock:dpd
-		pthread_rwlock_timedrdlock:dpdpd pthread_rwlock_timedwrlock:dpdpd pthread_rwlock_tryrdlock:dpd pthread_rwlock_trywrlock:dpd
-		pthread_rwlock_unlock:dpd pthread_rwlock_wrlock:dpd pthread_rwlockattr_destroy:dpd pthread_rwlockattr_getpshared:dpdp
-		pthread_rwlockattr_init:dpd pthread_rwlockattr_setpshared:dpdd pthread_self:d pthread_setaffinity_np:dddp
-		pthread_setcancelstate:ddp pthread_setcanceltype:ddp pthread_setname_np:dds pthread_setschedparam:dddpd pthread_setschedprio:ddd
-		pthread_setspecific:ddp pthread_sigmask:ddpdpd pthread_spin_destroy:dp pthread_spin_init:dpd pthread_spin_lock:dp
-		pthread_spin_trylock:dp pthread_spin_unlock:dp pthread_timedjoin_np:ddppd pthread_tryjoin_np:ddp ptsname:sd ptsname_r:ddpd
-		putenv:dp pwrite:ddpdd pwritev:ddpddd raise:dd read:ddpd readdir:ppd readdir_r:dppdpd readlink:dspd readlinkat:ddspd readv:ddpdd
-		realloc:ppd reallocarray:ppdd realpath:ssp recv:ddpdd recvfrom:ddpddpp recvmmsg:ddpddddpd recvmsg:ddpddd remove:ds rename:dss
-		renameat:ddsds rewinddir:vp rindex:ssd rmdir:ds sched_get_priority_max:dd sched_get_priority_min:dd sched_getaffinity:dddp
-		sched_getcpu:d sched_getparam:ddpd sched_getscheduler:dd sched_rr_get_interval:ddpd sched_setaffinity:dddp sched_setparam:ddpd
-		sched_setscheduler:dddpd sched_yield:d secure_getenv:ss seekdir:vpd select:ddpdpdpdpd sem_clockwait:dpddpd sem_close:dpd
-		sem_destroy:dpd sem_getvalue:dpdp sem_init:dpddd sem_open:psdpd sem_post:dpd sem_timedwait:dpdpd sem_trywait:dpd sem_unlink:ds
-		sem_wait:dpd semctl:ddddpd semget:dddd semop:ddpdd semtimedop:ddpddpd send:ddpdd sendmmsg:ddpdddd sendmsg:ddpddd sendto:ddpddpd
-		setdomainname:dsd setegid:dd setenv:dssd seteuid:dd setgid:dd setgroups:ddp sethostname:dsd setitimer:ddpdpd setjmp:dpd
-		setpgid:ddd setpgrp:d setpriority:dddd setregid:ddd setresgid:dddd setresuid:dddd setreuid:ddd setrlimit:ddpd setsid:d
-		setsockopt:ddddpd settimeofday:dpdpd setuid:dd shutdown:ddd sig2str:ddp sigaction:ddpdpdd sigaddset:dpdd sigaltstack:dpdpd
-		sigandset:dpdpdpd sigdelset:dpdd sigemptyset:dpd sigfillset:dpd sigisemptyset:dpd sigismember:dpdd siglongjmp:vpdd signal:ddd
-		sigorset:dpdpdpd sigpending:dpd sigprocmask:ddpdpd sigqueue:dddd sigsetjmp:dpdd sigsuspend:dpd sigtimedwait:dpdpdpd sigwait:dpdp
-		sigwaitinfo:dpdpd sleep:dd sockatmark:dd socket:dddd socketpair:ddddp stat:dspd statfs:dspd statvfs:dspd stpcpy:sps stpncpy:spsd
-		str2sig:dsp strcasecmp:dss strcasestr:sss strcat:sps strchr:ssd strchrnul:ssd strcmp:dss strcpy:sps strcspn:dss strdup:ss
-		strerror:sd strerror_r:ddpd strlcat:dpsd strlcpy:dpsd strlen:ds strncasecmp:dssd strncat:spsd strncmp:dssd strncpy:spsd
-		strndup:ssd strnlen:dsd strpbrk:sss strrchr:ssd strsep:sps strsignal:sd strspn:dss strstr:sss strtok:sps strtok_r:spsp
-		strverscmp:dss swab:vppd symlink:dss symlinkat:dsds sync:v syncfs:dd sysconf:dd sysinfo:dpd tcdrain:dd tcflow:ddd tcflush:ddd
-		tcgetattr:ddpd tcgetpgrp:dd tcgetsid:dd tcgetwinsize:ddpd tcsendbreak:ddd tcsetattr:dddpd tcsetpgrp:ddd tcsetwinsize:ddpd
-		telldir:dp thrd_create:dpdp thrd_current:d thrd_detach:dd thrd_equal:ddd thrd_join:ddp thrd_sleep:dpdpd thrd_yield:v time:dp
-		timegm:dpd timer_create:ddpdp timer_delete:dd timer_getoverrun:dd timer_gettime:ddpd timer_settime:dddpdpd timerfd_create:ddd
-		timerfd_gettime:ddpd timerfd_settime:dddpdpd times:dpd timespec_get:dpdd truncate:dsd tss_create:dpd tss_delete:vd tss_get:pd
-		tss_set:ddp ttyname:sd ttyname_r:ddpd umask:oo umount:ds umount2:dsd uname:dpd unlink:ds unlinkat:ddsd unlockpt:dd unsetenv:ds
-		usleep:dd utime:dspd utimensat:ddspdd utimes:dspd versionsort:dpdpd vfork:d wait:dp wait3:dpdpd wait4:ddpdpd waitid:dddpdd
-		waitpid:ddpd watchdir:ddd write:ddpd writev:ddpdd
+		pthread_attr_destroy:dpd pthread_attr_getdetachstate:dpdp pthread_attr_getguardsize:dpdp pthread_attr_getinheritsched:dpdp
+		pthread_attr_getschedparam:dpdpd pthread_attr_getschedpolicy:dpdp pthread_attr_getscope:dpdp pthread_attr_getstack:dpdpp
+		pthread_attr_getstacksize:dpdp pthread_attr_init:dpd pthread_attr_setdetachstate:dpdd pthread_attr_setguardsize:dpdd
+		pthread_attr_setinheritsched:dpdd pthread_attr_setschedparam:dpdpd pthread_attr_setschedpolicy:dpdd pthread_attr_setscope:dpdd
+		pthread_attr_setstack:dpdpd pthread_attr_setstacksize:dpdd pthread_barrier_destroy:dpd pthread_barrier_init:dpdpdd
+		pthread_barrier_wait:dpd pthread_barrierattr_destroy:dpd pthread_barrierattr_getpshared:dpdp pthread_barrierattr_init:dpd
+		pthread_barrierattr_setpshared:dpdd pthread_cancel:dd pthread_cond_broadcast:dpd pthread_cond_clockwait:dpdpddpd
+		pthread_cond_destroy:dpd pthread_cond_init:dpdpd pthread_cond_signal:dpd pthread_cond_timedwait:dpdpdpd pthread_cond_wait:dpdpd
+		pthread_condattr_destroy:dpd pthread_condattr_getclock:dpdp pthread_condattr_getpshared:dpdp pthread_condattr_init:dpd
+		pthread_condattr_setclock:dpdd pthread_condattr_setpshared:dpdd pthread_create:dppdpp pthread_detach:dd pthread_equal:ddd
+		pthread_getaffinity_np:dddp pthread_getattr_np:ddpd pthread_getcpuclockid:ddp pthread_getname_np:ddpd pthread_getschedparam:ddppd
+		pthread_getspecific:pd pthread_join:ddp pthread_key_create:dpp pthread_key_delete:dd pthread_kill:ddd
+		pthread_mutex_clocklock:dpddpd pthread_mutex_consistent:dpd pthread_mutex_destroy:dpd pthread_mutex_getprioceiling:dpdp
+		pthread_mutex_init:dpdpd pthread_mutex_lock:dpd pthread_mutex_setprioceiling:dpddp pthread_mutex_timedlock:dpdpd
+		pthread_mutex_trylock:dpd pthread_mutex_unlock:dpd pthread_mutexattr_destroy:dpd pthread_mutexattr_getprioceiling:dpdp
+		pthread_mutexattr_getprotocol:dpdp pthread_mutexattr_getpshared:dpdp pthread_mutexattr_getrobust:dpdp
+		pthread_mutexattr_gettype:dpdp pthread_mutexattr_init:dpd pthread_mutexattr_setprioceiling:dpdd pthread_mutexattr_setprotocol:dpdd
+		pthread_mutexattr_setpshared:dpdd pthread_mutexattr_setrobust:dpdd pthread_mutexattr_settype:dpdd
+		pthread_rwlock_clockrdlock:dpddpd pthread_rwlock_clockwrlock:dpddpd pthread_rwlock_destroy:dpd pthread_rwlock_init:dpdpd
+		pthread_rwlock_rdlock:dpd pthread_rwlock_timedrdlock:dpdpd pthread_rwlock_timedwrlock:dpdpd pthread_rwlock_tryrdlock:dpd
+		pthread_rwlock_trywrlock:dpd pthread_rwlock_unlock:dpd pthread_rwlock_wrlock:dpd pthread_rwlockattr_destroy:dpd
+		pthread_rwlockattr_getpshared:dpdp pthread_rwlockattr_init:dpd pthread_rwlockattr_setpshared:dpdd pthread_self:d
+		pthread_setaffinity_np:dddp pthread_setcancelstate:ddp pthread_setcanceltype:ddp pthread_setname_np:dds
+		pthread_setschedparam:dddpd pthread_setschedprio:ddd pthread_setspecific:ddp pthread_sigmask:ddpdpd pthread_spin_destroy:dp
+		pthread_spin_init:dpd pthread_spin_lock:dp pthread_spin_trylock:dp pthread_spin_unlock:dp pthread_timedjoin_np:ddppd
+		pthread_tryjoin_np:ddp ptsname:sd ptsname_r:ddpd putenv:dp pwrite:ddpdd pwritev:ddpddd raise:dd read:ddpd readdir:ppd
+		readdir_r:dppdpd readlink:dspd readlinkat:ddspd readv:ddpdd realloc:ppd reallocarray:ppdd realpath:ssp recv:ddpdd recvfrom:ddpddpp
+		recvmmsg:ddpddddpd recvmsg:ddpddd remove:ds rename:dss renameat:ddsds rewinddir:vp rindex:ssd rmdir:ds sched_get_priority_max:dd
+		sched_get_priority_min:dd sched_getaffinity:dddp sched_getcpu:d sched_getparam:ddpd sched_getscheduler:dd
+		sched_rr_get_interval:ddpd sched_setaffinity:dddp sched_setparam:ddpd sched_setscheduler:dddpd sched_yield:d secure_getenv:ss
+		seekdir:vpd select:ddpdpdpdpd sem_clockwait:dpddpd sem_close:dpd sem_destroy:dpd sem_getvalue:dpdp sem_init:dpddd sem_open:psdpd
+		sem_post:dpd sem_timedwait:dpdpd sem_trywait:dpd sem_unlink:ds sem_wait:dpd semctl:ddddpd semget:dddd semop:ddpdd
+		semtimedop:ddpddpd send:ddpdd sendmmsg:ddpdddd sendmsg:ddpddd sendto:ddpddpd setdomainname:dsd setegid:dd setenv:dssd seteuid:dd
+		setgid:dd setgroups:ddp sethostname:dsd setitimer:ddpdpd setjmp:dpd setpgid:ddd setpgrp:d setpriority:dddd setregid:ddd
+		setresgid:dddd setresuid:dddd setreuid:ddd setrlimit:ddpd setsid:d setsockopt:ddddpd settimeofday:dpdpd setuid:dd shutdown:ddd
+		sigaction:ddpdpdd sigaddset:dpdd sigaltstack:dpdpd sigandset:dpdpdpd sigdelset:dpdd sigemptyset:dpd sigfillset:dpd
+		sigisemptyset:dpd sigismember:dpdd siglongjmp:vpdd signal:ddd sigorset:dpdpdpd sigpending:dpd sigprocmask:ddpdpd sigqueue:dddd
+		sigsetjmp:dpdd sigsuspend:dpd sigtimedwait:dpdpdpd sigwait:dpdp sigwaitinfo:dpdpd sleep:dd sockatmark:dd socket:dddd
+		socketpair:ddddp stat:dspd statfs:dspd statvfs:dspd stpcpy:sps stpncpy:spsd strcasecmp:dss strcasestr:sss strcat:sps strchr:ssd
+		strchrnul:ssd strcmp:dss strcpy:sps strcspn:dss strdup:ss strlcat:dpsd strlcpy:dpsd strlen:ds strncasecmp:dssd strncat:spsd
+		strncmp:dssd strncpy:spsd strndup:ssd strnlen:dsd strpbrk:sss strrchr:ssd strsep:sps strspn:dss strstr:sss strtok:sps
+		strtok_r:spsp strverscmp:dss swab:vppd symlink:dss symlinkat:dsds sync:v syncfs:dd sysconf:dd sysinfo:dpd tcdrain:dd tcflow:ddd
+		tcflush:ddd tcgetattr:ddpd tcgetpgrp:dd tcgetsid:dd tcgetwinsize:ddpd tcsendbreak:ddd tcsetattr:dddpd tcsetpgrp:ddd
+		tcsetwinsize:ddpd telldir:dp thrd_create:dpdp thrd_current:d thrd_detach:dd thrd_equal:ddd thrd_join:ddp thrd_sleep:dpdpd
+		thrd_yield:v time:dp timegm:dpd timer_create:ddpdp timer_delete:dd timer_getoverrun:dd timer_gettime:ddpd timer_settime:dddpdpd
+		timerfd_create:ddd timerfd_gettime:ddpd timerfd_settime:dddpdpd times:dpd timespec_get:dpdd truncate:dsd tss_create:dpd
+		tss_delete:vd tss_get:pd tss_set:ddp ttyname:sd ttyname_r:ddpd umask:oo umount:ds umount2:dsd uname:dpd unlink:ds unlinkat:ddsd
+		unlockpt:dd unsetenv:ds usleep:dd utime:dspd utimensat:ddspdd utimes:dspd versionsort:dpdpd vfork:d wait:dp wait3:dpdpd
+		wait4:ddpdpd waitid:dddpdd waitpid:ddpd watchdir:ddd write:ddpd writev:ddpdd
 `) {
 		name, format, _ := strings.Cut(word, ":")
 

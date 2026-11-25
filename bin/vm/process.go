@@ -63,8 +63,6 @@ const (
 	staticSlash      = 2
 	staticTm         = 8
 	staticCtime      = 56
-	staticStrerror   = 88
-	staticStrsignal  = 184
 	staticStrtok     = 256
 	staticNtoa       = 392
 	staticCrypt      = 408
@@ -1863,33 +1861,6 @@ func (p *Process) libcSem_clockwait(sem, clock, at uint32) uint32 {
 	}
 
 	return p.result(0, p.syncCall(sem, nil, &SyncLock{thread: p.pid, end: end}))
-}
-
-func (p *Process) libcSig2str(sig, out uint32) uint32 {
-	name, ok := signalAbbrev(int(int32(sig)))
-
-	if !ok {
-		return ^uint32(0)
-	}
-
-	b := p.span(out, uint32(len(name))+1)
-
-	copy(b, name)
-	b[len(name)] = 0
-
-	return 0
-}
-
-func (p *Process) libcStr2sig(name, out uint32) uint32 {
-	sig, ok := signalNumbered(p.str(name))
-
-	if !ok {
-		return ^uint32(0)
-	}
-
-	p.put32(out, uint32(sig))
-
-	return 0
 }
 
 func (p *Process) libcTcgetwinsize(fd, at uint32) uint32 {
@@ -11219,14 +11190,6 @@ func (p *Process) libcGethostid() uint32 {
 	return 0
 }
 
-func (p *Process) libcPsignal(sig, s uint32) {
-	p.complain(s, signalMessage(int(sig)))
-}
-
-func (p *Process) libcPsiginfo(info, s uint32) {
-	p.complain(s, signalMessage(int(p.u32(info))))
-}
-
 func (p *Process) libc__assert_fail(expr, file, line, function uint32) {
 	msg := fmt.Sprintf("Assertion failed: %s (%s: %s: %d)\n", p.str(expr), p.str(file), p.str(function), int32(line))
 
@@ -11235,16 +11198,6 @@ func (p *Process) libc__assert_fail(expr, file, line, function uint32) {
 	}
 
 	p.abort()
-}
-
-func (p *Process) complain(prefix uint32, msg string) {
-	if prefix != 0 && p.u8(prefix) != 0 {
-		msg = p.str(prefix) + ": " + msg
-	}
-
-	if t, err := p.fd(2); err == nil {
-		p.fileWrite(t, bytesFile([]byte(msg+"\n")), len(msg)+1, IoMode{})
-	}
 }
 
 func (p *Process) libcGetsubopt(opt, keys, val uint32) uint32 {
@@ -11700,22 +11653,6 @@ func (p *Process) libcAbs(n uint32) uint32 {
 	return n
 }
 
-func (p *Process) libcStrerror(e uint32) uint32 {
-	at := p.staticAt(staticStrerror)
-
-	p.putString(at, truncate(Errno(e).message(), staticStrsignal-staticStrerror-1))
-
-	return at
-}
-
-func (p *Process) libcStrsignal(sig uint32) uint32 {
-	at := p.staticAt(staticStrsignal)
-
-	p.putString(at, truncate(signalMessage(int(sig)), staticStrtok-staticStrsignal-1))
-
-	return at
-}
-
 func (p *Process) libcDirname(s uint32) uint32 {
 	if s == 0 || p.u8(s) == 0 {
 		return p.staticAt(staticDot)
@@ -11801,22 +11738,6 @@ func (p *Process) libcStrtok(s, delim uint32) uint32 {
 	p.put32(save, next)
 
 	return token
-}
-
-func (p *Process) libcStrerror_r(e, buf, n uint32) uint32 {
-	msg := Errno(e).message()
-
-	if uint32(len(msg)) >= n {
-		if n > 0 {
-			p.putString(buf, msg[:n-1])
-		}
-
-		return uint32(ERANGE)
-	}
-
-	p.putString(buf, msg)
-
-	return 0
 }
 
 func (p *Process) libcBasename(s uint32) uint32 {

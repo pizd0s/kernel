@@ -422,18 +422,6 @@ func (e Errno) error() string {
 	return fmt.Sprintf("errno %d", int(e))
 }
 
-func (e Errno) message() string {
-	if e == 0 {
-		return "No error information"
-	}
-
-	if s, ok := errnoMessages[e]; ok {
-		return capitalize(s)
-	}
-
-	return fmt.Sprintf("Unknown error %d", int(e))
-}
-
 func hostErrno(err error) Errno {
 	var e syscall.Errno
 

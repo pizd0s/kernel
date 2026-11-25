@@ -530,7 +530,6 @@ const (
 	SIGSYS                            = 31
 	SIGUNUSED                         = 31
 	SIGRTMIN                          = 34
-	SIGRTMAX                          = 64
 	DT_CHR                            = 2
 	DT_DIR                            = 4
 	DT_BLK                            = 6

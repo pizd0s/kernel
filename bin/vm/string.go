@@ -6,43 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/bits"
-	"strconv"
-	"strings"
 )
-
-var signalMessages = map[int]string{
-	SIGHUP:    "Hangup",
-	SIGINT:    "Interrupt",
-	SIGQUIT:   "Quit",
-	SIGILL:    "Illegal instruction",
-	SIGTRAP:   "Trace/breakpoint trap",
-	SIGABRT:   "Aborted",
-	SIGBUS:    "Bus error",
-	SIGFPE:    "Floating point exception",
-	SIGKILL:   "Killed",
-	SIGUSR1:   "User defined signal 1",
-	SIGSEGV:   "Segmentation fault",
-	SIGUSR2:   "User defined signal 2",
-	SIGPIPE:   "Broken pipe",
-	SIGALRM:   "Alarm clock",
-	SIGTERM:   "Terminated",
-	SIGSTKFLT: "Stack fault",
-	SIGCHLD:   "Child exited",
-	SIGCONT:   "Continued",
-	SIGSTOP:   "Stopped (signal)",
-	SIGTSTP:   "Stopped",
-	SIGTTIN:   "Stopped (tty input)",
-	SIGTTOU:   "Stopped (tty output)",
-	SIGURG:    "Urgent I/O condition",
-	SIGXCPU:   "CPU time limit exceeded",
-	SIGXFSZ:   "File size limit exceeded",
-	SIGVTALRM: "Virtual timer expired",
-	SIGPROF:   "Profiling timer expired",
-	SIGWINCH:  "Window changed",
-	SIGIO:     "I/O possible",
-	SIGPWR:    "Power failure",
-	SIGSYS:    "Bad system call",
-}
 
 var signalNames = map[int]string{
 	SIGHUP:    "SIGHUP",
@@ -77,8 +41,6 @@ var signalNames = map[int]string{
 	SIGPWR:    "SIGPWR",
 	SIGSYS:    "SIGSYS",
 }
-
-var signalAliases = map[string]int{"IOT": SIGABRT, "CLD": SIGCHLD, "POLL": SIGIO, "UNUSED": SIGSYS}
 
 func lower(c byte) byte {
 	if c >= 'A' && c <= 'Z' {
@@ -134,87 +96,12 @@ func truncate(s string, n int) string {
 	return s
 }
 
-func capitalize(s string) string {
-	if s != "" && s[0] >= 'a' && s[0] <= 'z' {
-		return string(s[0]-'a'+'A') + s[1:]
-	}
-
-	return s
-}
-
 func signalName(sig int) string {
 	if s, ok := signalNames[sig]; ok {
 		return s
 	}
 
 	return fmt.Sprintf("signal %d", sig)
-}
-
-func signalAbbrev(sig int) (string, bool) {
-	switch {
-	case sig == SIGRTMIN:
-		return "RTMIN", true
-	case sig == SIGRTMAX:
-		return "RTMAX", true
-	case sig > SIGRTMIN && sig <= (SIGRTMIN+SIGRTMAX)/2:
-		return fmt.Sprintf("RTMIN+%d", sig-SIGRTMIN), true
-	case sig > SIGRTMIN && sig < SIGRTMAX:
-		return fmt.Sprintf("RTMAX-%d", SIGRTMAX-sig), true
-	case sig < 1 || sig >= NSIG:
-		return "", false
-	}
-
-	if s, ok := signalNames[sig]; ok {
-		return s[3:], true
-	}
-
-	return strconv.Itoa(sig), true
-}
-
-func signalNumbered(name string) (int, bool) {
-	for sig := 1; sig < NSIG; sig++ {
-		if s, _ := signalAbbrev(sig); s == name {
-			return sig, true
-		}
-	}
-
-	if sig, ok := signalAliases[name]; ok {
-		return sig, true
-	}
-
-	for _, form := range []struct {
-		prefix string
-		base   int
-		sign   int
-	}{{"RTMIN+", SIGRTMIN, 1}, {"RTMAX-", SIGRTMAX, -1}} {
-		if digits, ok := strings.CutPrefix(name, form.prefix); ok {
-			n, err := strconv.Atoi(digits)
-
-			if err == nil && digits[0] != '+' && digits[0] != '-' && n >= 1 && n < SIGRTMAX-SIGRTMIN {
-				return form.base + form.sign*n, true
-			}
-
-			return 0, false
-		}
-	}
-
-	if n, err := strconv.Atoi(name); err == nil && name[0] != '+' && name[0] != '-' && n >= 1 && n < NSIG {
-		return n, true
-	}
-
-	return 0, false
-}
-
-func signalMessage(sig int) string {
-	if sig >= SIGRTMIN && sig <= SIGRTMAX {
-		return fmt.Sprintf("Real-time signal %d", sig-SIGRTMIN)
-	}
-
-	if s, ok := signalMessages[sig]; ok {
-		return s
-	}
-
-	return fmt.Sprintf("Unknown signal %d", sig)
 }
 
 func strverscmp(a, b []byte) int {

@@ -814,14 +814,6 @@ func libcAbs(n uint32) uint32 {
 	return proc().libcAbs(n)
 }
 
-func libcStrerror(e uint32) uint32 {
-	return proc().libcStrerror(e)
-}
-
-func libcStrsignal(sig uint32) uint32 {
-	return proc().libcStrsignal(sig)
-}
-
 func libcDirname(s uint32) uint32 {
 	return proc().libcDirname(s)
 }
@@ -844,10 +836,6 @@ func libcSwab(s, d, n uint32) {
 
 func libcStrtok(s, delim uint32) uint32 {
 	return proc().libcStrtok(s, delim)
-}
-
-func libcStrerror_r(e, buf, n uint32) uint32 {
-	return proc().libcStrerror_r(e, buf, n)
 }
 
 func libcBasename(s uint32) uint32 {
@@ -1844,18 +1832,6 @@ func libcSetdomainname(name, n uint32) uint32 {
 
 func libcGethostid() uint32 {
 	return proc().libcGethostid()
-}
-
-func libcPsignal(sig, s uint32) {
-	proc().libcPsignal(sig, s)
-}
-
-func libcPsiginfo(info, infoSize, s uint32) {
-	p := proc()
-
-	p.sized("psiginfo", infoSize, sizeofSiginfo)
-
-	p.libcPsiginfo(info, s)
 }
 
 func libc__assert_fail(expr, file, line, function uint32) {
@@ -3241,14 +3217,6 @@ func libcSem_clockwait(sem, semSize, clock, at, atSize uint32) uint32 {
 	p.sized("sem_clockwait", semSize, sizeofSem, atSize, sizeofTimespec)
 
 	return p.libcSem_clockwait(sem, clock, at)
-}
-
-func libcSig2str(sig, out uint32) uint32 {
-	return proc().libcSig2str(sig, out)
-}
-
-func libcStr2sig(name, out uint32) uint32 {
-	return proc().libcStr2sig(name, out)
 }
 
 func libcTcgetwinsize(fd, size, sizeSize uint32) uint32 {
