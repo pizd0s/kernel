@@ -1,0 +1,40 @@
+A bracket's class, [:name:], which POSIX's patterns have, as a bracket
+expression of the regular expressions has: FreeBSD 14's fnmatch has
+none. Of wctype's names; with FNM_CASEFOLD, of either case.
+
+--- a/lib/libc/gen/fnmatch.c
++++ b/lib/libc/gen/fnmatch.c
+@@ -236,7 +236,7 @@
+ 	int negate, ok;
+ 	wchar_t c, c2;
+ 	size_t pclen;
+-	const char *origpat;
++	const char *origpat, *end;
+ 	struct xlocale_collate *table =
+ 		(struct xlocale_collate*)__get_locale()->components[XLC_COLLATE];
+ 
+@@ -268,6 +268,24 @@
+ 			return (RANGE_ERROR);
+ 		} else if (*pattern == '/' && (flags & FNM_PATHNAME)) {
+ 			return (RANGE_NOMATCH);
++		} else if (*pattern == '[' && pattern[1] == ':' &&
++		    (end = strstr(pattern + 2, ":]")) != NULL) {
++			/* A class, [:name:], of wctype's names; of either case
++			 * with FNM_CASEFOLD. */
++			char name[16];
++			wctype_t class = 0;
++
++			if ((size_t)(end - pattern - 2) < sizeof(name)) {
++				memcpy(name, pattern + 2, end - pattern - 2);
++				name[end - pattern - 2] = '\0';
++				class = wctype(name);
++			}
++			if (class != 0 && (iswctype(test, class) ||
++			    ((flags & FNM_CASEFOLD) &&
++			    iswctype(towupper(test), class))))
++				ok = 1;
++			pattern = end + 2;
++			continue;
+ 		} else if (*pattern == '\\' && !(flags & FNM_NOESCAPE))
+ 			pattern++;
+ 		pclen = mbrtowc(&c, pattern, MB_LEN_MAX, patmbs);

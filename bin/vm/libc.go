@@ -774,10 +774,6 @@ func libcAbs(n uint32) uint32 {
 	return proc().libcAbs(n)
 }
 
-func libcFnmatch(pattern, s, flags uint32) uint32 {
-	return proc().libcFnmatch(pattern, s, flags)
-}
-
 func libcMemrchr(s, c, n uint32) uint32 {
 	return proc().libcMemrchr(s, c, n)
 }
@@ -1648,22 +1644,6 @@ func libcPtsname(fd uint32) uint32 {
 
 func libcPtsname_r(fd, buf, size uint32) uint32 {
 	return proc().libcPtsname_r(fd, buf, size)
-}
-
-func libc__glob_home(pattern, flags, errfunc, out, outSize, home uint32) uint32 {
-	p := proc()
-
-	p.sized("glob", outSize, sizeofGlob)
-
-	return p.libc__glob_home(pattern, flags, errfunc, out, home)
-}
-
-func libcGlobfree(out, outSize uint32) {
-	p := proc()
-
-	p.sized("globfree", outSize, sizeofGlob)
-
-	p.libcGlobfree(out)
 }
 
 func libcPrctl(option, va uint32) uint32 {

@@ -302,9 +302,10 @@ lib/libc/stdlib/random.c
 # The environment: getenv, secure_getenv, setenv, putenv, unsetenv and
 # clearenv.
 lib/libc/stdlib/getenv.c
-# The rest: basename and dirname, getsubopt, strverscmp, mktemp, mkstemp
-# and their kind, and inet_aton, inet_addr, inet_ntoa, inet_ntop and
-# inet_pton.
+# The rest: basename and dirname, fnmatch, getsubopt, strverscmp, mktemp,
+# mkstemp and their kind, and inet_aton, inet_addr, inet_ntoa, inet_ntop
+# and inet_pton.
+lib/libc/gen/fnmatch.c
 lib/libc/gen/basename.c
 lib/libc/gen/dirname.c
 lib/libc/stdlib/getsubopt.c

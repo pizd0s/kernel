@@ -43,3 +43,8 @@ int __collate_range_cmp(char c1, char c2) {
 
     return (a > b) - (a < b);
 }
+
+// And of a range of wide characters, fnmatch's and regcomp's: their values'.
+int __wcollate_range_cmp(wchar_t c1, wchar_t c2) {
+    return (c1 > c2) - (c1 < c2);
+}

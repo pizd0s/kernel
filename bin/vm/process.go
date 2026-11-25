@@ -7363,44 +7363,6 @@ func (p *Process) openPath(path string, flags int, mode uint32) (Object, error) 
 	return p.openAt(AT_FDCWD, path, flags, mode)
 }
 
-func (p *Process) dirNames(path string) ([]string, error) {
-	d, err := p.openPath(path, O_RDONLY|O_DIRECTORY, 0)
-
-	if err != nil {
-		return nil, err
-	}
-
-	defer d.unref()
-
-	var names []string
-
-	buf := make([]byte, 4096)
-	file := bytesFile(buf)
-
-	for {
-		n, err := p.fileReaddir(d, file, len(buf))
-
-		if err != nil || n == 0 {
-			return names, err
-		}
-
-		for at := 0; at+19 <= n; {
-			reclen := int(binary.LittleEndian.Uint16(buf[at+16:]))
-			name := buf[at+19 : at+reclen]
-
-			if end := bytes.IndexByte(name, 0); end >= 0 {
-				name = name[:end]
-			}
-
-			if string(name) != "." && string(name) != ".." {
-				names = append(names, string(name))
-			}
-
-			at += reclen
-		}
-	}
-}
-
 func (p *Process) mkdir(dirfd int32, path string, mode uint32) error {
 	return p.onPath(dirfd, path, func(d Object) error {
 		return p.dirMkdir(d, path, mode&0o7777&^p.umask)
@@ -11053,14 +11015,6 @@ func (p *Process) libcAbs(n uint32) uint32 {
 	return n
 }
 
-func (p *Process) libcFnmatch(pattern, s, flags uint32) uint32 {
-	if fnmatch(p.cstr(pattern), p.cstr(s), int(flags), true) {
-		return 0
-	}
-
-	return 1
-}
-
 func (p *Process) libcMemrchr(s, c, n uint32) uint32 {
 	if i := bytes.LastIndexByte(p.span(s, n), byte(c)); i >= 0 {
 		return s + uint32(i)
@@ -11406,126 +11360,6 @@ func (p *Process) libcIconv_close(cd uint32) uint32 {
 	delete(p.iconvs, cd)
 
 	return p.result(0, nil)
-}
-
-func (p *Process) glob(pattern, flags, errfunc, out, home uint32) uint32 {
-	g := &Globber{p: p, flags: flags, errfunc: errfunc}
-
-	if home != 0 {
-		g.home = p.str(home)
-	}
-
-	offs := uint32(0)
-
-	if flags&GLOB_DOOFFS != 0 {
-		offs = p.u32(out + 8)
-	}
-
-	if flags&GLOB_APPEND == 0 {
-		p.put32(out, 0)
-		p.put32(out+4, 0)
-		p.put32(out+8, offs)
-	}
-
-	pat, ok := g.tilde(p.str(pattern))
-
-	if !ok || pat == "" {
-		return GLOB_NOMATCH
-	}
-
-	if strings.HasPrefix(pat, "/") {
-		g.walk("/", strings.Split(pat[1:], "/"))
-	} else {
-		g.walk("", strings.Split(pat, "/"))
-	}
-
-	if g.aborted {
-		return GLOB_ABORTED
-	}
-
-	if len(g.found) == 0 {
-		if flags&GLOB_NOCHECK == 0 {
-			return GLOB_NOMATCH
-		}
-
-		g.found = []string{p.str(pattern)}
-	}
-
-	if flags&GLOB_NOSORT == 0 {
-		slices.Sort(g.found)
-	}
-
-	if flags&GLOB_MARK != 0 {
-		for i, name := range g.found {
-			var st Stat
-
-			isDir := p.statPath(name, true, &st) == nil && st.Mode&S_IFMT == S_IFDIR
-
-			if isDir && !strings.HasSuffix(name, "/") {
-				g.found[i] = name + "/"
-			}
-		}
-	}
-
-	count, old := p.u32(out), p.u32(out+4)
-	total := uint64(offs) + uint64(count) + uint64(len(g.found)) + 1
-
-	if total*4 > heapMax {
-		return GLOB_NOSPACE
-	}
-
-	pathv := p.malloc(uint32(total * 4))
-
-	if pathv == 0 {
-		return GLOB_NOSPACE
-	}
-
-	clear(p.span(pathv, offs*4))
-
-	if old != 0 {
-		copy(p.span(pathv+offs*4, count*4), p.span(old+offs*4, count*4))
-	}
-
-	for i, name := range g.found {
-		s := p.newString(name)
-
-		if s == 0 {
-			p.put32(pathv+(offs+count+uint32(i))*4, 0)
-			p.globFree(pathv, offs, count+uint32(i))
-
-			return GLOB_NOSPACE
-		}
-
-		p.put32(pathv+(offs+count+uint32(i))*4, s)
-	}
-
-	p.put32(pathv+(offs+count+uint32(len(g.found)))*4, 0)
-	p.free(old)
-	p.put32(out, count+uint32(len(g.found)))
-	p.put32(out+4, pathv)
-
-	return 0
-}
-
-func (p *Process) globFree(pathv, offs, count uint32) {
-	for i := range count {
-		p.free(p.u32(pathv + (offs+i)*4))
-	}
-
-	p.free(pathv)
-}
-
-func (p *Process) libcGlobfree(out uint32) {
-	if pathv := p.u32(out + 4); pathv != 0 {
-		p.globFree(pathv, p.u32(out+8), p.u32(out))
-	}
-
-	p.put32(out, 0)
-	p.put32(out+4, 0)
-}
-
-func (p *Process) libc__glob_home(pattern, flags, errfunc, out, home uint32) uint32 {
-	return p.glob(pattern, flags, errfunc, out, home)
 }
 
 func (p *Process) sized(call string, sizes ...uint32) {

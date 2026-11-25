@@ -30,7 +30,6 @@ TYPES = {
     "sizeofEpollEvent": "struct epoll_event",
     "sizeofFdSet": "fd_set",
     "sizeofFlock": "struct flock",
-    "sizeofGlob": "glob_t",
     "sizeofIovec": "struct iovec",
     "sizeofItimerval": "struct itimerval",
     "sizeofItimerspec": "struct itimerspec",

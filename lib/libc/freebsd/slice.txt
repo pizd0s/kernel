@@ -163,3 +163,4 @@ sys/crypto/sha2/sha512.h
 sys/crypto/sha2/sha512c.c
 sys/crypto/sha2/sha512c_impl.h
 sys/crypto/sha2/sha512t.h
+lib/libc/gen/fnmatch.c

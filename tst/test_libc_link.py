@@ -20,7 +20,7 @@ import exe  # noqa: E402
 
 SOURCE = Path(__file__).resolve().parent / "link" / "check.c"
 REACHED = {"__kernel_dbm_open", "__kernel_dbm_close"}
-CALLS = {"__call_signal_handler", "__call_signal_action", "__call_glob_error"}
+CALLS = {"__call_signal_handler", "__call_signal_action"}
 UNREACHED = {"__kernel_dbm_store", "__kernel_dbm_delete", "__kernel_dbm_fetch", "__kernel_dbm_firstkey", "__kernel_dbm_nextkey"}
 
 
