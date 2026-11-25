@@ -284,7 +284,6 @@ const (
 	NS_DEFAULTPORT                    = 53
 	DBM_INSERT                        = 0
 	DBM_REPLACE                       = 1
-	NL_CAT_LOCALE                     = 1
 	SOCK_NONBLOCK                     = 0o4000
 	SOCK_CLOEXEC                      = 0o2000000
 	MSG_DONTWAIT                      = 0x40

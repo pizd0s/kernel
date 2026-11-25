@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <libintl.h>
 #include <limits.h>
+#include <locale.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -122,5 +123,30 @@ char* __kernel_ngettext(const char* one, const char* many, unsigned long n) {
 }
 
 char* __kernel_gettext(const char* message) {
+    return (char*)message;
+}
+
+// The _l functions: as those without the locale, of which lib/c has one.
+char* __kernel_dcngettext_l(const char* domain, const char* one, const char* many, unsigned long n, int category, locale_t locale) {
+    return (char*)(n == 1 ? one : many);
+}
+
+char* __kernel_dcgettext_l(const char* domain, const char* message, int category, locale_t locale) {
+    return (char*)message;
+}
+
+char* __kernel_dngettext_l(const char* domain, const char* one, const char* many, unsigned long n, locale_t locale) {
+    return (char*)(n == 1 ? one : many);
+}
+
+char* __kernel_dgettext_l(const char* domain, const char* message, locale_t locale) {
+    return (char*)message;
+}
+
+char* __kernel_ngettext_l(const char* one, const char* many, unsigned long n, locale_t locale) {
+    return (char*)(n == 1 ? one : many);
+}
+
+char* __kernel_gettext_l(const char* message, locale_t locale) {
     return (char*)message;
 }

@@ -2796,18 +2796,6 @@ func libcNs_name_uncompress(msg, eom, src, dst, size uint32) uint32 {
 	return proc().libcNs_name_uncompress(msg, eom, src, dst, size)
 }
 
-func libcCatopen(name, oflag uint32) uint32 {
-	return proc().libcCatopen(name, oflag)
-}
-
-func libcCatgets(catd, set, msg, s uint32) uint32 {
-	return proc().libcCatgets(catd, set, msg, s)
-}
-
-func libcCatclose(catd uint32) uint32 {
-	return proc().libcCatclose(catd)
-}
-
 func libcCrypt(key, setting uint32) uint32 {
 	return proc().libcCrypt(key, setting)
 }
@@ -4235,30 +4223,6 @@ func libcUselocale(locale uint32) uint32 {
 
 func libcGetlocalename_l(category, locale uint32) uint32 {
 	return proc().libcGetlocalename_l(category, locale)
-}
-
-func libcGettext_l(message, locale uint32) uint32 {
-	return proc().libcGettext_l(message, locale)
-}
-
-func libcDgettext_l(domain, message, locale uint32) uint32 {
-	return proc().libcDgettext_l(domain, message, locale)
-}
-
-func libcDcgettext_l(domain, message, category, locale uint32) uint32 {
-	return proc().libcDcgettext_l(domain, message, category, locale)
-}
-
-func libcNgettext_l(one, many, n, locale uint32) uint32 {
-	return proc().libcNgettext_l(one, many, n, locale)
-}
-
-func libcDngettext_l(domain, one, many, n, locale uint32) uint32 {
-	return proc().libcDngettext_l(domain, one, many, n, locale)
-}
-
-func libcDcngettext_l(domain, one, many, n, category, locale uint32) uint32 {
-	return proc().libcDcngettext_l(domain, one, many, n, category, locale)
 }
 
 func libcPosix_getdents(fd, buf, n, flags uint32) uint32 {
