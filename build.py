@@ -29,6 +29,7 @@ CLANG = tool("clang")
 CLANGXX = tool("clang++")
 LLVM_AR = tool("llvm-ar")
 LLVM_RANLIB = tool("llvm-ranlib")
+LLVM_NM = tool("llvm-nm")
 WASM_LD = tool("wasm-ld")
 GO = tool("go")
 
@@ -482,7 +483,7 @@ libc_wasm = command(
     ],
     outputs=["$(B)/lib/libc/libc.wasm"],
     deps=[freebsd_slice, llvm_libc_slice, arm_tarball],
-    cmd=["python3", "$(S)/lib/libc/make.py", CLANG, WASM_LD, freebsd_slice.outputs[0], llvm_libc_slice.outputs[0],
+    cmd=["python3", "$(S)/lib/libc/make.py", CLANG, WASM_LD, LLVM_NM, freebsd_slice.outputs[0], llvm_libc_slice.outputs[0],
          arm_tarball.outputs[0], "$(B)/lib/libc/libc.wasm"],
     descr="CC",
     color="green",

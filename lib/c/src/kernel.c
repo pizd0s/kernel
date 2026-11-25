@@ -117,9 +117,14 @@
 /*
  * The forwarders are weak: kernel.o is one object, which a program takes
  * whole for any of them, and a function of the program's own of one's name
- * is the program's, as with a static C library.
+ * is the program's, as with a static C library. libc.wasm's copy has them
+ * strong, WEAK empty, so that its link time optimization puts them in its
+ * calls; a function of its own of a forwarder's name is linked first and
+ * is the one (lib/libc/make.py).
  */
+#ifndef WEAK
 #define WEAK __attribute__((__weak__))
+#endif
 
 #define KERNEL(ret, name, params, args) \
     ret __kernel_##name params __KERNEL(name); \

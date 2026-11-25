@@ -5,7 +5,7 @@ entry and the compiler's runtime). The kernel links those a program imports,
 and what they reach, into the program before it compiles it
 (bin/vm/wasm_linker.go); the rest of its functions are its Go.
 
-    make.py <cc> <wasm-ld> <freebsd-slice> <llvm-slice> <arm-tarball> <libc.wasm>
+    make.py <cc> <wasm-ld> <llvm-nm> <freebsd-slice> <llvm-slice> <arm-tarball> <libc.wasm>
 
 A program imports the kernel's function X as ("kernel", X), by lib/c's
 declaration of it in lib/c/src/kernel.c, and libc.wasm's function
@@ -18,8 +18,13 @@ names each __kernel_X beside, where the import is of the function's type.
 
 libc.wasm is a relocatable object (wasm-ld -r) of all of them with lib/c's
 forwarders, kernel.c, through which they call the kernel as a program does,
-and its compiler's runtime, builtins.c. The forwarders are weak, so the
-function of a forwarder's name that libc.wasm has is the one it calls. A
+and its compiler's runtime, builtins.c. They are linked as one program of
+link time optimization, which puts the forwarders in their calls: a call
+of the kernel's Go is its import, one of libc.wasm's own __kernel_X that
+function. libc.wasm's forwarders are strong, as no program's function
+takes their place there, but those of a name a source defines: they are
+weak, #pragma weak, and linked after, so the source's function is the
+one, its __kernel_X beside it. A
 function a source here exports (export_name) the kernel links into every
 program and exports from it by its name: the kernel calls the program's
 functions through them (start.c).
@@ -170,6 +175,14 @@ def arm(tree, work):
     return sources
 
 
+def defined(nm, objects):
+    """The names the objects, bitcode, define for others."""
+    listing = subprocess.run([nm, "--defined-only", "--extern-only", "--format=just-symbols", *map(str, objects)],
+                             check=True, capture_output=True, text=True).stdout
+
+    return {line.strip() for line in listing.splitlines() if line.strip() and not line.endswith(":")}
+
+
 def relocatable(ld, output, objects):
     """One object of many (wasm-ld -r), their names in a file: there are
     more than a command line holds."""
@@ -179,7 +192,7 @@ def relocatable(ld, output, objects):
 
 
 def main():
-    cc, ld, freebsd_slice, llvm_slice, arm_tarball, output = sys.argv[1:7]
+    cc, ld, nm, freebsd_slice, llvm_slice, arm_tarball, output = sys.argv[1:8]
     work = Path(os.environ.get("TMPDIR") or "/tmp") / "libc.wasm"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -247,15 +260,27 @@ def main():
 
         seen[obj] = source
 
+    # The program's forwarders, of which the imports and their types are,
+    # and the compiler's runtime, plain objects; the sources, bitcode.
     forwarders = (LIBC / "src" / "kernel.c", objects / "kernel.o", FORWARDER_FLAGS)
     runtime = (LIBC / "src" / "builtins.c", objects / "builtins.o", FORWARDER_FLAGS)
-    wasm.compile_all(cc, [*units, forwarders, runtime])
+    wasm.compile_all(cc, [*((source, obj, [*flags, "-flto"]) for source, obj, flags in units), forwarders, runtime])
+
+    # libc.wasm's forwarders: bitcode too, strong but those of a name a
+    # source defines, which are weak and linked after them, so that the
+    # source's function is the one.
+    own = defined(nm, [obj for source, obj, flags in units])
+    weak = work / "weak.h"
+    weak.write_text("".join(f"#pragma weak {name}\n" for name in sorted(own & set(symbols.Object(forwarders[1].read_bytes()).defined()))))
+    inlined = (LIBC / "src" / "kernel.c", objects / "forwarders.o", [*FORWARDER_FLAGS, "-flto", "-DWEAK=", "-include", str(weak)])
+    wasm.compile_all(cc, [inlined])
 
     functions = work / "functions.o"
-    relocatable(ld, functions, [obj for source, obj, flags in units])
-    functions.write_bytes(symbols.named(functions.read_bytes(), forwarders[1].read_bytes()))
+    relocatable(ld, functions, [*(obj for source, obj, flags in units), inlined[1]])
+    functions.write_bytes(symbols.Object(functions.read_bytes()).with_import_names())
+    functions.write_bytes(symbols.named(functions.read_bytes(), forwarders[1].read_bytes(), own))
     Path(output).parent.mkdir(parents=True, exist_ok=True)
-    relocatable(ld, Path(output), [functions, forwarders[1], runtime[1]])
+    relocatable(ld, Path(output), [functions, runtime[1]])
 
 
 if __name__ == "__main__":
