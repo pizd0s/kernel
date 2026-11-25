@@ -253,7 +253,7 @@ func newInstance(pool *Pool, by *Process, c *Code, stack uint64) (*Instance, err
 		i.setMemory()
 
 		i.memfd = &MemfdFile{ObjectIdent: newObjectIdent(), mem: i.memory, n: -1, mode: O_RDWR, ino: memfdInodes.Add(1)}
-		i.memfd.refs.Store(1)
+		i.memfd.desc = held(i.memfd)
 	}
 
 	for _, t := range meta.tables {
@@ -354,21 +354,22 @@ func (i *Instance) window(at, n int64, mode int) *MemfdFile {
 	}
 
 	f.mem, f.at, f.n, f.mode, f.off, f.held = i.memory, at, n, mode, 0, true
-	f.refs.Store(1)
+	f.desc = held(f)
 	i.holds.Add(1)
 
 	return f
 }
 
 func (i *Instance) windowDone(f *MemfdFile) {
-	if f.mem != i.memory || f.refs.Load() != 1 || len(i.windows) >= windowsKept {
-		f.unref()
+	if f.mem != i.memory || f.desc.holders.Load() != 1 || len(i.windows) >= windowsKept {
+		f.desc.release()
 
 		return
 	}
 
-	f.refs.Store(0)
+	f.desc = nil
 	f.mem = nil
+
 	i.windows = append(i.windows, f)
 	i.unhold()
 }

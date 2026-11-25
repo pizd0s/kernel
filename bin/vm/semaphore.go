@@ -2,13 +2,11 @@ package main
 
 import (
 	"sync"
-	"sync/atomic"
 )
 
 type Semaphore struct {
 	ObjectIdent
 
-	refs    atomic.Int32
 	mu      sync.Mutex
 	value   uint32
 	waiting Waiters[Turn]
@@ -21,17 +19,10 @@ type Semaphore struct {
 func newSemaphore(value uint32) *Semaphore {
 	s := &Semaphore{ObjectIdent: newObjectIdent(), value: value}
 
-	s.refs.Store(1)
-
 	return s
 }
 
-func (s *Semaphore) ref() {
-	s.refs.Add(1)
-}
-
-func (s *Semaphore) unref() {
-	s.refs.Add(-1)
+func (s *Semaphore) closed() {
 }
 
 func (s *Semaphore) poll(events int16, through []*Epoll) int16 {
@@ -58,7 +49,6 @@ func (s *Semaphore) call(p *Process, r Request, group uint32, waits bool) (bool,
 		return false, nil
 	case *SyncCopy:
 		if s.name != "" {
-			s.ref()
 			r.copy = s
 
 			return false, nil

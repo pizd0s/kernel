@@ -15,7 +15,7 @@ type MemfdFile struct {
 	n    int64
 	mode int
 	held bool
-	refs atomic.Int32
+	desc *Description
 
 	mu  sync.Mutex
 	off int64
@@ -25,7 +25,7 @@ type MemfdFile struct {
 func newMemfd(mem *LinearMemory, at, n int64, mode int) *MemfdFile {
 	f := &MemfdFile{ObjectIdent: newObjectIdent(), mem: mem, at: at, n: n, mode: mode, ino: memfdInodes.Add(1)}
 
-	f.refs.Store(1)
+	f.desc = held(f)
 
 	if mem.owner != nil {
 		mem.owner.holds.Add(1)
@@ -58,12 +58,8 @@ func narrowed(mode, to int) int {
 	return mode
 }
 
-func (f *MemfdFile) ref() {
-	f.refs.Add(1)
-}
-
-func (f *MemfdFile) unref() {
-	if f.refs.Add(-1) == 0 && f.held {
+func (f *MemfdFile) closed() {
+	if f.held {
 		f.mem.owner.unhold()
 	}
 }
@@ -264,7 +260,7 @@ func (f *MemfdFile) copyTo(p *Process, out Object, from, to int64, n int) (int, 
 	part := f.splice(from, n, O_RDONLY)
 	count, err := p.filePwrite(out, part, n, to)
 
-	part.unref()
+	part.desc.release()
 
 	return count, err
 }
@@ -286,7 +282,7 @@ func (f *MemfdFile) copyFrom(p *Process, in Object, from, to int64, n int) (int,
 	part := f.splice(to, n, O_WRONLY)
 	count, err := p.filePread(in, part, n, from)
 
-	part.unref()
+	part.desc.release()
 
 	return count, err
 }

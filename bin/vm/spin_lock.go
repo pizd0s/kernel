@@ -2,13 +2,11 @@ package main
 
 import (
 	"sync"
-	"sync/atomic"
 )
 
 type SpinLock struct {
 	ObjectIdent
 
-	refs  atomic.Int32
 	mu    sync.Mutex
 	owner int32
 }
@@ -16,17 +14,10 @@ type SpinLock struct {
 func newSpinLock() *SpinLock {
 	l := &SpinLock{ObjectIdent: newObjectIdent()}
 
-	l.refs.Store(1)
-
 	return l
 }
 
-func (l *SpinLock) ref() {
-	l.refs.Add(1)
-}
-
-func (l *SpinLock) unref() {
-	l.refs.Add(-1)
+func (l *SpinLock) closed() {
 }
 
 func (l *SpinLock) poll(events int16, through []*Epoll) int16 {

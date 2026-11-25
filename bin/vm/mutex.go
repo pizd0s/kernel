@@ -3,13 +3,11 @@ package main
 import (
 	"math"
 	"sync"
-	"sync/atomic"
 )
 
 type Mutex struct {
 	ObjectIdent
 
-	refs  atomic.Int32
 	mu    sync.Mutex
 	kind  uint32
 	owner int32
@@ -19,17 +17,10 @@ type Mutex struct {
 func newMutex(kind uint32) *Mutex {
 	m := &Mutex{ObjectIdent: newObjectIdent(), kind: kind}
 
-	m.refs.Store(1)
-
 	return m
 }
 
-func (m *Mutex) ref() {
-	m.refs.Add(1)
-}
-
-func (m *Mutex) unref() {
-	m.refs.Add(-1)
+func (m *Mutex) closed() {
 }
 
 func (m *Mutex) poll(events int16, through []*Epoll) int16 {

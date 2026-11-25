@@ -3,35 +3,22 @@ package main
 import (
 	"encoding/binary"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
 type RemoteFD struct {
-	end  Object
-	refs atomic.Int32
+	end  *Description
+	desc *Description
 
 	mu       sync.Mutex
 	watchers Subscribers
 	key      FileKey
 	access   int
 	ready    int16
-
-	locks *LockTable
 }
 
-func (f *RemoteFD) ref() {
-	f.refs.Add(1)
-}
-
-func (f *RemoteFD) unref() {
-	if f.refs.Add(-1) == 0 {
-		if f.locks != nil {
-			f.locks.forget(f)
-		}
-
-		f.end.unref()
-	}
+func (f *RemoteFD) closed() {
+	f.end.release()
 }
 
 func (f *RemoteFD) subscribe(s *Subscription, events int16) {
@@ -66,6 +53,12 @@ func (f *RemoteFD) deliver(pk *Packet) {
 		return
 	}
 
+	if len(pk.data) >= remoteHeader && binary.LittleEndian.Uint32(pk.data) == rMove && len(pk.files) == 1 {
+		f.desc.adopt(pk.files[0])
+
+		return
+	}
+
 	if len(pk.data) >= remoteHeader && binary.LittleEndian.Uint32(pk.data) == rReady {
 		f.mu.Lock()
 		f.ready = readiness(binary.LittleEndian.Uint32(pk.data[4:]))
@@ -76,7 +69,7 @@ func (f *RemoteFD) deliver(pk *Packet) {
 	dropFiles(pk.files)
 }
 
-func (f *RemoteFD) exchange(p *Process, data []byte, files []Object, interruptible bool) (pk Packet, cancelled bool, err error) {
+func (f *RemoteFD) exchange(p *Process, data []byte, files []*Description, interruptible bool) (pk Packet, cancelled bool, err error) {
 	if interruptible && p.interrupts(true) {
 		return Packet{}, false, EINTR
 	}
@@ -85,7 +78,7 @@ func (f *RemoteFD) exchange(p *Process, data []byte, files []Object, interruptib
 
 	defer a.leave()
 
-	if _, err := p.sockSend(f.end, &Packet{data: data, files: append(files, a)}, Address{}, IoMode{quiet: true, kernel: true}); err != nil {
+	if _, err := p.sockSend(f.end.object(), &Packet{data: data, files: append(files, newDescription(a))}, Address{}, IoMode{quiet: true, kernel: true}); err != nil {
 		return Packet{}, false, EIO
 	}
 
@@ -178,5 +171,5 @@ func (f *RemoteFD) call(p *Process, r Request, group uint32, waits bool) (bool, 
 }
 
 func (f *RemoteFD) objectID() uint64 {
-	return f.end.objectID()
+	return f.end.object().objectID()
 }

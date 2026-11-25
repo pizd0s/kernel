@@ -12,7 +12,7 @@ func (r *FileSetfl) unserved() error {
 	return EBADF
 }
 
-func (r *FileSetfl) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *FileSetfl) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return uint32(r.flags & (O_APPEND | O_NONBLOCK)), b, nil
 }
 

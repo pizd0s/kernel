@@ -8,28 +8,19 @@ import (
 type DiskFile struct {
 	ObjectIdent
 
-	fd   int
-	refs atomic.Int32
-	pos  atomic.Int64
-	ino  uint64
+	fd  int
+	pos atomic.Int64
+	ino uint64
 }
 
 func newDiskFile(fd int) *DiskFile {
 	f := &DiskFile{ObjectIdent: newObjectIdent(), fd: fd, ino: pipeInodes.Add(1)}
 
-	f.refs.Store(1)
-
 	return f
 }
 
-func (f *DiskFile) ref() {
-	f.refs.Add(1)
-}
-
-func (f *DiskFile) unref() {
-	if f.refs.Add(-1) == 0 {
-		syscall.Close(f.fd)
-	}
+func (f *DiskFile) closed() {
+	syscall.Close(f.fd)
 }
 
 func (f *DiskFile) size() (int64, error) {

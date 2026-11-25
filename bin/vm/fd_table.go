@@ -17,33 +17,33 @@ func (t *FdTable) size() int {
 }
 
 func (t *FdTable) at(fd int) (Descriptor, bool) {
-	if fd < 0 || fd >= len(t.slots) || t.slots[fd].obj == nil {
+	if fd < 0 || fd >= len(t.slots) || t.slots[fd].desc == nil {
 		return Descriptor{}, false
 	}
 
 	return t.slots[fd], true
 }
 
-func (t *FdTable) put(fd int, obj Object, cloexec bool) {
+func (t *FdTable) put(fd int, d *Description, cloexec bool) {
 	if fd >= len(t.slots) {
 		t.slots = append(t.slots, make([]Descriptor, fd+1-len(t.slots))...)
 	}
 
-	t.slots[fd] = Descriptor{obj: obj, cloexec: cloexec}
+	t.slots[fd] = Descriptor{desc: d, cloexec: cloexec}
 	t.used.set(fd)
 }
 
-func (t *FdTable) take(fd int) Object {
-	if fd < 0 || fd >= len(t.slots) || t.slots[fd].obj == nil {
+func (t *FdTable) take(fd int) *Description {
+	if fd < 0 || fd >= len(t.slots) || t.slots[fd].desc == nil {
 		return nil
 	}
 
-	obj := t.slots[fd].obj
+	d := t.slots[fd].desc
 
 	t.slots[fd] = Descriptor{}
 	t.used.clear(fd)
 
-	return obj
+	return d
 }
 
 func (t *FdTable) lowest(min int) int {
@@ -172,6 +172,6 @@ func (t *FdTree) clone() FdTree {
 }
 
 type Descriptor struct {
-	obj     Object
+	desc    *Description
 	cloexec bool
 }

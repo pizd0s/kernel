@@ -9,7 +9,6 @@ import (
 type UnixSocket struct {
 	ObjectIdent
 
-	refs     atomic.Int32
 	nonblock atomic.Bool
 	kind     int
 	mu       sync.Mutex
@@ -28,22 +27,13 @@ type UnixSocket struct {
 func newUnixSocket(kind int, nonblock bool) *UnixSocket {
 	s := &UnixSocket{ObjectIdent: newObjectIdent(), kind: kind}
 
-	s.refs.Store(1)
 	s.nonblock.Store(nonblock)
 	s.inner.init(s, 0)
 
 	return s
 }
 
-func (s *UnixSocket) ref() {
-	s.refs.Add(1)
-}
-
-func (s *UnixSocket) unref() {
-	if s.refs.Add(-1) != 0 {
-		return
-	}
-
+func (s *UnixSocket) closed() {
 	s.mu.Lock()
 
 	l, c, b := s.listener, s.conn, s.bound
@@ -58,13 +48,11 @@ func (s *UnixSocket) unref() {
 		if b != nil {
 			b.forget(l)
 		}
-
-		l.unref()
 	}
 
 	if c != nil {
 		c.unsubscribe(&s.inner)
-		c.unref()
+		c.closed()
 	}
 }
 
@@ -173,14 +161,9 @@ func (s *UnixSocket) bind(p *Process, a Address) error {
 	}
 
 	l := &UnixListener{ObjectIdent: newObjectIdent(), ino: pairInodes.Add(1), backlog: 1, kind: s.kind}
-
-	l.refs.Store(1)
-
 	b, err := p.bindName(a, l)
 
 	if err != nil {
-		l.unref()
-
 		return err
 	}
 
@@ -204,7 +187,7 @@ func (s *UnixSocket) listen(backlog int) error {
 	return nil
 }
 
-func (s *UnixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
+func (s *UnixSocket) accept(p *Process, flags uint32) (*Description, []byte, error) {
 	l, _ := s.state()
 
 	if l == nil {
@@ -220,7 +203,7 @@ func (s *UnixSocket) accept(p *Process, flags uint32) (Object, []byte, error) {
 	e.nonblock.Store(flags&SOCK_NONBLOCK != 0)
 	e.options.copyOptions(&s.options)
 
-	return e, unixAddress(nil), nil
+	return held(e), unixAddress(nil), nil
 }
 
 func (s *UnixSocket) connect(p *Process, a Address) error {

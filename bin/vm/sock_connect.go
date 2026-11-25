@@ -6,7 +6,7 @@ import (
 
 type SockConnect struct {
 	addr  Address
-	moved Object
+	moved *Description
 }
 
 func (r *SockConnect) op() uint32 {
@@ -17,7 +17,7 @@ func (r *SockConnect) unserved() error {
 	return ENOTSOCK
 }
 
-func (r *SockConnect) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *SockConnect) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return 0, append(binary.LittleEndian.AppendUint32(b, uint32(len(r.addr.raw))), r.addr.raw...), nil
 }
 

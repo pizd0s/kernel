@@ -18,7 +18,7 @@ func (r *SockGetopt) unserved() error {
 	return ENOTSOCK
 }
 
-func (r *SockGetopt) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *SockGetopt) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return 0, binary.LittleEndian.AppendUint32(binary.LittleEndian.AppendUint32(b, r.level), r.name), nil
 }
 

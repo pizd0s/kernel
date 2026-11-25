@@ -12,7 +12,7 @@ func (r *FileSync) unserved() error {
 	return EINVAL
 }
 
-func (r *FileSync) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *FileSync) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return bit(r.data), b, nil
 }
 

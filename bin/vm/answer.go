@@ -14,27 +14,20 @@ const (
 type Answer struct {
 	ObjectIdent
 
-	refs  atomic.Int32
 	asker *Process
 	done  atomic.Bool
 
 	mu       sync.Mutex
 	data     []byte
-	files    []Object
+	files    []*Description
 	said     uint32
 	uid, gid uint32
 	watchers Subscribers
 }
 
-func (a *Answer) ref() {
-	a.refs.Add(1)
-}
-
-func (a *Answer) unref() {
-	if a.refs.Add(-1) == 0 {
-		a.done.Store(true)
-		a.asker.ring()
-	}
+func (a *Answer) closed() {
+	a.done.Store(true)
+	a.asker.ring()
 }
 
 func (a *Answer) cancel(p *Process) {
@@ -95,7 +88,7 @@ func (a *Answer) heard(b []byte) (int, error) {
 	return 0, EAGAIN
 }
 
-func (a *Answer) put(data []byte, files []Object) (int, error) {
+func (a *Answer) put(data []byte, files []*Description) (int, error) {
 	a.mu.Lock()
 
 	defer a.mu.Unlock()
@@ -108,9 +101,7 @@ func (a *Answer) put(data []byte, files []Object) (int, error) {
 		return 0, EMSGSIZE
 	}
 
-	for _, f := range files {
-		f.ref()
-	}
+	holdFiles(files)
 
 	if len(a.data) > 0 {
 		a.data = append(a.data, data...)
@@ -185,7 +176,7 @@ func (a *Answer) listen(backlog int) error {
 	return EOPNOTSUPP
 }
 
-func (a *Answer) accept(p *Process, flags uint32) (Object, []byte, error) {
+func (a *Answer) accept(p *Process, flags uint32) (*Description, []byte, error) {
 	return nil, nil, EOPNOTSUPP
 }
 

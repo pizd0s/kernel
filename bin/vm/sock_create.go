@@ -18,7 +18,7 @@ func (r *SockCreate) unserved() error {
 	return EAFNOSUPPORT
 }
 
-func (r *SockCreate) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *SockCreate) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return r.kind, binary.LittleEndian.AppendUint32(binary.LittleEndian.AppendUint32(b, r.domain), r.protocol), nil
 }
 

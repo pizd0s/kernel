@@ -50,6 +50,7 @@ const (
 	rGetfl
 	rSetfl
 	rCtl
+	rMove
 )
 
 const (
@@ -67,7 +68,7 @@ const (
 	sCreate
 )
 
-func served(p *Process, kind uint32, access int, dev, ino uint64, events uint32, end Object) (*RemoteFD, error) {
+func served(p *Process, kind uint32, access int, dev, ino uint64, events uint32, end *Description) (*Description, error) {
 	if kind != openedFile && kind != openedTerminal && kind != openedDir && kind != openedPath {
 		return nil, EINVAL
 	}
@@ -78,14 +79,10 @@ func served(p *Process, kind uint32, access int, dev, ino uint64, events uint32,
 
 	f := &RemoteFD{end: end, key: FileKey{dev, ino}, access: access & (O_ACCMODE | O_PATH), ready: readiness(events)}
 
-	if ino != 0 {
-		f.locks = &p.k.locks
-	}
+	f.desc = held(f)
+	p.request(end.object(), &SockConsume{sink: f.deliver})
 
-	f.refs.Store(1)
-	p.request(end, &SockConsume{sink: f.deliver})
-
-	return f, nil
+	return f.desc, nil
 }
 
 func readiness(events uint32) int16 {

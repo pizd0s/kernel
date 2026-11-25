@@ -12,7 +12,7 @@ func (r *SockShutdown) unserved() error {
 	return ENOTSOCK
 }
 
-func (r *SockShutdown) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *SockShutdown) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return uint32(r.how), b, nil
 }
 

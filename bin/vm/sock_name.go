@@ -17,7 +17,7 @@ func (r *SockName) unserved() error {
 	return ENOTSOCK
 }
 
-func (r *SockName) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *SockName) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return bit(r.peer), b, nil
 }
 

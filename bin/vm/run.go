@@ -143,12 +143,12 @@ func runKernel(k *Kernel, path string, argv []string, asan, network bool, data [
 
 	for fd, f := range k.newConsole() {
 		if f != nil {
-			p.files.put(fd, f, false)
+			p.files.put(fd, held(f), false)
 		}
 	}
 
-	if t, err := p.fd(2); err == nil && traced != 0 {
-		t.ref()
+	if t, err := p.description(2); err == nil && traced != 0 {
+		t.hold()
 		p.setSink(t)
 		p.modes |= EXEC_TRACE
 		p.classes = traced
@@ -161,7 +161,7 @@ func runKernel(k *Kernel, path string, argv []string, asan, network bool, data [
 			names[i] = d.name
 
 			if d.mem != nil {
-				p.files.put(max(p.files.size(), 3), newMemfd(&LinearMemory{data: d.mem}, 0, int64(len(d.mem)), O_RDONLY), false)
+				p.files.put(max(p.files.size(), 3), newMemfd(&LinearMemory{data: d.mem}, 0, int64(len(d.mem)), O_RDONLY).desc, false)
 
 				continue
 			}
@@ -172,7 +172,7 @@ func runKernel(k *Kernel, path string, argv []string, asan, network bool, data [
 				throwFmt("--disk %s: %v", d.path, err)
 			}
 
-			p.files.put(max(p.files.size(), 3), newDiskFile(fd), false)
+			p.files.put(max(p.files.size(), 3), held(newDiskFile(fd)), false)
 		}
 
 		env = append(env, "DISKS="+strings.Join(names, " "))
@@ -181,7 +181,7 @@ func runKernel(k *Kernel, path string, argv []string, asan, network bool, data [
 	if network {
 		guest, link := newPair(false)
 
-		p.files.put(max(p.files.size(), 3), guest, false)
+		p.files.put(max(p.files.size(), 3), held(guest), false)
 		startNet(link)
 
 		env = append(env, "NETS="+netName)

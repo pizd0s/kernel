@@ -12,7 +12,7 @@ func (r *TtyControl) unserved() error {
 	return ENOTTY
 }
 
-func (r *TtyControl) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *TtyControl) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return r.how, b, nil
 }
 

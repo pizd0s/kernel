@@ -102,7 +102,7 @@ func hostWindow() ([sizeofWinsize]byte, error) {
 }
 
 func (m *Mover) fill(host int, w *PipeEnd) {
-	defer w.unref()
+	defer w.closed()
 
 	buf := make([]byte, pipeChunk)
 
@@ -142,7 +142,7 @@ func (m *Mover) put(pp *Pipe, b []byte) bool {
 func (m *Mover) drain(r *PipeEnd, host int, c *Console) {
 	defer c.out.Done()
 
-	defer r.unref()
+	defer r.closed()
 
 	pp := r.pipe
 	buf := make([]byte, 65536)

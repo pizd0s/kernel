@@ -20,7 +20,6 @@ type TimerFd struct {
 	interval time.Duration
 	ticks    uint64
 	watchers Subscribers
-	refs     atomic.Int32
 	nonblock atomic.Bool
 	ino      uint64
 	made     time.Time
@@ -29,21 +28,12 @@ type TimerFd struct {
 func newTimerFd(clock uint32, nonblock bool) *TimerFd {
 	t := &TimerFd{ObjectIdent: newObjectIdent(), clock: clock, ino: timerFdInodes.Add(1), made: time.Now()}
 
-	t.refs.Store(1)
 	t.nonblock.Store(nonblock)
 
 	return t
 }
 
-func (t *TimerFd) ref() {
-	t.refs.Add(1)
-}
-
-func (t *TimerFd) unref() {
-	if t.refs.Add(-1) != 0 {
-		return
-	}
-
+func (t *TimerFd) closed() {
 	t.mu.Lock()
 	t.disarm()
 	t.mu.Unlock()

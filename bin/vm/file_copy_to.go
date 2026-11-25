@@ -15,7 +15,7 @@ func (r *FileCopyTo) unserved() error {
 	return EINVAL
 }
 
-func (r *FileCopyTo) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *FileCopyTo) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return 0, b, nil
 }
 

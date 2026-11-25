@@ -2,7 +2,6 @@ package main
 
 import (
 	"sync"
-	"sync/atomic"
 )
 
 const (
@@ -14,7 +13,6 @@ const (
 type Once struct {
 	ObjectIdent
 
-	refs  atomic.Int32
 	mu    sync.Mutex
 	state uint32
 }
@@ -22,17 +20,10 @@ type Once struct {
 func newOnce(state uint32) *Once {
 	o := &Once{ObjectIdent: newObjectIdent(), state: state}
 
-	o.refs.Store(1)
-
 	return o
 }
 
-func (o *Once) ref() {
-	o.refs.Add(1)
-}
-
-func (o *Once) unref() {
-	o.refs.Add(-1)
+func (o *Once) closed() {
 }
 
 func (o *Once) poll(events int16, through []*Epoll) int16 {

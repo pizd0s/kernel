@@ -12,7 +12,7 @@ func (r *FileUtimes) unserved() error {
 	return EINVAL
 }
 
-func (r *FileUtimes) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *FileUtimes) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	when, times := whens(r.ts)
 
 	return when, append(b, times...), nil

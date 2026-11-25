@@ -15,36 +15,17 @@ type ConsoleEnd struct {
 	ObjectIdent
 
 	in, out  *PipeEnd
-	refs     atomic.Int32
 	nonblock atomic.Bool
 }
 
 func newConsoleEnd(in, out *PipeEnd) *ConsoleEnd {
-	for _, e := range []*PipeEnd{in, out} {
-		if e != nil {
-			e.ref()
-		}
-	}
-
-	c := &ConsoleEnd{ObjectIdent: newObjectIdent(), in: in, out: out}
-
-	c.refs.Store(1)
-
-	return c
+	return &ConsoleEnd{ObjectIdent: newObjectIdent(), in: in.another(), out: out.another()}
 }
 
-func (c *ConsoleEnd) ref() {
-	c.refs.Add(1)
-}
-
-func (c *ConsoleEnd) unref() {
-	if c.refs.Add(-1) != 0 {
-		return
-	}
-
+func (c *ConsoleEnd) closed() {
 	for _, e := range []*PipeEnd{c.in, c.out} {
 		if e != nil {
-			e.unref()
+			e.closed()
 		}
 	}
 }

@@ -11,7 +11,7 @@ type SockRecv struct {
 	flags uint32
 	n     int
 	out   uint32
-	files []Object
+	files []*Description
 	cred  *Ucred
 	addr  []byte
 	pk    *Packet
@@ -25,7 +25,7 @@ func (r *SockRecv) unserved() error {
 	return ENOTSOCK
 }
 
-func (r *SockRecv) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *SockRecv) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return r.flags, binary.LittleEndian.AppendUint32(b, uint32(r.want)), nil
 }
 

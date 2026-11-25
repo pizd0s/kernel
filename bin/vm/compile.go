@@ -88,16 +88,9 @@ func (k *Kernel) compileObject(module []byte, options CompileOptions) ([]byte, e
 	p := k.process(0, nil)
 	out, diagnostic := newCapture(objectSize), newCapture(nil)
 
-	out.ref()
-	diagnostic.ref()
-
-	defer out.unref()
-
-	defer diagnostic.unref()
-
-	p.files.put(0, newMemfd(&LinearMemory{data: module}, 0, int64(len(module)), O_RDONLY), false)
-	p.files.put(1, out, false)
-	p.files.put(2, diagnostic, false)
+	p.files.put(0, newMemfd(&LinearMemory{data: module}, 0, int64(len(module)), O_RDONLY).desc, false)
+	p.files.put(1, held(out), false)
+	p.files.put(2, held(diagnostic), false)
 
 	status := p.run(&ExecImage{code: code, argv: append([]string{"aot"}, options.arguments()...), envp: compilerEnv()})
 	text := strings.TrimSpace(string(diagnostic.bytes()))

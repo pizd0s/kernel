@@ -13,8 +13,7 @@ const (
 )
 
 type Object interface {
-	ref()
-	unref()
+	closed()
 
 	poll(events int16, through []*Epoll) int16
 	subscribe(s *Subscription, events int16)

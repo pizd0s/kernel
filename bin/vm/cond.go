@@ -1,30 +1,18 @@
 package main
 
-import (
-	"sync/atomic"
-)
-
 type Cond struct {
 	ObjectIdent
 
-	refs  atomic.Int32
 	clock uint32
 }
 
 func newCond(clock uint32) *Cond {
 	c := &Cond{ObjectIdent: newObjectIdent(), clock: clock}
 
-	c.refs.Store(1)
-
 	return c
 }
 
-func (c *Cond) ref() {
-	c.refs.Add(1)
-}
-
-func (c *Cond) unref() {
-	c.refs.Add(-1)
+func (c *Cond) closed() {
 }
 
 func (c *Cond) poll(events int16, through []*Epoll) int16 {

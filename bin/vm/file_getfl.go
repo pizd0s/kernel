@@ -16,7 +16,7 @@ func (r *FileGetfl) unserved() error {
 	return EBADF
 }
 
-func (r *FileGetfl) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *FileGetfl) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return 0, b, nil
 }
 

@@ -10,24 +10,25 @@ type PipeEnd struct {
 	pipe     *Pipe
 	reads    bool
 	writes   bool
-	refs     atomic.Int32
 	nonblock atomic.Bool
 }
 
-func (e *PipeEnd) ref() {
-	e.refs.Add(1)
-}
-
-func (e *PipeEnd) unref() {
-	if e.refs.Add(-1) != 0 {
-		return
-	}
-
+func (e *PipeEnd) closed() {
 	pp := e.pipe
 
 	if pp.leave(e.reads, e.writes) && pp.name != nil {
 		pp.name.forget(pp)
 	}
+}
+
+func (e *PipeEnd) another() *PipeEnd {
+	if e == nil {
+		return nil
+	}
+
+	e.pipe.join(e.reads, e.writes)
+
+	return &PipeEnd{pipe: e.pipe, reads: e.reads, writes: e.writes}
 }
 
 func (e *PipeEnd) sides(events int16) (in, out bool) {

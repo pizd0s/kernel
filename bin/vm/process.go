@@ -115,8 +115,8 @@ type Process struct {
 	image *ExecImage
 	files FdTable
 
-	root  Object
-	cwd   Object
+	root  *Description
+	cwd   *Description
 	umask uint32
 
 	errnoAt   uint32
@@ -133,7 +133,7 @@ type Process struct {
 	chaos     *ChaosRulesOf
 	modes     uint32
 	classes   uint32
-	sink      Object
+	sink      *Description
 	failure   Errno
 	iconvs    map[uint32]*Iconv
 	nextIconv uint32
@@ -213,10 +213,10 @@ func (p *Process) libcExecmode(modes, classes, sink uint32) uint32 {
 		return p.result(0, EINVAL)
 	}
 
-	var to Object
+	var to *Description
 
 	if int32(sink) != -1 {
-		t, err := p.fd(sink)
+		t, err := p.description(sink)
 
 		if err != nil {
 			return p.result(0, err)
@@ -230,7 +230,7 @@ func (p *Process) libcExecmode(modes, classes, sink uint32) uint32 {
 	}
 
 	if to != nil {
-		to.ref()
+		to.hold()
 	}
 
 	p.setSink(to)
@@ -239,9 +239,9 @@ func (p *Process) libcExecmode(modes, classes, sink uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) setSink(to Object) {
+func (p *Process) setSink(to *Description) {
 	if p.sink != nil {
-		p.sink.unref()
+		p.sink.release()
 	}
 
 	p.sink = to
@@ -261,7 +261,7 @@ func (p *Process) traces(class uint32) bool {
 
 func (p *Process) sinkWrite(b []byte) {
 	for p.sink != nil {
-		_, err := p.fileWrite(p.sink, bytesFile(b), len(b), IoMode{quiet: true})
+		_, err := p.fileWrite(p.sink.object(), bytesFile(b), len(b), IoMode{quiet: true})
 
 		if err == nil || err == EAGAIN {
 			return
@@ -424,8 +424,8 @@ func (p *Process) chaosCompacts() bool {
 	return p != nil && p.chaos.holds("memory-compact")
 }
 
-func (p *Process) firstCwd() (Object, string) {
-	p.root.ref()
+func (p *Process) firstCwd() (*Description, string) {
+	p.root.hold()
 
 	return p.root, "/"
 }
@@ -580,8 +580,8 @@ func (p *Process) terminate(status int) {
 		p.closeFd(fd)
 	}
 
-	p.root.unref()
-	p.cwd.unref()
+	p.root.release()
+	p.cwd.release()
 	p.setSink(nil)
 	p.sig.mu.Lock()
 	p.sig.dead = true
@@ -1009,7 +1009,7 @@ func (p *Process) loadFrom(path, program string, f Object, argv []string) (*Exec
 
 func (p *Process) execReset() {
 	for fd, d := range p.files.slots {
-		if d.obj != nil && d.cloexec {
+		if d.desc != nil && d.cloexec {
 			p.closeFd(fd)
 		}
 	}
@@ -1260,12 +1260,13 @@ func (p *Process) aioSubmit(cb uint32, kind int, list *AioList) error {
 		return err
 	}
 
-	o, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return err
 	}
 
+	o := d.object()
 	fl, err := p.fileFlags(o)
 
 	switch {
@@ -1284,7 +1285,7 @@ func (p *Process) aioSubmit(cb uint32, kind int, list *AioList) error {
 		return EAGAIN
 	}
 
-	op := &AioOp{cb: cb, fd: fd, kind: kind, file: o, stream: kind == aioWrite && fl&O_APPEND != 0, offset: off, n: int(n), buf: buf, event: event,
+	op := &AioOp{cb: cb, fd: fd, kind: kind, file: d, stream: kind == aioWrite && fl&O_APPEND != 0, offset: off, n: int(n), buf: buf, event: event,
 		list: list, stop: make(chan struct{}), over: make(chan struct{})}
 
 	switch kind {
@@ -1294,7 +1295,7 @@ func (p *Process) aioSubmit(cb uint32, kind int, list *AioList) error {
 		op.data = bytes.Clone(p.span(buf, n))
 	default:
 		for _, b := range p.aios {
-			if b.file == o && !b.finished.Load() {
+			if b.file == d && !b.finished.Load() {
 				op.before = append(op.before, b)
 			}
 		}
@@ -1311,7 +1312,7 @@ func (p *Process) aioSubmit(cb uint32, kind int, list *AioList) error {
 		list.left++
 	}
 
-	o.ref()
+	d.hold()
 	p.aios[cb] = op
 	op.agent = p.k.process(p.pid, p)
 
@@ -2190,7 +2191,7 @@ func (p *Process) fork() (int32, error) {
 
 	for at, m := range p.mappings {
 		if m.file != nil {
-			m.file.ref()
+			m.file.hold()
 			m.read = bytes.Clone(m.read)
 		}
 
@@ -2221,8 +2222,8 @@ func (c *Process) inherit(p *Process) {
 	c.files = FdTable{slots: slices.Clone(p.files.slots), used: p.files.used.clone()}
 
 	for _, d := range c.files.slots {
-		if d.obj != nil {
-			d.obj.ref()
+		if d.desc != nil {
+			d.desc.hold()
 		}
 	}
 
@@ -4275,7 +4276,7 @@ func (p *Process) stackRelease(at uint32) {
 
 type Mapping struct {
 	length uint32
-	file   Object
+	file   *Description
 	offset int64
 	read   []byte
 }
@@ -4287,7 +4288,7 @@ func (p *Process) writeBack(at uint32, m Mapping, from, n uint32) error {
 
 	var st Stat
 
-	if err := statFile(p, m.file, &st); err != nil {
+	if err := statFile(p, m.file.object(), &st); err != nil {
 		return err
 	}
 
@@ -4311,7 +4312,7 @@ func (p *Process) writeBack(at uint32, m Mapping, from, n uint32) error {
 		}
 
 		w := p.memory(at+from+uint32(i), uint32(j-i), O_RDONLY)
-		_, err := p.filePwrite(m.file, w, j-i, m.offset+int64(from)+int64(i))
+		_, err := p.filePwrite(m.file.object(), w, j-i, m.offset+int64(from)+int64(i))
 
 		p.memoryDone(w)
 
@@ -4333,7 +4334,7 @@ func (p *Process) unmap(at uint32) {
 	delete(p.mappings, at)
 
 	if m.file != nil {
-		m.file.unref()
+		m.file.release()
 	}
 
 	p.free(at)
@@ -4344,7 +4345,7 @@ func (p *Process) unmapAll() {
 		p.writeBack(at, m, 0, m.length)
 
 		if m.file != nil {
-			m.file.unref()
+			m.file.release()
 		}
 	}
 
@@ -4443,19 +4444,15 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 	m := Mapping{length: n}
 
 	if flags&MAP_ANONYMOUS == 0 {
-		obj, err := p.fd(fd)
-
-		var f Object
+		d, err := p.description(fd)
 
 		if err == nil {
-			if _, failed := p.fileSeek(obj, 0, 1); failed != nil {
+			if _, failed := p.fileSeek(d.object(), 0, 1); failed != nil {
 				err = ENODEV
 			} else {
-				f = obj
-
 				w := p.memory(at, n, O_WRONLY)
 
-				_, err = p.filePread(f, w, int(n), int64(off))
+				_, err = p.filePread(d.object(), w, int(n), int64(off))
 
 				p.memoryDone(w)
 
@@ -4472,8 +4469,8 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 			return failed
 		}
 
-		f.ref()
-		m.file, m.offset = f, int64(off)
+		d.hold()
+		m.file, m.offset = d, int64(off)
 
 		if flags&MAP_SHARED != 0 && prot&PROT_WRITE != 0 {
 			m.read = bytes.Clone(p.span(at, n))
@@ -4538,7 +4535,7 @@ func (p *Process) libcMadvise(addr, n, advice uint32) uint32 {
 
 		w := p.memory(addr, uint32(len(in)), O_WRONLY)
 
-		p.filePread(m.file, w, len(in), m.offset+int64(addr-at))
+		p.filePread(m.file.object(), w, len(in), m.offset+int64(addr-at))
 		p.memoryDone(w)
 	}
 
@@ -4831,17 +4828,31 @@ func (p *Process) fd(fd uint32) (Object, error) {
 		return nil, EBADF
 	}
 
-	return d.obj, nil
+	return d.desc.object(), nil
+}
+
+func (p *Process) description(fd uint32) (*Description, error) {
+	d, ok := p.files.at(int(fd))
+
+	if !ok {
+		return nil, EBADF
+	}
+
+	return d.desc, nil
 }
 
 func (p *Process) install(obj Object, min int, cloexec bool) (int, error) {
+	return p.installDesc(held(obj), min, cloexec)
+}
+
+func (p *Process) installDesc(d *Description, min int, cloexec bool) (int, error) {
 	if fd := p.files.lowest(min); fd < p.fdLimit() {
-		p.files.put(fd, obj, cloexec)
+		p.files.put(fd, d, cloexec)
 
 		return fd, nil
 	}
 
-	obj.unref()
+	d.release()
 
 	return -1, EMFILE
 }
@@ -4863,19 +4874,19 @@ func min64(a, b uint64) uint64 {
 }
 
 func (p *Process) closeFd(fd int) bool {
-	obj := p.files.take(fd)
+	d := p.files.take(fd)
 
-	if obj == nil {
+	if d == nil {
 		return false
 	}
 
-	obj.unref()
+	d.release()
 
 	return true
 }
 
 func (p *Process) dupTo(old, new uint32, cloexec bool) (int, error) {
-	obj, err := p.fd(old)
+	d, err := p.description(old)
 
 	if err != nil {
 		return 0, err
@@ -4885,15 +4896,15 @@ func (p *Process) dupTo(old, new uint32, cloexec bool) (int, error) {
 		return 0, EBADF
 	}
 
-	p.placeAt(obj, new, cloexec)
+	p.placeAt(d, new, cloexec)
 
 	return int(new), nil
 }
 
-func (p *Process) placeAt(obj Object, fd uint32, cloexec bool) {
-	obj.ref()
+func (p *Process) placeAt(d *Description, fd uint32, cloexec bool) {
+	d.hold()
 	p.closeFd(int(fd))
-	p.files.put(int(fd), obj, cloexec)
+	p.files.put(int(fd), d, cloexec)
 }
 
 func (p *Process) idle(timeout int, restart bool) error {
@@ -4903,7 +4914,7 @@ func (p *Process) idle(timeout int, restart bool) error {
 }
 
 type PollEntry struct {
-	obj     Object
+	desc    *Description
 	events  int16
 	revents int16
 	sub     *Subscription
@@ -4912,12 +4923,12 @@ type PollEntry struct {
 func (p *Process) waitObjects(entries []PollEntry, timeout int, restart bool) (int, error) {
 	for i := range entries {
 		entries[i].sub = p.subscription(uint64(i))
-		entries[i].obj.subscribe(entries[i].sub, entries[i].events)
+		entries[i].desc.subscribe(entries[i].sub, entries[i].events)
 	}
 
 	defer func() {
 		for i := range entries {
-			entries[i].obj.unsubscribe(entries[i].sub)
+			entries[i].desc.unsubscribe(entries[i].sub)
 			p.release(entries[i].sub)
 		}
 	}()
@@ -4930,7 +4941,7 @@ func (p *Process) waitObjects(entries []PollEntry, timeout int, restart bool) (i
 
 		case e.kind != eventChanged || e.id >= uint64(len(entries)) || e != &entries[e.id].sub.event:
 			return false, nil
-		case entries[e.id].obj.poll(entries[e.id].events, nil) == 0:
+		case entries[e.id].desc.object().poll(entries[e.id].events, nil) == 0:
 			return false, nil
 		}
 
@@ -4948,7 +4959,7 @@ func pollEntries(entries []PollEntry) int {
 	ready := 0
 
 	for i := range entries {
-		entries[i].revents = entries[i].obj.poll(entries[i].events, nil)
+		entries[i].revents = entries[i].desc.object().poll(entries[i].events, nil)
 
 		if entries[i].revents != 0 {
 			ready++
@@ -4956,10 +4967,6 @@ func pollEntries(entries []PollEntry) int {
 	}
 
 	return ready
-}
-
-func (p *Process) waitObject(obj Object, events int16, timeout int, restart bool) (int, error) {
-	return p.waitObjects([]PollEntry{{obj: obj, events: events}}, timeout, restart)
 }
 
 func (p *Process) ioSpans(iovs uint32, count uint32) ([][]byte, error) {
@@ -5097,7 +5104,7 @@ func (p *Process) vectored(fd, iovs, count uint32, events int16, positioned bool
 	return p.result(n, err)
 }
 
-func (p *Process) recordLock(l Object, cmd, at uint32) error {
+func (p *Process) recordLock(l *Description, cmd, at uint32) error {
 	lk := Flock{Type: int16(p.u16(at)), Whence: int16(p.u16(at + 2)), Start: int64(p.u64(at + 8)), Len: int64(p.u64(at + 16))}
 
 	if cmd == F_GETLK {
@@ -5154,13 +5161,13 @@ func (p *Process) selectFds(n uint32, sets [3]FdSet, timeout int) (int, error) {
 			continue
 		}
 
-		obj, err := p.fd(uint32(fd))
+		d, err := p.description(uint32(fd))
 
 		if err != nil {
 			return 0, err
 		}
 
-		entries = append(entries, PollEntry{obj: obj, events: events})
+		entries = append(entries, PollEntry{desc: d, events: events})
 		fds = append(fds, fd)
 	}
 
@@ -5420,7 +5427,7 @@ func (p *Process) libcSyncfs(fd uint32) uint32 {
 }
 
 func (p *Process) libcFlock(fd, op uint32) uint32 {
-	l, err := p.fd(fd)
+	l, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5559,15 +5566,15 @@ func (p *Process) libcClose(fd uint32) uint32 {
 }
 
 func (p *Process) libcDup(fd uint32) uint32 {
-	obj, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	obj.ref()
+	d.hold()
 
-	return p.result(p.install(obj, 0, false))
+	return p.result(p.installDesc(d, 0, false))
 }
 
 func (p *Process) libcDup2(old, new uint32) uint32 {
@@ -5681,9 +5688,11 @@ func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
 			return p.result(0, EINVAL)
 		}
 
-		obj.ref()
+		d, _ := p.description(fd)
 
-		return p.result(p.install(obj, int(min), cmd == F_DUPFD_CLOEXEC))
+		d.hold()
+
+		return p.result(p.installDesc(d, int(min), cmd == F_DUPFD_CLOEXEC))
 	case F_GETFD:
 		if p.files.slots[fd].cloexec {
 			return p.result(1, nil)
@@ -5697,7 +5706,7 @@ func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
 	case F_GETFL:
 		return p.result(p.fileFlags(obj))
 	case F_GETLK, F_SETLK, F_SETLKW:
-		l, err := p.fd(fd)
+		l, err := p.description(fd)
 
 		if err != nil {
 			return p.result(0, err)
@@ -5754,7 +5763,7 @@ func (p *Process) poll(at, n uint32, timeout int) (int, error) {
 			continue
 		}
 
-		obj, err := p.fd(uint32(fd))
+		d, err := p.description(uint32(fd))
 
 		if err != nil {
 			binary.LittleEndian.PutUint16(e[6:], POLLNVAL)
@@ -5764,7 +5773,7 @@ func (p *Process) poll(at, n uint32, timeout int) (int, error) {
 		}
 
 		slot[i] = len(entries)
-		entries = append(entries, PollEntry{obj: obj, events: int16(binary.LittleEndian.Uint16(e[4:]))})
+		entries = append(entries, PollEntry{desc: d, events: int16(binary.LittleEndian.Uint16(e[4:]))})
 	}
 
 	if invalid > 0 {
@@ -5883,7 +5892,9 @@ func (p *Process) libc__kernel_fdioctl(fd, req, arg uint32) uint32 {
 		case p.device(obj) == (FileKey{}):
 			return p.result(0, ENOTTY)
 		case req == TIOCSCTTY:
-			return p.result(0, p.controls(obj))
+			d, _ := p.description(fd)
+
+			return p.result(0, p.controls(d))
 		}
 
 		return p.result(0, p.notty(obj))
@@ -5961,37 +5972,37 @@ func (p *Process) libcFstatvfs(fd, at uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) setCwd(d Object) {
+func (p *Process) setCwd(d *Description) {
 	old := p.cwd
 
 	p.cwd = d
 
 	if old != nil {
-		old.unref()
+		old.release()
 	}
 }
 
 func (p *Process) libcAttach(fd uint32) uint32 {
-	obj, err := p.fd(fd)
+	end, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	obj.ref()
+	end.hold()
 
-	d, err := served(p, openedDir, O_RDONLY, 0, 0, POLLIN|POLLOUT, obj)
+	d, err := served(p, openedDir, O_RDONLY, 0, 0, POLLIN|POLLOUT, end)
 
 	if err != nil {
-		obj.unref()
+		end.release()
 
 		return p.result(0, err)
 	}
 
-	return p.result(p.install(d, 0, false))
+	return p.result(p.installDesc(d, 0, false))
 }
 
-func (p *Process) ctlObject(fd int32) (Object, error) {
+func (p *Process) ctlDescription(fd int32) (*Description, error) {
 	switch fd {
 	case AT_FDCWD:
 		return p.cwd, nil
@@ -5999,16 +6010,17 @@ func (p *Process) ctlObject(fd int32) (Object, error) {
 		return p.root, nil
 	}
 
-	return p.fd(uint32(fd))
+	return p.description(uint32(fd))
 }
 
 func (p *Process) libcCtl(fd, at, flags uint32) uint32 {
-	o, err := p.ctlObject(int32(fd))
+	d, err := p.ctlDescription(int32(fd))
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
+	o := d.object()
 	in, size, fds, n := p.u32(at), p.u32(at+4), p.u32(at+8), p.u32(at+12)
 
 	switch {
@@ -6025,7 +6037,7 @@ func (p *Process) libcCtl(fd, at, flags uint32) uint32 {
 	r := Ctl{data: bytes.Clone(p.span(in, size))}
 
 	for i := range n {
-		f, err := p.ctlObject(int32(p.u32(fds + 4*i)))
+		f, err := p.ctlDescription(int32(p.u32(fds + 4*i)))
 
 		if err != nil {
 			return p.result(0, err)
@@ -6060,27 +6072,31 @@ func (p *Process) ctlCall(o Object, r *Ctl, restarts bool) error {
 	return err
 }
 
-func (p *Process) ctlOpened(opened []byte, files []Object, flags uint32) (Object, []Object, error) {
+func (p *Process) ctlOpened(opened []byte, files []*Description, flags uint32) (*Description, []*Description, error) {
 	kind, access := binary.LittleEndian.Uint32(opened), int(binary.LittleEndian.Uint32(opened[4:]))
 
 	if kind == openedFifo {
 		st := Stat{Dev: binary.LittleEndian.Uint64(opened[8:]), Ino: binary.LittleEndian.Uint64(opened[16:]), Mode: binary.LittleEndian.Uint32(opened[24:])}
 		obj, err := p.openFifo(&st, access&O_ACCMODE|int(flags&O_NONBLOCK))
 
-		return obj, files, err
+		if err != nil {
+			return nil, files, err
+		}
+
+		return held(obj), files, nil
 	}
 
 	if len(files) == 0 {
 		return nil, files, EIO
 	}
 
-	obj, err := p.servedOf(files[0], opened)
+	d, err := p.servedOf(files[0], opened)
 
 	if err == nil && kind == openedTerminal && flags&O_NOCTTY == 0 {
-		p.acquire(obj)
+		p.acquire(d)
 	}
 
-	return obj, files[1:], err
+	return d, files[1:], err
 }
 
 func (p *Process) ctlAnswer(at uint32, r *Ctl, flags uint32) error {
@@ -6092,7 +6108,7 @@ func (p *Process) ctlAnswer(at uint32, r *Ctl, flags uint32) error {
 		return EIO
 	}
 
-	objs := make([]Object, 0, len(files)+n)
+	objs := make([]*Description, 0, len(files)+n)
 
 	for i := range n {
 		obj, rest, err := p.ctlOpened(data[i*sizeofOpened:(i+1)*sizeofOpened], files, flags)
@@ -6116,14 +6132,14 @@ func (p *Process) ctlAnswer(at uint32, r *Ctl, flags uint32) error {
 	p.put32(at+20, uint32(len(data)))
 	p.put32(at+28, uint32(len(objs)))
 
-	for i, obj := range objs {
+	for i, d := range objs {
 		if uint32(i) >= slots {
-			obj.unref()
+			d.release()
 
 			continue
 		}
 
-		fd, err := p.install(obj, 0, flags&O_CLOEXEC != 0)
+		fd, err := p.installDesc(d, 0, flags&O_CLOEXEC != 0)
 
 		if err != nil {
 			dropFiles(objs[i+1:])
@@ -6150,7 +6166,7 @@ func (p *Process) libcFdid(fd, at uint32) uint32 {
 }
 
 func (p *Process) libcFchroot(fd uint32) uint32 {
-	d, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6158,15 +6174,15 @@ func (p *Process) libcFchroot(fd uint32) uint32 {
 
 	var st Stat
 
-	switch err := statFile(p, d, &st); {
+	switch err := statFile(p, d.object(), &st); {
 	case err != nil:
 		return p.result(0, err)
 	case st.Mode&S_IFMT != S_IFDIR:
 		return p.result(0, ENOTDIR)
 	}
 
-	d.ref()
-	p.root.unref()
+	d.hold()
+	p.root.release()
 	p.root = d
 
 	return p.result(0, nil)
@@ -6177,20 +6193,18 @@ func (p *Process) libcFchdir(fd uint32) uint32 {
 }
 
 func (p *Process) fchdir(fd uint32) error {
-	obj, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return err
 	}
 
-	d := obj
-
-	d.ref()
+	d.hold()
 
 	var st Stat
 
-	if err := statFile(p, d, &st); err != nil || st.Mode&S_IFMT != S_IFDIR || !p.permits(&st, 1) {
-		d.unref()
+	if err := statFile(p, d.object(), &st); err != nil || st.Mode&S_IFMT != S_IFDIR || !p.permits(&st, 1) {
+		d.release()
 
 		switch {
 		case err != nil:
@@ -6272,7 +6286,6 @@ func (p *Process) openFifo(st *Stat, flags int) (Object, error) {
 
 	e := &PipeEnd{pipe: pp, reads: reads, writes: writes}
 
-	e.refs.Store(1)
 	e.nonblock.Store(nonblock)
 
 	if nonblock || reads && writes {
@@ -6282,7 +6295,7 @@ func (p *Process) openFifo(st *Stat, flags int) (Object, error) {
 	err := pp.meet(p, reads, readerOpens, writerOpens)
 
 	if err != nil {
-		e.unref()
+		e.closed()
 
 		return nil, err
 	}
@@ -6305,7 +6318,6 @@ func (p *Process) pipe(at, flags uint32) uint32 {
 	var fds [2]int
 
 	for i, e := range ends {
-		e.refs.Store(1)
 		e.nonblock.Store(flags&O_NONBLOCK != 0)
 
 		fd, err := p.install(e, 0, cloexec)
@@ -6314,7 +6326,7 @@ func (p *Process) pipe(at, flags uint32) uint32 {
 			if i == 1 {
 				p.closeFd(fds[0])
 			} else {
-				ends[1].unref()
+				ends[1].closed()
 			}
 
 			return p.result(0, err)
@@ -6343,11 +6355,9 @@ func (p *Process) libcMemfile(at, n, flags uint32) uint32 {
 	}
 
 	f := newMemfd(i.memory, int64(at), int64(n), mode)
-	fd, err := p.install(f, 0, flags&O_CLOEXEC != 0)
+	fd, err := p.installDesc(f.desc, 0, flags&O_CLOEXEC != 0)
 
 	if err != nil {
-		f.unref()
-
 		return p.result(0, err)
 	}
 
@@ -6403,19 +6413,19 @@ func (p *Process) libc__kernel_socketon(fd, domain, kind, protocol uint32) uint3
 		return p.result(0, EINVAL)
 	}
 
-	obj, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	if err := p.request(obj, &SockCreate{domain: domain, kind: kind &^ SOCK_CLOEXEC, protocol: protocol}); err != nil {
+	if err := p.request(d.object(), &SockCreate{domain: domain, kind: kind &^ SOCK_CLOEXEC, protocol: protocol}); err != nil {
 		return p.result(0, err)
 	}
 
-	obj.ref()
+	d.hold()
 
-	return p.result(p.install(newIndirect(obj), 0, kind&SOCK_CLOEXEC != 0))
+	return p.result(p.install(newIndirect(d), 0, kind&SOCK_CLOEXEC != 0))
 }
 
 func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
@@ -6446,7 +6456,7 @@ func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 	x, err := p.install(a, 0, cloexec)
 
 	if err != nil {
-		b.unref()
+		b.closed()
 
 		return p.result(0, err)
 	}
@@ -6733,7 +6743,7 @@ func (p *Process) recvmsg(fd, msg, flags uint32) (int, error) {
 }
 
 func (p *Process) libcRecvmmsg(fd, vec, vlen, flags, timeout uint32) uint32 {
-	s, err := p.fd(fd)
+	s, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6781,7 +6791,7 @@ func (p *Process) libcRecvmmsg(fd, vec, vlen, flags, timeout uint32) uint32 {
 	return vlen
 }
 
-func (p *Process) recvmsgBy(s Object, fd, msg, flags uint32, end time.Time) (int, bool, error) {
+func (p *Process) recvmsgBy(s *Description, fd, msg, flags uint32, end time.Time) (int, bool, error) {
 	if end.IsZero() || flags&MSG_DONTWAIT != 0 {
 		n, err := p.recvmsg(fd, msg, flags)
 
@@ -6795,7 +6805,7 @@ func (p *Process) recvmsgBy(s Object, fd, msg, flags uint32, end time.Time) (int
 			wait = waitMs(left)
 		}
 
-		ready, err := p.waitObjects([]PollEntry{{obj: s, events: POLLIN}}, wait, false)
+		ready, err := p.waitObjects([]PollEntry{{desc: s, events: POLLIN}}, wait, false)
 
 		if err != nil || ready == 0 {
 			return 0, err != nil, err
@@ -6855,7 +6865,7 @@ func (p *Process) socketAccept(fd, addr, lenAt, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	guest, err := p.install(conn, 0, flags&SOCK_CLOEXEC != 0)
+	guest, err := p.installDesc(conn, 0, flags&SOCK_CLOEXEC != 0)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6903,7 +6913,7 @@ func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 	return p.result(r.n, err)
 }
 
-func (p *Process) putControl(files []Object, cred *Ucred, control, room uint32, cloexec bool) (uint32, uint32) {
+func (p *Process) putControl(files []*Description, cred *Ucred, control, room uint32, cloexec bool) (uint32, uint32) {
 	written, cut := p.putRights(files, control, room, cloexec)
 
 	if cred == nil {
@@ -6932,7 +6942,7 @@ func (p *Process) ucred() *Ucred {
 	return &Ucred{uint32(p.pid), p.cred.uid(), p.cred.gid()}
 }
 
-func (p *Process) rights(files []Object, at, n uint32) ([]Object, *Ucred, error) {
+func (p *Process) rights(files []*Description, at, n uint32) ([]*Description, *Ucred, error) {
 	var cred *Ucred
 
 	if n < sizeofCmsghdr {
@@ -6954,7 +6964,7 @@ func (p *Process) rights(files []Object, at, n uint32) ([]Object, *Ucred, error)
 		switch {
 		case level == SOL_SOCKET && kind == SCM_RIGHTS:
 			for i := 0; i+4 <= len(data); i += 4 {
-				f, err := p.fd(binary.LittleEndian.Uint32(data[i:]))
+				f, err := p.description(binary.LittleEndian.Uint32(data[i:]))
 
 				if err != nil {
 					return nil, nil, err
@@ -6980,7 +6990,7 @@ func (p *Process) rights(files []Object, at, n uint32) ([]Object, *Ucred, error)
 	return files, cred, nil
 }
 
-func (p *Process) putRights(files []Object, at, room uint32, cloexec bool) (uint32, uint32) {
+func (p *Process) putRights(files []*Description, at, room uint32, cloexec bool) (uint32, uint32) {
 	if len(files) == 0 {
 		return 0, 0
 	}
@@ -7001,13 +7011,13 @@ func (p *Process) putRights(files []Object, at, room uint32, cloexec bool) (uint
 
 	for i, f := range files {
 		if i >= fits {
-			f.unref()
+			f.release()
 			flags |= MSG_CTRUNC
 
 			continue
 		}
 
-		fd, err := p.install(f, 0, cloexec)
+		fd, err := p.installDesc(f, 0, cloexec)
 
 		if err != nil {
 			flags |= MSG_CTRUNC
@@ -7079,7 +7089,6 @@ func (p *Process) bindName(a Address, held Object) (*SocketName, error) {
 		return nil, EADDRINUSE
 	}
 
-	held.ref()
 	p.k.sockets[key] = held
 
 	return &SocketName{k: p.k, key: key}, nil
@@ -7108,10 +7117,6 @@ func (p *Process) boundAt(node Object) (Object, error) {
 
 	held := p.k.sockets[FileKey{st.Dev, st.Ino}]
 
-	if held != nil {
-		held.ref()
-	}
-
 	p.k.mu.Unlock()
 
 	if held == nil {
@@ -7128,8 +7133,6 @@ func (p *Process) connectUnix(node Object, kind int, nonblock bool, to *atomic.I
 		return nil, err
 	}
 
-	defer f.unref()
-
 	r := SockKnock{kind: kind, nonblock: nonblock, timeout: to}
 
 	err = p.request(f, &r)
@@ -7145,8 +7148,6 @@ func (p *Process) mouthOf(node Object) (Object, error) {
 	}
 
 	if p.sockKind(f) != SOCK_DGRAM {
-		f.unref()
-
 		return nil, EPROTOTYPE
 	}
 
@@ -7195,7 +7196,7 @@ func (p *Process) libcEpoll_ctl(epfd, op, fd, at uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	obj, err := p.fd(fd)
+	d, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -7218,7 +7219,7 @@ func (p *Process) libcEpoll_ctl(epfd, op, fd, at uint32) uint32 {
 		events, data = binary.LittleEndian.Uint32(b), binary.LittleEndian.Uint64(b[8:])
 	}
 
-	return p.result(0, p.epollCtl(ep, op, EpollKey{fd, obj}, events, data))
+	return p.result(0, p.epollCtl(ep, op, EpollKey{fd, d}, events, data))
 }
 
 func (p *Process) epollWait(epfd, at, max uint32, timeout int) (int, error) {
@@ -7247,7 +7248,7 @@ func (p *Process) libcEpoll_pwait(epfd, at, max, timeout, mask uint32) uint32 {
 	}))
 }
 
-func (p *Process) opened(pk *Packet) (Object, bool, error) {
+func (p *Process) opened(pk *Packet) (*Description, bool, error) {
 	f := pk.files[0]
 
 	if len(pk.data) == 0 {
@@ -7255,30 +7256,30 @@ func (p *Process) opened(pk *Packet) (Object, bool, error) {
 	}
 
 	if len(pk.data) != sizeofOpened {
-		f.unref()
+		f.release()
 
 		return nil, false, EIO
 	}
 
-	obj, err := p.servedOf(f, pk.data)
+	d, err := p.servedOf(f, pk.data)
 
-	return obj, err == nil && binary.LittleEndian.Uint32(pk.data) == openedTerminal, err
+	return d, err == nil && binary.LittleEndian.Uint32(pk.data) == openedTerminal, err
 }
 
-func (p *Process) servedOf(end Object, b []byte) (Object, error) {
-	obj, err := served(p, binary.LittleEndian.Uint32(b), int(binary.LittleEndian.Uint32(b[4:])), binary.LittleEndian.Uint64(b[8:]),
+func (p *Process) servedOf(end *Description, b []byte) (*Description, error) {
+	d, err := served(p, binary.LittleEndian.Uint32(b), int(binary.LittleEndian.Uint32(b[4:])), binary.LittleEndian.Uint64(b[8:]),
 		binary.LittleEndian.Uint64(b[16:]), binary.LittleEndian.Uint32(b[24:]), end)
 
 	if err != nil {
-		end.unref()
+		end.release()
 
 		return nil, EIO
 	}
 
-	return obj, nil
+	return d, nil
 }
 
-func (p *Process) attached(pk *Packet) (Object, []byte, error) {
+func (p *Process) attached(pk *Packet) (*Description, []byte, error) {
 	if len(pk.files) == 0 || len(pk.data) < sizeofOpened {
 		dropFiles(pk.files)
 
@@ -7329,10 +7330,10 @@ func (p *Process) isCtty(t Object) bool {
 
 	p.k.mu.Unlock()
 
-	return c != nil && p.sameTerminal(c, t)
+	return c != nil && p.sameTerminal(c.object(), t)
 }
 
-func (p *Process) acquire(t Object) {
+func (p *Process) acquire(t *Description) {
 	p.k.mu.Lock()
 
 	_, has := p.k.cttys[p.sid.Load()]
@@ -7403,11 +7404,11 @@ func (p *Process) leaveSession(going bool) {
 		how = cttyGone
 	}
 
-	p.ttyControl(t, how)
-	t.unref()
+	p.ttyControl(t.object(), how)
+	t.release()
 }
 
-func (p *Process) controls(t Object) error {
+func (p *Process) controls(t *Description) error {
 	p.k.mu.Lock()
 
 	sid := p.sid.Load()
@@ -7417,17 +7418,17 @@ func (p *Process) controls(t Object) error {
 	p.k.mu.Unlock()
 
 	switch {
-	case leads && c != nil && p.sameTerminal(c, t):
+	case leads && c != nil && p.sameTerminal(c.object(), t.object()):
 		return nil
 	case !leads || c != nil:
 		return EPERM
 	}
 
-	if err := p.ttyControl(t, cttyTake); err != nil {
+	if err := p.ttyControl(t.object(), cttyTake); err != nil {
 		return err
 	}
 
-	t.ref()
+	t.hold()
 	p.k.mu.Lock()
 	p.k.cttys[sid] = t
 	p.k.mu.Unlock()
@@ -8802,7 +8803,7 @@ func (p *Process) sockSend(s Object, pk *Packet, to Address, mode IoMode) (int, 
 	return n, err
 }
 
-func (p *Process) sockAccept(s Object, flags uint32) (Object, []byte, error) {
+func (p *Process) sockAccept(s Object, flags uint32) (*Description, []byte, error) {
 	r := SockAccept{flags: flags}
 	err := p.request(s, &r)
 
@@ -9011,7 +9012,8 @@ func (p *Process) lockable(o Object) (FileKey, int, error) {
 	return r.key, r.access, nil
 }
 
-func (p *Process) fileFlock(o Object, op int) error {
+func (p *Process) fileFlock(d *Description, op int) error {
+	o := d.object()
 	key, _, err := p.lockable(o)
 
 	if err != nil {
@@ -9020,17 +9022,18 @@ func (p *Process) fileFlock(o Object, op int) error {
 
 	switch kind := op &^ LOCK_NB; kind {
 	case LOCK_UN:
-		p.k.locks.unlock(o, key, false, 0, 0)
+		p.k.locks.unlock(d, key, false, 0, 0)
 
 		return nil
 	case LOCK_SH, LOCK_EX:
-		return p.k.locks.lock(p, &FileLock{owner: o, key: key, write: kind == LOCK_EX}, op&LOCK_NB == 0)
+		return p.k.locks.lock(p, &FileLock{owner: d, key: key, write: kind == LOCK_EX}, op&LOCK_NB == 0)
 	}
 
 	return EINVAL
 }
 
-func (p *Process) fileLock(o Object, cmd int, lk *Flock) error {
+func (p *Process) fileLock(d *Description, cmd int, lk *Flock) error {
+	o := d.object()
 	key, fl, err := p.lockable(o)
 
 	if err != nil {
@@ -9069,7 +9072,7 @@ func (p *Process) fileLock(o Object, cmd int, lk *Flock) error {
 		return EINVAL
 	}
 
-	want := &FileLock{owner: o, key: key, ranged: true, write: lk.Type == F_WRLCK, start: uint64(start), stop: lockPast}
+	want := &FileLock{owner: d, key: key, ranged: true, write: lk.Type == F_WRLCK, start: uint64(start), stop: lockPast}
 
 	if length != 0 && want.start <= lockPast-uint64(length) {
 		want.stop = want.start + uint64(length)
@@ -9103,7 +9106,7 @@ func (p *Process) fileLock(o Object, cmd int, lk *Flock) error {
 
 		return nil
 	case lk.Type == F_UNLCK:
-		p.k.locks.unlock(o, key, true, want.start, want.stop)
+		p.k.locks.unlock(d, key, true, want.start, want.stop)
 
 		return nil
 	}
@@ -9207,7 +9210,7 @@ func (p *Process) dropSync(at uint32) {
 
 	if o := p.syncs[h]; o != nil {
 		delete(p.syncs, h)
-		o.unref()
+		o.closed()
 	}
 
 	p.put32(at, 0)
@@ -10260,7 +10263,6 @@ func (p *Process) semOpen(name string, flags, va uint32) (uint32, error) {
 		return 0, ENOMEM
 	}
 
-	s.ref()
 	p.put32(at, uint32(p.addSync(s)))
 	p.semOpens[key] = &SemOpen{at: at, count: 1}
 

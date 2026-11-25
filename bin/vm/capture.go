@@ -2,13 +2,11 @@ package main
 
 import (
 	"sync"
-	"sync/atomic"
 )
 
 type Capture struct {
 	ObjectIdent
 
-	refs atomic.Int32
 	ino  uint64
 	size func(first []byte) int
 
@@ -19,17 +17,10 @@ type Capture struct {
 func newCapture(size func(first []byte) int) *Capture {
 	c := &Capture{ObjectIdent: newObjectIdent(), ino: pipeInodes.Add(1), size: size}
 
-	c.refs.Store(1)
-
 	return c
 }
 
-func (c *Capture) ref() {
-	c.refs.Add(1)
-}
-
-func (c *Capture) unref() {
-	c.refs.Add(-1)
+func (c *Capture) closed() {
 }
 
 func (c *Capture) bytes() []byte {

@@ -18,7 +18,6 @@ type PairEnd struct {
 	shared *PairState
 	peer   *PairEnd
 
-	refs     atomic.Int32
 	nonblock atomic.Bool
 
 	dead    atomic.Bool
@@ -45,22 +44,13 @@ func newPairOf(kind int, nonblock bool) (*PairEnd, *PairEnd) {
 	a.peer, b.peer = b, a
 
 	for _, e := range []*PairEnd{a, b} {
-		e.refs.Store(1)
 		e.nonblock.Store(nonblock)
 	}
 
 	return a, b
 }
 
-func (e *PairEnd) ref() {
-	e.refs.Add(1)
-}
-
-func (e *PairEnd) unref() {
-	if e.refs.Add(-1) != 0 {
-		return
-	}
-
+func (e *PairEnd) closed() {
 	var dropped []*Packet
 
 	e.dead.Store(true)
@@ -242,9 +232,7 @@ func (e *PairEnd) deliver(p *Process, pk *Packet, mode IoMode) error {
 		pk.cred = p.ucred()
 	}
 
-	for _, f := range pk.files {
-		f.ref()
-	}
+	holdFiles(pk.files)
 
 	end, how := time.Time{}, waitsOn
 
@@ -410,7 +398,7 @@ func (e *PairEnd) awaitInput(p *Process) (timedOut bool, err error) {
 	return timedOut, err
 }
 
-func (e *PairEnd) received(r *SockRecv, files []Object, cred *Ucred) {
+func (e *PairEnd) received(r *SockRecv, files []*Description, cred *Ucred) {
 	r.files = files
 
 	if e.options.passcred.Load() {
@@ -495,7 +483,7 @@ func (e *PairEnd) receiveStream(p *Process, r *SockRecv) error {
 	}
 }
 
-func (e *PairEnd) streamTake(into Into, at, room int, peek bool) (n int, files []Object, cred *Ucred, eof, ended bool) {
+func (e *PairEnd) streamTake(into Into, at, room int, peek bool) (n int, files []*Description, cred *Ucred, eof, ended bool) {
 	e.mu.Lock()
 
 	defer e.mu.Unlock()
@@ -621,7 +609,7 @@ func (e *PairEnd) listen(backlog int) error {
 	return EINVAL
 }
 
-func (e *PairEnd) accept(p *Process, flags uint32) (Object, []byte, error) {
+func (e *PairEnd) accept(p *Process, flags uint32) (*Description, []byte, error) {
 	return nil, nil, EINVAL
 }
 

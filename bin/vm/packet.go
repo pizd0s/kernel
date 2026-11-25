@@ -8,7 +8,7 @@ const (
 type Packet struct {
 	kind  uint8
 	data  []byte
-	files []Object
+	files []*Description
 	cred  *Ucred
 	addr  []byte
 
@@ -17,10 +17,4 @@ type Packet struct {
 
 type Ucred struct {
 	pid, uid, gid uint32
-}
-
-func dropFiles(files []Object) {
-	for _, f := range files {
-		f.unref()
-	}
 }

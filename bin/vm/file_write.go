@@ -25,8 +25,8 @@ func (r *FileWrite) unserved() error {
 	return EBADF
 }
 
-func (r *FileWrite) ser(p *Process, b []byte) (uint32, []byte, []Object) {
-	return uint32(r.n), ioBody(b, r.at, r.explicit), []Object{r.from}
+func (r *FileWrite) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
+	return uint32(r.n), ioBody(b, r.at, r.explicit), []*Description{r.from.desc}
 }
 
 func (r *FileWrite) des(p *Process, pk *Packet) error {

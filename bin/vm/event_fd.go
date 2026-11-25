@@ -18,7 +18,6 @@ type EventFd struct {
 	count     uint64
 	semaphore bool
 	watchers  Subscribers
-	refs      atomic.Int32
 	nonblock  atomic.Bool
 	ino       uint64
 	made      time.Time
@@ -27,18 +26,12 @@ type EventFd struct {
 func newEventFd(count uint64, semaphore, nonblock bool) *EventFd {
 	e := &EventFd{ObjectIdent: newObjectIdent(), count: count, semaphore: semaphore, ino: eventFdInodes.Add(1), made: time.Now()}
 
-	e.refs.Store(1)
 	e.nonblock.Store(nonblock)
 
 	return e
 }
 
-func (e *EventFd) ref() {
-	e.refs.Add(1)
-}
-
-func (e *EventFd) unref() {
-	e.refs.Add(-1)
+func (e *EventFd) closed() {
 }
 
 func (e *EventFd) poll(events int16, through []*Epoll) int16 {

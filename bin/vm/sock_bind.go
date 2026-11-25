@@ -6,7 +6,7 @@ import (
 
 type SockBind struct {
 	addr  Address
-	moved Object
+	moved *Description
 }
 
 func (r *SockBind) op() uint32 {
@@ -17,7 +17,7 @@ func (r *SockBind) unserved() error {
 	return ENOTSOCK
 }
 
-func (r *SockBind) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *SockBind) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return 0, append(binary.LittleEndian.AppendUint32(b, uint32(len(r.addr.raw))), r.addr.raw...), nil
 }
 

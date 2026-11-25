@@ -8,7 +8,6 @@ import (
 type UnixDgram struct {
 	ObjectIdent
 
-	refs         atomic.Int32
 	nonblock     atomic.Bool
 	inbox, mouth *PairEnd
 	mu           sync.Mutex
@@ -23,7 +22,6 @@ type UnixDgram struct {
 func newUnixDgram(nonblock bool) *UnixDgram {
 	s := &UnixDgram{ObjectIdent: newObjectIdent()}
 
-	s.refs.Store(1)
 	s.nonblock.Store(nonblock)
 	s.inbox, s.mouth = newPairOf(SOCK_DGRAM, false)
 	s.inner.init(s, 0)
@@ -31,15 +29,7 @@ func newUnixDgram(nonblock bool) *UnixDgram {
 	return s
 }
 
-func (s *UnixDgram) ref() {
-	s.refs.Add(1)
-}
-
-func (s *UnixDgram) unref() {
-	if s.refs.Add(-1) != 0 {
-		return
-	}
-
+func (s *UnixDgram) closed() {
 	s.mu.Lock()
 
 	t, b := s.target, s.bound
@@ -49,25 +39,20 @@ func (s *UnixDgram) unref() {
 
 	if t != nil {
 		t.unsubscribe(&s.inner)
-		t.unref()
 	}
 
 	if b != nil {
 		b.forget(s.mouth)
 	}
 
-	s.inbox.unref()
-	s.mouth.unref()
+	s.inbox.closed()
+	s.mouth.closed()
 }
 
 func (s *UnixDgram) targetEnd() Object {
 	s.mu.Lock()
 
 	defer s.mu.Unlock()
-
-	if s.target != nil {
-		s.target.ref()
-	}
 
 	return s.target
 }
@@ -81,8 +66,6 @@ func (s *UnixDgram) poll(events int16, through []*Epoll) int16 {
 	ready := s.inbox.poll(events, through) &^ (POLLOUT | POLLWRNORM)
 
 	if t := s.targetEnd(); t != nil {
-		defer t.unref()
-
 		return ready | t.poll(out, through)&out
 	}
 
@@ -182,7 +165,6 @@ func (s *UnixDgram) connect(p *Process, a Address) error {
 
 	if old != nil {
 		old.unsubscribe(&s.inner)
-		old.unref()
 	}
 
 	mouth.subscribe(&s.inner, POLLOUT)
@@ -197,7 +179,7 @@ func (s *UnixDgram) listen(backlog int) error {
 	return EOPNOTSUPP
 }
 
-func (s *UnixDgram) accept(p *Process, flags uint32) (Object, []byte, error) {
+func (s *UnixDgram) accept(p *Process, flags uint32) (*Description, []byte, error) {
 	return nil, nil, EOPNOTSUPP
 }
 
@@ -261,8 +243,6 @@ func (s *UnixDgram) send(p *Process, r *SockSend) error {
 	} else if t = s.targetEnd(); t == nil {
 		return ENOTCONN
 	}
-
-	defer t.unref()
 
 	s.mu.Lock()
 

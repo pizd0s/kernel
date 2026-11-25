@@ -12,7 +12,7 @@ func (r *SockConsume) unserved() error {
 	return nil
 }
 
-func (r *SockConsume) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *SockConsume) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return 0, b, nil
 }
 

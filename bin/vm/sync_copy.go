@@ -12,7 +12,7 @@ func (r *SyncCopy) unserved() error {
 	return EINVAL
 }
 
-func (r *SyncCopy) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *SyncCopy) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return 0, b, nil
 }
 

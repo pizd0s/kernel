@@ -2,48 +2,29 @@ package main
 
 import (
 	"sync"
-	"sync/atomic"
 )
 
 type Indirect struct {
 	ObjectIdent
 
-	refs atomic.Int32
-
 	mu     sync.Mutex
-	target Object
+	target *Description
 	subs   []Subscribed
 }
 
-type Subscribed struct {
-	s      *Subscription
-	events int16
+func newIndirect(target *Description) *Indirect {
+	return &Indirect{ObjectIdent: newObjectIdent(), target: target}
 }
 
-func newIndirect(target Object) *Indirect {
-	i := &Indirect{ObjectIdent: newObjectIdent(), target: target}
-
-	i.refs.Store(1)
-
-	return i
-}
-
-func (i *Indirect) ref() {
-	i.refs.Add(1)
-}
-
-func (i *Indirect) unref() {
-	if i.refs.Add(-1) == 0 {
-		i.target.unref()
-	}
+func (i *Indirect) closed() {
+	i.target.release()
 }
 
 func (i *Indirect) current() Object {
 	i.mu.Lock()
 
-	t := i.target
+	t := i.target.object()
 
-	t.ref()
 	i.mu.Unlock()
 
 	return t
@@ -51,17 +32,14 @@ func (i *Indirect) current() Object {
 
 func (i *Indirect) poll(events int16, through []*Epoll) int16 {
 	t := i.current()
-	ready := t.poll(events, through)
 
-	t.unref()
-
-	return ready
+	return t.poll(events, through)
 }
 
 func (i *Indirect) subscribe(s *Subscription, events int16) {
 	i.mu.Lock()
 	i.subs = append(i.subs, Subscribed{s, events})
-	i.target.subscribe(s, events)
+	i.target.object().subscribe(s, events)
 	i.mu.Unlock()
 }
 
@@ -76,15 +54,13 @@ func (i *Indirect) unsubscribe(s *Subscription) {
 		}
 	}
 
-	i.target.unsubscribe(s)
+	i.target.object().unsubscribe(s)
 	i.mu.Unlock()
 }
 
 func (i *Indirect) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	t := i.current()
 	cancelled, err := t.call(p, r, group, waits)
-
-	t.unref()
 
 	if to := movedOf(r); to != nil {
 		i.retarget(to)
@@ -93,14 +69,14 @@ func (i *Indirect) call(p *Process, r Request, group uint32, waits bool) (bool, 
 	return cancelled, err
 }
 
-func (i *Indirect) retarget(to Object) {
+func (i *Indirect) retarget(to *Description) {
 	i.mu.Lock()
 
 	from := i.target
 
 	for _, s := range i.subs {
-		from.unsubscribe(s.s)
-		to.subscribe(s.s, s.events)
+		from.object().unsubscribe(s.s)
+		to.object().subscribe(s.s, s.events)
 	}
 
 	i.target = to
@@ -109,7 +85,7 @@ func (i *Indirect) retarget(to Object) {
 
 	i.mu.Unlock()
 
-	from.unref()
+	from.release()
 
 	for _, s := range subs {
 		s.s.to.wake(&s.s.in)
@@ -117,8 +93,8 @@ func (i *Indirect) retarget(to Object) {
 	}
 }
 
-func movedOf(r Request) Object {
-	var to Object
+func movedOf(r Request) *Description {
+	var to *Description
 
 	switch r := r.(type) {
 	case *SockBind:

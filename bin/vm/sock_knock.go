@@ -19,7 +19,7 @@ func (r *SockKnock) unserved() error {
 	return ECONNREFUSED
 }
 
-func (r *SockKnock) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *SockKnock) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return 0, b, nil
 }
 

@@ -9,32 +9,24 @@ import (
 type UnixListener struct {
 	ObjectIdent
 
-	refs      atomic.Int32
 	mu        sync.Mutex
 	conns     MsgChannel[*PairEnd]
 	backlog   int
 	watchers  Subscribers
 	listening bool
-	closed    bool
+	gone      bool
 	ino       uint64
 	kind      int
 }
 
-func (l *UnixListener) ref() {
-	l.refs.Add(1)
-}
-
-func (l *UnixListener) unref() {
-	if l.refs.Add(-1) == 0 {
-		l.shut()
-	}
+func (l *UnixListener) closed() {
 }
 
 func (l *UnixListener) shut() {
 	var dropped []*PairEnd
 
 	l.mu.Lock()
-	l.closed = true
+	l.gone = true
 
 	for e, ok := l.conns.take(); ok; e, ok = l.conns.take() {
 		dropped = append(dropped, e)
@@ -44,7 +36,7 @@ func (l *UnixListener) shut() {
 	l.mu.Unlock()
 
 	for _, e := range dropped {
-		e.unref()
+		e.closed()
 	}
 }
 
@@ -53,7 +45,7 @@ func (l *UnixListener) listens() bool {
 
 	defer l.mu.Unlock()
 
-	return l.listening && !l.closed
+	return l.listening && !l.gone
 }
 
 func (l *UnixListener) open(backlog int) {
@@ -72,7 +64,7 @@ func (l *UnixListener) next(p *Process, nonblock bool) (*PairEnd, error) {
 		var err error
 
 		switch {
-		case !l.listening || l.closed:
+		case !l.listening || l.gone:
 			err = EINVAL
 		case ok:
 			l.watchers.tellOut()
@@ -89,7 +81,7 @@ func (l *UnixListener) next(p *Process, nonblock bool) (*PairEnd, error) {
 		l.mu.Unlock()
 
 		if err != nil && ok {
-			e.unref()
+			e.closed()
 		}
 
 		if err != nil {
@@ -105,7 +97,7 @@ func (l *UnixListener) push(e *PairEnd) (queued, refused bool) {
 
 	defer l.mu.Unlock()
 
-	if !l.listening || l.closed {
+	if !l.listening || l.gone {
 		return false, true
 	}
 
@@ -122,7 +114,7 @@ func (l *UnixListener) push(e *PairEnd) (queued, refused bool) {
 func (l *UnixListener) awaitRoom(p *Process, end time.Time, how Signalled) (timedOut bool, err error) {
 	l.mu.Lock()
 
-	if l.listening && !l.closed && l.conns.len() >= l.backlog {
+	if l.listening && !l.gone && l.conns.len() >= l.backlog {
 		timedOut, err = p.watch(&l.mu, &l.watchers, true, end, how)
 	}
 
@@ -140,7 +132,7 @@ func (l *UnixListener) stat(p *Process, st *Stat) error {
 func (l *UnixListener) poll(events int16, through []*Epoll) int16 {
 	l.mu.Lock()
 
-	shut, n, room := l.closed, l.conns.len(), l.conns.len() < l.backlog
+	shut, n, room := l.gone, l.conns.len(), l.conns.len() < l.backlog
 
 	l.mu.Unlock()
 
@@ -263,8 +255,8 @@ func (l *UnixListener) knock(p *Process, kind int, nonblock bool, timeout *atomi
 			err = EAGAIN
 		}
 
-		mine.unref()
-		theirs.unref()
+		mine.closed()
+		theirs.closed()
 
 		return nil, err
 	}

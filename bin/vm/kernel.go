@@ -25,7 +25,7 @@ var hostSignals = map[syscall.Signal]int{
 }
 
 type Kernel struct {
-	root    Object
+	root    *Description
 	user    Cred
 	console *Console
 
@@ -42,7 +42,7 @@ type Kernel struct {
 	locks      LockTable
 
 	fg        int32
-	cttys     map[int32]Object
+	cttys     map[int32]*Description
 	first     *Process
 	exit      chan int
 	functions map[string]any
@@ -53,7 +53,7 @@ type Kernel struct {
 func newKernel(user Cred, memory uint64) *Kernel {
 	k := &Kernel{procs: map[int32]*Process{}, codes: map[CodeKey]*CodeEntry{}, fifos: map[FileKey]*Pipe{}, sockets: map[FileKey]Object{},
 		semaphores: map[string]*Semaphore{},
-		exit:       make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]Object{}, pool: newPool(memory)}
+		exit:       make(chan int, 1), root: held(newNoRoot()), user: user, cttys: map[int32]*Description{}, pool: newPool(memory)}
 
 	k.locks.files = map[FileKey]*LockedFile{}
 	k.names.host, k.names.domain = "pizdos", "(none)"
@@ -120,12 +120,12 @@ func (k *Kernel) process(pid int32, parent *Process) *Process {
 		p.modes, p.classes, p.sink = parent.modes, parent.classes, parent.sink
 
 		if p.sink != nil {
-			p.sink.ref()
+			p.sink.hold()
 		}
 	}
 
-	p.root.ref()
-	p.cwd.ref()
+	p.root.hold()
+	p.cwd.hold()
 
 	return p
 }
@@ -467,10 +467,6 @@ func (k *Kernel) newConsole() []Object {
 		pp.readers, pp.writers = 1, 1
 
 		reader, writer := &PipeEnd{pipe: pp, reads: true}, &PipeEnd{pipe: pp, writes: true}
-
-		reader.refs.Store(1)
-		writer.refs.Store(1)
-
 		m := newMover()
 
 		c.movers = append(c.movers, m)
@@ -500,7 +496,7 @@ func (k *Kernel) newConsole() []Object {
 
 	for _, e := range pipes {
 		if e != nil {
-			e.unref()
+			e.closed()
 		}
 	}
 

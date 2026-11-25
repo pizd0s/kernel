@@ -4,10 +4,10 @@ import "bytes"
 
 type Ctl struct {
 	data   []byte
-	files  []Object
+	files  []*Description
 	opened uint32
 	answer []byte
-	got    []Object
+	got    []*Description
 }
 
 func (r *Ctl) op() uint32 {
@@ -18,7 +18,7 @@ func (r *Ctl) unserved() error {
 	return ENOTTY
 }
 
-func (r *Ctl) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *Ctl) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return 0, append(b, r.data...), r.files
 }
 

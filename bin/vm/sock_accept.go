@@ -6,7 +6,7 @@ import (
 
 type SockAccept struct {
 	flags uint32
-	conn  Object
+	conn  *Description
 	peer  []byte
 }
 
@@ -18,7 +18,7 @@ func (r *SockAccept) unserved() error {
 	return ENOTSOCK
 }
 
-func (r *SockAccept) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *SockAccept) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return r.flags, b, nil
 }
 

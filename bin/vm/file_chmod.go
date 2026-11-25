@@ -12,7 +12,7 @@ func (r *FileChmod) unserved() error {
 	return EINVAL
 }
 
-func (r *FileChmod) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *FileChmod) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return r.mode, b, nil
 }
 

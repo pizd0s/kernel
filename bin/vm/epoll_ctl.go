@@ -15,7 +15,7 @@ func (r *EpollCtl) unserved() error {
 	return EINVAL
 }
 
-func (r *EpollCtl) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *EpollCtl) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return 0, b, nil
 }
 

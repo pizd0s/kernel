@@ -12,7 +12,7 @@ func (r *SockListen) unserved() error {
 	return ENOTSOCK
 }
 
-func (r *SockListen) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *SockListen) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return uint32(r.backlog), b, nil
 }
 

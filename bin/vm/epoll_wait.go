@@ -19,7 +19,7 @@ func (r *EpollWait) unserved() error {
 	return EINVAL
 }
 
-func (r *EpollWait) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *EpollWait) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return 0, b, nil
 }
 

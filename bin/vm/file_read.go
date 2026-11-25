@@ -25,8 +25,8 @@ func (r *FileRead) unserved() error {
 	return EBADF
 }
 
-func (r *FileRead) ser(p *Process, b []byte) (uint32, []byte, []Object) {
-	return uint32(r.n), ioBody(b, r.at, r.explicit), []Object{r.into}
+func (r *FileRead) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
+	return uint32(r.n), ioBody(b, r.at, r.explicit), []*Description{r.into.desc}
 }
 
 func (r *FileRead) des(p *Process, pk *Packet) error {

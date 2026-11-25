@@ -18,7 +18,7 @@ func (r *FileReaddir) unserved() error {
 	return ENOTDIR
 }
 
-func (r *FileReaddir) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *FileReaddir) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return uint32(r.n), b, nil
 }
 

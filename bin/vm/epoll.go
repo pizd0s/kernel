@@ -26,14 +26,13 @@ type Epoll struct {
 	told    bool
 	self    []*Epoll
 	waiting Waiters[Turn]
-	refs    atomic.Int32
 	ino     uint64
 	made    time.Time
 }
 
 type EpollKey struct {
-	fd  uint32
-	obj Object
+	fd   uint32
+	desc *Description
 }
 
 type EpollMember struct {
@@ -50,20 +49,11 @@ func newEpoll() *Epoll {
 	ep := &Epoll{ObjectIdent: newObjectIdent(), members: map[EpollKey]*EpollMember{}, ino: epollInodes.Add(1), made: time.Now()}
 
 	ep.self = []*Epoll{ep}
-	ep.refs.Store(1)
 
 	return ep
 }
 
-func (ep *Epoll) ref() {
-	ep.refs.Add(1)
-}
-
-func (ep *Epoll) unref() {
-	if ep.refs.Add(-1) != 0 {
-		return
-	}
-
+func (ep *Epoll) closed() {
 	ep.mu.Lock()
 
 	members := ep.members
@@ -72,8 +62,8 @@ func (ep *Epoll) unref() {
 	ep.mu.Unlock()
 
 	for _, m := range members {
-		m.key.obj.unsubscribe(&m.sub)
-		m.key.obj.unref()
+		m.key.desc.unsubscribe(&m.sub)
+		m.key.desc.release()
 	}
 }
 
@@ -113,7 +103,7 @@ func (ep *Epoll) poll(events int16, through []*Epoll) int16 {
 		ep.ready.put(m)
 
 		if !m.disabled && ep.members[m.key] == m {
-			marked = append(marked, asked{m.key.obj, m.events})
+			marked = append(marked, asked{m.key.desc.object(), m.events})
 		}
 	}
 
@@ -202,8 +192,8 @@ func (ep *Epoll) epollCtl(op uint32, key EpollKey, events uint32, data uint64) e
 
 		m.events, m.data, m.disabled = events, data, false
 		ep.mu.Unlock()
-		key.obj.unsubscribe(&m.sub)
-		key.obj.subscribe(&m.sub, int16(events))
+		key.desc.unsubscribe(&m.sub)
+		key.desc.subscribe(&m.sub, int16(events))
 		ep.ring(m)
 
 		return nil
@@ -220,8 +210,8 @@ func (ep *Epoll) epollCtl(op uint32, key EpollKey, events uint32, data uint64) e
 
 		delete(ep.members, key)
 		ep.mu.Unlock()
-		key.obj.unsubscribe(&m.sub)
-		key.obj.unref()
+		key.desc.unsubscribe(&m.sub)
+		key.desc.release()
 
 		return nil
 	}
@@ -244,8 +234,8 @@ func (ep *Epoll) add(key EpollKey, events uint32, data uint64) error {
 	ep.members[key] = m
 	ep.mu.Unlock()
 
-	key.obj.subscribe(&m.sub, int16(events))
-	key.obj.ref()
+	key.desc.subscribe(&m.sub, int16(events))
+	key.desc.hold()
 	ep.ring(m)
 
 	return nil
@@ -268,7 +258,7 @@ func (ep *Epoll) collect(buf []byte, max int) int {
 
 		ep.mu.Unlock()
 
-		revents := m.key.obj.poll(int16(events), ep.self)
+		revents := m.key.desc.object().poll(int16(events), ep.self)
 
 		ep.mu.Lock()
 

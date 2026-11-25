@@ -18,7 +18,7 @@ func (r *FileSeek) unserved() error {
 	return ESPIPE
 }
 
-func (r *FileSeek) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *FileSeek) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return uint32(r.whence), binary.LittleEndian.AppendUint64(b, uint64(r.off)), nil
 }
 

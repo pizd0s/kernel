@@ -3,13 +3,11 @@ package main
 import (
 	"math"
 	"sync"
-	"sync/atomic"
 )
 
 type RWLock struct {
 	ObjectIdent
 
-	refs    atomic.Int32
 	mu      sync.Mutex
 	writer  int32
 	readers uint32
@@ -18,17 +16,10 @@ type RWLock struct {
 func newRWLock() *RWLock {
 	l := &RWLock{ObjectIdent: newObjectIdent()}
 
-	l.refs.Store(1)
-
 	return l
 }
 
-func (l *RWLock) ref() {
-	l.refs.Add(1)
-}
-
-func (l *RWLock) unref() {
-	l.refs.Add(-1)
+func (l *RWLock) closed() {
 }
 
 func (l *RWLock) poll(events int16, through []*Epoll) int16 {

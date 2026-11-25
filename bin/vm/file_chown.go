@@ -16,7 +16,7 @@ func (r *FileChown) unserved() error {
 	return EINVAL
 }
 
-func (r *FileChown) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *FileChown) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	return 0, binary.LittleEndian.AppendUint32(binary.LittleEndian.AppendUint32(b, uint32(r.uid)), uint32(r.gid)), nil
 }
 

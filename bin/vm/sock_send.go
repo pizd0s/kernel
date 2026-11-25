@@ -9,7 +9,7 @@ type SockSend struct {
 	to    Address
 	mode  IoMode
 	n     int
-	moved Object
+	moved *Description
 }
 
 func (r *SockSend) op() uint32 {
@@ -20,7 +20,7 @@ func (r *SockSend) unserved() error {
 	return ENOTSOCK
 }
 
-func (r *SockSend) ser(p *Process, b []byte) (uint32, []byte, []Object) {
+func (r *SockSend) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 	b = append(binary.LittleEndian.AppendUint32(b, uint32(len(r.to.raw))), r.to.raw...)
 
 	return bit(r.mode.nonblock)*MSG_DONTWAIT | bit(r.mode.quiet)*MSG_NOSIGNAL, append(b, r.pk.data...), r.pk.files

@@ -1,30 +1,18 @@
 package main
 
-import (
-	"sync/atomic"
-)
-
 type Barrier struct {
 	ObjectIdent
 
-	refs  atomic.Int32
 	count uint32
 }
 
 func newBarrier(count uint32) *Barrier {
 	b := &Barrier{ObjectIdent: newObjectIdent(), count: count}
 
-	b.refs.Store(1)
-
 	return b
 }
 
-func (b *Barrier) ref() {
-	b.refs.Add(1)
-}
-
-func (b *Barrier) unref() {
-	b.refs.Add(-1)
+func (b *Barrier) closed() {
 }
 
 func (b *Barrier) poll(events int16, through []*Epoll) int16 {

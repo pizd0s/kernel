@@ -10,7 +10,7 @@ import (
 const lockPast = math.MaxUint64
 
 type FileLock struct {
-	owner       Object
+	owner       *Description
 	key         FileKey
 	ranged      bool
 	write       bool
@@ -27,7 +27,7 @@ type LockedFile struct {
 type LockTable struct {
 	mu     sync.Mutex
 	files  map[FileKey]*LockedFile
-	owners map[Object]FileKey
+	owners map[*Description]FileKey
 	held   atomic.Int32
 }
 
@@ -67,7 +67,7 @@ func (f *LockedFile) ready(want, before *FileLock) bool {
 	return true
 }
 
-func (f *LockedFile) drop(owner Object, ranged bool, start, stop uint64) {
+func (f *LockedFile) drop(owner *Description, ranged bool, start, stop uint64) {
 	for at := &f.held; *at != nil; {
 		l := *at
 
@@ -146,12 +146,13 @@ func (t *LockTable) lock(p *Process, want *FileLock, waits bool) error {
 	t.mu.Lock()
 
 	if t.owners == nil {
-		t.owners = map[Object]FileKey{}
+		t.owners = map[*Description]FileKey{}
 	}
 
 	if _, known := t.owners[n]; !known {
 		t.owners[n] = key
 		t.held.Add(1)
+		n.locks.Store(t)
 	}
 
 	f := t.files[key]
@@ -195,7 +196,7 @@ func (t *LockTable) lock(p *Process, want *FileLock, waits bool) error {
 func (t *LockTable) wait(p *Process, f *LockedFile, w *FileLock) (err error) {
 	n := w.owner
 
-	n.ref()
+	n.hold()
 
 	defer func() {
 		t.mu.Lock()
@@ -208,7 +209,7 @@ func (t *LockTable) wait(p *Process, f *LockedFile, w *FileLock) (err error) {
 		}
 
 		t.mu.Unlock()
-		n.unref()
+		n.release()
 	}()
 
 	for {
@@ -220,7 +221,7 @@ func (t *LockTable) wait(p *Process, f *LockedFile, w *FileLock) (err error) {
 	}
 }
 
-func (t *LockTable) unlock(n Object, key FileKey, ranged bool, start, stop uint64) {
+func (t *LockTable) unlock(n *Description, key FileKey, ranged bool, start, stop uint64) {
 	if t.held.Load() == 0 {
 		return
 	}
@@ -249,7 +250,7 @@ func (t *LockTable) way(want *FileLock) (FileLock, bool) {
 	return FileLock{}, false
 }
 
-func (t *LockTable) forget(n Object) {
+func (t *LockTable) forget(n *Description) {
 	if t.held.Load() == 0 {
 		return
 	}

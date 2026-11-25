@@ -1,31 +1,22 @@
 package main
 
 import (
-	"sync/atomic"
 	"time"
 )
 
 type NoRoot struct {
 	ObjectIdent
 
-	refs atomic.Int32
 	made time.Time
 }
 
 func newNoRoot() *NoRoot {
 	r := &NoRoot{ObjectIdent: newObjectIdent(), made: time.Now()}
 
-	r.refs.Store(1)
-
 	return r
 }
 
-func (r *NoRoot) ref() {
-	r.refs.Add(1)
-}
-
-func (r *NoRoot) unref() {
-	r.refs.Add(-1)
+func (r *NoRoot) closed() {
 }
 
 func (r *NoRoot) stat(p *Process, st *Stat) error {
