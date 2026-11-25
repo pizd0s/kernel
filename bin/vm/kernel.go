@@ -100,7 +100,7 @@ func (k *Kernel) newProcess(parent *Process) (*Process, error) {
 
 func (k *Kernel) process(pid int32, parent *Process) *Process {
 	p := &Process{k: k, pid: pid, umask: 0o022, iconvs: map[uint32]*Iconv{}, seed: 0, syncs: map[int32]Object{},
-		semOpens: map[string]*SemOpen{}, spawnFiles: map[uint32][]SpawnAction{}, locales: map[uint32][LC_ALL]string{}}
+		semOpens: map[string]*SemOpen{}, spawnFiles: map[uint32][]SpawnAction{}}
 
 	p.own.signal.kind, p.own.continued.kind = eventSignal, eventContinued
 	p.own.child.kind, p.own.compiled.kind, p.own.pool.kind = eventChild, eventCompiled, eventPool
@@ -714,9 +714,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"atol":                                  libcAtol,
 		"atoll":                                 libcAtoll,
 		"atof":                                  libcAtof,
-		"strtod_l":                              libcStrtod_l,
-		"strtof_l":                              libcStrtof_l,
-		"strtold_l":                             libcStrtold_l,
 		"iconv_open":                            libcIconv_open,
 		"iconv":                                 libcIconv,
 		"iconv_close":                           libcIconv_close,
@@ -770,8 +767,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"memccpy":                               libcMemccpy,
 		"swab":                                  libcSwab,
 		"strtok":                                libcStrtok,
-		"strcoll":                               libcStrcoll,
-		"strxfrm":                               libcStrxfrm,
 		"strerror_r":                            libcStrerror_r,
 		"basename":                              libcBasename,
 		"ffs":                                   libcFfs,
@@ -810,8 +805,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"alarm":                                 libcAlarm,
 		"mktime":                                libcMktime,
 		"ctime":                                 libcCtime,
-		"strftime":                              libcStrftime,
-		"strptime":                              libcStrptime,
 		"times":                                 libcTimes,
 		"sleep":                                 libcSleep,
 		"clock_gettime":                         libcClock_gettime,
@@ -878,11 +871,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"tcsetwinsize":                          libcTcsetwinsize,
 		"wcslcpy":                               libcWcslcpy,
 		"wcslcat":                               libcWcslcat,
-		"newlocale":                             libcNewlocale,
-		"duplocale":                             libcDuplocale,
-		"freelocale":                            libcFreelocale,
-		"uselocale":                             libcUselocale,
-		"getlocalename_l":                       libcGetlocalename_l,
 		"posix_getdents":                        libcPosix_getdents,
 		"posix_devctl":                          libcPosix_devctl,
 		"getrandom":                             libcGetrandom,
@@ -957,9 +945,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"wait3":                                 libcWait3,
 		"wait4":                                 libcWait4,
 		"waitid":                                libcWaitid,
-		"setlocale":                             libcSetlocale,
-		"localeconv":                            libcLocaleconv,
-		"nl_langinfo":                           libcNl_langinfo,
 		"towlower":                              libcTowlower,
 		"towupper":                              libcTowupper,
 		"wctype":                                libcWctype,
@@ -985,8 +970,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"wcscat":                                libcWcscat,
 		"wcscmp":                                libcWcscmp,
 		"wcsncmp":                               libcWcsncmp,
-		"wcscoll":                               libcWcscoll,
-		"wcsxfrm":                               libcWcsxfrm,
 		"wcschr":                                libcWcschr,
 		"wcsrchr":                               libcWcsrchr,
 		"wcsstr":                                libcWcsstr,
@@ -995,7 +978,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"wcscspn":                               libcWcscspn,
 		"wcstok":                                libcWcstok,
 		"wcsdup":                                libcWcsdup,
-		"wcsftime":                              libcWcsftime,
 		"wmemchr":                               libcWmemchr,
 		"wmemcmp":                               libcWmemcmp,
 		"wmemcpy":                               libcWmemcpy,
@@ -1340,9 +1322,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"inotify_add_watch":                     libcInotify_add_watch,
 		"inotify_rm_watch":                      libcInotify_rm_watch,
 		"mkostemps":                             libcMkostemps,
-		"strerror_l":                            libcStrerror_l,
-		"strcasecmp_l":                          libcStrcasecmp_l,
-		"strncasecmp_l":                         libcStrncasecmp_l,
 		"lchmod":                                libcLchmod,
 		"posix_close":                           libcPosix_close,
 		"issetugid":                             libcIssetugid,
@@ -1351,11 +1330,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"wcpncpy":                               libcWcpncpy,
 		"wcscasecmp":                            libcWcscasecmp,
 		"wcsncasecmp":                           libcWcsncasecmp,
-		"wcscasecmp_l":                          libcWcscasecmp_l,
-		"wcsncasecmp_l":                         libcWcsncasecmp_l,
-		"wcsftime_l":                            libcWcsftime_l,
-		"towctrans_l":                           libcTowctrans_l,
-		"wctrans_l":                             libcWctrans_l,
 		"timespec_get":                          libcTimespec_get,
 	}
 }

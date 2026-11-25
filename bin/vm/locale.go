@@ -3,7 +3,6 @@
 package main
 
 import (
-	"strings"
 	"unicode"
 )
 
@@ -21,27 +20,6 @@ const (
 	wcUpper
 	wcXdigit
 )
-
-func utf8Codeset(name string) bool {
-	_, codeset, ok := strings.Cut(name, ".")
-
-	if !ok {
-		return true
-	}
-
-	codeset, _, _ = strings.Cut(codeset, "@")
-	codeset = strings.ToLower(strings.ReplaceAll(codeset, "-", ""))
-
-	return codeset == "utf8"
-}
-
-func localeShown(name string) string {
-	if name == "" {
-		return "C"
-	}
-
-	return name
-}
 
 func noBreakSpace(c rune) bool {
 	return c == 0xa0 || c == 0x2007 || c == 0x202f

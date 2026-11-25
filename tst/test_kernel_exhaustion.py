@@ -68,8 +68,8 @@ def main():
     vm, native, wazero = sys.argv[1:]
     startup = ("__kernel_begin", list(range(1024, 1052, 4)), False)
     cases = [("startup-array", *startup, False, None), ("startup-string", *startup, True, None),
-             # localeconv takes the size of its struct lconv.
-             ("locale-structure", "localeconv", [56], True, False, None), ("constant-string", "nl_langinfo", [14], True, False, None),
+             # strerror's message is the static area's, gai_strerror's a constant.
+             ("static-result", "strerror", [2], True, False, None), ("constant-string", "gai_strerror", [-2], True, False, None),
              ("working-directory", "getcwd", [0, 0], True, False, 12),
              ("large-allocation", "malloc", [4194304], True, False, 12),
              ("growing-allocation", "realloc", [0, 4194304], True, False, 12)]

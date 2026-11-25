@@ -862,18 +862,6 @@ func libcAtof(s uint32) float64 {
 	return proc().libcAtof(s)
 }
 
-func libcStrtod_l(s, end, locale uint32) float64 {
-	return proc().libcStrtod(s, end)
-}
-
-func libcStrtof_l(s, end, locale uint32) float32 {
-	return proc().libcStrtof(s, end)
-}
-
-func libcStrtold_l(s, end, locale uint32) float64 {
-	return proc().libcStrtod(s, end)
-}
-
 func libc__dtoa(v float64, mode, n, decpt, sign, end uint32) uint32 {
 	return proc().libc__dtoa(v, mode, n, decpt, sign, end)
 }
@@ -924,14 +912,6 @@ func libcSwab(s, d, n uint32) {
 
 func libcStrtok(s, delim uint32) uint32 {
 	return proc().libcStrtok(s, delim)
-}
-
-func libcStrcoll(a, b uint32) uint32 {
-	return proc().libcStrcoll(a, b)
-}
-
-func libcStrxfrm(d, s, n uint32) uint32 {
-	return proc().libcStrxfrm(d, s, n)
 }
 
 func libcStrerror_r(e, buf, n uint32) uint32 {
@@ -1128,22 +1108,6 @@ func libcMktime(at, atSize uint32) uint64 {
 
 func libcCtime(t uint32) uint32 {
 	return proc().libcCtime(t)
-}
-
-func libcStrftime(s, max, format, tm, tmSize uint32) uint32 {
-	p := proc()
-
-	p.sized("strftime", tmSize, sizeofTm)
-
-	return p.libcStrftime(s, max, format, tm)
-}
-
-func libcStrptime(s, format, tm, tmSize uint32) uint32 {
-	p := proc()
-
-	p.sized("strptime", tmSize, sizeofTm)
-
-	return p.libcStrptime(s, format, tm)
 }
 
 func libcTimes(at, atSize uint32) uint64 {
@@ -1734,22 +1698,6 @@ func libcWaitid(idtype, id, info, infoSize, options uint32) uint32 {
 	return p.libcWaitid(idtype, id, info, options)
 }
 
-func libcSetlocale(cat, name uint32) uint32 {
-	return proc().libcSetlocale(cat, name)
-}
-
-func libcLocaleconv(size uint32) uint32 {
-	p := proc()
-
-	p.sized("localeconv", size, sizeofLconv)
-
-	return p.libcLocaleconv()
-}
-
-func libcNl_langinfo(item uint32) uint32 {
-	return proc().libcNl_langinfo(item)
-}
-
 func libcTowlower(c uint32) uint32 {
 	return proc().libcTowlower(c)
 }
@@ -1850,14 +1798,6 @@ func libcWcsncmp(a, b, n uint32) uint32 {
 	return proc().libcWcsncmp(a, b, n)
 }
 
-func libcWcscoll(a, b uint32) uint32 {
-	return proc().libcWcscoll(a, b)
-}
-
-func libcWcsxfrm(d, s, n uint32) uint32 {
-	return proc().libcWcsxfrm(d, s, n)
-}
-
 func libcWcschr(s, c uint32) uint32 {
 	return proc().libcWcschr(s, c)
 }
@@ -1888,14 +1828,6 @@ func libcWcstok(s, sep, save uint32) uint32 {
 
 func libcWcsdup(s uint32) uint32 {
 	return proc().libcWcsdup(s)
-}
-
-func libcWcsftime(s, max, format, tm, tmSize uint32) uint32 {
-	p := proc()
-
-	p.sized("wcsftime", tmSize, sizeofTm)
-
-	return p.libcWcsftime(s, max, format, tm)
 }
 
 func libcWmemchr(s, c, n uint32) uint32 {
@@ -3965,18 +3897,6 @@ func libcMkostemps(template, suffix, flags uint32) uint32 {
 	return proc().libcMkostemps(template, suffix, flags)
 }
 
-func libcStrerror_l(e, locale uint32) uint32 {
-	return proc().libcStrerror_l(e, locale)
-}
-
-func libcStrcasecmp_l(a, b, locale uint32) uint32 {
-	return proc().libcStrcasecmp_l(a, b, locale)
-}
-
-func libcStrncasecmp_l(a, b, n, locale uint32) uint32 {
-	return proc().libcStrncasecmp_l(a, b, n, locale)
-}
-
 func libcLchmod(path, mode uint32) uint32 {
 	return proc().libcLchmod(path, mode)
 }
@@ -4007,30 +3927,6 @@ func libcWcscasecmp(a, b uint32) uint32 {
 
 func libcWcsncasecmp(a, b, n uint32) uint32 {
 	return proc().libcWcsncasecmp(a, b, n)
-}
-
-func libcWcscasecmp_l(a, b, locale uint32) uint32 {
-	return proc().libcWcscasecmp_l(a, b, locale)
-}
-
-func libcWcsncasecmp_l(a, b, n, locale uint32) uint32 {
-	return proc().libcWcsncasecmp_l(a, b, n, locale)
-}
-
-func libcWcsftime_l(s, max, format, tm, tmSize, locale uint32) uint32 {
-	p := proc()
-
-	p.sized("wcsftime_l", tmSize, sizeofTm)
-
-	return p.libcWcsftime_l(s, max, format, tm, locale)
-}
-
-func libcTowctrans_l(c, trans, locale uint32) uint32 {
-	return proc().libcTowctrans_l(c, trans, locale)
-}
-
-func libcWctrans_l(name, locale uint32) uint32 {
-	return proc().libcWctrans_l(name, locale)
 }
 
 func libcTimespec_get(ts, tsSize, base uint32) uint32 {
@@ -4203,26 +4099,6 @@ func libcWcslcpy(d, s, n uint32) uint32 {
 
 func libcWcslcat(d, s, n uint32) uint32 {
 	return proc().libcWcslcat(d, s, n)
-}
-
-func libcNewlocale(mask, name, base uint32) uint32 {
-	return proc().libcNewlocale(mask, name, base)
-}
-
-func libcDuplocale(locale uint32) uint32 {
-	return proc().libcDuplocale(locale)
-}
-
-func libcFreelocale(locale uint32) {
-	proc().libcFreelocale(locale)
-}
-
-func libcUselocale(locale uint32) uint32 {
-	return proc().libcUselocale(locale)
-}
-
-func libcGetlocalename_l(category, locale uint32) uint32 {
-	return proc().libcGetlocalename_l(category, locale)
 }
 
 func libcPosix_getdents(fd, buf, n, flags uint32) uint32 {

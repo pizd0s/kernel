@@ -24,8 +24,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-	"unicode"
-	"unicode/utf8"
 	"unsafe"
 )
 
@@ -34,7 +32,6 @@ var (
 	zoneDirs       = []string{"/usr/share/zoneinfo/", "/share/zoneinfo/", "/etc/zoneinfo/"}
 	pathconfValues = []int32{8, 255, 255, 255, 4096, 4096, 1, 1, 0, 1, -1, -1, -1, 64, 4096, 4096, 4096, 4096, 4096, -1, 1}
 	hostMessages   = []string{"Host not found", "Try again", "Non-recoverable error", "Address not available"}
-	localeVars     = [LC_ALL]string{"LC_CTYPE", "LC_NUMERIC", "LC_TIME", "LC_COLLATE", "LC_MONETARY", "LC_MESSAGES"}
 	wcClassNames   = []string{"alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"}
 	devctlValues   = map[uint32]bool{TCFLSH: true, TCXONC: true, TCSBRK: true}
 )
@@ -68,19 +65,6 @@ var wellKnown = []ServiceEntry{
 	{"http", 80, "tcp", nil}, {"pop3", 110, "tcp", nil}, {"sunrpc", 111, "tcp", nil}, {"sunrpc", 111, "udp", nil}, {"nntp", 119, "tcp", nil},
 	{"ntp", 123, "udp", nil}, {"imap", 143, "tcp", nil}, {"snmp", 161, "udp", nil}, {"ldap", 389, "tcp", nil}, {"https", 443, "tcp", nil},
 	{"syslog", 514, "udp", nil}, {"submission", 587, "tcp", nil}, {"imaps", 993, "tcp", nil}, {"pop3s", 995, "tcp", nil},
-}
-
-var langItems = map[int][]string{
-	LC_NUMERIC: {".", ""},
-	LC_TIME: {
-		"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat",
-		"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
-		"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-		"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December",
-		"AM", "PM", "%a %b %e %T %Y", "%m/%d/%y", "%H:%M:%S", "%I:%M:%S %p",
-		"", "", "%m/%d/%y", "0123456789", "%a %b %e %T %Y", "%H:%M:%S",
-	},
-	LC_MESSAGES: {"^[yY]", "^[nN]", "yes", "no"},
 }
 
 var hostRlimits = [RLIM_NLIMITS]int{
@@ -190,7 +174,6 @@ const (
 	windowsKept      = 8
 	packetsKept      = 8
 	packetRoomKept   = 4096
-	localeNameMax    = 23
 	traceStringMax   = 64
 )
 
@@ -261,8 +244,6 @@ type Process struct {
 
 	spawnFiles     map[uint32][]SpawnAction
 	nextSpawnFiles uint32
-	locales        map[uint32][LC_ALL]string
-	nextLocale     uint32
 	semUndo        map[*SemSet]bool
 	aios           map[uint32]*AioOp
 
@@ -278,7 +259,6 @@ type Process struct {
 	constants map[string]uint32
 	siginfo   uint32
 
-	locale     [LC_ALL]string
 	zone       ZoneCache
 	envStrings map[uint32]bool
 	mappings   map[uint32]Mapping
@@ -568,8 +548,8 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 		i.attach(p)
 		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
 		p.tzAt, p.nameAt = [3]uint32{}, 0
-		p.constants, p.locale = map[string]uint32{}, [LC_ALL]string{}
-		p.iconvs, p.spawnFiles, p.locales = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}, map[uint32][LC_ALL]string{}
+		p.constants = map[string]uint32{}
+		p.iconvs, p.spawnFiles = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
 		p.defaultStack, p.defaultGuard = 0, 0
 
@@ -2129,114 +2109,6 @@ func (p *Process) libcWcslcat(d, s, n uint32) uint32 {
 	p.put32(d+4*(l+k), 0)
 
 	return l + src
-}
-
-func (p *Process) libcNewlocale(mask, name, base uint32) uint32 {
-	if name == 0 || int32(mask) < 0 {
-		return p.pointer(0, EINVAL)
-	}
-
-	var names [LC_ALL]string
-
-	if base != 0 {
-		b, ok := p.locales[base]
-
-		if !ok {
-			return p.pointer(0, EINVAL)
-		}
-
-		names = b
-	}
-
-	s := p.str(name)
-	parts := []string{s}
-
-	if mask&(1<<LC_ALL-1) == 1<<LC_ALL-1 {
-		parts = strings.Split(s, ";")
-	}
-
-	for i := range LC_ALL {
-		if mask&(1<<i) == 0 {
-			continue
-		}
-
-		n := p.localeName(i, parts[min(i, len(parts)-1)])
-
-		if !utf8Codeset(n) {
-			return p.pointer(0, ENOENT)
-		}
-
-		names[i] = n
-	}
-
-	if base != 0 {
-		p.locales[base] = names
-
-		return base
-	}
-
-	return p.addLocale(names)
-}
-
-func (p *Process) addLocale(names [LC_ALL]string) uint32 {
-	p.nextLocale++
-	p.locales[p.nextLocale] = names
-
-	return p.nextLocale
-}
-
-func (p *Process) localeOf(locale uint32) ([LC_ALL]string, bool) {
-	if locale == uint32(LC_GLOBAL_LOCALE) {
-		return p.locale, true
-	}
-
-	names, ok := p.locales[locale]
-
-	return names, ok
-}
-
-func (p *Process) libcDuplocale(locale uint32) uint32 {
-	names, ok := p.localeOf(locale)
-
-	if !ok {
-		return p.pointer(0, EINVAL)
-	}
-
-	return p.addLocale(names)
-}
-
-func (p *Process) libcFreelocale(locale uint32) {
-	delete(p.locales, locale)
-}
-
-func (p *Process) libcUselocale(locale uint32) uint32 {
-	previous := p.thread.locale
-
-	if previous == 0 {
-		previous = uint32(LC_GLOBAL_LOCALE)
-	}
-
-	switch _, ok := p.locales[locale]; {
-	case locale == 0:
-	case locale == uint32(LC_GLOBAL_LOCALE):
-		p.thread.locale = 0
-	case !ok:
-		return p.pointer(0, EINVAL)
-	default:
-		p.thread.locale = locale
-	}
-
-	return previous
-}
-
-func (p *Process) libcGetlocalename_l(cat, locale uint32) uint32 {
-	names, ok := p.localeOf(locale)
-
-	if !ok || cat > LC_ALL {
-		return 0
-	}
-
-	return p.localeString(names, cat)
 }
 
 func (p *Process) libcPosix_getdents(fd, buf, n, flags uint32) uint32 {
@@ -3915,10 +3787,9 @@ func (p *Process) startVfork() uint32 {
 	c.constants, c.jumps, c.stackAt = p.constants, p.jumps, p.stackAt
 	c.iconvs, c.nextIconv = p.iconvs, p.nextIconv
 	c.spawnFiles, c.nextSpawnFiles = p.spawnFiles, p.nextSpawnFiles
-	c.locales, c.nextLocale = p.locales, p.nextLocale
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
 	c.defaultStack, c.defaultGuard = p.defaultStack, p.defaultGuard
-	c.locale, c.envStrings, c.mappings, c.tzAt = p.locale, p.envStrings, p.mappings, p.tzAt
+	c.envStrings, c.mappings, c.tzAt = p.envStrings, p.mappings, p.tzAt
 	c.nameAt = p.nameAt
 	c.token.Store(p.token.Load())
 	c.inherit(p)
@@ -3969,12 +3840,11 @@ func (p *Process) fork() (int32, error) {
 	inst.attach(c)
 	c.image = p.image
 	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap.clone(), p.stack.clone(), p.static, p.env, p.errnoAt, p.environAt, p.siginfo
-	c.stackAt, c.locale, c.tzAt = p.stackAt, p.locale, p.tzAt
+	c.stackAt, c.tzAt = p.stackAt, p.tzAt
 	c.nameAt = p.nameAt
 	c.constants, c.jumps = map[string]uint32{}, map[uint32]*JmpBuf{}
 	c.iconvs, c.nextIconv = map[uint32]*Iconv{}, p.nextIconv
 	c.spawnFiles, c.nextSpawnFiles = map[uint32][]SpawnAction{}, p.nextSpawnFiles
-	c.locales, c.nextLocale = maps.Clone(p.locales), p.nextLocale
 
 	for id, cd := range p.iconvs {
 		c.iconvs[id] = cd.copy()
@@ -11173,35 +11043,6 @@ func (p *Process) libcCtime(t uint32) uint32 {
 	return p.libcCtime_r(t, p.staticAt(staticCtime))
 }
 
-func (p *Process) libcStrftime(s, max, format, tm uint32) uint32 {
-	out := strftime(string(p.cstr(format)), p.readTm(tm))
-
-	if uint32(len(out)) >= max {
-		return 0
-	}
-
-	p.putString(s, out)
-
-	return uint32(len(out))
-}
-
-func (p *Process) libcStrptime(s, format, tm uint32) uint32 {
-	fields := p.readTm(tm)
-	n, ok := strptime(p.cstr(s), string(p.cstr(format)), &fields)
-
-	if !ok {
-		return 0
-	}
-
-	b := p.span(tm, 36)
-
-	for i, v := range []int{fields.sec, fields.min, fields.hour, fields.mday, fields.mon, fields.year, fields.wday, fields.yday, fields.isdst} {
-		binary.LittleEndian.PutUint32(b[4*i:], uint32(int32(v)))
-	}
-
-	return s + uint32(n)
-}
-
 func (p *Process) libcTimes(at uint32) uint64 {
 	var t syscall.Tms
 
@@ -14588,125 +14429,6 @@ func (p *Process) libcIf_freenameindex(block uint32) {
 	p.free(block)
 }
 
-func (p *Process) localeName(cat int, name string) string {
-	if name == "" {
-		for _, v := range []string{"LC_ALL", localeVars[cat], "LANG"} {
-			if s, ok := p.getenv(v); ok && s != "" {
-				name = s
-
-				break
-			}
-		}
-	}
-
-	if name == "" || len(name) > localeNameMax || name[0] == '.' || strings.Contains(name, "/") {
-		name = "C.UTF-8"
-	}
-
-	switch {
-	case name == "C" || name == "POSIX":
-		return ""
-	case name == "C.UTF-8" && cat != LC_CTYPE:
-		return ""
-	}
-
-	return name
-}
-
-func (p *Process) setlocale(cat uint32, name uint32) uint32 {
-	if cat > LC_ALL {
-		return 0
-	}
-
-	if name != 0 {
-		s := p.str(name)
-		parts := strings.Split(s, ";")
-
-		var names [LC_ALL]string
-
-		for i := range LC_ALL {
-			part := s
-
-			if cat == LC_ALL {
-				part = parts[min(i, len(parts)-1)]
-			} else if i != int(cat) {
-				continue
-			}
-
-			names[i] = p.localeName(i, part)
-
-			if !utf8Codeset(names[i]) {
-				return 0
-			}
-		}
-
-		for i := range LC_ALL {
-			if cat == LC_ALL || i == int(cat) {
-				p.locale[i] = names[i]
-			}
-		}
-	}
-
-	return p.localeString(p.locale, cat)
-}
-
-func (p *Process) localeString(locale [LC_ALL]string, cat uint32) uint32 {
-	if cat < LC_ALL {
-		return p.constant(localeShown(locale[cat]))
-	}
-
-	names := make([]string, LC_ALL)
-
-	for i, n := range locale {
-		names[i] = localeShown(n)
-	}
-
-	for _, n := range names {
-		if n != names[0] {
-			return p.constant(strings.Join(names, ";"))
-		}
-	}
-
-	return p.constant(names[0])
-}
-
-func (p *Process) langinfo(item uint32) string {
-	cat, idx := int(item>>16), int(item&0xffff)
-
-	switch {
-	case item == CODESET:
-		return "UTF-8"
-	case idx == localeNameItem && cat < LC_ALL:
-		return localeShown(p.locale[cat])
-	case idx < len(langItems[cat]):
-		return langItems[cat][idx]
-	}
-
-	return ""
-}
-
-func (p *Process) localeconv() uint32 {
-	at := p.staticAt(staticLconv)
-
-	p.put32(at, p.staticAt(staticDot))
-
-	for i := uint32(1); i < lconvStrings; i++ {
-		p.put32(at+4*i, p.staticAt(staticEmpty))
-	}
-
-	chars := p.span(at+4*lconvStrings, lconvChars)
-
-	for i := range chars {
-		chars[i] = CHAR_MAX
-	}
-
-	return at
-}
-
-func (p *Process) libcNl_langinfo(item uint32) uint32 {
-	return p.constant(p.langinfo(item))
-}
-
 func (p *Process) libcTowlower(c uint32) uint32 {
 	return towlower(c)
 }
@@ -14799,14 +14521,6 @@ func (p *Process) libcIswupper(c uint32) uint32 {
 
 func (p *Process) libcIswxdigit(c uint32) uint32 {
 	return bit(iswClass(wcXdigit, c))
-}
-
-func (p *Process) libcSetlocale(cat, name uint32) uint32 {
-	return p.setlocale(cat, name)
-}
-
-func (p *Process) libcLocaleconv() uint32 {
-	return p.localeconv()
 }
 
 func (p *Process) libcIsalnum(c uint32) uint32 {
@@ -15419,20 +15133,6 @@ func (p *Process) libcStrtok(s, delim uint32) uint32 {
 	return token
 }
 
-func (p *Process) libcStrcoll(a, b uint32) uint32 {
-	return uint32(int32(bytes.Compare(p.cstr(a), p.cstr(b))))
-}
-
-func (p *Process) libcStrxfrm(d, s, n uint32) uint32 {
-	l := uint32(len(p.cstr(s)))
-
-	if n > l {
-		p.strcpy(d, s)
-	}
-
-	return l
-}
-
 func (p *Process) libcStrerror_r(e, buf, n uint32) uint32 {
 	msg := Errno(e).message()
 
@@ -15796,36 +15496,6 @@ func (p *Process) wcscpy(d, s uint32) uint32 {
 	return d
 }
 
-func (p *Process) wcsftime(s, max, format, tm uint32) uint32 {
-	var f strings.Builder
-
-	for _, c := range p.wstring(format) {
-		r := rune(c)
-
-		if c > unicode.MaxRune || !utf8.ValidRune(r) {
-			r = utf8.RuneError
-		}
-
-		f.WriteRune(r)
-	}
-
-	out := []rune(strftime(f.String(), p.readTm(tm)))
-
-	if uint32(len(out)) >= max {
-		return 0
-	}
-
-	b := p.wide(s, uint32(len(out))+1)
-
-	for i, r := range out {
-		binary.LittleEndian.PutUint32(b[4*i:], uint32(r))
-	}
-
-	binary.LittleEndian.PutUint32(b[4*len(out):], 0)
-
-	return uint32(len(out))
-}
-
 func (p *Process) libcWcsncpy(d, s, n uint32) uint32 {
 	l := p.wcsnlen(s, n)
 	dst := p.wide(d, n)
@@ -15862,29 +15532,6 @@ func (p *Process) libcWcsncmp(a, b, n uint32) uint32 {
 	}
 
 	return 0
-}
-
-func (p *Process) libcWcscoll(a, b uint32) uint32 {
-	for i := uint32(0); ; i++ {
-		x, y := p.wcharAt(a, i), p.wcharAt(b, i)
-
-		if x != y || x == 0 {
-			return wcmp(x, y)
-		}
-	}
-}
-
-func (p *Process) libcWcsxfrm(d, s, n uint32) uint32 {
-	l := p.wcslen(s)
-
-	if l < n {
-		copy(p.wide(d, l+1), p.wide(s, l+1))
-	} else if n > 0 {
-		copy(p.wide(d, n-1), p.wide(s, n-1))
-		binary.LittleEndian.PutUint32(p.wide(d+4*(n-1), 1), 0)
-	}
-
-	return l
 }
 
 func (p *Process) libcWcschr(s, c uint32) uint32 {
@@ -16077,10 +15724,6 @@ func (p *Process) libcWcsspn(s, set uint32) uint32 {
 
 func (p *Process) libcWcscspn(s, set uint32) uint32 {
 	return p.wcsspan(s, set, true)
-}
-
-func (p *Process) libcWcsftime(s, max, format, tm uint32) uint32 {
-	return p.wcsftime(s, max, format, tm)
 }
 
 func (p *Process) libcIconv_open(to, from uint32) uint32 {
@@ -18265,18 +17908,6 @@ func (p *Process) libcMkostemps(template, suffix, flags uint32) uint32 {
 	return p.mkstemp(template, suffix, flags)
 }
 
-func (p *Process) libcStrerror_l(e, locale uint32) uint32 {
-	return p.libcStrerror(e)
-}
-
-func (p *Process) libcStrcasecmp_l(a, b, locale uint32) uint32 {
-	return p.libcStrcasecmp(a, b)
-}
-
-func (p *Process) libcStrncasecmp_l(a, b, n, locale uint32) uint32 {
-	return p.libcStrncasecmp(a, b, n)
-}
-
 func (p *Process) libcLchmod(path, mode uint32) uint32 {
 	return p.fchmodat(AT_FDCWD, path, mode, AT_SYMLINK_NOFOLLOW)
 }
@@ -18332,26 +17963,6 @@ func (p *Process) libcWcscasecmp(a, b uint32) uint32 {
 
 func (p *Process) libcWcsncasecmp(a, b, n uint32) uint32 {
 	return p.wcscasecmp(a, b, n)
-}
-
-func (p *Process) libcWcscasecmp_l(a, b, locale uint32) uint32 {
-	return p.wcscasecmp(a, b, math.MaxUint32)
-}
-
-func (p *Process) libcWcsncasecmp_l(a, b, n, locale uint32) uint32 {
-	return p.wcscasecmp(a, b, n)
-}
-
-func (p *Process) libcWcsftime_l(s, max, format, tm, locale uint32) uint32 {
-	return p.wcsftime(s, max, format, tm)
-}
-
-func (p *Process) libcTowctrans_l(c, trans, locale uint32) uint32 {
-	return p.libcTowctrans(c, trans)
-}
-
-func (p *Process) libcWctrans_l(name, locale uint32) uint32 {
-	return p.libcWctrans(name)
 }
 
 func (p *Process) libcTimespec_get(ts, base uint32) uint32 {

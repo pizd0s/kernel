@@ -231,17 +231,6 @@ const (
 	NO_RECOVERY                       = 3
 	IPPROTO_TCP                       = 6
 	IPPROTO_UDP                       = 17
-	LC_CTYPE                          = 0
-	LC_NUMERIC                        = 1
-	LC_TIME                           = 2
-	LC_MONETARY                       = 4
-	LC_MESSAGES                       = 5
-	LC_ALL                            = 6
-	CODESET                           = 14
-	localeNameItem                    = 0xffff
-	lconvStrings                      = 10
-	lconvChars                        = 14
-	CHAR_MAX                          = 127
 	UTIME_NOW                         = 0x3fffffff
 	UTIME_OMIT                        = 0x3ffffffe
 	SO_RCVLOWAT                       = 18
@@ -340,7 +329,6 @@ const (
 	sizeofIovec                       = 8
 	sizeofItimerval                   = 32
 	sizeofJmpBuf                      = 4
-	sizeofLconv                       = 56
 	sizeofMsghdr                      = 28
 	sizeofMmsghdr                     = 32
 	sizeofIfaddrs                     = 28
@@ -393,7 +381,6 @@ const (
 	PTHREAD_STACK_MIN                 = 2048
 	SEM_VALUE_MAX                     = 0x7fffffff
 	NAME_MAX                          = 255
-	LC_GLOBAL_LOCALE                  = 0xffffffff
 	TIME_UTC                          = 1
 	EFD_SEMAPHORE                     = 1
 	TFD_TIMER_ABSTIME                 = 1

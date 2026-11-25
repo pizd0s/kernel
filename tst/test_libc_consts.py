@@ -41,7 +41,6 @@ TYPES = {
     "sizeofItimerspec": "struct itimerspec",
     "sizeofSigevent": "struct sigevent",
     "sizeofJmpBuf": "jmp_buf",
-    "sizeofLconv": "struct lconv",
     "sizeofMsghdr": "struct msghdr",
     "sizeofMmsghdr": "struct mmsghdr",
     "sizeofIfaddrs": "struct ifaddrs",
@@ -101,11 +100,8 @@ TYPES = {
 
 # What the other constants with a name of the kernel's own are of.
 EXPRESSIONS = {
-    "localeNameItem": "_NL_LOCALE_NAME(0)",
     "sunPathMax": "sizeof(((struct sockaddr_un *)0)->sun_path)",
     "utsField": "sizeof(((struct utsname *)0)->sysname)",
-    "lconvStrings": "offsetof(struct lconv, int_frac_digits) / sizeof(char *)",
-    "lconvChars": "offsetof(struct lconv, int_n_sign_posn) - offsetof(struct lconv, int_frac_digits) + 1",
     "stoppedBy": "WIFSTOPPED(({v}) | 5 << 8) && WSTOPSIG(({v}) | 5 << 8) == 5",
     "continued": "WIFCONTINUED({v})",
 }

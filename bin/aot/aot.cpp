@@ -25629,7 +25629,6 @@ static Int intrinsicOf(Import imp, FuncType* t) {
         {String("bzero"), String("ii>"), intrinsicBzero},
         {String("explicit_bzero"), String("ii>"), intrinsicBzero},
         {String("strpbrk"), String("ii>i"), intrinsicStrpbrk},
-        {String("strcoll"), String("ii>i"), intrinsicStrcmp},
         {String("strchr"), String("ii>i"), intrinsicStrchr},
         {String("index"), String("ii>i"), intrinsicStrchr},
         {String("strchrnul"), String("ii>i"), intrinsicStrchrnul},

@@ -8,7 +8,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <glob.h>
-#include <locale.h>
 #include <malloc.h>
 #include <net/if.h>
 #include <netdb.h>
@@ -43,7 +42,9 @@ static void check(bool condition, int line) {
 #define assert(condition) check((condition), __LINE__)
 
 int main() {
-    assert(localeconv() != nullptr);
+    // The kernel makes its static area of results at the first one, here,
+    // while there is room.
+    assert(strerror(EINVAL) != nullptr);
     int directory = open("/", O_RDONLY | O_DIRECTORY);
     assert(directory >= 0);
     auto* preserved = static_cast<unsigned char*>(malloc(16));
