@@ -10,6 +10,10 @@ const (
 	openedDir             = 3
 	openedPath            = 4
 	sizeofOpened          = 32
+	ctlFdsMax             = 3
+	ctlGetWinsize         = 9
+	ctlGetPgrp            = 12
+	ctlSetPgrp            = 13
 	sockmgrSocket         = "/dev/sockmgr/socket"
 	rOk            uint32 = 128
 	rErr           uint32 = 129
@@ -26,6 +30,7 @@ const (
 	cttyGone              = 2
 	cttyDropped           = 3
 	errUnserved    Errno  = 1 << 16
+	rSetCtty       uint32 = 112
 )
 
 const (
@@ -44,23 +49,7 @@ const (
 	rSeek
 	rGetfl
 	rSetfl
-)
-
-const (
-	rTcgetattr uint32 = iota + 112
-	rTcsetattr
-	rTcflush
-	rTcflow
-	rTcdrain
-	rGetWinsize
-	rSetWinsize
-	rInq
-	rOutq
-	rName
-	rGetPgrp
-	rSetPgrp
-	rSetCtty
-	rTcsbrk
+	rCtl
 )
 
 const (

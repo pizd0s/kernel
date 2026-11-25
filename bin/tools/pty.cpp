@@ -1184,6 +1184,63 @@ static void openControlling(Request& r) {
     fail(r.reply(), ENXIO);
 }
 
+// A terminal's CTL (lib/protocol/calls.h): its call, then a value u32 or
+// what it sets, the value the handlers' as the header's arg; a call that
+// changes the terminal, of a group out of the foreground, held back as a
+// WRITE is.
+static void terminalCtl(Open& o, Request& r) {
+    Terminal& t = *o.terminal;
+    uint32_t call = 0;
+    if (!r.at(0, call)) {
+        return fail(r.reply(), EINVAL);
+    }
+    const bool changes = call == ctlTcsetattr || call == ctlTcflush || call == ctlTcflow || call == ctlTcdrain || call == ctlTcsbrk;
+    if (changes && heldBack(o, r, SIGTTOU)) {
+        return;
+    }
+    const size_t skip = MIN(call == ctlSetWinsize ? size_t(4) : size_t(8), r.size);
+    r.h.arg = 0;
+    r.at(4, r.h.arg);
+    r.body += skip;
+    r.size -= skip;
+    switch (call) {
+        case ctlTcgetattr:
+            return answer(r.reply(), opOk, 0, &t.settings, sizeof t.settings);
+        case ctlTcsetattr:
+            return setAttributes(o, r);
+        case ctlTcflush:
+            return flush(o, r);
+        case ctlTcflow:
+            return flow(o, r);
+        case ctlTcdrain:
+            if (o.master) {
+                return answer(r.reply(), opOk, 0);
+            }
+            if (hold(o, r, Wait::Drain)) {
+                progress(t);
+            }
+            return;
+        case ctlTcsbrk:
+            return answer(r.reply(), opOk, 0);
+        case ctlGetWinsize:
+            return answer(r.reply(), opOk, 0, &t.size, sizeof t.size);
+        case ctlSetWinsize:
+            return setSize(o, r);
+        case ctlInq:
+            return answerCount(r.reply(), uint32_t(o.master ? t.output.count : inq(t)));
+        case ctlOutq:
+            return answerCount(r.reply(), uint32_t(o.master ? t.input.count + t.lineLength : t.output.count));
+        case ctlName:
+            return name(o, r);
+        case ctlGetPgrp:
+            return controlled(o, r);
+        case ctlSetPgrp:
+            return putForeground(o, r);
+        default:
+            return fail(r.reply(), ENOTTY);
+    }
+}
+
 static void fileCall(Open& o, const Endpoint& e, Request& r) {
     Terminal& t = *o.terminal;
     switch (r.h.op) {
@@ -1197,15 +1254,6 @@ static void fileCall(Open& o, const Endpoint& e, Request& r) {
                 return;
             }
             return writeFile(o, e, r);
-        case opTcsetattr:
-        case opTcflush:
-        case opTcflow:
-        case opTcdrain:
-        case opTcsbrk:
-            if (heldBack(o, r, SIGTTOU)) {
-                return;
-            }
-            break;
     }
     switch (r.h.op) {
         case opFstat:
@@ -1216,38 +1264,8 @@ static void fileCall(Open& o, const Endpoint& e, Request& r) {
         case opFchown:
         case opFutimes:
             return fail(r.reply(), EPERM);
-        case opTcgetattr:
-            return answer(r.reply(), opOk, 0, &t.settings, sizeof t.settings);
-        case opTcsetattr:
-            return setAttributes(o, r);
-        case opTcflush:
-            return flush(o, r);
-        case opTcflow:
-            return flow(o, r);
-        case opTcdrain:
-            if (o.master) {
-                return answer(r.reply(), opOk, 0);
-            }
-            if (hold(o, r, Wait::Drain)) {
-                progress(t);
-            }
-            return;
-        case opTcsbrk:
-            return answer(r.reply(), opOk, 0);
-        case opGetWinsize:
-            return answer(r.reply(), opOk, 0, &t.size, sizeof t.size);
-        case opSetWinsize:
-            return setSize(o, r);
-        case opInq:
-            return answerCount(r.reply(), uint32_t(o.master ? t.output.count : inq(t)));
-        case opOutq:
-            return answerCount(r.reply(), uint32_t(o.master ? t.input.count + t.lineLength : t.output.count));
-        case opName:
-            return name(o, r);
-        case opGetPgrp:
-            return controlled(o, r);
-        case opSetPgrp:
-            return putForeground(o, r);
+        case opCtl:
+            return terminalCtl(o, r);
         case opSetCtty:
             return controls(o, r);
         default:

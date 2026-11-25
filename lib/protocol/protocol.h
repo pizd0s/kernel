@@ -178,6 +178,17 @@
 //                                         open file: one that does not wait
 //                                         answers at once, EAGAIN where it
 //                                         would
+//     CTL                   call u32, its body   a call of the server's own,
+//                                         a program's (ctl, unistd.h), fds
+//                                         with it, which the kernel neither
+//                                         makes nor reads: OK arg n, n
+//                                         openeds, then the answer, fds the
+//                                         answer's, the first n open files
+//                                         of the server's as their openeds
+//                                         say. The calls are calls.h's, the
+//                                         servers' and lib/c's: a terminal's
+//                                         below, rootfs's, mqueue's and
+//                                         xsi's; ENOTTY of another
 //     READDIR   arg room                  OK (ino u64, pos u64, type u8, name, 0)*:
 //                                         the entries after the position,
 //                                         as many as room bytes of struct
@@ -208,39 +219,40 @@
 //   A call that a group out of the foreground may not make, on the
 //   session's controlling terminal, a slave, is answered BACKGROUND with
 //   the signal its group gets, and goes no further: a READ, SIGTTIN; a
-//   WRITE while TOSTOP is set, a TCSETATTR, TCFLUSH, TCFLOW, TCDRAIN,
-//   TCSBRK or SETPGRP, SIGTTOU. What follows is the kernel's, which knows
-//   the process: EIO, or the call again with pgrp 0 where the process
-//   ignores the signal or blocks it, EIO where its group is orphaned, else
-//   the signal to the group.
-//     TCGETATTR                           OK termios
-//     TCSETATTR arg when  termios         TCSANOW, TCSADRAIN, TCSAFLUSH; a
+//   WRITE while TOSTOP is set, and a CTL of ctlTcsetattr, ctlTcflush,
+//   ctlTcflow, ctlTcdrain, ctlTcsbrk or ctlSetPgrp, SIGTTOU. What follows
+//   is the kernel's, which knows the process: EIO, or the call again with
+//   pgrp 0 where the process ignores the signal or blocks it, EIO where
+//   its group is orphaned, else the signal to the group. Its CTLs:
+//     ctlTcgetattr                        OK termios
+//     ctlTcsetattr  when u32, termios     TCSANOW, TCSADRAIN, TCSAFLUSH; a
 //                                         slave's that drains waits for the
 //                                         output to go, and may hear CANCEL
-//     TCFLUSH   arg queue                 TCIFLUSH, TCOFLUSH, TCIOFLUSH
-//     TCFLOW    arg action                TCOOFF, TCOON, TCIOFF, TCION
-//     TCDRAIN                             waits for the output to go, and
+//     ctlTcflush    queue u32             TCIFLUSH, TCOFLUSH, TCIOFLUSH
+//     ctlTcflow     action u32            TCOOFF, TCOON, TCIOFF, TCION
+//     ctlTcdrain                          waits for the output to go, and
 //                                         may hear CANCEL
-//     TCSBRK                              a break, none on a pseudoterminal
-//     GETWINSIZE                          OK winsize
-//     SETWINSIZE          winsize         SIGWINCH to the foreground group
+//     ctlTcsbrk                           a break, none on a pseudoterminal
+//     ctlGetWinsize                       OK winsize
+//     ctlSetWinsize winsize               SIGWINCH to the foreground group
 //                                         when it changes
-//     INQ                                 OK count u32: the bytes a read
+//     ctlInq                              OK count u32: the bytes a read
 //                                         would find
-//     OUTQ                                OK count u32: the bytes written
+//     ctlOutq                             OK count u32: the bytes written
 //                                         that the other end has not read
-//     NAME      arg peer                  OK the path of the terminal's
+//     ctlName       peer u32              OK the path of the terminal's
 //                                         device; with peer a master's
 //                                         slave's
-//     GETPGRP                             OK pgrp u32, sid u32: the
+//     ctlGetPgrp                          OK pgrp u32, sid u32: the
 //                                         foreground group and the session
 //                                         the terminal controls, 0 for none;
 //                                         ENOTTY on a slave not the caller's
 //                                         session's controlling terminal
-//     SETPGRP   arg pgrp                  the foreground group, which the
-//                                         kernel found in the caller's
-//                                         session; ENOTTY as GETPGRP, and on
-//                                         a master
+//     ctlSetPgrp    pgrp u32              the foreground group, which lib/c
+//                                         found in the caller's session;
+//                                         ENOTTY as ctlGetPgrp, and on a
+//                                         master
+//   and the kernel's own:
 //     SETCTTY   arg how                   on a slave, how its control of the
 //                                         caller's session goes: cttyTake,
 //                                         the slave controls it now, the
@@ -470,6 +482,8 @@
 //   statfs { blocks u64, bfree u64, files u64, ffree u64, dev u64,
 //            bsize u32, namemax u32, flags u32 }  flags: 1 read-only
 
+#include <lib/protocol/calls.h>
+
 #include <poll.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -535,24 +549,12 @@ enum : uint32_t {
     opSeek,
     opGetfl,
     opSetfl,
+    opCtl,
     // A service's.
     opOpen = 96,
     opRegister,
     // A terminal's.
-    opTcgetattr = 112,
-    opTcsetattr,
-    opTcflush,
-    opTcflow,
-    opTcdrain,
-    opGetWinsize,
-    opSetWinsize,
-    opInq,
-    opOutq,
-    opName,
-    opGetPgrp,
-    opSetPgrp,
-    opSetCtty,
-    opTcsbrk,
+    opSetCtty = 112,
     // Replies.
     opOk = 128,
     opErr,

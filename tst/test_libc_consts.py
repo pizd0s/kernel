@@ -29,6 +29,7 @@ TYPES = {
     "sizeofEpollEvent": "struct epoll_event",
     "sizeofFdSet": "fd_set",
     "sizeofFlock": "struct flock",
+    "sizeofCtl": "struct ctl",
     "sizeofIovec": "struct iovec",
     "sizeofItimerval": "struct itimerval",
     "sizeofItimerspec": "struct itimerspec",
@@ -63,7 +64,6 @@ TYPES = {
     "sizeofStatfs": "struct statfs",
     "sizeofStatvfs": "struct statvfs",
     "sizeofSysinfo": "struct sysinfo",
-    "sizeofTermios": "struct termios",
     "sizeofTimespec": "struct timespec",
     "sizeofTimeval": "struct timeval",
     "sizeofTimezone": "struct timezone",
@@ -160,10 +160,12 @@ def main():
     passed = set()
     go = go_functions(root)
     for source in (root / "lib/c/src/kernel.c", include / "setjmp.h", include / "pty.h"):
-        for line in source.read_text().splitlines():
-            called = [a or b for a, b in re.findall(r"^KERNEL\w*\(.*?(\w+), \(|\b__kernel_(\w+)\(", line)]
+        # A unit is what starts at the line's start, a forwarder's body with
+        # it: its sizes go where its call goes.
+        for unit in re.split(r"\n(?=\S)", source.read_text()):
+            called = [a or b for a, b in re.findall(r"^KERNEL\w*\(.*?(\w+), \(|\b__kernel_(\w+)\(", unit, re.M)]
             if not called or any(name in go for name in called):
-                passed.update(re.findall(r"sizeof\(((?:struct )?\w+)\)", line))
+                passed.update(re.findall(r"sizeof\(((?:struct )?\w+)\)", unit))
     passed = {ALIASES.get(t, t) for t in passed}
     assert not passed - known, f"lib/c passes sizes the kernel does not know: {sorted(passed - known)}"
 

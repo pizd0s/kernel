@@ -41,6 +41,13 @@ void __kernel_begin(int* errnoAt, char*** environAt, int* argc, char*** argv) __
 // through its links, or a failure when it is outside the root.
 char* __kernel_program(char* path, size_t size) __KERNEL(__kernel_program);
 
+// __kernel_fdioctl is the kernel's of ioctl's requests, of a descriptor of
+// any kind: FIONBIO, FIOCLEX and FIONCLEX; FIONREAD of what the kernel
+// keeps, a pipe's or a socket's; TIOCSCTTY and TIOCNOTTY, of the
+// controlling terminal. Another is ENOTTY: a terminal's are its server's,
+// which lib/c's ioctl calls (ctl).
+int __kernel_fdioctl(int fd, unsigned long request, void* arg) __KERNEL(__kernel_fdioctl);
+
 // __kernel_name is the name the program was started by, the last component
 // of its argv[0], or null where it has no arguments: what a message of
 // lib/c's begins with.

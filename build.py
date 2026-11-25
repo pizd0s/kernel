@@ -470,6 +470,7 @@ libc_wasm = command(
     inputs=[
         *LIBC_HEADERS,
         *build.glob("$(S)/lib/c/src/*"),
+        "$(S)/lib/protocol/calls.h",
         *build.glob("$(S)/lib/libc/*.c"),
         *build.glob("$(S)/lib/libc/*.py"),
         *build.glob("$(S)/lib/libc/freebsd/**/*.h"),

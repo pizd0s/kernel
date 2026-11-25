@@ -184,6 +184,29 @@ int attach(int);
  * which so knows the open file it is given back as its own.
  */
 int fdid(int, unsigned long long*);
+/*
+ * ctl calls the server of a descriptor's file (CTL, lib/protocol): the
+ * request's bytes and descriptors go to it, with who calls, which the
+ * kernel says, and the answer's come back, its bytes into out, as many as
+ * room holds, room then the answer's size, and its descriptors into got,
+ * as many as ngot holds, ngot then their count, a server's files of them
+ * as the server says, O_CLOEXEC of flags. It fails with the server's
+ * errno, ENOTTY of a file no server serves. A signal ends a call that
+ * waits, EINTR, or restarts it with CTL_RESTART where its handler has
+ * SA_RESTART. At most 3 descriptors go.
+ */
+struct ctl {
+    const void* in;
+    size_t size;
+    const int* fds;
+    size_t nfds;
+    void* out;
+    size_t room;
+    int* got;
+    size_t ngot;
+};
+#define CTL_RESTART 1
+int ctl(int, struct ctl*, int);
 char* getcwd(char*, size_t);
 int unlink(const char*);
 int unlinkat(int, const char*, int);

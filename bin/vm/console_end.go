@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"sync/atomic"
 	"unsafe"
 )
@@ -130,26 +131,43 @@ func (c *ConsoleEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
 	return c.in.ioctl(req, arg)
 }
 
+func (c *ConsoleEnd) ctl(p *Process, r *Ctl) error {
+	if len(r.data) < 4 {
+		return EINVAL
+	}
+
+	switch binary.LittleEndian.Uint32(r.data) {
+	case ctlGetWinsize:
+		w, err := hostWindow()
+
+		r.answer = w[:]
+
+		return err
+	case ctlGetPgrp:
+		r.answer = binary.LittleEndian.AppendUint32(binary.LittleEndian.AppendUint32(nil, uint32(p.k.foreground())), 0)
+
+		return nil
+	case ctlSetPgrp:
+		if len(r.data) < 8 {
+			return EINVAL
+		}
+
+		p.k.mu.Lock()
+		p.k.fg = int32(binary.LittleEndian.Uint32(r.data[4:]))
+		p.k.mu.Unlock()
+
+		return nil
+	}
+
+	return ENOTTY
+}
+
 func (c *ConsoleEnd) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, c.stat(p, r.st)
-	case *TtyWindow:
-		w, err := hostWindow()
-
-		r.size = w[:]
-
-		return false, err
-	case *TtyForeground:
-		r.group = uint32(p.k.foreground())
-
-		return false, nil
-	case *TtySetForeground:
-		p.k.mu.Lock()
-		p.k.fg = int32(r.group)
-		p.k.mu.Unlock()
-
-		return false, nil
+	case *Ctl:
+		return false, c.ctl(p, r)
 	case *FileGetfl:
 		var err error
 

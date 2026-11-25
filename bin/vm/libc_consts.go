@@ -23,13 +23,7 @@ const (
 	F_UNLCK                           = 2
 	TCGETS                            = 0x5401
 	TCSETS                            = 0x5402
-	TCSBRK                            = 0x5409
-	TCXONC                            = 0x540a
-	TCFLSH                            = 0x540b
-	TIOCGPGRP                         = 0x540f
-	TIOCSPGRP                         = 0x5410
 	TIOCGWINSZ                        = 0x5413
-	TIOCSWINSZ                        = 0x5414
 	FIONREAD                          = 0x541b
 	FIONBIO                           = 0x5421
 	FIONCLEX                          = 0x5450
@@ -147,11 +141,7 @@ const (
 	VMIN                              = 6
 	UMOUNT_NOFOLLOW                   = 8
 	TIOCSCTTY                         = 0x540e
-	TIOCOUTQ                          = 0x5411
 	TIOCNOTTY                         = 0x5422
-	TIOCGSID                          = 0x5429
-	TIOCGPTN                          = 0x80045430
-	TIOCSPTLCK                        = 0x40045431
 	ITIMER_PROF                       = 2
 	PR_SET_PDEATHSIG                  = 1
 	PR_GET_PDEATHSIG                  = 2
@@ -214,6 +204,8 @@ const (
 	SOMAXCONN                         = 4096
 	sizeofFdSet                       = 128
 	sizeofFlock                       = 32
+	sizeofCtl                         = 32
+	CTL_RESTART                       = 1
 	sizeofIovec                       = 8
 	sizeofItimerval                   = 32
 	sizeofJmpBuf                      = 4
@@ -282,7 +274,6 @@ const (
 	sizeofStatfs                      = 72
 	sizeofStatvfs                     = 72
 	sizeofSysinfo                     = 56
-	sizeofTermios                     = 60
 	sizeofTimespec                    = 16
 	sizeofSigevent                    = 20
 	sizeofItimerspec                  = 32

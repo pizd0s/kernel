@@ -27,7 +27,6 @@ import (
 var (
 	itimerSignals  = [3]int{SIGALRM, SIGVTALRM, SIGPROF}
 	pathconfValues = []int32{8, 255, 255, 255, 4096, 4096, 1, 1, 0, 1, -1, -1, -1, 64, 4096, 4096, 4096, 4096, 4096, -1, 1}
-	devctlValues   = map[uint32]bool{TCFLSH: true, TCXONC: true, TCSBRK: true}
 )
 
 var hostRlimits = [RLIM_NLIMITS]int{
@@ -47,12 +46,6 @@ var hostRlimits = [RLIM_NLIMITS]int{
 	RLIMIT_NICE:       unix.RLIMIT_NICE,
 	RLIMIT_RTPRIO:     unix.RLIMIT_RTPRIO,
 	RLIMIT_RTTIME:     unix.RLIMIT_RTTIME,
-}
-
-var devctlData = map[uint32]uint32{
-	FIONBIO: 4, TIOCGPGRP: 4, TIOCSPGRP: 4, FIONREAD: 4, TIOCOUTQ: 4, TIOCGPTN: 4, TIOCGSID: 4,
-	TIOCGWINSZ: sizeofWinsize, TIOCSWINSZ: sizeofWinsize,
-	TCGETS: sizeofTermios, TCSETS: sizeofTermios, TCSETS + 1: sizeofTermios, TCSETS + 2: sizeofTermios,
 }
 
 const (
@@ -1627,32 +1620,6 @@ func (p *Process) libcSem_clockwait(sem, clock, at uint32) uint32 {
 	return p.result(0, p.syncCall(sem, nil, &SyncLock{thread: p.pid, end: end}))
 }
 
-func (p *Process) libcTcgetwinsize(fd, at uint32) uint32 {
-	t, err := p.fd(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	size, err := p.ttyWindow(t)
-
-	if err == nil {
-		copy(p.span(at, sizeofWinsize), size)
-	}
-
-	return p.result(0, err)
-}
-
-func (p *Process) libcTcsetwinsize(fd, at uint32) uint32 {
-	t, err := p.fd(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	return p.result(0, p.ttySetWindow(t, append([]byte(nil), p.span(at, sizeofWinsize)...)))
-}
-
 func (p *Process) libcPosix_getdents(fd, buf, n, flags uint32) uint32 {
 	if flags != 0 {
 		return p.result(0, EINVAL)
@@ -1696,43 +1663,6 @@ func (p *Process) libcPosix_getdents(fd, buf, n, flags uint32) uint32 {
 
 func direntRoom(length uint32) uint32 {
 	return (19 + length + 1 + 7) &^ 7
-}
-
-func (p *Process) libcPosix_devctl(fd, cmd, data, n, info uint32) uint32 {
-	arg := data
-
-	if need, ok := devctlData[cmd]; ok && (data == 0 || n != 0 && n < need) {
-		return uint32(EINVAL)
-	}
-
-	if devctlValues[cmd] {
-		arg = 0
-
-		if data != 0 {
-			if n != 0 && n < 4 {
-				return uint32(EINVAL)
-			}
-
-			arg = p.u32(data)
-		}
-	}
-
-	saved := p.errno()
-	r := p.ioctl(fd, cmd, arg)
-
-	if int32(r) == -1 {
-		failed := p.failure
-
-		p.setErrno(saved)
-
-		return uint32(failed)
-	}
-
-	if info != 0 {
-		p.put32(info, r)
-	}
-
-	return 0
 }
 
 func (p *Process) ended() bool {
@@ -6367,21 +6297,11 @@ func (p *Process) libcPipe2(fds, flags uint32) uint32 {
 	return p.pipe(fds, flags)
 }
 
-func (p *Process) libcIoctl(fd, req, va uint32) uint32 {
-	return p.ioctl(fd, req, p.varArg(va, 0))
-}
-
-func (p *Process) ioctl(fd, req, arg uint32) uint32 {
+func (p *Process) libc__kernel_fdioctl(fd, req, arg uint32) uint32 {
 	obj, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
-	}
-
-	if p.device(obj) != (FileKey{}) {
-		if r, done := p.terminalIoctl(obj, fd, req, arg); done {
-			return r
-		}
 	}
 
 	switch req {
@@ -6403,50 +6323,25 @@ func (p *Process) ioctl(fd, req, arg uint32) uint32 {
 		p.files.slots[fd].cloexec = req == FIOCLEX
 
 		return p.result(0, nil)
-	case TIOCGPGRP:
-		r := p.libcTcgetpgrp(fd)
-
-		if int32(r) >= 0 {
-			p.put32(arg, r)
-			r = 0
+	case TIOCSCTTY, TIOCNOTTY:
+		switch {
+		case p.device(obj) == (FileKey{}):
+			return p.result(0, ENOTTY)
+		case req == TIOCSCTTY:
+			return p.result(0, p.controls(obj))
 		}
 
-		return r
-	case TIOCSPGRP:
-		return p.libcTcsetpgrp(fd, p.u32(arg))
-	case TIOCGWINSZ:
-		w, err := p.ttyWindow(obj)
-
-		if err == ENOTTY {
-			break
-		}
-
-		if err == nil {
-			copy(p.span(arg, sizeofWinsize), w)
-		}
-
-		return p.result(0, err)
+		return p.result(0, p.notty(obj))
 	case FIONREAD:
 		var n int32
 
 		err := p.fileIoctl(obj, FIONREAD, unsafe.Pointer(&n))
 
-		if err == ENOTTY {
-			var queued uint32
-
-			queued, err = p.ttyPending(obj)
-			n = int32(queued)
+		if err == nil {
+			p.put32(arg, uint32(n))
 		}
 
-		if err == ENOTTY {
-			break
-		} else if err != nil {
-			return p.result(0, err)
-		}
-
-		p.put32(arg, uint32(n))
-
-		return p.result(0, nil)
+		return p.result(0, err)
 	}
 
 	return p.result(0, ENOTTY)
@@ -6833,6 +6728,121 @@ func (p *Process) libcAttach(fd uint32) uint32 {
 	}
 
 	return p.result(p.install(d, 0, false))
+}
+
+func (p *Process) libcCtl(fd, at, flags uint32) uint32 {
+	o, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	in, size, fds, n := p.u32(at), p.u32(at+4), p.u32(at+8), p.u32(at+12)
+
+	switch {
+	case flags&^(O_CLOEXEC|CTL_RESTART) != 0:
+		return p.result(0, EINVAL)
+	case size > packetMax-remoteHeader:
+		return p.result(0, EMSGSIZE)
+	case n > ctlFdsMax:
+		return p.result(0, EINVAL)
+	}
+
+	r := Ctl{data: bytes.Clone(p.span(in, size))}
+
+	for i := range n {
+		f, err := p.fd(p.u32(fds + 4*i))
+
+		if err != nil {
+			return p.result(0, err)
+		}
+
+		r.files = append(r.files, f)
+	}
+
+	if err := p.ctlCall(o, &r, flags&CTL_RESTART != 0); err != nil {
+		return p.result(0, err)
+	}
+
+	return p.result(0, p.ctlAnswer(at, &r, flags&O_CLOEXEC != 0))
+}
+
+func (p *Process) ctlCall(o Object, r *Ctl, restarts bool) error {
+	_, err := p.job(func(group uint32) (int, error) {
+		for {
+			cancelled, err := o.call(p, r, group, true)
+
+			switch {
+			case restarts && err == EINTR && cancelled && !p.interrupts(true):
+				continue
+			case err == errUnserved:
+				err = r.unserved()
+			}
+
+			return 0, err
+		}
+	})
+
+	return err
+}
+
+func (p *Process) ctlAnswer(at uint32, r *Ctl, cloexec bool) error {
+	n, data, files := int(r.opened), r.answer, r.got
+
+	if n > len(files) || len(data) < n*sizeofOpened {
+		dropFiles(files)
+
+		return EIO
+	}
+
+	objs := make([]Object, len(files))
+
+	for i, f := range files {
+		if i >= n {
+			objs[i] = f
+
+			continue
+		}
+
+		obj, err := p.servedOf(f, data[i*sizeofOpened:(i+1)*sizeofOpened])
+
+		if err != nil {
+			dropFiles(objs[:i])
+			dropFiles(files[i+1:])
+
+			return EIO
+		}
+
+		objs[i] = obj
+	}
+
+	data = data[n*sizeofOpened:]
+
+	out, room, fds, slots := p.u32(at+16), p.u32(at+20), p.u32(at+24), p.u32(at+28)
+
+	copy(p.span(out, min(room, uint32(len(data)))), data)
+	p.put32(at+20, uint32(len(data)))
+	p.put32(at+28, uint32(len(objs)))
+
+	for i, obj := range objs {
+		if uint32(i) >= slots {
+			obj.unref()
+
+			continue
+		}
+
+		fd, err := p.install(obj, 0, cloexec)
+
+		if err != nil {
+			dropFiles(objs[i+1:])
+
+			return err
+		}
+
+		p.put32(fds+4*uint32(i), uint32(fd))
+	}
+
+	return nil
 }
 
 func (p *Process) libcFdid(fd, at uint32) uint32 {
@@ -8441,131 +8451,6 @@ func (p *Process) leaveSession(going bool) {
 	t.unref()
 }
 
-func (p *Process) libcTcgetattr(fd, at uint32) uint32 {
-	return p.result(0, p.tcgetattr(fd, at))
-}
-
-func (p *Process) tcgetattr(fd, at uint32) error {
-	t, err := p.fd(fd)
-
-	if err != nil {
-		return err
-	}
-
-	settings, err := p.ttyGetattr(t)
-
-	if err == nil {
-		copy(p.span(at, sizeofTermios), settings)
-	}
-
-	return err
-}
-
-func (p *Process) libcTcsetattr(fd, action, at uint32) uint32 {
-	return p.result(0, p.tcsetattr(fd, action, at))
-}
-
-func (p *Process) tcsetattr(fd, action, at uint32) error {
-	if action > 2 {
-		return EINVAL
-	}
-
-	t, err := p.fd(fd)
-
-	if err != nil {
-		return err
-	}
-
-	return p.ttySetattr(t, action, append([]byte(nil), p.span(at, sizeofTermios)...))
-}
-
-func (p *Process) libcTcflow(fd, action uint32) uint32 {
-	t, err := p.fd(fd)
-
-	if err == nil {
-		err = p.ttyFlow(t, action)
-	}
-
-	return p.result(0, err)
-}
-
-func (p *Process) libcTcflush(fd, queue uint32) uint32 {
-	t, err := p.fd(fd)
-
-	if err == nil {
-		err = p.ttyFlush(t, queue)
-	}
-
-	return p.result(0, err)
-}
-
-func (p *Process) libcTcdrain(fd uint32) uint32 {
-	t, err := p.fd(fd)
-
-	if err == nil {
-		err = p.ttyDrain(t)
-	}
-
-	return p.result(0, err)
-}
-
-func (p *Process) libcTcsendbreak(fd, duration uint32) uint32 {
-	t, err := p.fd(fd)
-
-	if err == nil {
-		err = p.ttyBreak(t)
-	}
-
-	return p.result(0, err)
-}
-
-func (p *Process) libcTcgetpgrp(fd uint32) uint32 {
-	t, err := p.fd(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	group, _, err := p.ttyForeground(t)
-
-	return p.result(int(group), err)
-}
-
-func (p *Process) libcTcsetpgrp(fd, pgrp uint32) uint32 {
-	t, err := p.fd(fd)
-
-	if err == nil && p.device(t) == (FileKey{}) {
-		_, _, err = p.ttyForeground(t)
-	}
-
-	switch {
-	case err != nil:
-		return p.result(0, err)
-	case int32(pgrp) < 0:
-		return p.result(0, EINVAL)
-	case !p.groupExists(int32(pgrp)):
-		return p.result(0, EPERM)
-	}
-
-	return p.result(0, p.ttySetForeground(t, pgrp))
-}
-
-func (p *Process) libcTcgetsid(fd uint32) uint32 {
-	t, err := p.fd(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	_, sid, err := p.ttyForeground(t)
-
-	if err == nil && sid == 0 {
-		err = ENOTTY
-	}
-
-	return p.result(int(sid), err)
-}
-
 func (p *Process) controls(t Object) error {
 	p.k.mu.Lock()
 
@@ -8602,159 +8487,6 @@ func (p *Process) notty(t Object) error {
 	p.leaveSession(false)
 
 	return nil
-}
-
-func (p *Process) terminalIoctl(t Object, fd, req, arg uint32) (uint32, bool) {
-	switch req {
-	case TCGETS:
-		return p.result(0, p.tcgetattr(fd, arg)), true
-	case TCSETS, TCSETS + 1, TCSETS + 2:
-		return p.result(0, p.tcsetattr(fd, req-TCSETS, arg)), true
-	case TCFLSH:
-		return p.libcTcflush(fd, arg), true
-	case TCXONC:
-		return p.libcTcflow(fd, arg), true
-	case TCSBRK:
-		if arg == 0 {
-			return p.result(0, p.ttyBreak(t)), true
-		}
-
-		return p.result(0, p.ttyDrain(t)), true
-	case TIOCGWINSZ:
-		size, err := p.ttyWindow(t)
-
-		if err == nil {
-			copy(p.span(arg, sizeofWinsize), size)
-		}
-
-		return p.result(0, err), true
-	case TIOCSWINSZ:
-		return p.result(0, p.ttySetWindow(t, append([]byte(nil), p.span(arg, sizeofWinsize)...))), true
-	case FIONREAD, TIOCOUTQ:
-		count := p.ttyPending
-
-		if req == TIOCOUTQ {
-			count = p.ttyUnsent
-		}
-
-		n, err := count(t)
-
-		if err == nil {
-			p.put32(arg, n)
-		}
-
-		return p.result(0, err), true
-	case TIOCGPTN:
-		n, err := p.slaveNumber(t)
-
-		if err == nil {
-			p.put32(arg, uint32(n))
-		}
-
-		return p.result(0, err), true
-	case TIOCSPTLCK:
-		_, err := p.ttyName(t, true)
-
-		return p.result(0, err), true
-	case TIOCSCTTY:
-		return p.result(0, p.controls(t)), true
-	case TIOCNOTTY:
-		return p.result(0, p.notty(t)), true
-	case TIOCGSID:
-		r := p.libcTcgetsid(fd)
-
-		if int32(r) >= 0 {
-			p.put32(arg, r)
-			r = 0
-		}
-
-		return r, true
-	}
-
-	return 0, false
-}
-
-func (p *Process) slaveNumber(t Object) (int, error) {
-	name, err := p.ttyName(t, true)
-
-	if err != nil {
-		return 0, err
-	}
-
-	n, err := strconv.Atoi(strings.TrimPrefix(name, "/dev/pts/"))
-
-	if err != nil {
-		return 0, EIO
-	}
-
-	return n, nil
-}
-
-func (p *Process) terminalName(fd uint32) (string, Errno) {
-	t, err := p.fd(fd)
-
-	if err == nil {
-		var name string
-
-		if name, err = p.ttyName(t, false); err == nil {
-			return name, 0
-		}
-	}
-
-	return "", errnoOf(err)
-}
-
-func (p *Process) libcGrantpt(fd uint32) uint32 {
-	_, err := p.fd(fd)
-
-	return p.result(0, err)
-}
-
-func (p *Process) libcUnlockpt(fd uint32) uint32 {
-	t, err := p.fd(fd)
-
-	if err == nil {
-		_, err = p.ttyName(t, true)
-	}
-
-	return p.result(0, err)
-}
-
-func (p *Process) libcPtsname(fd uint32) uint32 {
-	name, err := p.ptsname(fd)
-
-	if err != nil {
-		p.setErrno(errnoOf(err))
-
-		return 0
-	}
-
-	return p.constant(name)
-}
-
-func (p *Process) libcPtsname_r(fd, buf, size uint32) uint32 {
-	name, err := p.ptsname(fd)
-
-	switch {
-	case err != nil:
-		return uint32(errnoOf(err))
-	case uint32(len(name)) >= size:
-		return uint32(ERANGE)
-	}
-
-	p.putString(buf, name)
-
-	return 0
-}
-
-func (p *Process) ptsname(fd uint32) (string, error) {
-	t, err := p.fd(fd)
-
-	if err != nil {
-		return "", err
-	}
-
-	return p.ttyName(t, true)
 }
 
 func (p *Process) putTimespec(at uint32, d time.Duration) {
@@ -9323,33 +9055,6 @@ func (p *Process) libcFpathconf(fd, name uint32) uint32 {
 	}
 
 	return p.pathconf(name)
-}
-
-func (p *Process) libcTtyname(fd uint32) uint32 {
-	name, e := p.terminalName(fd)
-
-	if e != 0 {
-		p.setErrno(e)
-
-		return 0
-	}
-
-	return p.constant(name)
-}
-
-func (p *Process) libcTtyname_r(fd, buf, n uint32) uint32 {
-	name, e := p.terminalName(fd)
-
-	switch {
-	case e != 0:
-		return uint32(e)
-	case uint32(len(name)) >= n:
-		return uint32(ERANGE)
-	}
-
-	p.putString(buf, name)
-
-	return 0
 }
 
 func (p *Process) name() string {
@@ -10266,97 +9971,8 @@ func (p *Process) dirUnmount(d Object, path string, flags uint32) error {
 	return p.request(d, &VfsUnmount{root: p.vfsRoot(d), path: path, flags: flags})
 }
 
-func (p *Process) ttyChange(t Object, r Request, waits bool) error {
-	_, err := p.job(func(group uint32) (int, error) {
-		for {
-			cancelled, err := t.call(p, r, group, waits)
-
-			switch {
-			case waits && err == EINTR && cancelled && !p.interrupts(true):
-				continue
-			case err == errUnserved:
-				err = r.unserved()
-			}
-
-			return 0, err
-		}
-	})
-
-	return err
-}
-
-func (p *Process) ttyGetattr(t Object) ([]byte, error) {
-	r := TtyGetattr{}
-	err := p.request(t, &r)
-
-	return r.termios, err
-}
-
-func (p *Process) ttySetattr(t Object, when uint32, termios []byte) error {
-	return p.ttyChange(t, &TtySetattr{when: when, termios: termios}, when != 0)
-}
-
-func (p *Process) ttyFlush(t Object, queue uint32) error {
-	return p.ttyChange(t, &TtyFlush{queue: queue}, false)
-}
-
-func (p *Process) ttyFlow(t Object, action uint32) error {
-	return p.ttyChange(t, &TtyFlow{action: action}, false)
-}
-
-func (p *Process) ttyDrain(t Object) error {
-	return p.ttyChange(t, &TtyDrain{}, true)
-}
-
-func (p *Process) ttyBreak(t Object) error {
-	return p.ttyChange(t, &TtyBreak{}, false)
-}
-
-func (p *Process) ttyWindow(t Object) ([]byte, error) {
-	r := TtyWindow{}
-	err := p.request(t, &r)
-
-	return r.size, err
-}
-
-func (p *Process) ttySetWindow(t Object, size []byte) error {
-	return p.request(t, &TtySetWindow{size: size})
-}
-
-func (p *Process) ttyPending(t Object) (uint32, error) {
-	r := TtyQueue{}
-	err := p.request(t, &r)
-
-	return r.n, err
-}
-
-func (p *Process) ttyUnsent(t Object) (uint32, error) {
-	r := TtyQueue{out: true}
-	err := p.request(t, &r)
-
-	return r.n, err
-}
-
-func (p *Process) ttyForeground(t Object) (uint32, uint32, error) {
-	r := TtyForeground{}
-	err := p.request(t, &r)
-
-	return r.group, r.sid, err
-}
-
-func (p *Process) ttySetForeground(t Object, pgrp uint32) error {
-	return p.ttyChange(t, &TtySetForeground{group: pgrp}, false)
-}
-
 func (p *Process) ttyControl(t Object, how uint32) error {
 	return p.request(t, &TtyControl{how: how})
-}
-
-func (p *Process) ttyName(t Object, peer bool) (string, error) {
-	r := TtyName{peer: peer}
-	err := p.request(t, &r)
-
-	return r.name, err
 }
 
 func (p *Process) sockKind(s Object) int {

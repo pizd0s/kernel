@@ -55,7 +55,7 @@ int unserved(uint32_t op) {
     if (op >= vfsOpen && op <= vfsPath) {
         return ENOTDIR;
     }
-    if (op >= opTcgetattr && op <= opSetCtty) {
+    if (op == opSetCtty || op == opCtl) {
         return ENOTTY;
     }
     if (op >= opBind && op <= opSocket) {

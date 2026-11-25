@@ -3880,7 +3880,7 @@ static bool onWatcher(Endpoint* ep, const Header& h, Body body, int fd) {
 
 // A request on an events file, answered on fd: READ, its events, or,
 // with none, the READ kept until there are, but of O_NONBLOCK, one at a
-// time; INQ, the bytes queued; FSTAT, of its id and who made it when;
+// time; CTL's ctlInq, the bytes queued; FSTAT, of its id and who made it when;
 // GETFL and SETFL of its flags; SEND, a mark's, or its watcher's; WRITE,
 // EBADF; what else an open file
 // takes, as the protocol has it of what is none of it. Whether fd is
@@ -3920,7 +3920,11 @@ static bool onEvents(Endpoint* ep, const Header& h, Body body, int fd) {
         case opSend:
             eventsSend(in, body, fd);
             return false;
-        case opInq: {
+        case opCtl: {
+            u32 call = 0;
+            if (body.size() < 4 || (call = body.take<u32>()) != ctlInq) {
+                return error(fd, ENOTTY);
+            }
             const u32 n = u32(in.queue.size());
             ok(fd, &n, sizeof n);
             return false;

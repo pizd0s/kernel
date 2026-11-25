@@ -1,14 +1,17 @@
 /*
- * Pseudoterminals: posix_openpt opens /dev/ptmx, the kernel's master of a
- * new one; openpty opens one and its terminal, /dev/pts/N, with the
- * settings and size given, the kernel's grantpt, unlockpt and ptsname
- * between; forkpty, the libcs', is openpty's terminal and a child of fork
- * that leads a session of its own with the terminal as its controlling one
- * and as its standard input, output and error, its master closed; the
- * parent keeps the master. The terminal's settings and size come with
- * their sizes, the one layout each has had.
+ * Pseudoterminals: posix_openpt opens /dev/ptmx, pty's master of a new
+ * one; grantpt has nothing to grant; ptsname is the master's slave's
+ * path, pty's (terminal.h), and unlockpt finds it, ENOTTY of a slave;
+ * openpty opens one and its terminal, /dev/pts/N, with the settings and
+ * size given, grantpt, unlockpt and ptsname between; forkpty, the libcs',
+ * is openpty's terminal and a child of fork that leads a session of its
+ * own with the terminal as its controlling one and as its standard input,
+ * output and error, its master closed; the parent keeps the master. The
+ * terminal's settings and size come with their sizes, the one layout each
+ * has had.
  */
 #include "sized.h"
+#include "terminal.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -21,6 +24,41 @@
 
 int __kernel_posix_openpt(int flags) {
     return open("/dev/ptmx", flags);
+}
+
+int __kernel_grantpt(int fd) {
+    return fcntl(fd, F_GETFD) < 0 ? -1 : 0;
+}
+
+// A master's slave's path, of TIOCGPTN's number: ENOTTY of a slave.
+int __kernel_unlockpt(int fd) {
+    char name[64];
+    int e = __terminal_name(fd, 1, name, sizeof name);
+
+    if (e != 0) {
+        errno = e;
+
+        return -1;
+    }
+
+    return 0;
+}
+
+int __kernel_ptsname_r(int fd, char* name, size_t n) {
+    return __terminal_name(fd, 1, name, n);
+}
+
+char* __kernel_ptsname(int fd) {
+    static char name[64];
+    int e = __terminal_name(fd, 1, name, sizeof name);
+
+    if (e != 0) {
+        errno = e;
+
+        return NULL;
+    }
+
+    return name;
 }
 
 int __kernel_openpty(int* master, int* terminal, char* name, const struct termios* term, size_t termSize, const struct winsize* window,

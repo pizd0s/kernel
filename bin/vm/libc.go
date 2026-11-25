@@ -136,26 +136,6 @@ func libcPipe2(fds, flags uint32) uint32 {
 	return proc().libcPipe2(fds, flags)
 }
 
-func libcTcdrain(fd uint32) uint32 {
-	return proc().libcTcdrain(fd)
-}
-
-func libcTcsendbreak(fd, duration uint32) uint32 {
-	return proc().libcTcsendbreak(fd, duration)
-}
-
-func libcTcflow(fd, action uint32) uint32 {
-	return proc().libcTcflow(fd, action)
-}
-
-func libcTcflush(fd, queue uint32) uint32 {
-	return proc().libcTcflush(fd, queue)
-}
-
-func libcTcgetsid(fd uint32) uint32 {
-	return proc().libcTcgetsid(fd)
-}
-
 func libcFsync(fd uint32) uint32 {
 	return proc().libcFsync(fd)
 }
@@ -194,30 +174,6 @@ func libcFcntl(fd, cmd, va, size uint32) uint32 {
 	p.sized("fcntl", size, fcntlSize(cmd))
 
 	return p.libcFcntl(fd, cmd, va)
-}
-
-func libcIoctl(fd, req, va, size uint32) uint32 {
-	p := proc()
-
-	p.sized("ioctl", size, ioctlSize(req))
-
-	return p.libcIoctl(fd, req, va)
-}
-
-func libcTcgetattr(fd, at, atSize uint32) uint32 {
-	p := proc()
-
-	p.sized("tcgetattr", atSize, sizeofTermios)
-
-	return p.libcTcgetattr(fd, at)
-}
-
-func libcTcsetattr(fd, action, at, atSize uint32) uint32 {
-	p := proc()
-
-	p.sized("tcsetattr", atSize, sizeofTermios)
-
-	return p.libcTcsetattr(fd, action, at)
 }
 
 func libcPoll(at, atSize, n, timeout uint32) uint32 {
@@ -302,6 +258,18 @@ func libcFchdir(fd uint32) uint32 {
 
 func libcAttach(fd uint32) uint32 {
 	return proc().libcAttach(fd)
+}
+
+func libc__kernel_fdioctl(fd, req, arg uint32) uint32 {
+	return proc().libc__kernel_fdioctl(fd, req, arg)
+}
+
+func libcCtl(fd, at, atSize, flags uint32) uint32 {
+	p := proc()
+
+	p.sized("ctl", atSize, sizeofCtl)
+
+	return p.libcCtl(fd, at, flags)
 }
 
 func libcFdid(fd, at uint32) uint32 {
@@ -1088,14 +1056,6 @@ func libcSetpgid(pid, pgid uint32) uint32 {
 	return proc().libcSetpgid(pid, pgid)
 }
 
-func libcTcgetpgrp(fd uint32) uint32 {
-	return proc().libcTcgetpgrp(fd)
-}
-
-func libcTcsetpgrp(fd, pgrp uint32) uint32 {
-	return proc().libcTcsetpgrp(fd, pgrp)
-}
-
 func libcSetjmp(buf, bufSize uint32) uint32 {
 	p := proc()
 
@@ -1326,30 +1286,6 @@ func libcPathconf(path, name uint32) uint32 {
 
 func libcFpathconf(fd, name uint32) uint32 {
 	return proc().libcFpathconf(fd, name)
-}
-
-func libcTtyname(fd uint32) uint32 {
-	return proc().libcTtyname(fd)
-}
-
-func libcTtyname_r(fd, buf, n uint32) uint32 {
-	return proc().libcTtyname_r(fd, buf, n)
-}
-
-func libcGrantpt(fd uint32) uint32 {
-	return proc().libcGrantpt(fd)
-}
-
-func libcUnlockpt(fd uint32) uint32 {
-	return proc().libcUnlockpt(fd)
-}
-
-func libcPtsname(fd uint32) uint32 {
-	return proc().libcPtsname(fd)
-}
-
-func libcPtsname_r(fd, buf, size uint32) uint32 {
-	return proc().libcPtsname_r(fd, buf, size)
 }
 
 func libcPrctl(option, va uint32) uint32 {
@@ -2650,17 +2586,6 @@ func libcTimer_getoverrun(timer uint32) uint32 {
 	return proc().libcTimer_getoverrun(timer)
 }
 
-func ioctlSize(req uint32) uint32 {
-	switch req {
-	case TCGETS, TCSETS, TCSETS + 1, TCSETS + 2:
-		return sizeofTermios
-	case TIOCGWINSZ, TIOCSWINSZ:
-		return sizeofWinsize
-	}
-
-	return 0
-}
-
 func libcPthread_mutex_clocklock(mutex, mutexSize, clock, at, atSize uint32) uint32 {
 	p := proc()
 
@@ -2701,28 +2626,8 @@ func libcSem_clockwait(sem, semSize, clock, at, atSize uint32) uint32 {
 	return p.libcSem_clockwait(sem, clock, at)
 }
 
-func libcTcgetwinsize(fd, size, sizeSize uint32) uint32 {
-	p := proc()
-
-	p.sized("tcgetwinsize", sizeSize, sizeofWinsize)
-
-	return p.libcTcgetwinsize(fd, size)
-}
-
-func libcTcsetwinsize(fd, size, sizeSize uint32) uint32 {
-	p := proc()
-
-	p.sized("tcsetwinsize", sizeSize, sizeofWinsize)
-
-	return p.libcTcsetwinsize(fd, size)
-}
-
 func libcPosix_getdents(fd, buf, n, flags uint32) uint32 {
 	return proc().libcPosix_getdents(fd, buf, n, flags)
-}
-
-func libcPosix_devctl(fd, cmd, data, n, info uint32) uint32 {
-	return proc().libcPosix_devctl(fd, cmd, data, n, info)
 }
 
 func libcAio_read(cb, cbSize uint32) uint32 {
