@@ -27048,8 +27048,28 @@ static void compileWithOptions(CompileOptions options) {
 }
 
 #ifdef AOT_CHAOS
+// PIZDOS_AOT_CHAOS's rules: in the kernel, of the environment the start
+// got, as getenv is libc.wasm's, which the compiler is not linked with.
+static const char* chaosScript() {
+#if defined(__wasm__) || defined(wasm)
+    const char name[] = "PIZDOS_AOT_CHAOS=";
+    for (char** variable = environment; variable && *variable; ++variable) {
+        usize i = 0;
+        while (name[i] != 0 && (*variable)[i] == name[i]) {
+            ++i;
+        }
+        if (name[i] == 0) {
+            return *variable + i;
+        }
+    }
+    return nullptr;
+#else
+    return ::getenv("PIZDOS_AOT_CHAOS");
+#endif
+}
+
 static void configureChaos() {
-    const char* script = ::getenv("PIZDOS_AOT_CHAOS");
+    const char* script = chaosScript();
     const char* names[] = {"read", "write", "malloc"};
     while (script && *script) {
         u32 point = 0;
