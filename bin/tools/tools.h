@@ -16,6 +16,7 @@ int consoleMain(int argc, char** argv);
 int devfsMain(int argc, char** argv);
 int devicesMain(int argc, char** argv);
 int dnsMain(int argc, char** argv);
+int ipcMain(int argc, char** argv);
 int erofsMain(int argc, char** argv);
 int gencatMain(int argc, char** argv);
 int mountMain(int argc, char** argv);

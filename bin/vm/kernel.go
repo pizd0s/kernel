@@ -39,9 +39,6 @@ type Kernel struct {
 	fifos      map[FileKey]*Pipe
 	sockets    map[FileKey]Object
 	semaphores map[string]*Semaphore
-	queues     map[string]*MessageQueue
-	msgs       IpcTable[*MsgQueue]
-	sems       IpcTable[*SemSet]
 	locks      LockTable
 
 	fg        int32
@@ -55,8 +52,8 @@ type Kernel struct {
 
 func newKernel(user Cred, memory uint64) *Kernel {
 	k := &Kernel{procs: map[int32]*Process{}, codes: map[CodeKey]*CodeEntry{}, fifos: map[FileKey]*Pipe{}, sockets: map[FileKey]Object{},
-		semaphores: map[string]*Semaphore{}, queues: map[string]*MessageQueue{}, msgs: newIpcTable[*MsgQueue](), sems: newIpcTable[*SemSet](),
-		exit: make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]Object{}, pool: newPool(memory)}
+		semaphores: map[string]*Semaphore{},
+		exit:       make(chan int, 1), root: newNoRoot(), user: user, cttys: map[int32]Object{}, pool: newPool(memory)}
 
 	k.locks.files = map[FileKey]*LockedFile{}
 	k.names.host, k.names.domain = "pizdos", "(none)"
@@ -721,6 +718,7 @@ func (k *Kernel) functionTable() map[string]any {
 		"sigsuspend":                            libcSigsuspend,
 		"kill":                                  libcKill,
 		"sigqueue":                              libcSigqueue,
+		"sigqueueinfo":                          libcSigqueueinfo,
 		"abort":                                 libcAbort,
 		"getpid":                                libcGetpid,
 		"getppid":                               libcGetppid,
@@ -735,6 +733,7 @@ func (k *Kernel) functionTable() map[string]any {
 		"getgroups":                             libcGetgroups,
 		"uname":                                 libcUname,
 		"sysconf":                               libcSysconf,
+		"getumask":                              libcGetumask,
 		"umask":                                 libcUmask,
 		"execve":                                libcExecve,
 		"fexecve":                               libcFexecve,
@@ -757,25 +756,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"aio_suspend":                           libcAio_suspend,
 		"aio_cancel":                            libcAio_cancel,
 		"lio_listio":                            libcLio_listio,
-		"mq_open":                               libcMq_open,
-		"mq_close":                              libcMq_close,
-		"mq_unlink":                             libcMq_unlink,
-		"mq_send":                               libcMq_send,
-		"mq_timedsend":                          libcMq_timedsend,
-		"mq_receive":                            libcMq_receive,
-		"mq_timedreceive":                       libcMq_timedreceive,
-		"mq_getattr":                            libcMq_getattr,
-		"mq_setattr":                            libcMq_setattr,
-		"mq_notify":                             libcMq_notify,
-		"ftok":                                  libcFtok,
-		"msgget":                                libcMsgget,
-		"msgsnd":                                libcMsgsnd,
-		"msgrcv":                                libcMsgrcv,
-		"msgctl":                                libcMsgctl,
-		"semget":                                libcSemget,
-		"semop":                                 libcSemop,
-		"semtimedop":                            libcSemtimedop,
-		"semctl":                                libcSemctl,
 		"posix_spawn":                           libcPosix_spawn,
 		"posix_spawn_file_actions_init":         libcPosix_spawn_file_actions_init,
 		"posix_spawn_file_actions_destroy":      libcPosix_spawn_file_actions_destroy,

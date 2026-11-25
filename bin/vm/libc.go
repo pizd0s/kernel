@@ -808,6 +808,14 @@ func libcKill(pid, sig uint32) uint32 {
 	return proc().libcKill(pid, sig)
 }
 
+func libcSigqueueinfo(pid, sig, info, infoSize uint32) uint32 {
+	p := proc()
+
+	p.sized("sigqueueinfo", infoSize, sizeofSiginfo)
+
+	return p.libcSigqueueinfo(pid, sig, info)
+}
+
 func libcSigqueue(pid, sig, value uint32) uint32 {
 	return proc().libcSigqueue(pid, sig, value)
 }
@@ -858,6 +866,10 @@ func libcUname(at, atSize uint32) uint32 {
 
 func libcSysconf(name uint32) uint32 {
 	return proc().libcSysconf(name)
+}
+
+func libcGetumask() uint32 {
+	return proc().libcGetumask()
 }
 
 func libcUmask(mask uint32) uint32 {
@@ -2711,122 +2723,6 @@ func libcPosix_getdents(fd, buf, n, flags uint32) uint32 {
 
 func libcPosix_devctl(fd, cmd, data, n, info uint32) uint32 {
 	return proc().libcPosix_devctl(fd, cmd, data, n, info)
-}
-
-func libcMq_open(name, flags, va, attrSize uint32) uint32 {
-	p := proc()
-
-	p.sized("mq_open", attrSize, sizeofMqAttr)
-
-	return p.libcMq_open(name, flags, va)
-}
-
-func libcMq_close(fd uint32) uint32 {
-	return proc().libcMq_close(fd)
-}
-
-func libcMq_unlink(name uint32) uint32 {
-	return proc().libcMq_unlink(name)
-}
-
-func libcMq_send(fd, msg, n, prio uint32) uint32 {
-	return proc().libcMq_send(fd, msg, n, prio)
-}
-
-func libcMq_timedsend(fd, msg, n, prio, at, atSize uint32) uint32 {
-	p := proc()
-
-	p.sized("mq_timedsend", atSize, sizeofTimespec)
-
-	return p.libcMq_timedsend(fd, msg, n, prio, at)
-}
-
-func libcMq_receive(fd, buf, n, prio uint32) uint32 {
-	return proc().libcMq_receive(fd, buf, n, prio)
-}
-
-func libcMq_timedreceive(fd, buf, n, prio, at, atSize uint32) uint32 {
-	p := proc()
-
-	p.sized("mq_timedreceive", atSize, sizeofTimespec)
-
-	return p.libcMq_timedreceive(fd, buf, n, prio, at)
-}
-
-func libcMq_getattr(fd, attr, attrSize uint32) uint32 {
-	p := proc()
-
-	p.sized("mq_getattr", attrSize, sizeofMqAttr)
-
-	return p.libcMq_getattr(fd, attr)
-}
-
-func libcMq_setattr(fd, attr, attrSize, old, oldSize uint32) uint32 {
-	p := proc()
-
-	p.sized("mq_setattr", attrSize, sizeofMqAttr, oldSize, sizeofMqAttr)
-
-	return p.libcMq_setattr(fd, attr, old)
-}
-
-func libcMq_notify(fd, event, eventSize uint32) uint32 {
-	p := proc()
-
-	p.sized("mq_notify", eventSize, sizeofSigevent)
-
-	return p.libcMq_notify(fd, event)
-}
-
-func libcFtok(path, id uint32) uint32 {
-	return proc().libcFtok(path, id)
-}
-
-func libcMsgget(key, flags uint32) uint32 {
-	return proc().libcMsgget(key, flags)
-}
-
-func libcMsgsnd(id, msg, n, flags uint32) uint32 {
-	return proc().libcMsgsnd(id, msg, n, flags)
-}
-
-func libcMsgrcv(id, msg, n, mtype, flags uint32) uint32 {
-	return proc().libcMsgrcv(id, msg, n, mtype, flags)
-}
-
-func libcMsgctl(id, cmd, buf, bufSize uint32) uint32 {
-	p := proc()
-
-	p.sized("msgctl", bufSize, sizeofMsqidDs)
-
-	return p.libcMsgctl(id, cmd, buf)
-}
-
-func libcSemget(key, n, flags uint32) uint32 {
-	return proc().libcSemget(key, n, flags)
-}
-
-func libcSemop(id, ops, opsSize, n uint32) uint32 {
-	p := proc()
-
-	p.sized("semop", opsSize, sizeofSembuf)
-
-	return p.libcSemop(id, ops, n)
-}
-
-func libcSemtimedop(id, ops, opsSize, n, at, atSize uint32) uint32 {
-	p := proc()
-
-	p.sized("semtimedop", opsSize, sizeofSembuf, atSize, sizeofTimespec)
-
-	return p.libcSemtimedop(id, ops, n, at)
-}
-
-func libcSemctl(id, num, cmd, va, dsSize uint32) uint32 {
-	p := proc()
-
-	p.sized("semctl", dsSize, sizeofSemidDs)
-
-	return p.libcSemctl(id, num, cmd, va)
 }
 
 func libcAio_read(cb, cbSize uint32) uint32 {

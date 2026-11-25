@@ -109,6 +109,7 @@ console
 dns
 full
 init
+ipc
 net
 null
 ptmx

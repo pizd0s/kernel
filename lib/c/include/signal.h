@@ -170,6 +170,11 @@ int sigwait(const sigset_t* __restrict, int* __restrict);
 int sigwaitinfo(const sigset_t* __restrict, siginfo_t* __restrict);
 int sigtimedwait(const sigset_t* __restrict, siginfo_t* __restrict, const struct timespec* __restrict);
 int sigqueue(pid_t, int, union sigval);
+// sigqueueinfo queues a signal to a process with the siginfo given, its
+// si_code, si_pid, si_uid and si_value: a server's of the system, as the
+// kernel's own would be, SI_MESGQ of a message queue's notification; EPERM
+// but of a privileged process and a code below 0.
+int sigqueueinfo(pid_t, int, const siginfo_t*);
 int sig2str(int, char*);
 int str2sig(const char* __restrict, int* __restrict);
 int sigaltstack(const stack_t* __restrict, stack_t* __restrict);

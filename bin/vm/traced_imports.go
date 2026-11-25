@@ -41,17 +41,15 @@ var callFormats = func() map[string]string {
 		dup3:dddd eaccess:dsd epoll_create:dd epoll_create1:dd epoll_ctl:ddddpd epoll_pwait:ddpdddpd epoll_wait:ddpddd eventfd:ddd
 		eventfd_read:ddp eventfd_write:ddd execmode:dddd execve:dspp explicit_bzero:vpd faccessat:ddsdd fchdir:dd fchmod:ddo
 		fchmodat:ddsod fchown:dddd fchownat:ddsddd fcntl:dddpd fdatasync:dd fdid:ddp fexecve:ddpp ffs:dd ffsl:dd ffsll:dd flock:ddd
-		fpathconf:ddd free:vp fstat:ddpd fstatat:ddspdd fstatfs:ddpd fstatvfs:ddpd fsync:dd ftok:dsd ftruncate:ddd futimens:ddpd
-		get_avphys_pages:d get_nprocs:d get_nprocs_conf:d get_phys_pages:d getcwd:spd getdtablesize:d getegid:d geteuid:d getgid:d
-		getgroups:ddp gethostid:d getitimer:ddpd getloadavg:dpd getpagesize:d getpeername:ddpp getpgid:dd getpgrp:d getpid:d getppid:d
-		getpriority:ddd getrandom:dpdd getresgid:dppp getresuid:dppp getrlimit:ddpd getrusage:ddpd getsid:dd getsockname:ddpp
-		getsockopt:ddddpp gettid:d getuid:d grantpt:dd iconv:ddpppp iconv_close:dd iconv_open:dss imaxabs:dd imaxdiv:ddd index:ssd
-		ioctl:dddpd issetugid:d kill:ddd labs:dd lchmod:dso lchown:dsdd ldiv:ddd link:dss linkat:ddsdsd lio_listio:ddpddpd listen:ddd
-		llabs:dd lldiv:ddd longjmp:vpdd lseek:dddd lstat:dspd madvise:dpdd malloc:pd malloc_usable_size:dp mallopt:ddd memalign:pdd
-		memccpy:pppdd memchr:ppdd memcmp:dppd memcpy:pppd memfile:dpdd memmem:ppdpd memmove:pppd mempcpy:pppd memrchr:ppdd memset:ppdd
-		mkdir:dso mkdirat:ddso mknod:dsod mknodat:ddsod mlock:dpd mlockall:dd mmap:ppddddd mount:dsssdp mprotect:dpdd mq_close:dd
-		mq_getattr:ddpd mq_notify:ddpd mq_open:dsdpd mq_receive:ddpdp mq_send:ddsdd mq_setattr:ddpdpd mq_timedreceive:ddpdppd
-		mq_timedsend:ddsddpd mq_unlink:ds msgctl:dddpd msgget:ddd msgrcv:ddpddd msgsnd:ddpdd msync:dpdd mtx_destroy:vpd mtx_init:dpdd
+		fpathconf:ddd free:vp fstat:ddpd fstatat:ddspdd fstatfs:ddpd fstatvfs:ddpd fsync:dd ftruncate:ddd futimens:ddpd get_avphys_pages:d
+		get_nprocs:d get_nprocs_conf:d get_phys_pages:d getcwd:spd getdtablesize:d getegid:d geteuid:d getgid:d getgroups:ddp gethostid:d
+		getitimer:ddpd getloadavg:dpd getpagesize:d getpeername:ddpp getpgid:dd getpgrp:d getpid:d getppid:d getpriority:ddd
+		getrandom:dpdd getresgid:dppp getresuid:dppp getrlimit:ddpd getrusage:ddpd getsid:dd getsockname:ddpp getsockopt:ddddpp gettid:d
+		getuid:d getumask:o grantpt:dd iconv:ddpppp iconv_close:dd iconv_open:dss imaxabs:dd imaxdiv:ddd index:ssd ioctl:dddpd issetugid:d
+		kill:ddd labs:dd lchmod:dso lchown:dsdd ldiv:ddd link:dss linkat:ddsdsd lio_listio:ddpddpd listen:ddd llabs:dd lldiv:ddd
+		longjmp:vpdd lseek:dddd lstat:dspd madvise:dpdd malloc:pd malloc_usable_size:dp mallopt:ddd memalign:pdd memccpy:pppdd memchr:ppdd
+		memcmp:dppd memcpy:pppd memfile:dpdd memmem:ppdpd memmove:pppd mempcpy:pppd memrchr:ppdd memset:ppdd mkdir:dso mkdirat:ddso
+		mknod:dsod mknodat:ddsod mlock:dpd mlockall:dd mmap:ppddddd mount:dsssdp mprotect:dpdd msync:dpdd mtx_destroy:vpd mtx_init:dpdd
 		mtx_lock:dpd mtx_timedlock:dpdpd mtx_trylock:dpd mtx_unlock:dpd munlock:dpd munlockall:d munmap:dpd nanosleep:dpdpd open:dsdp
 		openat:ddsdp pathconf:dsd pause:d pipe:dp pipe2:dpd poll:dpddd posix_devctl:dddpdp posix_fadvise:ddddd posix_fallocate:dddd
 		posix_getdents:ddpdd posix_madvise:dpdd posix_memalign:dpdd posix_spawn:dpspdpdpp posix_spawn_file_actions_addchdir:dpds
@@ -93,21 +91,21 @@ var callFormats = func() map[string]string {
 		sched_get_priority_max:dd sched_get_priority_min:dd sched_getaffinity:dddp sched_getcpu:d sched_getparam:ddpd
 		sched_getscheduler:dd sched_rr_get_interval:ddpd sched_setaffinity:dddp sched_setparam:ddpd sched_setscheduler:dddpd sched_yield:d
 		select:ddpdpdpdpd sem_clockwait:dpddpd sem_close:dpd sem_destroy:dpd sem_getvalue:dpdp sem_init:dpddd sem_open:psdpd sem_post:dpd
-		sem_timedwait:dpdpd sem_trywait:dpd sem_unlink:ds sem_wait:dpd semctl:ddddpd semget:dddd semop:ddpdd semtimedop:ddpddpd send:ddpdd
-		sendmmsg:ddpdddd sendmsg:ddpddd sendto:ddpddpd setdomainname:dsd setegid:dd seteuid:dd setgid:dd setgroups:ddp sethostname:dsd
-		setitimer:ddpdpd setjmp:dpd setpgid:ddd setpriority:dddd setregid:ddd setresgid:dddd setresuid:dddd setreuid:ddd setrlimit:ddpd
-		setsid:d setsockopt:ddddpd settimeofday:dpdpd setuid:dd shutdown:ddd sigaction:ddpdpdd sigaltstack:dpdpd siglongjmp:vpdd
-		sigpending:dpd sigprocmask:ddpdpd sigqueue:dddd sigsetjmp:dpdd sigsuspend:dpd sigtimedwait:dpdpdpd sigwait:dpdp sigwaitinfo:dpdpd
-		sockatmark:dd socket:dddd socketpair:ddddp stat:dspd statfs:dspd statvfs:dspd stpcpy:sps stpncpy:spsd strcasecmp:dss
-		strcasestr:sss strcat:sps strchr:ssd strchrnul:ssd strcmp:dss strcpy:sps strcspn:dss strdup:ss strlcat:dpsd strlcpy:dpsd strlen:ds
-		strncasecmp:dssd strncat:spsd strncmp:dssd strncpy:spsd strndup:ssd strnlen:dsd strpbrk:sss strrchr:ssd strsep:sps strspn:dss
-		strstr:sss strtok:sps strtok_r:spsp swab:vppd symlink:dss symlinkat:dsds sync:v syncfs:dd sysconf:dd sysinfo:dpd tcdrain:dd
-		tcflow:ddd tcflush:ddd tcgetattr:ddpd tcgetpgrp:dd tcgetsid:dd tcgetwinsize:ddpd tcsendbreak:ddd tcsetattr:dddpd tcsetpgrp:ddd
-		tcsetwinsize:ddpd thrd_create:dpdp thrd_current:d thrd_detach:dd thrd_equal:ddd thrd_join:ddp thrd_sleep:dpdpd thrd_yield:v
-		timer_create:ddpdp timer_delete:dd timer_getoverrun:dd timer_gettime:ddpd timer_settime:dddpdpd timerfd_create:ddd
-		timerfd_gettime:ddpd timerfd_settime:dddpdpd times:dpd timespec_get:dpdd truncate:dsd tss_create:dpd tss_delete:vd tss_get:pd
-		tss_set:ddp ttyname:sd ttyname_r:ddpd umask:oo umount:ds umount2:dsd uname:dpd unlink:ds unlinkat:ddsd unlockpt:dd
-		utimensat:ddspdd vfork:d wait4:ddpdpd waitid:dddpdd write:ddpd writev:ddpdd
+		sem_timedwait:dpdpd sem_trywait:dpd sem_unlink:ds sem_wait:dpd send:ddpdd sendmmsg:ddpdddd sendmsg:ddpddd sendto:ddpddpd
+		setdomainname:dsd setegid:dd seteuid:dd setgid:dd setgroups:ddp sethostname:dsd setitimer:ddpdpd setjmp:dpd setpgid:ddd
+		setpriority:dddd setregid:ddd setresgid:dddd setresuid:dddd setreuid:ddd setrlimit:ddpd setsid:d setsockopt:ddddpd
+		settimeofday:dpdpd setuid:dd shutdown:ddd sigaction:ddpdpdd sigaltstack:dpdpd siglongjmp:vpdd sigpending:dpd sigprocmask:ddpdpd
+		sigqueue:dddd sigqueueinfo:dddpd sigsetjmp:dpdd sigsuspend:dpd sigtimedwait:dpdpdpd sigwait:dpdp sigwaitinfo:dpdpd sockatmark:dd
+		socket:dddd socketpair:ddddp stat:dspd statfs:dspd statvfs:dspd stpcpy:sps stpncpy:spsd strcasecmp:dss strcasestr:sss strcat:sps
+		strchr:ssd strchrnul:ssd strcmp:dss strcpy:sps strcspn:dss strdup:ss strlcat:dpsd strlcpy:dpsd strlen:ds strncasecmp:dssd
+		strncat:spsd strncmp:dssd strncpy:spsd strndup:ssd strnlen:dsd strpbrk:sss strrchr:ssd strsep:sps strspn:dss strstr:sss strtok:sps
+		strtok_r:spsp swab:vppd symlink:dss symlinkat:dsds sync:v syncfs:dd sysconf:dd sysinfo:dpd tcdrain:dd tcflow:ddd tcflush:ddd
+		tcgetattr:ddpd tcgetpgrp:dd tcgetsid:dd tcgetwinsize:ddpd tcsendbreak:ddd tcsetattr:dddpd tcsetpgrp:ddd tcsetwinsize:ddpd
+		thrd_create:dpdp thrd_current:d thrd_detach:dd thrd_equal:ddd thrd_join:ddp thrd_sleep:dpdpd thrd_yield:v timer_create:ddpdp
+		timer_delete:dd timer_getoverrun:dd timer_gettime:ddpd timer_settime:dddpdpd timerfd_create:ddd timerfd_gettime:ddpd
+		timerfd_settime:dddpdpd times:dpd timespec_get:dpdd truncate:dsd tss_create:dpd tss_delete:vd tss_get:pd tss_set:ddp ttyname:sd
+		ttyname_r:ddpd umask:oo umount:ds umount2:dsd uname:dpd unlink:ds unlinkat:ddsd unlockpt:dd utimensat:ddspdd vfork:d wait4:ddpdpd
+		waitid:dddpdd write:ddpd writev:ddpdd
 `) {
 		name, format, _ := strings.Cut(word, ":")
 

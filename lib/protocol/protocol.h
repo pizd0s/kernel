@@ -370,6 +370,64 @@
 //     SEND      watchEventsRemove, wd     on an events file: the mark taken
 //                                         away
 //
+//   ipc's (bin/tools/ipc), of /dev/ipc/mq and /dev/ipc/xsi, whose opens
+//   devfs hands on. An open of ipc/mq is a control file:
+//     SEND      mqOpen u32, flags u32, mode u32, maxmsg u32, msgsize u32,
+//                           name, 0       the queue of the name, made of
+//                                         O_CREAT, the mode the umask's,
+//                                         limits of 0 the defaults: OK count
+//     SEND      mqUnlink u32, name, 0     the name goes, the queue with its
+//                                         last descriptor
+//     ACCEPT    arg flags                 OK opened, fds[0] a descriptor of
+//                                         the queue the SEND before opened,
+//                                         of its access, O_NONBLOCK of the
+//                                         flags
+//   and a descriptor of a queue, which tells its readiness (READY), POLLIN
+//   of a message and POLLOUT of room:
+//     SEND      arg flags   prio u32, pid u32, uid u32, message   OK count;
+//                                         waiting for room but of
+//                                         O_NONBLOCK or MSG_DONTWAIT, EAGAIN
+//     RECV      arg flags   want u32      OK flags 0, len 0, prio u32,
+//                                         message: the first of the highest
+//                                         priority, waiting as SEND does;
+//                                         EMSGSIZE of want short of msgsize
+//                                         and 4
+//     GETSOCKOPT            ipcLevel, mqAttributes   OK maxmsg u32, msgsize
+//                                         u32, curmsgs u32, flags u32
+//     SETSOCKOPT            ipcLevel, mqNotify, pid u32, how u32, signal
+//                                         u32, value u32: the process's
+//                                         notification, EBUSY while
+//                                         another's lives; mqUnnotify, pid
+//                                         u32, its own taken away
+//   An open of ipc/xsi takes a call of XSI's and answers it:
+//     SEND                  call          the call, kept for the RECV, its
+//                                         rights a semop of SEM_UNDO's undo
+//                                         file, an open of ipc/xsi the
+//                                         process keeps, whose close gives
+//                                         its adjustments back: OK count
+//     RECV      arg flags   want u32      OK flags 0, len 0, the call's
+//                                         answer, when the call is done
+//   A call is its kind u32, then:
+//     xsiMsgget key i32, flags u32        id i32
+//     xsiMsgsnd id i32, flags u32, pid u32, mtype i32, text
+//     xsiMsgrcv id i32, room i32, mtype i32, flags u32, pid u32
+//                                         mtype i32, text
+//     xsiMsgctl id i32, cmd u32, uid u32, gid u32, mode u32, qbytes u32
+//                                         IPC_STAT's perm, stime i64, rtime
+//                                         i64, ctime i64, qnum u32, qbytes
+//                                         u32, lspid u32, lrpid u32, cbytes
+//                                         u32
+//     xsiSemget key i32, nsems i32, flags u32   id i32
+//     xsiSemop  id i32, nops u32, timed u32, sec i64, nsec i64, pid u32,
+//               (num u16, op i16, flg i16)*
+//     xsiSemctl id i32, num i32, cmd u32, pid u32, value i32, uid u32,
+//               gid u32, mode u32, SETALL's values u16*
+//                                         a value i32, GETALL's u16*, or
+//                                         IPC_STAT's perm, otime i64, ctime
+//                                         i64, nsems u32
+//   perm is key i32, uid u32, gid u32, cuid u32, cgid u32, mode u32, seq
+//   i32; who calls the header's ids, and the pid the call says.
+//
 //   A file system is a socket of its own, SOCK_SEQPACKET, bound to a path:
 //   mount(2) connects to it and mounts the connection, and every
 //   connection the file system accepts is a channel of its calls.
@@ -538,6 +596,21 @@ constexpr uint8_t watchRemoved = 4;
 // flag of a name that is a directory's.
 constexpr uint8_t noticeGone = 5;
 constexpr uint8_t noticeDirectory = 0x80;
+// ipc's: a SEND's of ipc/mq's control file, a queue's options
+// (getsockopt and setsockopt, of ipcLevel), and the calls of ipc/xsi.
+constexpr uint32_t mqOpen = 1;
+constexpr uint32_t mqUnlink = 2;
+constexpr uint32_t ipcLevel = 0x6970;
+constexpr uint32_t mqAttributes = 1;
+constexpr uint32_t mqNotify = 2;
+constexpr uint32_t mqUnnotify = 3;
+constexpr uint32_t xsiMsgget = 1;
+constexpr uint32_t xsiMsgsnd = 2;
+constexpr uint32_t xsiMsgrcv = 3;
+constexpr uint32_t xsiMsgctl = 4;
+constexpr uint32_t xsiSemget = 5;
+constexpr uint32_t xsiSemop = 6;
+constexpr uint32_t xsiSemctl = 7;
 // A SEND's of inotify's, rootfs's: its how.
 constexpr uint32_t watchEventsNew = 1;
 constexpr uint32_t watchEventsAdd = 2;

@@ -14,10 +14,10 @@
 // rootfs sees none of it, so devfs tells it every name that comes or
 // goes and every directory that goes, for its watchers (NOTICE).
 // devfs starts the services of the system's devices, /bin/devices,
-// /bin/pty, /bin/sockmgr, /bin/dns, /bin/inet of the loopback, lo,
-// /bin/blk for each disk vm gave the system and /bin/inet for each card
-// of its network, named net/<name>, and ends when rootfs lets go of its
-// channel.
+// /bin/pty, /bin/sockmgr, /bin/dns, /bin/ipc, /bin/inet of the loopback,
+// lo, /bin/blk for each disk vm gave the system and /bin/inet for each
+// card of its network, named net/<name>, and ends when rootfs lets go of
+// its channel.
 //
 //     devfs [-r fd] <channel> [<disk> <fd>]... [net/<name> <fd>]...
 //
@@ -562,6 +562,10 @@ int devfsMain(int argc, char** argv) {
     char* const dnsArgv[] = {dnsName, option, readyText, nullptr};
     char* const bareDns[] = {dnsName, nullptr};
     start("/bin/dns", ready >= 0 ? dnsArgv : bareDns, -1);
+    char ipcName[] = "ipc";
+    char* const ipcArgv[] = {ipcName, option, readyText, nullptr};
+    char* const bareIpc[] = {ipcName, nullptr};
+    start("/bin/ipc", ready >= 0 ? ipcArgv : bareIpc, -1);
     char inetName[] = "inet";
     char loopback[] = "lo";
     char* const loopbackArgv[] = {inetName, option, readyText, loopback, nullptr};

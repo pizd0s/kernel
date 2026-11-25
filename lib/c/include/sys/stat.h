@@ -82,6 +82,8 @@ int mkfifoat(int, const char*, mode_t);
 int mknod(const char*, mode_t, dev_t);
 int mknodat(int, const char*, mode_t, dev_t);
 mode_t umask(mode_t);
+// The file mode creation mask, unchanged (GNU's getumask).
+mode_t getumask(void);
 int utimensat(int, const char*, const struct timespec[2], int);
 int futimens(int, const struct timespec[2]);
 
