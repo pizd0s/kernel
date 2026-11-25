@@ -14,7 +14,6 @@ const (
 	sizeofOpened          = 40
 	sockmgrSocket         = "/dev/sockmgr/socket"
 	dnsQuery              = "/dev/dns/query"
-	dnsMessage            = "/dev/dns/message"
 	dnsNameMax            = 253
 	rOk            uint32 = 128
 	rErr           uint32 = 129
