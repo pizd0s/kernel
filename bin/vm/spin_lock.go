@@ -6,13 +6,15 @@ import (
 )
 
 type SpinLock struct {
+	ObjectIdent
+
 	refs  atomic.Int32
 	mu    sync.Mutex
 	owner int32
 }
 
 func newSpinLock() *SpinLock {
-	l := &SpinLock{}
+	l := &SpinLock{ObjectIdent: newObjectIdent()}
 
 	l.refs.Store(1)
 

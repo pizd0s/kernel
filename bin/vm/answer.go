@@ -12,6 +12,8 @@ const (
 )
 
 type Answer struct {
+	ObjectIdent
+
 	refs  atomic.Int32
 	asker *Process
 	done  atomic.Bool

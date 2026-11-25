@@ -82,7 +82,7 @@ func (f *RemoteFD) exchange(p *Process, data []byte, files []Object, interruptib
 		return Packet{}, false, EINTR
 	}
 
-	a := &Answer{asker: p}
+	a := &Answer{ObjectIdent: newObjectIdent(), asker: p}
 
 	defer a.leave()
 
@@ -176,4 +176,8 @@ func (f *RemoteFD) call(p *Process, r Request, group uint32, waits bool) (bool, 
 	}
 
 	return cancelled, r.des(p, &pk)
+}
+
+func (f *RemoteFD) objectID() uint64 {
+	return f.end.objectID()
 }

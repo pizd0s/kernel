@@ -291,3 +291,7 @@ func (e *PipeEnd) call(p *Process, r Request, group uint32, waits bool) (bool, e
 
 	return false, errUnserved
 }
+
+func (e *PipeEnd) objectID() uint64 {
+	return e.pipe.objectID()
+}

@@ -5,12 +5,14 @@ import (
 )
 
 type Cond struct {
+	ObjectIdent
+
 	refs  atomic.Int32
 	clock uint32
 }
 
 func newCond(clock uint32) *Cond {
-	c := &Cond{clock: clock}
+	c := &Cond{ObjectIdent: newObjectIdent(), clock: clock}
 
 	c.refs.Store(1)
 

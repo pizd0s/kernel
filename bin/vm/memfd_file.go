@@ -8,6 +8,8 @@ import (
 var memfdInodes atomic.Uint64
 
 type MemfdFile struct {
+	ObjectIdent
+
 	mem  *LinearMemory
 	at   int64
 	n    int64
@@ -21,7 +23,7 @@ type MemfdFile struct {
 }
 
 func newMemfd(mem *LinearMemory, at, n int64, mode int) *MemfdFile {
-	f := &MemfdFile{mem: mem, at: at, n: n, mode: mode, ino: memfdInodes.Add(1)}
+	f := &MemfdFile{ObjectIdent: newObjectIdent(), mem: mem, at: at, n: n, mode: mode, ino: memfdInodes.Add(1)}
 
 	f.refs.Store(1)
 

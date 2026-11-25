@@ -6,6 +6,8 @@ import (
 )
 
 type UnixDgram struct {
+	ObjectIdent
+
 	refs         atomic.Int32
 	nonblock     atomic.Bool
 	inbox, mouth *PairEnd
@@ -19,7 +21,7 @@ type UnixDgram struct {
 }
 
 func newUnixDgram(nonblock bool) *UnixDgram {
-	s := &UnixDgram{}
+	s := &UnixDgram{ObjectIdent: newObjectIdent()}
 
 	s.refs.Store(1)
 	s.nonblock.Store(nonblock)

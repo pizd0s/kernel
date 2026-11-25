@@ -6,6 +6,8 @@ import (
 )
 
 type Indirect struct {
+	ObjectIdent
+
 	refs atomic.Int32
 
 	mu     sync.Mutex
@@ -19,7 +21,7 @@ type Subscribed struct {
 }
 
 func newIndirect(target Object) *Indirect {
-	i := &Indirect{target: target}
+	i := &Indirect{ObjectIdent: newObjectIdent(), target: target}
 
 	i.refs.Store(1)
 

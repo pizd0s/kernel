@@ -252,7 +252,7 @@ func newInstance(pool *Pool, by *Process, c *Code, stack uint64) (*Instance, err
 		i.memory.owner = i
 		i.setMemory()
 
-		i.memfd = &MemfdFile{mem: i.memory, n: -1, mode: O_RDWR, ino: memfdInodes.Add(1)}
+		i.memfd = &MemfdFile{ObjectIdent: newObjectIdent(), mem: i.memory, n: -1, mode: O_RDWR, ino: memfdInodes.Add(1)}
 		i.memfd.refs.Store(1)
 	}
 
@@ -350,7 +350,7 @@ func (i *Instance) window(at, n int64, mode int) *MemfdFile {
 	if k := len(i.windows); k > 0 {
 		f, i.windows = i.windows[k-1], i.windows[:k-1]
 	} else {
-		f = &MemfdFile{ino: memfdInodes.Add(1)}
+		f = &MemfdFile{ObjectIdent: newObjectIdent(), ino: memfdInodes.Add(1)}
 	}
 
 	f.mem, f.at, f.n, f.mode, f.off, f.held = i.memory, at, n, mode, 0, true

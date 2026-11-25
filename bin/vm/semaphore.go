@@ -6,6 +6,8 @@ import (
 )
 
 type Semaphore struct {
+	ObjectIdent
+
 	refs    atomic.Int32
 	mu      sync.Mutex
 	value   uint32
@@ -17,7 +19,7 @@ type Semaphore struct {
 }
 
 func newSemaphore(value uint32) *Semaphore {
-	s := &Semaphore{value: value}
+	s := &Semaphore{ObjectIdent: newObjectIdent(), value: value}
 
 	s.refs.Store(1)
 

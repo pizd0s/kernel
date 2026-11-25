@@ -6,6 +6,8 @@ import (
 )
 
 type Capture struct {
+	ObjectIdent
+
 	refs atomic.Int32
 	ino  uint64
 	size func(first []byte) int
@@ -15,7 +17,7 @@ type Capture struct {
 }
 
 func newCapture(size func(first []byte) int) *Capture {
-	c := &Capture{ino: pipeInodes.Add(1), size: size}
+	c := &Capture{ObjectIdent: newObjectIdent(), ino: pipeInodes.Add(1), size: size}
 
 	c.refs.Store(1)
 

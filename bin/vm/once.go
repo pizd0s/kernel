@@ -12,13 +12,15 @@ const (
 )
 
 type Once struct {
+	ObjectIdent
+
 	refs  atomic.Int32
 	mu    sync.Mutex
 	state uint32
 }
 
 func newOnce(state uint32) *Once {
-	o := &Once{state: state}
+	o := &Once{ObjectIdent: newObjectIdent(), state: state}
 
 	o.refs.Store(1)
 

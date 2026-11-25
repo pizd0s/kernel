@@ -7,6 +7,8 @@ import (
 )
 
 type UnixListener struct {
+	ObjectIdent
+
 	refs      atomic.Int32
 	mu        sync.Mutex
 	conns     MsgChannel[*PairEnd]

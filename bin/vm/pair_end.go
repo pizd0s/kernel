@@ -7,6 +7,8 @@ import (
 )
 
 type PairState struct {
+	ObjectIdent
+
 	ino  uint64
 	made time.Time
 	kind int
@@ -37,7 +39,7 @@ func newPair(nonblock bool) (*PairEnd, *PairEnd) {
 }
 
 func newPairOf(kind int, nonblock bool) (*PairEnd, *PairEnd) {
-	s := &PairState{ino: pairInodes.Add(1), made: time.Now(), kind: kind}
+	s := &PairState{ObjectIdent: newObjectIdent(), ino: pairInodes.Add(1), made: time.Now(), kind: kind}
 	a, b := &PairEnd{shared: s}, &PairEnd{shared: s}
 
 	a.peer, b.peer = b, a
@@ -752,4 +754,8 @@ func (e *PairEnd) call(p *Process, r Request, group uint32, waits bool) (bool, e
 	}
 
 	return false, errUnserved
+}
+
+func (e *PairEnd) objectID() uint64 {
+	return e.shared.objectID()
 }

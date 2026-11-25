@@ -10,6 +10,8 @@ import (
 var timerFdInodes atomic.Uint64
 
 type TimerFd struct {
+	ObjectIdent
+
 	mu       sync.Mutex
 	clock    uint32
 	timer    *time.Timer
@@ -25,7 +27,7 @@ type TimerFd struct {
 }
 
 func newTimerFd(clock uint32, nonblock bool) *TimerFd {
-	t := &TimerFd{clock: clock, ino: timerFdInodes.Add(1), made: time.Now()}
+	t := &TimerFd{ObjectIdent: newObjectIdent(), clock: clock, ino: timerFdInodes.Add(1), made: time.Now()}
 
 	t.refs.Store(1)
 	t.nonblock.Store(nonblock)

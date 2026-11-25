@@ -6,6 +6,8 @@ import (
 )
 
 type DiskFile struct {
+	ObjectIdent
+
 	fd   int
 	refs atomic.Int32
 	pos  atomic.Int64
@@ -13,7 +15,7 @@ type DiskFile struct {
 }
 
 func newDiskFile(fd int) *DiskFile {
-	f := &DiskFile{fd: fd, ino: pipeInodes.Add(1)}
+	f := &DiskFile{ObjectIdent: newObjectIdent(), fd: fd, ino: pipeInodes.Add(1)}
 
 	f.refs.Store(1)
 

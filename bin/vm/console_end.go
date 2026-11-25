@@ -11,6 +11,8 @@ const (
 )
 
 type ConsoleEnd struct {
+	ObjectIdent
+
 	in, out  *PipeEnd
 	refs     atomic.Int32
 	nonblock atomic.Bool
@@ -23,7 +25,7 @@ func newConsoleEnd(in, out *PipeEnd) *ConsoleEnd {
 		}
 	}
 
-	c := &ConsoleEnd{in: in, out: out}
+	c := &ConsoleEnd{ObjectIdent: newObjectIdent(), in: in, out: out}
 
 	c.refs.Store(1)
 

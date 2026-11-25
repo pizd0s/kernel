@@ -304,6 +304,10 @@ func libcAttach(fd uint32) uint32 {
 	return proc().libcAttach(fd)
 }
 
+func libcFdid(fd, at uint32) uint32 {
+	return proc().libcFdid(fd, at)
+}
+
 func libc__kernel_watch(fd, flags, body, size uint32) uint32 {
 	return proc().libc__kernel_watch(fd, flags, body, size)
 }

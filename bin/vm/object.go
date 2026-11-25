@@ -21,6 +21,8 @@ type Object interface {
 	unsubscribe(s *Subscription)
 
 	call(p *Process, r Request, group uint32, waits bool) (bool, error)
+
+	objectID() uint64
 }
 
 type IoMode struct {

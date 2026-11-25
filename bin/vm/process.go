@@ -7419,6 +7419,18 @@ func (p *Process) libcAttach(fd uint32) uint32 {
 	return p.result(p.install(d, 0, false))
 }
 
+func (p *Process) libcFdid(fd, at uint32) uint32 {
+	o, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	p.put64(at, o.objectID())
+
+	return 0
+}
+
 func (p *Process) libc__kernel_watch(fd, flags, body, size uint32) uint32 {
 	if flags&^(O_CLOEXEC|O_NONBLOCK) != 0 || size > watchBodyMax {
 		return p.result(0, EINVAL)

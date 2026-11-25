@@ -175,6 +175,15 @@ int chroot(const char*);
  * as rootfs gives its processes their root (fchdir, then chroot(".")).
  */
 int attach(int);
+/*
+ * fdid gives the id of the kernel's object of a descriptor: the same for
+ * the descriptors of one object, dup's, fork's and SCM_RIGHTS's among
+ * them, and never another's, while the system runs. A pipe's two ends
+ * are one pipe's, a socket pair's two ends one pair's, and an open file
+ * of a server's is of its channel, the pair the server keeps an end of,
+ * which so knows the open file it is given back as its own.
+ */
+int fdid(int, unsigned long long*);
 char* getcwd(char*, size_t);
 int unlink(const char*);
 int unlinkat(int, const char*, int);

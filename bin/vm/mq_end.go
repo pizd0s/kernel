@@ -3,6 +3,8 @@ package main
 import "sync/atomic"
 
 type MqEnd struct {
+	ObjectIdent
+
 	refs     atomic.Int32
 	queue    *MessageQueue
 	access   int
@@ -10,7 +12,7 @@ type MqEnd struct {
 }
 
 func newMqEnd(q *MessageQueue, access int, nonblock bool) *MqEnd {
-	e := &MqEnd{queue: q, access: access}
+	e := &MqEnd{ObjectIdent: newObjectIdent(), queue: q, access: access}
 
 	e.refs.Store(1)
 	e.nonblock.Store(nonblock)

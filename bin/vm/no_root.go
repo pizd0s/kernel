@@ -7,12 +7,14 @@ import (
 )
 
 type NoRoot struct {
+	ObjectIdent
+
 	refs atomic.Int32
 	made time.Time
 }
 
 func newNoRoot() *NoRoot {
-	r := &NoRoot{made: time.Now()}
+	r := &NoRoot{ObjectIdent: newObjectIdent(), made: time.Now()}
 
 	r.refs.Store(1)
 

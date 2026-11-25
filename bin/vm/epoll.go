@@ -16,6 +16,8 @@ var (
 const epollMaxEvents = 1 << 20
 
 type Epoll struct {
+	ObjectIdent
+
 	mu      sync.Mutex
 	members map[EpollKey]*EpollMember
 	ready   MsgChannel[*EpollMember]
@@ -45,7 +47,7 @@ type EpollMember struct {
 }
 
 func newEpoll() *Epoll {
-	ep := &Epoll{members: map[EpollKey]*EpollMember{}, ino: epollInodes.Add(1), made: time.Now()}
+	ep := &Epoll{ObjectIdent: newObjectIdent(), members: map[EpollKey]*EpollMember{}, ino: epollInodes.Add(1), made: time.Now()}
 
 	ep.self = []*Epoll{ep}
 	ep.refs.Store(1)

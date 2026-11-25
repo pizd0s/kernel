@@ -15,6 +15,8 @@ const (
 )
 
 type Pipe struct {
+	ObjectIdent
+
 	mu          sync.Mutex
 	ch          MsgChannel[*Packet]
 	tail        *Packet
@@ -35,7 +37,7 @@ type Pipe struct {
 }
 
 func newPipe() *Pipe {
-	return &Pipe{ino: pipeInodes.Add(1), made: time.Now()}
+	return &Pipe{ObjectIdent: newObjectIdent(), ino: pipeInodes.Add(1), made: time.Now()}
 }
 
 func (pp *Pipe) join(reads, writes bool) (uint64, uint64) {

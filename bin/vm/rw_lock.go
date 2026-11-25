@@ -7,6 +7,8 @@ import (
 )
 
 type RWLock struct {
+	ObjectIdent
+
 	refs    atomic.Int32
 	mu      sync.Mutex
 	writer  int32
@@ -14,7 +16,7 @@ type RWLock struct {
 }
 
 func newRWLock() *RWLock {
-	l := &RWLock{}
+	l := &RWLock{ObjectIdent: newObjectIdent()}
 
 	l.refs.Store(1)
 

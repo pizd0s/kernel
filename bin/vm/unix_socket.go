@@ -7,6 +7,8 @@ import (
 )
 
 type UnixSocket struct {
+	ObjectIdent
+
 	refs     atomic.Int32
 	nonblock atomic.Bool
 	kind     int
@@ -24,7 +26,7 @@ type UnixSocket struct {
 }
 
 func newUnixSocket(kind int, nonblock bool) *UnixSocket {
-	s := &UnixSocket{kind: kind}
+	s := &UnixSocket{ObjectIdent: newObjectIdent(), kind: kind}
 
 	s.refs.Store(1)
 	s.nonblock.Store(nonblock)
@@ -170,7 +172,7 @@ func (s *UnixSocket) bind(p *Process, a Address) error {
 		return EINVAL
 	}
 
-	l := &UnixListener{ino: pairInodes.Add(1), backlog: 1, kind: s.kind}
+	l := &UnixListener{ObjectIdent: newObjectIdent(), ino: pairInodes.Add(1), backlog: 1, kind: s.kind}
 
 	l.refs.Store(1)
 

@@ -7,6 +7,8 @@ import (
 )
 
 type Mutex struct {
+	ObjectIdent
+
 	refs  atomic.Int32
 	mu    sync.Mutex
 	kind  uint32
@@ -15,7 +17,7 @@ type Mutex struct {
 }
 
 func newMutex(kind uint32) *Mutex {
-	m := &Mutex{kind: kind}
+	m := &Mutex{ObjectIdent: newObjectIdent(), kind: kind}
 
 	m.refs.Store(1)
 

@@ -12,6 +12,8 @@ var eventFdInodes atomic.Uint64
 const eventFdMax = ^uint64(0) - 1
 
 type EventFd struct {
+	ObjectIdent
+
 	mu        sync.Mutex
 	count     uint64
 	semaphore bool
@@ -23,7 +25,7 @@ type EventFd struct {
 }
 
 func newEventFd(count uint64, semaphore, nonblock bool) *EventFd {
-	e := &EventFd{count: count, semaphore: semaphore, ino: eventFdInodes.Add(1), made: time.Now()}
+	e := &EventFd{ObjectIdent: newObjectIdent(), count: count, semaphore: semaphore, ino: eventFdInodes.Add(1), made: time.Now()}
 
 	e.refs.Store(1)
 	e.nonblock.Store(nonblock)

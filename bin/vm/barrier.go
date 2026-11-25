@@ -5,12 +5,14 @@ import (
 )
 
 type Barrier struct {
+	ObjectIdent
+
 	refs  atomic.Int32
 	count uint32
 }
 
 func newBarrier(count uint32) *Barrier {
-	b := &Barrier{count: count}
+	b := &Barrier{ObjectIdent: newObjectIdent(), count: count}
 
 	b.refs.Store(1)
 
