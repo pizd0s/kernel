@@ -20,6 +20,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -29,22 +31,22 @@ var (
 )
 
 var hostRlimits = [RLIM_NLIMITS]int{
-	RLIMIT_CPU:        syscall.RLIMIT_CPU,
-	RLIMIT_FSIZE:      syscall.RLIMIT_FSIZE,
-	RLIMIT_DATA:       syscall.RLIMIT_DATA,
-	RLIMIT_STACK:      syscall.RLIMIT_STACK,
-	RLIMIT_CORE:       syscall.RLIMIT_CORE,
-	RLIMIT_RSS:        hostRlimitRss,
-	RLIMIT_NPROC:      hostRlimitNproc,
-	RLIMIT_NOFILE:     syscall.RLIMIT_NOFILE,
-	RLIMIT_MEMLOCK:    hostRlimitMemlock,
-	RLIMIT_AS:         syscall.RLIMIT_AS,
-	RLIMIT_LOCKS:      hostRlimitLocks,
-	RLIMIT_SIGPENDING: hostRlimitSigpending,
-	RLIMIT_MSGQUEUE:   hostRlimitMsgqueue,
-	RLIMIT_NICE:       hostRlimitNice,
-	RLIMIT_RTPRIO:     hostRlimitRtprio,
-	RLIMIT_RTTIME:     hostRlimitRttime,
+	RLIMIT_CPU:        unix.RLIMIT_CPU,
+	RLIMIT_FSIZE:      unix.RLIMIT_FSIZE,
+	RLIMIT_DATA:       unix.RLIMIT_DATA,
+	RLIMIT_STACK:      unix.RLIMIT_STACK,
+	RLIMIT_CORE:       unix.RLIMIT_CORE,
+	RLIMIT_RSS:        unix.RLIMIT_RSS,
+	RLIMIT_NPROC:      unix.RLIMIT_NPROC,
+	RLIMIT_NOFILE:     unix.RLIMIT_NOFILE,
+	RLIMIT_MEMLOCK:    unix.RLIMIT_MEMLOCK,
+	RLIMIT_AS:         unix.RLIMIT_AS,
+	RLIMIT_LOCKS:      unix.RLIMIT_LOCKS,
+	RLIMIT_SIGPENDING: unix.RLIMIT_SIGPENDING,
+	RLIMIT_MSGQUEUE:   unix.RLIMIT_MSGQUEUE,
+	RLIMIT_NICE:       unix.RLIMIT_NICE,
+	RLIMIT_RTPRIO:     unix.RLIMIT_RTPRIO,
+	RLIMIT_RTTIME:     unix.RLIMIT_RTTIME,
 }
 
 var devctlData = map[uint32]uint32{
@@ -10059,7 +10061,7 @@ func (p *Process) libcUsleep(us uint32) uint32 {
 }
 
 func (p *Process) libcClock() uint64 {
-	return uint64(clockGettime(hostClockProcessCputime) / time.Microsecond)
+	return uint64(clockGettime(unix.CLOCK_PROCESS_CPUTIME_ID) / time.Microsecond)
 }
 
 func (p *Process) libcClock_getres(clock, res uint32) uint32 {
@@ -10225,14 +10227,14 @@ func (p *Process) hostClock(clock uint32) (uintptr, bool) {
 	pid := ^(id >> 3)
 
 	if id&4 != 0 {
-		return hostClockProcessCputime, pid == p.pid
+		return unix.CLOCK_PROCESS_CPUTIME_ID, pid == p.pid
 	}
 
 	if _, err := p.process(pid); err != nil {
 		return 0, false
 	}
 
-	return hostClockProcessCputime, true
+	return unix.CLOCK_PROCESS_CPUTIME_ID, true
 }
 
 func (p *Process) libcClock_getcpuclockid(pid, out uint32) uint32 {

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 var perfOut = newPerfOutput(os.Getenv("W2O_PERFMAP"))
@@ -47,7 +49,7 @@ func newPerfOutput(setting string) *PerfOutput {
 func monotonic() uint64 {
 	var ts syscall.Timespec
 
-	syscall.Syscall(syscall.SYS_CLOCK_GETTIME, hostClockMonotonic, uintptr(unsafe.Pointer(&ts)), 0)
+	syscall.Syscall(syscall.SYS_CLOCK_GETTIME, unix.CLOCK_MONOTONIC, uintptr(unsafe.Pointer(&ts)), 0)
 
 	return uint64(ts.Sec)*1e9 + uint64(ts.Nsec)
 }
