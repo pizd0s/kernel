@@ -68,19 +68,14 @@ def program(name, args, *, wide=False, returns=True, expected=None, memory=True,
 def main():
     vm, native, wazero, rootfs = sys.argv[1:]
     cases = [("span-overflow", "write", [1, 65535, 2], {}, 139, "out of bounds memory access"),
-             ("string-address", "getenv", [65536], {}, 139, "out of bounds memory access"),
-             ("unterminated-string", "getenv", [65520], {}, 139, "out of bounds memory access"),
+             ("string-address", "strdup", [65536], {}, 139, "out of bounds memory access"),
+             ("unterminated-string", "strdup", [65520], {}, 139, "out of bounds memory access"),
              ("bounded-length", "strnlen", [65520, 17], {}, 139, "out of bounds memory access"),
              ("bounded-length-address", "strnlen", [65537, 0], {}, 139, "out of bounds memory access"),
              ("search-unterminated-haystack", "strstr", [65520, 4096], {}, 139, "out of bounds memory access"),
              ("search-unterminated-needle", "strstr", [4096, 65520], {}, 139, "out of bounds memory access"),
              ("search-haystack-range", "memmem", [65530, 7, 4096, 1], {}, 139, "out of bounds memory access"),
-             ("search-needle-range", "memmem", [4096, 1, 65530, 7], {}, 139, "out of bounds memory access"),
-             ("wide-span", "wmemchr", [65535, 0, 1], {}, 139, "out of bounds memory access"),
-             ("wide-address", "wcslen", [65534], {}, 139, "out of bounds memory access"),
-             ("wide-length", "wcsnlen", [65532, 2], {}, 139, "out of bounds memory access"),
-             ("wide-copy-source", "wmemcpy", [4096, 65535, 1], {}, 139, "out of bounds memory access"),
-             ("wide-copy-dest", "wmemcpy", [65535, 4096, 1], {}, 139, "out of bounds memory access")]
+             ("search-needle-range", "memmem", [4096, 1, 65530, 7], {}, 139, "out of bounds memory access")]
     for name in ("div", "ldiv", "lldiv", "imaxdiv"):
         wide = name in ("lldiv", "imaxdiv")
         cases += [(name + "-zero", name, [4096, 1, 0], {"wide": wide, "returns": False}, 136, "integer divide by zero"),
@@ -91,13 +86,10 @@ def main():
               ("search-empty-strings", "strstr", [4096, 8192], {"expected": 4096}, 0, ""),
               ("search-at-end", "memmem", [65520, 16, 65524, 12], {"expected": 65520}, 0, ""),
               ("search-empty-ranges", "memmem", [65536, 0, 65536, 0], {"expected": 65536}, 0, ""),
-              ("wide-empty-span", "wmemchr", [65536, 0, 0], {"expected": 0}, 0, ""),
-              ("wide-early-match", "wmemchr", [65520, 0x41414141, 4], {"expected": 65520}, 0, ""),
               ("empty-write-bound", "write", [1, 65536, 0], {"expected": 0}, 0, "")]
     cases += [("timezone-without-CRT", "__kernel_zone", [0, 0, 0], {"expected": 0}, 0, ""),
               ("no-linear-memory", "getpid", [], {"memory": False, "expected": 1}, 0, ""),
-              ("environment-without-CRT", "getenv", [4096], {"expected": 0}, 0, ""),
-              ("exec-without-CRT", "execv", [4096, 4096], {"expected": 0xffffffff}, 0, "")]
+              ("exec-without-CRT", "execve", [4096, 4096, 0], {"expected": 0xffffffff}, 0, "")]
     # In the system a program has its path; without a root, as vm's first
     # process, it has none. The process without linear memory is the first
     # too, whose pid it knows.

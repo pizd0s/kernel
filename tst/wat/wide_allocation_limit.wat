@@ -1,5 +1,6 @@
 (module
-  (import "kernel" "wcsdup" (func $duplicate (param i32) (result i32)))
+  (import "kernel" "strcasecmp" (func $compare (param i32 i32) (result i32)))
+  (import "kernel" "strndup" (func $duplicate (param i32 i32) (result i32)))
   (import "kernel" "write" (func $write (param i32 i32 i32) (result i32)))
   (import "kernel" "signal" (func $signal (param i32 i32) (result i32)))
   (memory 32833 32833)
@@ -16,11 +17,14 @@
   (func (export "_start")
     (if (i32.ne (call $signal (i32.const 10) (i32.const 1)) (i32.const 0)) (then unreachable))
     ;; Keep the stack, static results and signal info below the input.
-    ;; 2^29 nonzero wchar_t words plus NUL require 2^31 + 4 bytes to copy.
+    ;; 2^31 nonzero bytes plus NUL require 2^31 + 1 bytes to copy.
     (memory.fill (i32.const 4194304) (i32.const 1) (i32.const 2147483648))
-    (i32.store (i32.const 2151677952) (i32.const 0))
+    (i32.store8 (i32.const 2151677952) (i32.const 0))
     (if (i32.ne (call $write (i32.const 1) (i32.const 2048) (i32.const 1)) (i32.const 1)) (then unreachable))
-    (if (i32.ne (call $duplicate (i32.const 4194304)) (i32.const 0)) (then unreachable))
-    (if (i32.ne (i32.load (i32.const 0)) (i32.const 12)) (then unreachable))
-    (if (i32.ne (global.get $handled) (i32.const 1)) (then unreachable)))
+    ;; The host's signals come during a long call of the kernel, a byte's
+    ;; comparison at a time, and are delivered after it.
+    (if (i32.ne (call $compare (i32.const 4194304) (i32.const 4194304)) (i32.const 0)) (then unreachable))
+    (if (i32.ne (global.get $handled) (i32.const 1)) (then unreachable))
+    (if (i32.ne (call $duplicate (i32.const 4194304) (i32.const -1)) (i32.const 0)) (then unreachable))
+    (if (i32.ne (i32.load (i32.const 0)) (i32.const 12)) (then unreachable)))
 )

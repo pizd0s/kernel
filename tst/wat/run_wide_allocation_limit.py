@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Reject a wide-string copy beyond the heap limit while signals are pending.
+"""Deliver the signals that come during a long call of the kernel after
+it, strcasecmp's of 2 GiB, and reject a copy of that string beyond the
+heap limit, strndup's: calls of the kernel, which strdup, the compiler's
+own code, is not.
 The host's SIGUSR1 reaches only vm's first process, so the program runs
 as it, not in the system: rootfs goes unused.
 
@@ -52,7 +55,7 @@ def main():
                 if child.poll() is None:
                     child.kill()
                 child.communicate()
-    print("WAT wide allocation limit: both AOTs reject a 2 GiB wide-string copy with ENOMEM and deliver signals after the kernel call in strict/optimized modes")
+    print("WAT wide allocation limit: both AOTs deliver signals after a long kernel call and reject a 2 GiB string copy with ENOMEM in strict/optimized modes")
 
 
 if __name__ == "__main__":
