@@ -1366,16 +1366,8 @@ func libcExecve(path, argv, envp uint32) uint32 {
 	return proc().libcExecve(path, argv, envp)
 }
 
-func libcExecvp(file, argv uint32) uint32 {
-	return proc().libcExecvp(file, argv)
-}
-
 func libcExecv(path, argv uint32) uint32 {
 	return proc().libcExecv(path, argv)
-}
-
-func libcExecvpe(file, argv, envp uint32) uint32 {
-	return proc().libcExecvpe(file, argv, envp)
 }
 
 func libcExecle(path, arg0, va uint32) uint32 {
@@ -1392,14 +1384,6 @@ func libcPosix_spawn(pid, path, actions, actionsSize, attr, attrSize, argv, envp
 	p.sized("posix_spawn", actionsSize, sizeofPosixSpawnFileActions, attrSize, sizeofPosixSpawnattr)
 
 	return p.libcPosix_spawn(pid, path, actions, attr, argv, envp)
-}
-
-func libcPosix_spawnp(pid, file, actions, actionsSize, attr, attrSize, argv, envp uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnp", actionsSize, sizeofPosixSpawnFileActions, attrSize, sizeofPosixSpawnattr)
-
-	return p.libcPosix_spawnp(pid, file, actions, attr, argv, envp)
 }
 
 func libcPosix_spawn_file_actions_init(actions, actionsSize uint32) uint32 {
@@ -1590,20 +1574,12 @@ func libcExecl(path, arg0, va uint32) uint32 {
 	return proc().libcExecl(path, arg0, va)
 }
 
-func libcExeclp(file, arg0, va uint32) uint32 {
-	return proc().libcExeclp(file, arg0, va)
-}
-
 func libc_exit(code uint32) {
 	proc().libc_exit(code)
 }
 
 func libc_Exit(code uint32) {
 	proc().libc_Exit(code)
-}
-
-func libcSystem(cmd uint32) uint32 {
-	return proc().libcSystem(cmd)
 }
 
 func libcSetpgid(pid, pgid uint32) uint32 {
@@ -1962,22 +1938,6 @@ func libcSched_rr_get_interval(pid, ts, tsSize uint32) uint32 {
 	return p.libcSched_rr_get_interval(pid, ts)
 }
 
-func libcOpenlog(ident, option, facility uint32) {
-	proc().libcOpenlog(ident, option, facility)
-}
-
-func libcCloselog() {
-	proc().libcCloselog()
-}
-
-func libcSetlogmask(mask uint32) uint32 {
-	return proc().libcSetlogmask(mask)
-}
-
-func libc__kernel_syslog(priority, message uint32) {
-	proc().libc__kernel_syslog(priority, message)
-}
-
 func libcSysinfo(at, atSize uint32) uint32 {
 	p := proc()
 
@@ -2074,10 +2034,6 @@ func libcTtyname_r(fd, buf, n uint32) uint32 {
 	return proc().libcTtyname_r(fd, buf, n)
 }
 
-func libcPosix_openpt(flags uint32) uint32 {
-	return proc().libcPosix_openpt(flags)
-}
-
 func libcGrantpt(fd uint32) uint32 {
 	return proc().libcGrantpt(fd)
 }
@@ -2092,14 +2048,6 @@ func libcPtsname(fd uint32) uint32 {
 
 func libcPtsname_r(fd, buf, size uint32) uint32 {
 	return proc().libcPtsname_r(fd, buf, size)
-}
-
-func libcOpenpty(amaster, aslave, name, termp, termpSize, winp, winpSize uint32) uint32 {
-	p := proc()
-
-	p.sized("openpty", termpSize, sizeofTermios, winpSize, sizeofWinsize)
-
-	return p.libcOpenpty(amaster, aslave, name, termp, winp)
 }
 
 func libc__glob_home(pattern, flags, errfunc, out, outSize, home uint32) uint32 {
@@ -2146,8 +2094,8 @@ func libcGetsubopt(opt, keys, val uint32) uint32 {
 	return proc().libcGetsubopt(opt, keys, val)
 }
 
-func libcDaemon(nochdir, noclose uint32) uint32 {
-	return proc().libcDaemon(nochdir, noclose)
+func libc__daemon() uint32 {
+	return proc().libc__daemon()
 }
 
 func libcPrctl(option, va uint32) uint32 {

@@ -37,10 +37,6 @@ extern const struct __start* __program;
 void __kernel_begin(int* errnoAt, char*** environAt, int* argc, char*** argv, char** tznameAt, long* timezoneAt,
                     int* daylightAt) __KERNEL(__kernel_begin);
 
-// __kernel_log_message is the kernel's log of a message syslog has made;
-// its import's name is of the time syslog was a program's own.
-void __kernel_log_message(int priority, const char* message) __KERNEL(__kernel_syslog);
-
 // __kernel_program is getcwd of the program's file: its absolute path,
 // through its links, or a failure when it is outside the root.
 char* __kernel_program(char* path, size_t size) __KERNEL(__kernel_program);

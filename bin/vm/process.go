@@ -74,14 +74,11 @@ const (
 	staticStrerror   = 88
 	staticStrsignal  = 184
 	staticStrtok     = 256
-	staticLogIdent   = 260
-	staticLogOption  = 292
-	staticLogMask    = 296
-	staticRandom     = 300
-	staticRandomInit = 304
-	staticNtoa       = 432
-	staticCrypt      = 448
-	staticSize       = 452
+	staticRandom     = 260
+	staticRandomInit = 264
+	staticNtoa       = 392
+	staticCrypt      = 408
+	staticSize       = 412
 	niceMin          = -20
 	niceMax          = 19
 	ngroupsMax       = 65536
@@ -103,7 +100,6 @@ const (
 	dirIndex         = 12
 	dirBuf           = 16
 	dirBufLen        = 4096
-	logIdentSize     = 32
 	utsSysname       = "pizdos"
 	utsRelease       = "1"
 	utsVersion       = "#1"
@@ -1000,10 +996,6 @@ func (p *Process) execFrom(path string, f Object, argv, envp []string) error {
 	return ELOOP
 }
 
-func (p *Process) loadProgram(path string, argv []string) (*ExecImage, error) {
-	return p.loadFrom(path, nil, argv)
-}
-
 func (p *Process) loadFrom(path string, first Object, argv []string) (*ExecImage, error) {
 	for range 4 {
 		f, program := first, ""
@@ -1105,46 +1097,6 @@ func (p *Process) openProgram(path string) (Object, string, error) {
 	})
 
 	return f, program, err
-}
-
-func (p *Process) execPath(file string, argv, envp []string) error {
-	return p.onSearchPath(file, func(path string) error {
-		return p.exec(path, argv, envp)
-	})
-}
-
-func (p *Process) onSearchPath(file string, try func(path string) error) error {
-	if file == "" {
-		return ENOENT
-	}
-
-	if strings.Contains(file, "/") {
-		return try(file)
-	}
-
-	path, ok := p.getenv("PATH")
-
-	if !ok {
-		path = "/usr/local/bin:/bin:/usr/bin"
-	}
-
-	err := error(ENOENT)
-
-	for _, dir := range strings.Split(path, ":") {
-		if dir == "" {
-			dir = "."
-		}
-
-		switch e := try(dir + "/" + file); e {
-		case ENOENT, ENOTDIR:
-		case EACCES:
-			err = e
-		default:
-			return e
-		}
-	}
-
-	return err
 }
 
 func (p *Process) execReset() {
@@ -1469,16 +1421,8 @@ func (p *Process) libcExecve(path, argv, envp uint32) uint32 {
 	return p.result(0, p.exec(p.str(path), p.strings(argv), p.strings(envp)))
 }
 
-func (p *Process) libcExecvp(file, argv uint32) uint32 {
-	return p.result(0, p.execPath(p.str(file), p.strings(argv), p.environment()))
-}
-
 func (p *Process) libcExecv(path, argv uint32) uint32 {
 	return p.result(0, p.exec(p.str(path), p.strings(argv), p.environment()))
-}
-
-func (p *Process) libcExecvpe(file, argv, envp uint32) uint32 {
-	return p.result(0, p.execPath(p.str(file), p.strings(argv), p.strings(envp)))
 }
 
 func (p *Process) libcExecle(path, arg0, va uint32) uint32 {
@@ -1505,13 +1449,7 @@ func (p *Process) libcFexecve(fd, argv, envp uint32) uint32 {
 }
 
 func (p *Process) libcPosix_spawn(pid, path, actions, attr, argv, envp uint32) uint32 {
-	child, err := p.spawn(p.str(path), false, actions, attr, p.strings(argv), p.strings(envp))
-
-	return p.spawned(pid, child, err)
-}
-
-func (p *Process) libcPosix_spawnp(pid, file, actions, attr, argv, envp uint32) uint32 {
-	child, err := p.spawn(p.str(file), true, actions, attr, p.strings(argv), p.strings(envp))
+	child, err := p.spawn(p.str(path), actions, attr, p.strings(argv), p.strings(envp))
 
 	return p.spawned(pid, child, err)
 }
@@ -1528,7 +1466,7 @@ func (p *Process) spawned(pid uint32, child int32, err error) uint32 {
 	return 0
 }
 
-func (p *Process) spawn(file string, search bool, actions, attr uint32, argv, envp []string) (int32, error) {
+func (p *Process) spawn(file string, actions, attr uint32, argv, envp []string) (int32, error) {
 	var list []SpawnAction
 
 	if actions != 0 {
@@ -1553,7 +1491,7 @@ func (p *Process) spawn(file string, search bool, actions, attr uint32, argv, en
 
 	c.inherit(p)
 
-	img, path, err := c.spawnSetup(p, file, search, list, attr, argv)
+	img, path, err := c.spawnSetup(p, file, list, attr, argv)
 
 	if err != nil {
 		c.unmade()
@@ -1575,7 +1513,7 @@ func (p *Process) spawn(file string, search bool, actions, attr uint32, argv, en
 	return c.pid, nil
 }
 
-func (c *Process) spawnSetup(p *Process, file string, search bool, list []SpawnAction, attr uint32, argv []string) (*ExecImage, string, error) {
+func (c *Process) spawnSetup(p *Process, file string, list []SpawnAction, attr uint32, argv []string) (*ExecImage, string, error) {
 	if attr != 0 {
 		if err := c.spawnAttributes(p, attr); err != nil {
 			return nil, "", err
@@ -1588,26 +1526,9 @@ func (c *Process) spawnSetup(p *Process, file string, search bool, list []SpawnA
 		}
 	}
 
-	if !search {
-		img, err := c.loadFrom(file, nil, argv)
+	img, err := c.loadFrom(file, nil, argv)
 
-		return img, file, err
-	}
-
-	var img *ExecImage
-
-	path := file
-
-	err := p.onSearchPath(file, func(name string) error {
-		var err error
-
-		img, err = c.loadFrom(name, nil, argv)
-		path = name
-
-		return err
-	})
-
-	return img, path, err
+	return img, file, err
 }
 
 func (c *Process) spawnAttributes(p *Process, attr uint32) error {
@@ -3148,69 +3069,12 @@ func (p *Process) libcExecl(path, arg0, va uint32) uint32 {
 	return p.result(0, p.exec(p.str(path), p.argList(arg0, va), p.environment()))
 }
 
-func (p *Process) libcExeclp(file, arg0, va uint32) uint32 {
-	return p.result(0, p.execPath(p.str(file), p.argList(arg0, va), p.environment()))
-}
-
 func (p *Process) libc_exit(code uint32) {
 	p.exitWith(int(code&0xff) << 8)
 }
 
 func (p *Process) libc_Exit(code uint32) {
 	p.exitWith(int(code&0xff) << 8)
-}
-
-func (p *Process) libcSystem(cmd uint32) uint32 {
-	if cmd == 0 {
-		_, err := p.loadProgram("/bin/sh", []string{"sh", "-c", "exit 0"})
-
-		return bit(err == nil)
-	}
-
-	argv := []string{"sh", "-c", string(p.cstr(cmd))}
-	img, err := p.loadProgram("/bin/sh", argv)
-
-	if err != nil {
-		return uint32(int32(127 << 8))
-	}
-
-	img.envp = p.environment()
-
-	c, err := p.k.newProcess(p)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	c.inherit(p)
-	c.execReset()
-	var ended atomic.Bool
-
-	go func() {
-		c.run(img)
-		ended.Store(true)
-		p.post(&p.own.child)
-	}()
-
-	intr := p.setAction(SIGINT, SigAction{handler: SIG_IGN})
-	quit := p.setAction(SIGQUIT, SigAction{handler: SIG_IGN})
-	mask := p.setMask(p.mask() | sigBit(SIGCHLD))
-
-	p.wait(time.Time{}, func(*Event) (bool, error) {
-		return ended.Load(), nil
-	})
-
-	p.setAction(SIGINT, intr)
-	p.setAction(SIGQUIT, quit)
-	p.setMask(mask)
-
-	status := c.status
-
-	p.k.mu.Lock()
-	delete(p.k.procs, c.pid)
-	p.k.mu.Unlock()
-
-	return uint32(int32(status))
 }
 
 func (p *Process) argList(arg0, va uint32) []string {
@@ -10360,10 +10224,6 @@ func (p *Process) terminalName(fd uint32) (string, Errno) {
 	return "", errnoOf(err)
 }
 
-func (p *Process) libcPosix_openpt(flags uint32) uint32 {
-	return p.result(p.open(AT_FDCWD, "/dev/ptmx", flags, 0))
-}
-
 func (p *Process) libcGrantpt(fd uint32) uint32 {
 	_, err := p.fd(fd)
 
@@ -10415,62 +10275,6 @@ func (p *Process) ptsname(fd uint32) (string, error) {
 	}
 
 	return p.ttyName(t, true)
-}
-
-func (p *Process) openPty(termp, winp uint32) (int, int, string, error) {
-	master, err := p.open(AT_FDCWD, "/dev/ptmx", O_RDWR|O_NOCTTY, 0)
-
-	if err != nil {
-		return 0, 0, "", err
-	}
-
-	name, err := p.ptsname(uint32(master))
-	slave := 0
-
-	if err == nil {
-		slave, err = p.open(AT_FDCWD, name, O_RDWR|O_NOCTTY, 0)
-	}
-
-	if err == nil && termp != 0 {
-		err = p.tcsetattr(uint32(slave), 0, termp)
-	}
-
-	if err == nil && winp != 0 {
-		var t Object
-
-		if t, err = p.fd(uint32(slave)); err == nil {
-			err = p.ttySetWindow(t, append([]byte(nil), p.span(winp, sizeofWinsize)...))
-		}
-	}
-
-	if err != nil {
-		p.closeFd(master)
-
-		if slave != 0 {
-			p.closeFd(slave)
-		}
-
-		return 0, 0, "", err
-	}
-
-	return master, slave, name, nil
-}
-
-func (p *Process) libcOpenpty(amaster, aslave, name, termp, winp uint32) uint32 {
-	master, slave, path, err := p.openPty(termp, winp)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	p.put32(amaster, uint32(master))
-	p.put32(aslave, uint32(slave))
-
-	if name != 0 {
-		p.putString(name, path)
-	}
-
-	return 0
 }
 
 func (p *Process) putTimespec(at uint32, d time.Duration) {
@@ -11040,45 +10844,6 @@ func (p *Process) libcGmtime_r(t, at uint32) uint32 {
 	return p.gmtime(t, at)
 }
 
-func (p *Process) syslog(priority, message uint32) {
-	if p.u32(p.staticAt(staticLogMask))&(1<<(priority&7)) != 0 {
-		return
-	}
-
-	option := p.u32(p.staticAt(staticLogOption))
-	line := p.str(p.staticAt(staticLogIdent))
-
-	if option&LOG_PID != 0 {
-		line += fmt.Sprintf("[%d]", p.pid)
-	}
-
-	line += ": " + p.str(message)
-
-	if !strings.HasSuffix(line, "\n") {
-		line += "\n"
-	}
-
-	p.consoleWrite(line)
-
-	if t, err := p.fd(2); err == nil && option&LOG_PERROR != 0 {
-		p.fileWrite(t, bytesFile([]byte(line)), len(line), IoMode{})
-	}
-}
-
-func (p *Process) consoleWrite(text string) error {
-	f, err := p.openPath("/dev/console", O_WRONLY|O_NOCTTY, 0)
-
-	if err != nil {
-		return err
-	}
-
-	defer f.unref()
-
-	_, err = p.fileWrite(f, bytesFile([]byte(text)), len(text), IoMode{})
-
-	return err
-}
-
 func (p *Process) pathconf(name uint32) uint32 {
 	if name >= uint32(len(pathconfValues)) {
 		return p.result(0, EINVAL)
@@ -11198,31 +10963,6 @@ func (p *Process) limit(q *Process, res uint32, set *Rlimit) (Rlimit, error) {
 	}
 
 	return cur, nil
-}
-
-func (p *Process) libcOpenlog(ident, option, facility uint32) {
-	name := ""
-
-	if ident != 0 {
-		name = truncate(p.str(ident), logIdentSize-1)
-	}
-
-	p.putString(p.staticAt(staticLogIdent), name)
-	p.put32(p.staticAt(staticLogOption), option)
-}
-
-func (p *Process) libcCloselog() {
-}
-
-func (p *Process) libcSetlogmask(mask uint32) uint32 {
-	at := p.staticAt(staticLogMask)
-	old := ^p.u32(at) & 0xff
-
-	if mask != 0 {
-		p.put32(at, ^mask&0xff)
-	}
-
-	return old
 }
 
 func (p *Process) libcSysinfo(at uint32) uint32 {
@@ -11405,10 +11145,6 @@ func (p *Process) libcTtyname_r(fd, buf, n uint32) uint32 {
 	return 0
 }
 
-func (p *Process) libc__kernel_syslog(priority, message uint32) {
-	p.syslog(priority, message)
-}
-
 func (p *Process) randomState() uint32 {
 	slot := p.staticAt(staticRandom)
 
@@ -11541,26 +11277,7 @@ func (p *Process) getsubopt(opt, keys, val uint32) uint32 {
 	}
 }
 
-func (p *Process) daemon(nochdir, noclose uint32) uint32 {
-	if nochdir == 0 {
-		p.root.ref()
-		p.setCwd(p.root)
-	}
-
-	if noclose == 0 {
-		obj, err := p.openPath("/dev/null", O_RDWR, 0)
-
-		if err != nil {
-			return p.result(0, err)
-		}
-
-		for fd := range uint32(3) {
-			p.placeAt(obj, fd, false)
-		}
-
-		obj.unref()
-	}
-
+func (p *Process) daemon() uint32 {
 	k := p.k
 
 	if p == k.first {
@@ -11769,8 +11486,8 @@ func (p *Process) libcGetsubopt(opt, keys, val uint32) uint32 {
 	return p.getsubopt(opt, keys, val)
 }
 
-func (p *Process) libcDaemon(nochdir, noclose uint32) uint32 {
-	return p.daemon(nochdir, noclose)
+func (p *Process) libc__daemon() uint32 {
+	return p.daemon()
 }
 
 func (p *Process) libcPrctl(option, va uint32) uint32 {

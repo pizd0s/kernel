@@ -1602,6 +1602,8 @@ KERNEL(char*, crypt, (const char* a, const char* b), (a, b))
 KERNEL_VOID(encrypt, (char* a, int b), (a, b))
 KERNEL(char*, getpass, (const char* a), (a))
 KERNEL(int, daemon, (int a, int b), (a, b))
+// The kernel's part of daemon: the process the system's, of a session of its own.
+KERNEL(int, __daemon, (void), ())
 KERNEL(int, acct, (const char* a), (a))
 KERNEL(unsigned, sleep, (unsigned a), (a))
 KERNEL(int, usleep, (useconds_t a), (a))

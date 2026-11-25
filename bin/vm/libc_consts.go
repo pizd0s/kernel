@@ -192,8 +192,6 @@ const (
 	TIOCSPTLCK                        = 0x40045431
 	ITIMER_REAL                       = 0
 	ITIMER_PROF                       = 2
-	LOG_PID                           = 0x01
-	LOG_PERROR                        = 0x20
 	PR_SET_PDEATHSIG                  = 1
 	PR_GET_PDEATHSIG                  = 2
 	PR_GET_DUMPABLE                   = 3
