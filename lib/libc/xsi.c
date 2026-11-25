@@ -1,5 +1,5 @@
 /*
- * XSI's message queues and semaphore sets, ipc's (bin/tools/ipc,
+ * XSI's message queues and semaphore sets, xsi's (bin/tools/xsi,
  * lib/protocol): a call is an open of /dev/ipc/xsi of its own, its SEND,
  * sendmsg here, the call, and its RECV, recv, the answer, which waits as
  * long as the call does; who calls is the header's ids and the pid the

@@ -693,7 +693,7 @@ vm_chaos_coverage = command(
 # The tools of the system, its services and the commands that speak to
 # them, in one multicall executable, /bin/tools, each a link to it in the
 # image (bin/tools).
-TOOLS = ["blk", "console", "devfs", "devices", "dns", "erofs", "gencat", "ipc", "mount", "pty", "sockmgr", "spawn", "tmpfs", "umount"]
+TOOLS = ["blk", "console", "devfs", "devices", "dns", "erofs", "gencat", "mount", "mqueue", "pty", "sockmgr", "spawn", "tmpfs", "umount", "xsi"]
 PROTOCOL_SOURCES = build.glob("$(S)/lib/protocol/*.cpp")
 PROTOCOL_HEADERS = build.glob("$(S)/lib/protocol/*.h")
 TOOL_SOURCES = [*build.glob("$(S)/bin/tools/*.cpp"), *PROTOCOL_SOURCES]

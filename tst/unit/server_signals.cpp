@@ -4,10 +4,11 @@
 
 // What a server of the system takes of the kernel to do what the kernel
 // did: getumask, the mask as umask set it, unchanged; sigqueueinfo, a
-// signal of the siginfo given, SI_MESGQ's of another pid and uid, as ipc
-// tells a message queue's notification. A code of 0 or more is EPERM, and
-// so is a process that is not privileged; a pid of no process ESRCH, and
-// of none of 0 or below EINVAL. host: false: both are the system's.
+// signal of the siginfo given, SI_MESGQ's of another pid and uid, as
+// mqueue tells a message queue's notification. A code of 0 or more is
+// EPERM, and so is a process that is not privileged; a pid of no process
+// ESRCH, and of none of 0 or below EINVAL. host: false: both are the
+// system's.
 
 #include <assert.h>
 #include <errno.h>

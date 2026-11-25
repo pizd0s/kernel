@@ -42,6 +42,20 @@ void tell(int fd, uint32_t events) {
     answer(fd, opReady, events);
 }
 
+bool sentData(const Request& r, const unsigned char*& data, size_t& size) {
+    uint32_t length;
+    if (!r.at(0, length) || r.size - 4 < length) {
+        return false;
+    }
+    data = r.body + 4 + length;
+    size = r.size - 4 - length;
+    return true;
+}
+
+void answerSent(int fd, uint32_t count) {
+    answer(fd, opOk, 0, &count, sizeof count);
+}
+
 Endpoint* answerOpen(int epoll, const Request& r, Opened what, void* of) {
     what.access = r.h.arg & O_ACCMODE;
     int pair[2];

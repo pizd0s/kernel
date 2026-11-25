@@ -21,13 +21,14 @@ static const Tool tools[] = {
     {"dns", dnsMain},
     {"erofs", erofsMain},
     {"gencat", gencatMain},
-    {"ipc", ipcMain},
     {"mount", mountMain},
+    {"mqueue", mqueueMain},
     {"pty", ptyMain},
     {"sockmgr", sockmgrMain},
     {"spawn", spawnMain},
     {"tmpfs", tmpfsMain},
     {"umount", umountMain},
+    {"xsi", xsiMain},
 };
 
 int runTool(int argc, char** argv) {

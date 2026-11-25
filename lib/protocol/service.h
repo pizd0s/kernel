@@ -17,6 +17,7 @@ void fail(int fd, int e);
 // it now (READY).
 void tell(int fd, uint32_t events);
 
+
 // A device registered: ours of the pair rootfs hands its opens on to, and
 // its stat, as rootfs has its name.
 struct Device {
@@ -99,6 +100,13 @@ template <typename T>
 bool Request::at(size_t offset, T& out) const {
     return copy(offset, &out, sizeof out);
 }
+
+// A request's data as a SEND brings it, after its address: false of a
+// body that is none.
+bool sentData(const Request& r, const unsigned char*& data, size_t& size);
+
+// Answers a SEND: the count of its data.
+void answerSent(int fd, uint32_t count);
 
 // Where a READ or a WRITE of an open file goes: off with ioAt, else its
 // position, or the file's end, size, for a WRITE that appends.

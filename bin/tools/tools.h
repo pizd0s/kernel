@@ -16,15 +16,16 @@ int consoleMain(int argc, char** argv);
 int devfsMain(int argc, char** argv);
 int devicesMain(int argc, char** argv);
 int dnsMain(int argc, char** argv);
-int ipcMain(int argc, char** argv);
 int erofsMain(int argc, char** argv);
 int gencatMain(int argc, char** argv);
 int mountMain(int argc, char** argv);
+int mqueueMain(int argc, char** argv);
 int ptyMain(int argc, char** argv);
 int sockmgrMain(int argc, char** argv);
 int spawnMain(int argc, char** argv);
 int tmpfsMain(int argc, char** argv);
 int umountMain(int argc, char** argv);
+int xsiMain(int argc, char** argv);
 
 // Runs the tool argv[0] names, or the one after "tools".
 int runTool(int argc, char** argv);

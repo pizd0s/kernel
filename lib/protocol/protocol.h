@@ -370,8 +370,8 @@
 //     SEND      watchEventsRemove, wd     on an events file: the mark taken
 //                                         away
 //
-//   ipc's (bin/tools/ipc), of /dev/ipc/mq and /dev/ipc/xsi, whose opens
-//   devfs hands on. An open of ipc/mq is a control file:
+//   mqueue's and xsi's (bin/tools), of /dev/ipc/mq and /dev/ipc/xsi, whose
+//   opens devfs hands on. An open of ipc/mq is a control file:
 //     SEND      mqOpen u32, flags u32, mode u32, maxmsg u32, msgsize u32,
 //                           name, 0       the queue of the name, made of
 //                                         O_CREAT, the mode the umask's,
@@ -596,8 +596,8 @@ constexpr uint8_t watchRemoved = 4;
 // flag of a name that is a directory's.
 constexpr uint8_t noticeGone = 5;
 constexpr uint8_t noticeDirectory = 0x80;
-// ipc's: a SEND's of ipc/mq's control file, a queue's options
-// (getsockopt and setsockopt, of ipcLevel), and the calls of ipc/xsi.
+// mqueue's: a SEND's of ipc/mq's control file and a queue's options
+// (getsockopt and setsockopt, of ipcLevel); xsi's: the calls of ipc/xsi.
 constexpr uint32_t mqOpen = 1;
 constexpr uint32_t mqUnlink = 2;
 constexpr uint32_t ipcLevel = 0x6970;

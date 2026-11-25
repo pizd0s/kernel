@@ -1,12 +1,12 @@
 /*
- * POSIX's message queues, ipc's (bin/tools/ipc, lib/protocol): an open of
- * /dev/ipc/mq is a control file, whose SEND, send here, opens or unlinks
- * a queue by its name, and whose ACCEPT then gives a descriptor of the
- * queue, exec closing it. A message's SEND, sendmsg, brings its priority
- * and who sends it, and a RECV, recvmsg, takes the priority and the
- * message; each waits in ipc but of O_NONBLOCK, and a timed one waits
- * here, in ppoll, for the queue's readiness, trying again until its time
- * is past. The attributes are getsockopt's of the queue, and so is a
+ * POSIX's message queues, mqueue's (bin/tools/mqueue, lib/protocol): an
+ * open of /dev/ipc/mq is a control file, whose SEND, send here, opens or
+ * unlinks a queue by its name, and whose ACCEPT then gives a descriptor
+ * of the queue, exec closing it. A message's SEND, sendmsg, brings its
+ * priority and who sends it, and a RECV, recvmsg, takes the priority and
+ * the message; each waits in mqueue but of O_NONBLOCK, and a timed one
+ * waits here, in ppoll, for the queue's readiness, trying again until its
+ * time is past. The attributes are getsockopt's of the queue, and so is a
  * notification, setsockopt's. A name is one of a slash, the slashes
  * before it not part of it. What is no queue is EBADF, a socket sent
  * nothing.
