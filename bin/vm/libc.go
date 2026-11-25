@@ -1902,10 +1902,6 @@ func libcSetgroups(n, list uint32) uint32 {
 	return proc().libcSetgroups(n, list)
 }
 
-func libcInitgroups(user, gid uint32) uint32 {
-	return proc().libcInitgroups(user, gid)
-}
-
 func libcSetsid() uint32 {
 	return proc().libcSetsid()
 }
@@ -2094,106 +2090,6 @@ func libcTtyname_r(fd, buf, n uint32) uint32 {
 	return proc().libcTtyname_r(fd, buf, n)
 }
 
-func libcGetpwnam(name, size uint32) uint32 {
-	p := proc()
-
-	p.sized("getpwnam", size, sizeofPasswd)
-
-	return p.libcGetpwnam(name)
-}
-
-func libcGetpwuid(uid, size uint32) uint32 {
-	p := proc()
-
-	p.sized("getpwuid", size, sizeofPasswd)
-
-	return p.libcGetpwuid(uid)
-}
-
-func libcGetpwnam_r(name, pwd, pwdSize, buf, size, result, resultSize uint32) uint32 {
-	p := proc()
-
-	p.sized("getpwnam_r", pwdSize, sizeofPasswd, resultSize, sizeofPasswd)
-
-	return p.libcGetpwnam_r(name, pwd, buf, size, result)
-}
-
-func libcGetpwuid_r(uid, pwd, pwdSize, buf, size, result, resultSize uint32) uint32 {
-	p := proc()
-
-	p.sized("getpwuid_r", pwdSize, sizeofPasswd, resultSize, sizeofPasswd)
-
-	return p.libcGetpwuid_r(uid, pwd, buf, size, result)
-}
-
-func libcGetpwent(size uint32) uint32 {
-	p := proc()
-
-	p.sized("getpwent", size, sizeofPasswd)
-
-	return p.libcGetpwent()
-}
-
-func libcSetpwent() {
-	proc().libcSetpwent()
-}
-
-func libcEndpwent() {
-	proc().libcEndpwent()
-}
-
-func libcGetgrnam(name, size uint32) uint32 {
-	p := proc()
-
-	p.sized("getgrnam", size, sizeofGroup)
-
-	return p.libcGetgrnam(name)
-}
-
-func libcGetgrgid(gid, size uint32) uint32 {
-	p := proc()
-
-	p.sized("getgrgid", size, sizeofGroup)
-
-	return p.libcGetgrgid(gid)
-}
-
-func libcGetgrnam_r(name, grp, grpSize, buf, size, result, resultSize uint32) uint32 {
-	p := proc()
-
-	p.sized("getgrnam_r", grpSize, sizeofGroup, resultSize, sizeofGroup)
-
-	return p.libcGetgrnam_r(name, grp, buf, size, result)
-}
-
-func libcGetgrgid_r(gid, grp, grpSize, buf, size, result, resultSize uint32) uint32 {
-	p := proc()
-
-	p.sized("getgrgid_r", grpSize, sizeofGroup, resultSize, sizeofGroup)
-
-	return p.libcGetgrgid_r(gid, grp, buf, size, result)
-}
-
-func libcGetgrent(size uint32) uint32 {
-	p := proc()
-
-	p.sized("getgrent", size, sizeofGroup)
-
-	return p.libcGetgrent()
-}
-
-func libcSetgrent() {
-	proc().libcSetgrent()
-}
-
-func libcEndgrent() {
-	proc().libcEndgrent()
-}
-
-func libcGetgrouplist(user, group, groups, count uint32) uint32 {
-	return proc().libcGetgrouplist(user, group, groups, count)
-}
-
 func libcPosix_openpt(flags uint32) uint32 {
 	return proc().libcPosix_openpt(flags)
 }
@@ -2272,18 +2168,6 @@ func libcDaemon(nochdir, noclose uint32) uint32 {
 
 func libcPrctl(option, va uint32) uint32 {
 	return proc().libcPrctl(option, va)
-}
-
-func libcGetusershell() uint32 {
-	return proc().libcGetusershell()
-}
-
-func libcSetusershell() {
-	proc().libcSetusershell()
-}
-
-func libcEndusershell() {
-	proc().libcEndusershell()
 }
 
 func libcGethostname(name, n uint32) uint32 {
@@ -2448,98 +2332,6 @@ func libcGai_strerror(code uint32) uint32 {
 
 func libcGetnameinfo(sa, salen, host, hostlen, serv, servlen, flags uint32) uint32 {
 	return proc().libcGetnameinfo(sa, salen, host, hostlen, serv, servlen, flags)
-}
-
-func libcGethostbyname(name, size uint32) uint32 {
-	p := proc()
-
-	p.sized("gethostbyname", size, sizeofHostent)
-
-	return p.libcGethostbyname(name)
-}
-
-func libcGethostbyname2(name, family, size uint32) uint32 {
-	p := proc()
-
-	p.sized("gethostbyname2", size, sizeofHostent)
-
-	return p.libcGethostbyname2(name, family)
-}
-
-func libcGethostbyaddr(addr, n, family, size uint32) uint32 {
-	p := proc()
-
-	p.sized("gethostbyaddr", size, sizeofHostent)
-
-	return p.libcGethostbyaddr(addr, n, family)
-}
-
-func libcGethostent(size uint32) uint32 {
-	p := proc()
-
-	p.sized("gethostent", size, sizeofHostent)
-
-	return p.libcGethostent()
-}
-
-func libcSethostent(stay uint32) {
-	proc().libcSethostent(stay)
-}
-
-func libcEndhostent() {
-	proc().libcEndhostent()
-}
-
-func libcGetservbyname(name, proto, size uint32) uint32 {
-	p := proc()
-
-	p.sized("getservbyname", size, sizeofServent)
-
-	return p.libcGetservbyname(name, proto)
-}
-
-func libcGetservbyport(port, proto, size uint32) uint32 {
-	p := proc()
-
-	p.sized("getservbyport", size, sizeofServent)
-
-	return p.libcGetservbyport(port, proto)
-}
-
-func libcGetprotobyname(name, size uint32) uint32 {
-	p := proc()
-
-	p.sized("getprotobyname", size, sizeofProtoent)
-
-	return p.libcGetprotobyname(name)
-}
-
-func libcGetprotobynumber(number, size uint32) uint32 {
-	p := proc()
-
-	p.sized("getprotobynumber", size, sizeofProtoent)
-
-	return p.libcGetprotobynumber(number)
-}
-
-func libcGetnetbyname(name, size uint32) uint32 {
-	p := proc()
-
-	p.sized("getnetbyname", size, sizeofNetent)
-
-	return p.libcGetnetbyname(name)
-}
-
-func libcGetnetbyaddr(net, family, size uint32) uint32 {
-	p := proc()
-
-	p.sized("getnetbyaddr", size, sizeofNetent)
-
-	return p.libcGetnetbyaddr(net, family)
-}
-
-func libcHstrerror(code uint32) uint32 {
-	return proc().libcHstrerror(code)
 }
 
 func libcInet_aton(s, at, atSize uint32) uint32 {
@@ -4107,94 +3899,6 @@ func libcPosix_getdents(fd, buf, n, flags uint32) uint32 {
 
 func libcPosix_devctl(fd, cmd, data, n, info uint32) uint32 {
 	return proc().libcPosix_devctl(fd, cmd, data, n, info)
-}
-
-func libcSetservent(stay uint32) {
-	proc().libcSetservent(stay)
-}
-
-func libcEndservent() {
-	proc().libcEndservent()
-}
-
-func libcGetservent(size uint32) uint32 {
-	p := proc()
-
-	p.sized("getservent", size, sizeofServent)
-
-	return p.libcGetservent()
-}
-
-func libcSetprotoent(stay uint32) {
-	proc().libcSetprotoent(stay)
-}
-
-func libcEndprotoent() {
-	proc().libcEndprotoent()
-}
-
-func libcGetprotoent(size uint32) uint32 {
-	p := proc()
-
-	p.sized("getprotoent", size, sizeofProtoent)
-
-	return p.libcGetprotoent()
-}
-
-func libcSetnetent(stay uint32) {
-	proc().libcSetnetent(stay)
-}
-
-func libcEndnetent() {
-	proc().libcEndnetent()
-}
-
-func libcGetnetent(size uint32) uint32 {
-	p := proc()
-
-	p.sized("getnetent", size, sizeofNetent)
-
-	return p.libcGetnetent()
-}
-
-func libcGethostbyname_r(name, ret, retSize, buf, n, result, resultSize, herr uint32) uint32 {
-	p := proc()
-
-	p.sized("gethostbyname_r", retSize, sizeofHostent, resultSize, sizeofHostent)
-
-	return p.libcGethostbyname_r(name, ret, buf, n, result, herr)
-}
-
-func libcGethostbyname2_r(name, family, ret, retSize, buf, n, result, resultSize, herr uint32) uint32 {
-	p := proc()
-
-	p.sized("gethostbyname2_r", retSize, sizeofHostent, resultSize, sizeofHostent)
-
-	return p.libcGethostbyname2_r(name, family, ret, buf, n, result, herr)
-}
-
-func libcGethostbyaddr_r(addr, length, family, ret, retSize, buf, n, result, resultSize, herr uint32) uint32 {
-	p := proc()
-
-	p.sized("gethostbyaddr_r", retSize, sizeofHostent, resultSize, sizeofHostent)
-
-	return p.libcGethostbyaddr_r(addr, length, family, ret, buf, n, result, herr)
-}
-
-func libcGetservbyname_r(name, proto, ret, retSize, buf, n, result, resultSize uint32) uint32 {
-	p := proc()
-
-	p.sized("getservbyname_r", retSize, sizeofServent, resultSize, sizeofServent)
-
-	return p.libcGetservbyname_r(name, proto, ret, buf, n, result)
-}
-
-func libcGetservbyport_r(port, proto, ret, retSize, buf, n, result, resultSize uint32) uint32 {
-	p := proc()
-
-	p.sized("getservbyport_r", retSize, sizeofServent, resultSize, sizeofServent)
-
-	return p.libcGetservbyport_r(port, proto, ret, buf, n, result)
 }
 
 func libcMq_open(name, flags, va, attrSize uint32) uint32 {

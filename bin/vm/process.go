@@ -31,7 +31,6 @@ var (
 	itimerSignals  = [3]int{SIGALRM, SIGVTALRM, SIGPROF}
 	zoneDirs       = []string{"/usr/share/zoneinfo/", "/share/zoneinfo/", "/etc/zoneinfo/"}
 	pathconfValues = []int32{8, 255, 255, 255, 4096, 4096, 1, 1, 0, 1, -1, -1, -1, 64, 4096, 4096, 4096, 4096, 4096, -1, 1}
-	hostMessages   = []string{"Host not found", "Try again", "Non-recoverable error", "Address not available"}
 	wcClassNames   = []string{"alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"}
 	devctlValues   = map[uint32]bool{TCFLSH: true, TCXONC: true, TCSBRK: true}
 )
@@ -46,17 +45,6 @@ var randomInit = [32]uint32{
 var gaiMessages = []string{"Invalid flags", "Name does not resolve", "Try again", "Non-recoverable error", "Name has no usable address",
 	"Unrecognized address family or invalid length", "Unrecognized socket type", "Unrecognized service", "Unknown error",
 	"Out of memory", "System error", "Overflow"}
-
-var protocols = []struct {
-	number int
-	name   string
-}{
-	{0, "ip"}, {1, "icmp"}, {2, "igmp"}, {3, "ggp"}, {4, "ipencap"}, {5, "st"}, {6, "tcp"}, {8, "egp"}, {12, "pup"}, {17, "udp"},
-	{20, "hmp"}, {22, "xns-idp"}, {27, "rdp"}, {29, "iso-tp4"}, {36, "xtp"}, {37, "ddp"}, {38, "idpr-cmtp"}, {41, "ipv6"},
-	{43, "ipv6-route"}, {44, "ipv6-frag"}, {45, "idrp"}, {46, "rsvp"}, {47, "gre"}, {50, "esp"}, {51, "ah"}, {57, "skip"},
-	{58, "ipv6-icmp"}, {59, "ipv6-nonxt"}, {60, "ipv6-opts"}, {73, "rspf"}, {81, "vmtp"}, {89, "ospf"}, {94, "ipip"},
-	{98, "encap"}, {103, "pim"}, {255, "raw"},
-}
 
 var wellKnown = []ServiceEntry{
 	{"echo", 7, "tcp", nil}, {"echo", 7, "udp", nil}, {"discard", 9, "tcp", nil}, {"discard", 9, "udp", nil}, {"daytime", 13, "tcp", nil},
@@ -3718,19 +3706,6 @@ func (p *Process) libcSetgroups(n, list uint32) uint32 {
 
 	for i := range groups {
 		groups[i] = p.u32(list + uint32(4*i))
-	}
-
-	return p.result(0, p.setGroups(groups))
-}
-
-func (p *Process) libcInitgroups(user, gid uint32) uint32 {
-	name := p.str(user)
-	groups := []uint32{gid}
-
-	for _, e := range p.groupEntries() {
-		if slices.Contains(e.members, name) && !slices.Contains(groups, e.gid) {
-			groups = append(groups, e.gid)
-		}
 	}
 
 	return p.result(0, p.setGroups(groups))
@@ -11824,24 +11799,6 @@ func (p *Process) prctl(option, va uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) shells() []string {
-	data, err := p.readPath("/etc/shells", databaseMax)
-
-	if err != nil {
-		return []string{"/bin/sh", "/bin/csh"}
-	}
-
-	var out []string
-
-	for _, line := range strings.Split(string(data), "\n") {
-		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
-			out = append(out, line)
-		}
-	}
-
-	return out
-}
-
 func (p *Process) libcSrandom(seed uint32) {
 	p.srandom(p.randomState(), seed)
 }
@@ -11894,30 +11851,6 @@ func (p *Process) libcSecure_getenv(name uint32) uint32 {
 	_, value, _ := p.lookupEnv(p.cstr(name))
 
 	return value
-}
-
-func (p *Process) libcGetusershell() uint32 {
-	shell := nextEntry(p, staticShellIndex, p.shells())
-
-	if shell == nil {
-		return 0
-	}
-
-	block := p.staticResult(staticShell, uint32(len(*shell)+1))
-
-	if block != 0 {
-		p.putString(block, *shell)
-	}
-
-	return block
-}
-
-func (p *Process) libcSetusershell() {
-	p.put32(p.staticAt(staticShellIndex), 0)
-}
-
-func (p *Process) libcEndusershell() {
-	p.put32(p.staticAt(staticShellIndex), 0)
 }
 
 func (p *Process) libcGetentropy(buf, n uint32) uint32 {
@@ -12060,10 +11993,35 @@ type PasswdEntry struct {
 	gecos, dir, shell string
 }
 
-type GroupEntry struct {
-	name, passwd string
-	gid          uint32
-	members      []string
+func (p *Process) staticResult(slot, size uint32) uint32 {
+	at := p.staticAt(slot)
+
+	p.free(p.u32(at))
+	p.put32(at, 0)
+
+	block := p.malloc(size)
+
+	if block == 0 {
+		p.setErrno(ENOMEM)
+
+		return 0
+	}
+
+	p.put32(at, block)
+
+	return block
+}
+
+type ServiceEntry struct {
+	name    string
+	port    int
+	proto   string
+	aliases []string
+}
+
+type HostEntry struct {
+	addr  netip.Addr
+	names []string
 }
 
 func (p *Process) databaseLines(path string, fields int) [][]string {
@@ -12105,180 +12063,6 @@ func (p *Process) passwdEntries() []PasswdEntry {
 	return out
 }
 
-func (p *Process) groupEntries() []GroupEntry {
-	var out []GroupEntry
-
-	for _, f := range p.databaseLines("/etc/group", 4) {
-		gid, ok := parseId(f[2])
-
-		if !ok {
-			continue
-		}
-
-		var members []string
-
-		if f[3] != "" {
-			members = strings.Split(f[3], ",")
-		}
-
-		out = append(out, GroupEntry{f[0], f[1], gid, members})
-	}
-
-	return out
-}
-
-func stringsRoom(strs []string) uint32 {
-	n := uint32(0)
-
-	for _, v := range strs {
-		n += uint32(len(v)) + 1
-	}
-
-	return n
-}
-
-func (e *ServiceEntry) size(align uint32) uint32 {
-	return (4-align%4)%4 + 4*uint32(len(e.aliases)+1) + stringsRoom(append([]string{e.name, e.proto}, e.aliases...))
-}
-
-func (e *PasswdEntry) size() uint32 {
-	return uint32(len(e.name) + len(e.passwd) + len(e.gecos) + len(e.dir) + len(e.shell) + 5)
-}
-
-func (p *Process) putPasswd(at, buf uint32, e *PasswdEntry) {
-	ptrs := make([]uint32, 0, 5)
-
-	for _, s := range []string{e.name, e.passwd, e.gecos, e.dir, e.shell} {
-		p.putString(buf, s)
-		ptrs = append(ptrs, buf)
-		buf += uint32(len(s) + 1)
-	}
-
-	p.put32(at, ptrs[0])
-	p.put32(at+4, ptrs[1])
-	p.put32(at+8, e.uid)
-	p.put32(at+12, e.gid)
-	p.put32(at+16, ptrs[2])
-	p.put32(at+20, ptrs[3])
-	p.put32(at+24, ptrs[4])
-}
-
-func (e *GroupEntry) size(align uint32) uint32 {
-	n := (4-align%4)%4 + 4*uint32(len(e.members)+1) + uint32(len(e.name)+len(e.passwd)+2)
-
-	for _, m := range e.members {
-		n += uint32(len(m) + 1)
-	}
-
-	return n
-}
-
-func (p *Process) putGroup(at, buf uint32, e *GroupEntry) {
-	mem := buf + (4-buf%4)%4
-	s := mem + 4*uint32(len(e.members)+1)
-
-	str := func(v string) uint32 {
-		at := s
-
-		p.putString(at, v)
-		s += uint32(len(v) + 1)
-
-		return at
-	}
-
-	p.put32(at, str(e.name))
-	p.put32(at+4, str(e.passwd))
-	p.put32(at+8, e.gid)
-	p.put32(at+12, mem)
-
-	for i, m := range e.members {
-		p.put32(mem+4*uint32(i), str(m))
-	}
-
-	p.put32(mem+4*uint32(len(e.members)), 0)
-}
-
-func (p *Process) passwdResult(e *PasswdEntry, pwd, buf, size, result uint32) uint32 {
-	p.put32(result, 0)
-
-	if e == nil {
-		return 0
-	}
-
-	if e.size() > size {
-		return uint32(ERANGE)
-	}
-
-	p.putPasswd(pwd, buf, e)
-	p.put32(result, pwd)
-
-	return 0
-}
-
-func (p *Process) groupResult(e *GroupEntry, grp, buf, size, result uint32) uint32 {
-	p.put32(result, 0)
-
-	if e == nil {
-		return 0
-	}
-
-	if e.size(buf) > size {
-		return uint32(ERANGE)
-	}
-
-	p.putGroup(grp, buf, e)
-	p.put32(result, grp)
-
-	return 0
-}
-
-func (p *Process) staticResult(slot, size uint32) uint32 {
-	at := p.staticAt(slot)
-
-	p.free(p.u32(at))
-	p.put32(at, 0)
-
-	block := p.malloc(size)
-
-	if block == 0 {
-		p.setErrno(ENOMEM)
-
-		return 0
-	}
-
-	p.put32(at, block)
-
-	return block
-}
-
-func (p *Process) staticPasswd(e *PasswdEntry) uint32 {
-	if e == nil {
-		return 0
-	}
-
-	block := p.staticResult(staticPasswd, 28+e.size())
-
-	if block != 0 {
-		p.putPasswd(block, block+28, e)
-	}
-
-	return block
-}
-
-func (p *Process) staticGroup(e *GroupEntry) uint32 {
-	if e == nil {
-		return 0
-	}
-
-	block := p.staticResult(staticGroup, 16+e.size(16))
-
-	if block != 0 {
-		p.putGroup(block, block+16, e)
-	}
-
-	return block
-}
-
 func (p *Process) passwdBy(match func(*PasswdEntry) bool) *PasswdEntry {
 	entries := p.passwdEntries()
 
@@ -12289,144 +12073,14 @@ func (p *Process) passwdBy(match func(*PasswdEntry) bool) *PasswdEntry {
 	return nil
 }
 
-func (p *Process) groupBy(match func(*GroupEntry) bool) *GroupEntry {
-	entries := p.groupEntries()
-
-	if i := slices.IndexFunc(entries, func(e GroupEntry) bool { return match(&e) }); i >= 0 {
-		return &entries[i]
-	}
-
-	return nil
-}
-
-func nextEntry[E any](p *Process, slot uint32, entries []E) *E {
-	at := p.staticAt(slot)
-	i := p.u32(at)
-
-	if i >= uint32(len(entries)) {
-		return nil
-	}
-
-	p.put32(at, i+1)
-
-	return &entries[i]
-}
-
-func byName(p *Process, name uint32) func(*PasswdEntry) bool {
-	s := p.str(name)
-
-	return func(e *PasswdEntry) bool { return e.name == s }
-}
-
-func byUid(uid uint32) func(*PasswdEntry) bool {
-	return func(e *PasswdEntry) bool { return e.uid == uid }
-}
-
-func groupName(p *Process, name uint32) func(*GroupEntry) bool {
-	s := p.str(name)
-
-	return func(e *GroupEntry) bool { return e.name == s }
-}
-
-func byGid(gid uint32) func(*GroupEntry) bool {
-	return func(e *GroupEntry) bool { return e.gid == gid }
-}
-
-func (p *Process) rewind(slot uint32) {
-	p.put32(p.staticAt(slot), 0)
-}
-
-func (p *Process) libcGetpwnam(name uint32) uint32 {
-	return p.staticPasswd(p.passwdBy(byName(p, name)))
-}
-
-func (p *Process) libcGetpwuid(uid uint32) uint32 {
-	return p.staticPasswd(p.passwdBy(byUid(uid)))
-}
-
-func (p *Process) libcGetpwnam_r(name, pwd, buf, size, result uint32) uint32 {
-	return p.passwdResult(p.passwdBy(byName(p, name)), pwd, buf, size, result)
-}
-
-func (p *Process) libcGetpwuid_r(uid, pwd, buf, size, result uint32) uint32 {
-	return p.passwdResult(p.passwdBy(byUid(uid)), pwd, buf, size, result)
-}
-
-func (p *Process) libcGetpwent() uint32 {
-	return p.staticPasswd(nextEntry(p, staticPwent, p.passwdEntries()))
-}
-
-func (p *Process) libcSetpwent() {
-	p.rewind(staticPwent)
-}
-
-func (p *Process) libcEndpwent() {
-	p.rewind(staticPwent)
-}
-
-func (p *Process) libcGetgrnam(name uint32) uint32 {
-	return p.staticGroup(p.groupBy(groupName(p, name)))
-}
-
-func (p *Process) libcGetgrgid(gid uint32) uint32 {
-	return p.staticGroup(p.groupBy(byGid(gid)))
-}
-
-func (p *Process) libcGetgrnam_r(name, grp, buf, size, result uint32) uint32 {
-	return p.groupResult(p.groupBy(groupName(p, name)), grp, buf, size, result)
-}
-
-func (p *Process) libcGetgrgid_r(gid, grp, buf, size, result uint32) uint32 {
-	return p.groupResult(p.groupBy(byGid(gid)), grp, buf, size, result)
-}
-
-func (p *Process) libcGetgrent() uint32 {
-	return p.staticGroup(nextEntry(p, staticGrent, p.groupEntries()))
-}
-
-func (p *Process) libcSetgrent() {
-	p.rewind(staticGrent)
-}
-
-func (p *Process) libcEndgrent() {
-	p.rewind(staticGrent)
-}
-
-func (p *Process) libcGetgrouplist(user, group, groups, count uint32) uint32 {
-	name := p.str(user)
-	list := []uint32{group}
-
-	for _, e := range p.groupEntries() {
-		if slices.Contains(e.members, name) && !slices.Contains(list, e.gid) {
-			list = append(list, e.gid)
+func (p *Process) serviceName(port int, proto string) (ServiceEntry, bool) {
+	for _, s := range p.services() {
+		if s.port == port && (proto == "" || s.proto == proto) {
+			return s, true
 		}
 	}
 
-	room := min(int(int32(p.u32(count))), len(list))
-
-	for i := range max(room, 0) {
-		p.put32(groups+4*uint32(i), list[i])
-	}
-
-	p.put32(count, uint32(len(list)))
-
-	if room < len(list) {
-		return ^uint32(0)
-	}
-
-	return uint32(len(list))
-}
-
-type ServiceEntry struct {
-	name    string
-	port    int
-	proto   string
-	aliases []string
-}
-
-type HostEntry struct {
-	addr  netip.Addr
-	names []string
+	return ServiceEntry{}, false
 }
 
 func (p *Process) fileLines(path string) ([]string, bool) {
@@ -12459,54 +12113,6 @@ func (p *Process) hostEntries() []HostEntry {
 
 		if addr, err := netip.ParseAddr(fields[0]); err == nil && len(fields) > 1 {
 			out = append(out, HostEntry{addr.WithZone(""), fields[1:]})
-		}
-	}
-
-	return out
-}
-
-func (p *Process) protocolEntries() []ProtocolEntry {
-	lines, ok := p.fileLines("/etc/protocols")
-
-	var out []ProtocolEntry
-
-	if !ok {
-		for _, e := range protocols {
-			out = append(out, ProtocolEntry{name: e.name, number: e.number})
-		}
-
-		return out
-	}
-
-	for _, line := range lines {
-		fields := strings.Fields(line)
-
-		if len(fields) < 2 {
-			continue
-		}
-
-		if n, err := strconv.Atoi(fields[1]); err == nil {
-			out = append(out, ProtocolEntry{fields[0], n, fields[2:]})
-		}
-	}
-
-	return out
-}
-
-func (p *Process) networkEntries() []NetworkEntry {
-	lines, _ := p.fileLines("/etc/networks")
-
-	var out []NetworkEntry
-
-	for _, line := range lines {
-		fields := strings.Fields(line)
-
-		if len(fields) < 2 {
-			continue
-		}
-
-		if n, ok := networkNumber(fields[1]); ok {
-			out = append(out, NetworkEntry{fields[0], n, fields[2:]})
 		}
 	}
 
@@ -12660,16 +12266,6 @@ func (p *Process) servicePort(name, proto string) (int, bool) {
 func (p *Process) serviceNamed(name, proto string) (ServiceEntry, bool) {
 	for _, s := range p.services() {
 		if (s.name == name || slices.Contains(s.aliases, name)) && (proto == "" || s.proto == proto) {
-			return s, true
-		}
-	}
-
-	return ServiceEntry{}, false
-}
-
-func (p *Process) serviceName(port int, proto string) (ServiceEntry, bool) {
-	for _, s := range p.services() {
-		if s.port == port && (proto == "" || s.proto == proto) {
 			return s, true
 		}
 	}
@@ -12983,243 +12579,6 @@ func (p *Process) getnameinfo(sa, salen, host, hostlen, serv, servlen, flags uin
 	return 0
 }
 
-func (p *Process) hostent(h *Hostent) uint32 {
-	return p.staticEntry(staticHostent, sizeofHostent, h.size(sizeofHostent), func(at, buf uint32) {
-		p.putHostent(at, buf, h)
-	})
-}
-
-func (p *Process) staticEntry(slot, size, rest uint32, put func(at, buf uint32)) uint32 {
-	block := p.staticResult(slot, size+rest)
-
-	if block != 0 {
-		put(block, block+size)
-	}
-
-	return block
-}
-
-func (p *Process) putStrings(at uint32, strs []string) []uint32 {
-	ptrs := make([]uint32, len(strs))
-
-	for i, v := range strs {
-		p.putString(at, v)
-		ptrs[i] = at
-		at += uint32(len(v)) + 1
-	}
-
-	return ptrs
-}
-
-func (p *Process) putPointers(at uint32, ptrs []uint32) {
-	for i, v := range ptrs {
-		p.put32(at+4*uint32(i), v)
-	}
-
-	p.put32(at+4*uint32(len(ptrs)), 0)
-}
-
-func (p *Process) putHostent(at, buf uint32, h *Hostent) {
-	aliases := buf + (4-buf%4)%4
-	list := aliases + 4*uint32(len(h.aliases)+1)
-	data := list + 4*uint32(len(h.addrs)+1)
-	length := h.length()
-	addrs := make([]uint32, len(h.addrs))
-
-	for i, a := range h.addrs {
-		addrs[i] = data + length*uint32(i)
-
-		if length == 4 {
-			v4 := a.As4()
-
-			copy(p.span(addrs[i], 4), v4[:])
-		} else {
-			v6 := a.As16()
-
-			copy(p.span(addrs[i], 16), v6[:])
-		}
-	}
-
-	strs := p.putStrings(data+length*uint32(len(h.addrs)), append([]string{h.name}, h.aliases...))
-
-	p.putPointers(aliases, strs[1:])
-	p.putPointers(list, addrs)
-
-	for i, v := range []uint32{strs[0], aliases, uint32(h.family), length, list} {
-		p.put32(at+4*uint32(i), v)
-	}
-}
-
-func (p *Process) putServent(at, buf uint32, e *ServiceEntry) {
-	aliases := buf + (4-buf%4)%4
-	strs := p.putStrings(aliases+4*uint32(len(e.aliases)+1), append([]string{e.name, e.proto}, e.aliases...))
-
-	p.putPointers(aliases, strs[2:])
-
-	var port [2]byte
-	binary.BigEndian.PutUint16(port[:], uint16(e.port))
-
-	for i, v := range []uint32{strs[0], aliases, uint32(binary.LittleEndian.Uint16(port[:])), strs[1]} {
-		p.put32(at+4*uint32(i), v)
-	}
-}
-
-func (p *Process) putProtoent(at, buf uint32, e *ProtocolEntry) {
-	aliases := buf + (4-buf%4)%4
-	strs := p.putStrings(aliases+4*uint32(len(e.aliases)+1), append([]string{e.name}, e.aliases...))
-
-	p.putPointers(aliases, strs[1:])
-
-	for i, v := range []uint32{strs[0], aliases, uint32(e.number)} {
-		p.put32(at+4*uint32(i), v)
-	}
-}
-
-func (p *Process) putNetent(at, buf uint32, e *NetworkEntry) {
-	aliases := buf + (4-buf%4)%4
-	strs := p.putStrings(aliases+4*uint32(len(e.aliases)+1), append([]string{e.name}, e.aliases...))
-
-	p.putPointers(aliases, strs[1:])
-
-	for i, v := range []uint32{strs[0], aliases, AF_INET, e.net} {
-		p.put32(at+4*uint32(i), v)
-	}
-}
-
-func (p *Process) hostByName(name string, family int) (*Hostent, int) {
-	if family != AF_INET && family != AF_INET6 {
-		return nil, NO_RECOVERY
-	}
-
-	var found []netip.Addr
-
-	canonical := name
-
-	if a, _, ok := numericHost(name, p.interfaceIndex); ok {
-		found = []netip.Addr{a}
-	} else {
-		addrs, canon, code := p.resolve(name)
-
-		switch code {
-		case 0:
-		case EAI_AGAIN:
-			return nil, TRY_AGAIN
-		case EAI_FAIL:
-			return nil, NO_RECOVERY
-		default:
-			return nil, HOST_NOT_FOUND
-		}
-
-		found, canonical = addrs, canon
-	}
-
-	var kept []netip.Addr
-
-	for _, a := range found {
-		if a.Is4() == (family == AF_INET) {
-			kept = append(kept, a)
-		}
-	}
-
-	if len(kept) == 0 {
-		return nil, HOST_NOT_FOUND
-	}
-
-	return &Hostent{name: canonical, family: family, addrs: kept}, 0
-}
-
-func (p *Process) hostByAddr(addr, n, family uint32) (*Hostent, int) {
-	var a netip.Addr
-
-	switch {
-	case family == AF_INET && n == 4:
-		a = netip.AddrFrom4([4]byte(p.span(addr, 4)))
-	case family == AF_INET6 && n == 16:
-		a = netip.AddrFrom16([16]byte(p.span(addr, 16)))
-	default:
-		return nil, NO_RECOVERY
-	}
-
-	name, ok := p.reverse(a)
-
-	if !ok {
-		return nil, HOST_NOT_FOUND
-	}
-
-	return &Hostent{name: name, family: int(family), addrs: []netip.Addr{a}}, 0
-}
-
-func (p *Process) staticHost(h *Hostent, _ int) uint32 {
-	if h == nil {
-		return 0
-	}
-
-	return p.hostent(h)
-}
-
-func (p *Process) hostResult(h *Hostent, herr int, ret, buf, n, result, herrAt uint32) uint32 {
-	p.put32(result, 0)
-
-	if h == nil {
-		if herrAt != 0 {
-			p.put32(herrAt, uint32(herr))
-		}
-
-		switch herr {
-		case TRY_AGAIN:
-			return uint32(EAGAIN)
-		case NO_RECOVERY:
-			return uint32(EBADMSG)
-		}
-
-		return 0
-	}
-
-	if h.size(buf) > n {
-		return uint32(ERANGE)
-	}
-
-	p.putHostent(ret, buf, h)
-	p.put32(result, ret)
-
-	return 0
-}
-
-func (p *Process) entryResult(found bool, need, ret, n, result uint32, put func()) uint32 {
-	p.put32(result, 0)
-
-	if !found {
-		return 0
-	}
-
-	if need > n {
-		return uint32(ERANGE)
-	}
-
-	put()
-	p.put32(result, ret)
-
-	return 0
-}
-
-func (p *Process) servent(s *ServiceEntry) uint32 {
-	return p.staticEntry(staticServent, sizeofServent, s.size(sizeofServent), func(at, buf uint32) {
-		p.putServent(at, buf, s)
-	})
-}
-
-func (p *Process) protoent(e *ProtocolEntry) uint32 {
-	return p.staticEntry(staticProtoent, sizeofProtoent, e.size(sizeofProtoent), func(at, buf uint32) {
-		p.putProtoent(at, buf, e)
-	})
-}
-
-func (p *Process) netent(e *NetworkEntry) uint32 {
-	return p.staticEntry(staticNetent, sizeofNetent, e.size(sizeofNetent), func(at, buf uint32) {
-		p.putNetent(at, buf, e)
-	})
-}
-
 func (p *Process) libcGetaddrinfo(node, service, hints, res uint32) uint32 {
 	return uint32(int32(p.getaddrinfo(node, service, hints, res)))
 }
@@ -13236,209 +12595,6 @@ func (p *Process) libcGai_strerror(code uint32) uint32 {
 
 func (p *Process) libcGetnameinfo(sa, salen, host, hostlen, serv, servlen, flags uint32) uint32 {
 	return uint32(int32(p.getnameinfo(sa, salen, host, hostlen, serv, servlen, flags)))
-}
-
-func (p *Process) libcGethostbyname(name uint32) uint32 {
-	return p.staticHost(p.hostByName(p.str(name), AF_INET))
-}
-
-func (p *Process) libcGethostbyname2(name, family uint32) uint32 {
-	return p.staticHost(p.hostByName(p.str(name), int(family)))
-}
-
-func (p *Process) libcGethostbyaddr(addr, n, family uint32) uint32 {
-	return p.staticHost(p.hostByAddr(addr, n, family))
-}
-
-func (p *Process) libcGethostbyname_r(name, ret, buf, n, result, herr uint32) uint32 {
-	h, code := p.hostByName(p.str(name), AF_INET)
-
-	return p.hostResult(h, code, ret, buf, n, result, herr)
-}
-
-func (p *Process) libcGethostbyname2_r(name, family, ret, buf, n, result, herr uint32) uint32 {
-	h, code := p.hostByName(p.str(name), int(family))
-
-	return p.hostResult(h, code, ret, buf, n, result, herr)
-}
-
-func (p *Process) libcGethostbyaddr_r(addr, length, family, ret, buf, n, result, herr uint32) uint32 {
-	h, code := p.hostByAddr(addr, length, family)
-
-	return p.hostResult(h, code, ret, buf, n, result, herr)
-}
-
-func (p *Process) libcGethostent() uint32 {
-	e := nextEntry(p, staticHostIndex, p.hostEntries())
-
-	if e == nil {
-		return 0
-	}
-
-	family := AF_INET6
-
-	if e.addr.Is4() {
-		family = AF_INET
-	}
-
-	return p.hostent(&Hostent{name: e.names[0], aliases: e.names[1:], family: family, addrs: []netip.Addr{e.addr}})
-}
-
-func (p *Process) libcSethostent(stay uint32) {
-	p.rewind(staticHostIndex)
-}
-
-func (p *Process) libcEndhostent() {
-	p.rewind(staticHostIndex)
-}
-
-func (p *Process) protoName(proto uint32) string {
-	if proto == 0 {
-		return ""
-	}
-
-	return p.str(proto)
-}
-
-func servicePortOf(port uint32) int {
-	var b [2]byte
-	binary.LittleEndian.PutUint16(b[:], uint16(port))
-
-	return int(binary.BigEndian.Uint16(b[:]))
-}
-
-func (p *Process) libcGetservbyname(name, proto uint32) uint32 {
-	s, ok := p.serviceNamed(p.str(name), p.protoName(proto))
-
-	if !ok {
-		return 0
-	}
-
-	return p.servent(&s)
-}
-
-func (p *Process) libcGetservbyport(port, proto uint32) uint32 {
-	s, ok := p.serviceName(servicePortOf(port), p.protoName(proto))
-
-	if !ok {
-		return 0
-	}
-
-	return p.servent(&s)
-}
-
-func (p *Process) libcGetservbyname_r(name, proto, ret, buf, n, result uint32) uint32 {
-	s, ok := p.serviceNamed(p.str(name), p.protoName(proto))
-
-	return p.entryResult(ok, s.size(buf), ret, n, result, func() { p.putServent(ret, buf, &s) })
-}
-
-func (p *Process) libcGetservbyport_r(port, proto, ret, buf, n, result uint32) uint32 {
-	s, ok := p.serviceName(servicePortOf(port), p.protoName(proto))
-
-	return p.entryResult(ok, s.size(buf), ret, n, result, func() { p.putServent(ret, buf, &s) })
-}
-
-func (p *Process) libcGetservent() uint32 {
-	if e := nextEntry(p, staticServIndex, p.services()); e != nil {
-		return p.servent(e)
-	}
-
-	return 0
-}
-
-func (p *Process) libcSetservent(stay uint32) {
-	p.rewind(staticServIndex)
-}
-
-func (p *Process) libcEndservent() {
-	p.rewind(staticServIndex)
-}
-
-func (p *Process) libcGetprotobyname(name uint32) uint32 {
-	s := p.str(name)
-
-	for _, e := range p.protocolEntries() {
-		if e.name == s || slices.Contains(e.aliases, s) {
-			return p.protoent(&e)
-		}
-	}
-
-	return 0
-}
-
-func (p *Process) libcGetprotobynumber(number uint32) uint32 {
-	for _, e := range p.protocolEntries() {
-		if e.number == int(int32(number)) {
-			return p.protoent(&e)
-		}
-	}
-
-	return 0
-}
-
-func (p *Process) libcGetprotoent() uint32 {
-	if e := nextEntry(p, staticProtoIndex, p.protocolEntries()); e != nil {
-		return p.protoent(e)
-	}
-
-	return 0
-}
-
-func (p *Process) libcSetprotoent(stay uint32) {
-	p.rewind(staticProtoIndex)
-}
-
-func (p *Process) libcEndprotoent() {
-	p.rewind(staticProtoIndex)
-}
-
-func (p *Process) libcGetnetbyname(name uint32) uint32 {
-	s := p.str(name)
-
-	for _, e := range p.networkEntries() {
-		if e.name == s || slices.Contains(e.aliases, s) {
-			return p.netent(&e)
-		}
-	}
-
-	return 0
-}
-
-func (p *Process) libcGetnetbyaddr(net, family uint32) uint32 {
-	for _, e := range p.networkEntries() {
-		if family == AF_INET && e.net == net {
-			return p.netent(&e)
-		}
-	}
-
-	return 0
-}
-
-func (p *Process) libcGetnetent() uint32 {
-	if e := nextEntry(p, staticNetIndex, p.networkEntries()); e != nil {
-		return p.netent(e)
-	}
-
-	return 0
-}
-
-func (p *Process) libcSetnetent(stay uint32) {
-	p.rewind(staticNetIndex)
-}
-
-func (p *Process) libcEndnetent() {
-	p.rewind(staticNetIndex)
-}
-
-func (p *Process) libcHstrerror(code uint32) uint32 {
-	msg := "Unknown error"
-
-	if c := int(int32(code)); c >= 1 && c <= len(hostMessages) {
-		msg = hostMessages[c-1]
-	}
-
-	return p.constant(msg)
 }
 
 func (p *Process) libcInet_aton(s, at uint32) uint32 {

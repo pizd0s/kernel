@@ -96,7 +96,8 @@ static const char* find(const unsigned char* b, int32_t set, int32_t message) {
     return (const char*)b + text + number(b + first + ENTRY * k + 8);
 }
 
-// The catalog of a file, or null and errno: ENOENT for a file of none.
+// The catalog of a file, what of it can be read, or null and errno:
+// ENOENT for a file of none.
 static unsigned char* readCatalog(const char* path) {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
 
@@ -128,8 +129,6 @@ static unsigned char* readCatalog(const char* path) {
         }
 
         if (n <= 0) {
-            e = n < 0 ? errno : 0;
-
             break;
         }
 

@@ -322,8 +322,6 @@ const (
 	sizeofFdSet                       = 128
 	sizeofFlock                       = 32
 	sizeofGlob                        = 12
-	sizeofGroup                       = 16
-	sizeofHostent                     = 20
 	sizeofIfNameindex                 = 8
 	sizeofInAddr                      = 4
 	sizeofIovec                       = 8
@@ -337,10 +335,7 @@ const (
 	sizeofResState                    = 512
 	sizeofNsMsg                       = 48
 	sizeofNsRr                        = 1044
-	sizeofNetent                      = 16
-	sizeofPasswd                      = 28
 	sizeofPollfd                      = 8
-	sizeofProtoent                    = 12
 	sizeofRlimit                      = 16
 	sizeofRusage                      = 88
 	sizeofSchedParam                  = 4
@@ -415,7 +410,6 @@ const (
 	thrd_nomem                        = 3
 	thrd_timedout                     = 4
 	mtx_recursive                     = 1
-	sizeofServent                     = 16
 	sizeofSigaction                   = 24
 	sizeofSiginfo                     = 44
 	sizeofSigset                      = 8

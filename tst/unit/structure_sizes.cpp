@@ -13,18 +13,18 @@
 #include <assert.h>
 #include <fcntl.h>
 #include <poll.h>
-#include <pwd.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 extern "C" {
 int __kernel_stat(const char*, struct stat*, size_t) __KERNEL(stat);
-struct passwd* __kernel_getpwnam(const char*, size_t) __KERNEL(getpwnam);
+struct tm* __kernel_gmtime(const time_t*, size_t) __KERNEL(gmtime);
 int __kernel_sigaction(int, const struct sigaction*, size_t, struct sigaction*, size_t, size_t) __KERNEL(sigaction);
 int __kernel_fcntl(int, int, va_list, size_t) __KERNEL(fcntl);
 int __kernel_ioctl(int, unsigned long, va_list, size_t) __KERNEL(ioctl);
@@ -74,7 +74,8 @@ int main() {
         __kernel_stat("/", st, sizeof st[0] + 8);
     });
     refused([] {
-        __kernel_getpwnam("root", sizeof(struct passwd) + 4);
+        time_t now = 0;
+        __kernel_gmtime(&now, sizeof(struct tm) + 4);
     });
     refused([] {
         struct sigaction action = {};
