@@ -37,8 +37,12 @@ int main() {
     assert(putenv(pair) == 0 && strcmp(getenv("PIZDOS_PUT"), "before") == 0);
     strcpy(strchr(pair, '=') + 1, "after");
     assert(strcmp(getenv("PIZDOS_PUT"), "after") == 0);
+    // A string of no '=' POSIX leaves unspecified; FreeBSD's is EINVAL.
+#ifdef __wasm__
     char remove[] = "PIZDOS_PUT";
-    assert(putenv(remove) == 0 && getenv("PIZDOS_PUT") == nullptr);
+    assert(putenv(remove) == -1 && errno == EINVAL && strcmp(getenv("PIZDOS_PUT"), "after") == 0);
+#endif
+    assert(unsetenv("PIZDOS_PUT") == 0 && getenv("PIZDOS_PUT") == nullptr);
     char key[32], number[32];
     for (int i = 0; i < 100; ++i) {
         snprintf(key, sizeof(key), "PIZDOS_%d", i);
@@ -57,8 +61,9 @@ int main() {
     environ = suppliedEnvironment;
     assert(strcmp(getenv("PIZDOS_SUPPLIED"), "one") == 0);
     assert(setenv("PIZDOS_ADDED", "new", 1) == 0);
-    strcpy(strchr(supplied, '=') + 1, "two");
-    assert(strcmp(getenv("PIZDOS_SUPPLIED"), "two") == 0);
+    // Whether setenv keeps the strings of an environ the program set, or
+    // copies them, as FreeBSD's does, POSIX leaves unsaid.
+    assert(strcmp(getenv("PIZDOS_SUPPLIED"), "one") == 0);
     assert(strcmp(getenv("PIZDOS_ADDED"), "new") == 0);
     assert(unsetenv("PIZDOS_SUPPLIED") == 0 && getenv("PIZDOS_SUPPLIED") == nullptr);
     assert(clearenv() == 0);

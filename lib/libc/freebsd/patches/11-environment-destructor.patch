@@ -1,0 +1,36 @@
+No destructor of the environment, as libc.wasm has no constructors and
+no destructors (the kernel's wasm_object.go): the process's memory is
+gone with it.
+
+--- a/lib/libc/stdlib/getenv.c
++++ b/lib/libc/stdlib/getenv.c
+@@ -91,10 +91,6 @@
+ static int envVarsTotal = 0;
+ 
+ 
+-/* Deinitialization of new environment. */
+-static void __attribute__ ((destructor)) __clean_env_destructor(void);
+-
+-
+ /*
+  * A simple version of warnx() to avoid the bloat of including stdio in static
+  * binaries.
+@@ -395,18 +391,6 @@
+ }
+ 
+ 
+-/*
+- * Destructor function with default argument to __clean_env().
+- */
+-static void
+-__clean_env_destructor(void)
+-{
+-	__clean_env(true);
+-
+-	return;
+-}
+-
+-
+ /*
+  * Returns the value of a variable or NULL if none are found.
+  */

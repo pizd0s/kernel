@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"maps"
 	"math"
 	"math/bits"
 	mathrand "math/rand/v2"
@@ -148,7 +147,6 @@ type Process struct {
 	heap   *Heap
 	stack  *Stack
 	static uint32
-	env    uint32
 	seed   uint64
 	limits [RLIM_NLIMITS]Rlimit
 	cred   Cred
@@ -178,9 +176,8 @@ type Process struct {
 	constants map[string]uint32
 	siginfo   uint32
 
-	zone       *time.Location
-	envStrings map[uint32]bool
-	mappings   map[uint32]Mapping
+	zone     *time.Location
+	mappings map[uint32]Mapping
 
 	timers [3]Itimer
 
@@ -465,7 +462,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 		}
 
 		i.attach(p)
-		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
+		p.heap, p.stack, p.static, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0
 		p.tzAt, p.nameAt, p.zone = [3]uint32{}, 0, nil
 		p.constants = map[string]uint32{}
 		p.iconvs, p.spawnFiles = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}
@@ -478,7 +475,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 
 		p.posixTimers = nil
 		p.aioDrop()
-		p.envStrings, p.mappings = map[uint32]bool{}, map[uint32]Mapping{}
+		p.mappings = map[uint32]Mapping{}
 		p.jumps, p.stackAt = map[uint32]*JmpBuf{}, 0
 		enter = func() {
 			p.chaosStart(img.envp)
@@ -693,10 +690,9 @@ func (p *Process) libc__kernel_begin(errnoAt, environAt, argcAt, argvAt, tznameA
 	p.tzAt = [3]uint32{tznameAt, timezoneAt, daylightAt}
 
 	argv := p.stringArray(p.image.argv)
+	env := p.stringArray(p.image.envp)
 
-	p.env = p.stringArray(p.image.envp)
-
-	if argv == 0 || p.env == 0 {
+	if argv == 0 || env == 0 {
 		p.exitWith(SIGABRT)
 	}
 
@@ -706,7 +702,7 @@ func (p *Process) libc__kernel_begin(errnoAt, environAt, argcAt, argvAt, tznameA
 
 	p.put32(argcAt, uint32(len(p.image.argv)))
 	p.put32(argvAt, argv)
-	p.put32(environAt, p.env)
+	p.put32(environAt, env)
 }
 
 func (p *Process) libc__kernel_name() uint32 {
@@ -1159,77 +1155,6 @@ func (p *Process) getenv(name string) (string, bool) {
 	return p.str(value), true
 }
 
-func (p *Process) setEnviron(entries []uint32) bool {
-	arr := p.malloc(uint32(4 * (len(entries) + 1)))
-
-	if arr == 0 {
-		return false
-	}
-
-	for i, s := range entries {
-		p.put32(arr+uint32(4*i), s)
-	}
-
-	p.put32(arr+uint32(4*len(entries)), 0)
-
-	old := p.u32(p.environAt)
-
-	p.put32(p.environAt, arr)
-
-	if old != 0 && old == p.env {
-		p.free(old)
-	}
-
-	p.env = arr
-
-	return true
-}
-
-func (p *Process) setVariable(name string, entry uint32) bool {
-	var entries, gone []uint32
-
-	if env := p.u32(p.environAt); env != 0 {
-		for at := env; p.u32(at) != 0; at += 4 {
-			s := p.u32(at)
-
-			if e := p.cstr(s); len(e) > len(name) && e[len(name)] == '=' && string(e[:len(name)]) == name {
-				gone = append(gone, s)
-			} else {
-				entries = append(entries, s)
-			}
-		}
-	}
-
-	if entry != 0 {
-		entries = append(entries, entry)
-	}
-
-	if !p.setEnviron(entries) {
-		return false
-	}
-
-	for _, s := range gone {
-		if s != entry && p.envStrings[s] {
-			delete(p.envStrings, s)
-			p.free(s)
-		}
-	}
-
-	return true
-}
-
-func (p *Process) variableName(at uint32) (string, bool) {
-	name := p.str(at)
-
-	if name == "" || strings.IndexByte(name, '=') >= 0 {
-		p.setErrno(EINVAL)
-
-		return "", false
-	}
-
-	return name, true
-}
-
 func (p *Process) libcGetpid() uint32 {
 	return uint32(p.pid)
 }
@@ -1312,89 +1237,6 @@ func (p *Process) libcUmask(mask uint32) uint32 {
 	p.umask = mask & 0o777
 
 	return old
-}
-
-func (p *Process) libcGetenv(name uint32) uint32 {
-	_, value, _ := p.lookupEnv(p.cstr(name))
-
-	return value
-}
-
-func (p *Process) libcPutenv(s uint32) uint32 {
-	name, _, set := strings.Cut(p.str(s), "=")
-
-	if name == "" {
-		p.setErrno(EINVAL)
-
-		return math.MaxUint32
-	}
-
-	if !set {
-		s = 0
-	}
-
-	if !p.setVariable(name, s) {
-		p.setErrno(ENOMEM)
-
-		return math.MaxUint32
-	}
-
-	return 0
-}
-
-func (p *Process) libcSetenv(at, value, overwrite uint32) uint32 {
-	name, ok := p.variableName(at)
-
-	if !ok {
-		return math.MaxUint32
-	}
-
-	if _, _, set := p.lookupEnv([]byte(name)); set && overwrite == 0 {
-		return 0
-	}
-
-	s := p.newString(name + "=" + p.str(value))
-
-	if s == 0 || !p.setVariable(name, s) {
-		p.free(s)
-		p.setErrno(ENOMEM)
-
-		return math.MaxUint32
-	}
-
-	p.envStrings[s] = true
-
-	return 0
-}
-
-func (p *Process) libcUnsetenv(at uint32) uint32 {
-	name, ok := p.variableName(at)
-
-	if !ok {
-		return math.MaxUint32
-	}
-
-	if !p.setVariable(name, 0) {
-		p.setErrno(ENOMEM)
-
-		return math.MaxUint32
-	}
-
-	return 0
-}
-
-func (p *Process) libcClearenv() uint32 {
-	old := p.u32(p.environAt)
-
-	p.put32(p.environAt, 0)
-
-	if old != 0 && old == p.env {
-		p.free(old)
-	}
-
-	p.env = 0
-
-	return 0
 }
 
 func (p *Process) libcExecve(path, argv, envp uint32) uint32 {
@@ -3493,13 +3335,13 @@ func (p *Process) startVfork() uint32 {
 
 	c.setInstance(p.inst)
 	c.image, c.vfork = p.image, v
-	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo
+	c.heap, c.stack, c.static, c.errnoAt, c.environAt, c.siginfo = p.heap, p.stack, p.static, p.errnoAt, p.environAt, p.siginfo
 	c.constants, c.jumps, c.stackAt = p.constants, p.jumps, p.stackAt
 	c.iconvs, c.nextIconv = p.iconvs, p.nextIconv
 	c.spawnFiles, c.nextSpawnFiles = p.spawnFiles, p.nextSpawnFiles
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
 	c.defaultStack, c.defaultGuard = p.defaultStack, p.defaultGuard
-	c.envStrings, c.mappings, c.tzAt, c.zone = p.envStrings, p.mappings, p.tzAt, p.zone
+	c.mappings, c.tzAt, c.zone = p.mappings, p.tzAt, p.zone
 	c.nameAt = p.nameAt
 	c.token.Store(p.token.Load())
 	c.inherit(p)
@@ -3549,7 +3391,7 @@ func (p *Process) fork() (int32, error) {
 
 	inst.attach(c)
 	c.image = p.image
-	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap.clone(), p.stack.clone(), p.static, p.env, p.errnoAt, p.environAt, p.siginfo
+	c.heap, c.stack, c.static, c.errnoAt, c.environAt, c.siginfo = p.heap.clone(), p.stack.clone(), p.static, p.errnoAt, p.environAt, p.siginfo
 	c.stackAt, c.tzAt, c.zone = p.stackAt, p.tzAt, p.zone
 	c.nameAt = p.nameAt
 	c.constants, c.jumps = map[string]uint32{}, map[uint32]*JmpBuf{}
@@ -3585,7 +3427,7 @@ func (p *Process) fork() (int32, error) {
 		c.semOpens[name] = &copied
 	}
 
-	c.envStrings, c.mappings = maps.Clone(p.envStrings), map[uint32]Mapping{}
+	c.mappings = map[uint32]Mapping{}
 
 	for at, m := range p.mappings {
 		if m.file != nil {
@@ -11102,12 +10944,6 @@ func (p *Process) prctl(option, va uint32) uint32 {
 	}
 
 	return p.result(0, nil)
-}
-
-func (p *Process) libcSecure_getenv(name uint32) uint32 {
-	_, value, _ := p.lookupEnv(p.cstr(name))
-
-	return value
 }
 
 func (p *Process) libcGetentropy(buf, n uint32) uint32 {

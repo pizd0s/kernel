@@ -1190,26 +1190,6 @@ func libcUmask(mask uint32) uint32 {
 	return proc().libcUmask(mask)
 }
 
-func libcGetenv(name uint32) uint32 {
-	return proc().libcGetenv(name)
-}
-
-func libcPutenv(s uint32) uint32 {
-	return proc().libcPutenv(s)
-}
-
-func libcSetenv(at, value, overwrite uint32) uint32 {
-	return proc().libcSetenv(at, value, overwrite)
-}
-
-func libcUnsetenv(at uint32) uint32 {
-	return proc().libcUnsetenv(at)
-}
-
-func libcClearenv() uint32 {
-	return proc().libcClearenv()
-}
-
 func libcExecve(path, argv, envp uint32) uint32 {
 	return proc().libcExecve(path, argv, envp)
 }
@@ -1752,10 +1732,6 @@ func libcGlobfree(out, outSize uint32) {
 	p.sized("globfree", outSize, sizeofGlob)
 
 	p.libcGlobfree(out)
-}
-
-func libcSecure_getenv(name uint32) uint32 {
-	return proc().libcSecure_getenv(name)
 }
 
 func libcGetsubopt(opt, keys, val uint32) uint32 {

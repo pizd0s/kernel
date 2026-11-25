@@ -299,3 +299,6 @@ lib/libc/locale/wcstold.c
 # and setstate.
 lib/libc/stdlib/rand.c
 lib/libc/stdlib/random.c
+# The environment: getenv, secure_getenv, setenv, putenv, unsetenv and
+# clearenv.
+lib/libc/stdlib/getenv.c
