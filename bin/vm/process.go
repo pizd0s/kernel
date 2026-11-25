@@ -29,7 +29,6 @@ import (
 
 var (
 	itimerSignals  = [3]int{SIGALRM, SIGVTALRM, SIGPROF}
-	zoneDirs       = []string{"/usr/share/zoneinfo/", "/share/zoneinfo/", "/etc/zoneinfo/"}
 	pathconfValues = []int32{8, 255, 255, 255, 4096, 4096, 1, 1, 0, 1, -1, -1, -1, 64, 4096, 4096, 4096, 4096, 4096, -1, 1}
 	wcClassNames   = []string{"alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"}
 	devctlValues   = map[uint32]bool{TCFLSH: true, TCXONC: true, TCSBRK: true}
@@ -104,7 +103,6 @@ const (
 	dirIndex         = 12
 	dirBuf           = 16
 	dirBufLen        = 4096
-	zoneMax          = 1 << 20
 	logIdentSize     = 32
 	utsSysname       = "pizdos"
 	utsRelease       = "1"
@@ -199,7 +197,7 @@ type Process struct {
 	constants map[string]uint32
 	siginfo   uint32
 
-	zone       ZoneCache
+	zone       *time.Location
 	envStrings map[uint32]bool
 	mappings   map[uint32]Mapping
 
@@ -487,7 +485,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 
 		i.attach(p)
 		p.heap, p.stack, p.static, p.env, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0, 0
-		p.tzAt, p.nameAt = [3]uint32{}, 0
+		p.tzAt, p.nameAt, p.zone = [3]uint32{}, 0, nil
 		p.constants = map[string]uint32{}
 		p.iconvs, p.spawnFiles = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
@@ -3716,7 +3714,7 @@ func (p *Process) startVfork() uint32 {
 	c.spawnFiles, c.nextSpawnFiles = p.spawnFiles, p.nextSpawnFiles
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
 	c.defaultStack, c.defaultGuard = p.defaultStack, p.defaultGuard
-	c.envStrings, c.mappings, c.tzAt = p.envStrings, p.mappings, p.tzAt
+	c.envStrings, c.mappings, c.tzAt, c.zone = p.envStrings, p.mappings, p.tzAt, p.zone
 	c.nameAt = p.nameAt
 	c.token.Store(p.token.Load())
 	c.inherit(p)
@@ -3767,7 +3765,7 @@ func (p *Process) fork() (int32, error) {
 	inst.attach(c)
 	c.image = p.image
 	c.heap, c.stack, c.static, c.env, c.errnoAt, c.environAt, c.siginfo = p.heap.clone(), p.stack.clone(), p.static, p.env, p.errnoAt, p.environAt, p.siginfo
-	c.stackAt, c.tzAt = p.stackAt, p.tzAt
+	c.stackAt, c.tzAt, c.zone = p.stackAt, p.tzAt, p.zone
 	c.nameAt = p.nameAt
 	c.constants, c.jumps = map[string]uint32{}, map[uint32]*JmpBuf{}
 	c.iconvs, c.nextIconv = map[uint32]*Iconv{}, p.nextIconv
@@ -10626,58 +10624,34 @@ func (p *Process) stopTimers() {
 	}
 }
 
-type ZoneCache struct {
-	tz  string
-	loc *time.Location
-}
-
 func (p *Process) location() *time.Location {
-	tz, ok := p.getenv("TZ")
-
-	if !ok {
-		tz = "/etc/localtime"
-	}
-
-	if p.zone.loc == nil || p.zone.tz != tz {
-		p.zone = ZoneCache{tz, p.parseZone(tz)}
-	}
-
-	return p.zone.loc
-}
-
-func (p *Process) parseZone(tz string) *time.Location {
-	if tz == "" {
+	if p.zone == nil {
 		return time.UTC
 	}
 
-	if slash := strings.IndexByte(tz, '/'); tz[0] == ':' || slash >= 0 && !strings.Contains(tz[:slash], ",") {
-		return p.zoneFile(strings.TrimPrefix(tz, ":"))
-	}
-
-	return posixZone(tz)
+	return p.zone
 }
 
-func (p *Process) zoneFile(name string) *time.Location {
-	var paths []string
+func (p *Process) libc__kernel_zone(name, data, size uint32) uint32 {
+	tz, loc := p.str(name), time.UTC
 
 	switch {
-	case strings.HasPrefix(name, "/") || strings.HasPrefix(name, "."):
-		paths = []string{name}
-	case len(name) <= 255 && !strings.Contains(name, "."):
-		for _, dir := range zoneDirs {
-			paths = append(paths, dir+name)
+	case data != 0:
+		l, err := time.LoadLocationFromTZData(tz, bytes.Clone(p.span(data, size)))
+
+		if err != nil {
+			return ^uint32(0)
 		}
+
+		loc = l
+	case tz != "":
+		loc = posixZone(tz)
 	}
 
-	for _, path := range paths {
-		if data, err := p.readPath(path, zoneMax); err == nil && len(data) >= 44 && string(data[:4]) == "TZif" {
-			if loc, err := time.LoadLocationFromTZData(name, data); err == nil {
-				return loc
-			}
-		}
-	}
+	p.zone = loc
+	p.tzset()
 
-	return time.UTC
+	return 0
 }
 
 func (p *Process) tzset() {
@@ -10755,14 +10729,6 @@ func (p *Process) libcGettimeofday(tv, tz uint32) uint32 {
 	return 0
 }
 
-func (p *Process) libcLocaltime(t uint32) uint32 {
-	return p.localtime(t, p.staticAt(staticTm))
-}
-
-func (p *Process) libcLocaltime_r(t, at uint32) uint32 {
-	return p.localtime(t, at)
-}
-
 func (p *Process) localtime(t, at uint32) uint32 {
 	p.tzset()
 
@@ -10793,20 +10759,6 @@ func (p *Process) libcAsctime(tm uint32) uint32 {
 
 func (p *Process) libcAsctime_r(tm, buf uint32) uint32 {
 	s, ok := asctime(p.readTm(tm))
-
-	if !ok {
-		p.setErrno(EOVERFLOW)
-
-		return 0
-	}
-
-	p.putString(buf, s)
-
-	return buf
-}
-
-func (p *Process) libcCtime_r(t, buf uint32) uint32 {
-	s, ok := asctime(tmOf(time.Unix(int64(p.u64(t)), 0).In(p.location())))
 
 	if !ok {
 		p.setErrno(EOVERFLOW)
@@ -10966,10 +10918,6 @@ func (p *Process) libcMktime(at uint32) uint64 {
 	return uint64(t.Unix())
 }
 
-func (p *Process) libcCtime(t uint32) uint32 {
-	return p.libcCtime_r(t, p.staticAt(staticCtime))
-}
-
 func (p *Process) libcTimes(at uint32) uint64 {
 	var t syscall.Tms
 
@@ -11108,10 +11056,6 @@ func (p *Process) sleep(d time.Duration) time.Duration {
 
 func (p *Process) libcClock_settime(clock, ts uint32) uint32 {
 	return p.result(0, EPERM)
-}
-
-func (p *Process) libcTzset() {
-	p.tzset()
 }
 
 func (p *Process) libcSettimeofday(tv, tz uint32) uint32 {

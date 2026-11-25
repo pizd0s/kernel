@@ -49,3 +49,13 @@ char* __kernel_program(char* path, size_t size) __KERNEL(__kernel_program);
 // of its argv[0], or null where it has no arguments: what a message of
 // lib/c's begins with.
 const char* __kernel_name(void) __KERNEL(__kernel_name);
+
+// The time zone, which libc.wasm reads and the kernel's Go converts by:
+// __kernel_zone's data are a TZif file's, or with none the name is a POSIX
+// TZ rule, an empty one UTC, and it sets tzname, timezone and daylight;
+// -1 is data of no zone. __kernel_tolocal and __kernel_fromlocal are
+// localtime_r and mktime by the zone.
+struct tm;
+int __kernel_zone(const char* name, const void* data, size_t size) __KERNEL(__kernel_zone);
+struct tm* __kernel_tolocal(const time_t* t, struct tm* tm, size_t size) __KERNEL(__kernel_tolocal);
+time_t __kernel_fromlocal(struct tm* tm, size_t size) __KERNEL(__kernel_fromlocal);

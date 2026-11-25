@@ -2,6 +2,26 @@
 
 package main
 
+func libc__kernel_zone(name, data, size uint32) uint32 {
+	return proc().libc__kernel_zone(name, data, size)
+}
+
+func libc__kernel_tolocal(t, at, size uint32) uint32 {
+	p := proc()
+
+	p.sized("localtime_r", size, sizeofTm)
+
+	return p.localtime(t, at)
+}
+
+func libc__kernel_fromlocal(at, size uint32) uint64 {
+	p := proc()
+
+	p.sized("mktime", size, sizeofTm)
+
+	return p.libcMktime(at)
+}
+
 func libc__errno_location() uint32 {
 	return proc().libc__errno_location()
 }
@@ -970,26 +990,6 @@ func libcClock_settime(clock, ts, tsSize uint32) uint32 {
 	return p.libcClock_settime(clock, ts)
 }
 
-func libcLocaltime(t, size uint32) uint32 {
-	p := proc()
-
-	p.sized("localtime", size, sizeofTm)
-
-	return p.libcLocaltime(t)
-}
-
-func libcLocaltime_r(t, at, atSize, size uint32) uint32 {
-	p := proc()
-
-	p.sized("localtime_r", atSize, sizeofTm, size, sizeofTm)
-
-	return p.libcLocaltime_r(t, at)
-}
-
-func libcTzset() {
-	proc().libcTzset()
-}
-
 func libcAsctime(tm, tmSize uint32) uint32 {
 	p := proc()
 
@@ -1004,10 +1004,6 @@ func libcAsctime_r(tm, tmSize, buf uint32) uint32 {
 	p.sized("asctime_r", tmSize, sizeofTm)
 
 	return p.libcAsctime_r(tm, buf)
-}
-
-func libcCtime_r(t, buf uint32) uint32 {
-	return proc().libcCtime_r(t, buf)
 }
 
 func libcDifftime(t1, t0 uint64) float64 {
@@ -1096,18 +1092,6 @@ func libcGetitimer(which, at, atSize uint32) uint32 {
 
 func libcAlarm(seconds uint32) uint32 {
 	return proc().libcAlarm(seconds)
-}
-
-func libcMktime(at, atSize uint32) uint64 {
-	p := proc()
-
-	p.sized("mktime", atSize, sizeofTm)
-
-	return p.libcMktime(at)
-}
-
-func libcCtime(t uint32) uint32 {
-	return proc().libcCtime(t)
 }
 
 func libcTimes(at, atSize uint32) uint64 {
