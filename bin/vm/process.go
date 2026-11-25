@@ -138,9 +138,7 @@ type Process struct {
 	iconvs    map[uint32]*Iconv
 	nextIconv uint32
 
-	spawnFiles     map[uint32][]SpawnAction
-	nextSpawnFiles uint32
-	aios           map[uint32]*AioOp
+	aios map[uint32]*AioOp
 
 	posixTimers  map[int32]*PosixTimer
 	syncs        map[int32]Object
@@ -306,6 +304,35 @@ func (p *Process) traceString(at uint32) string {
 	return strconv.Quote(string(s)) + "..."
 }
 
+func (p *Process) traceCtl(at uint32) string {
+	m := p.mem()
+
+	if p.inst == nil || uint64(at)+sizeofCtl > uint64(len(m)) {
+		return fmt.Sprintf("%#x", at)
+	}
+
+	in, size, fds, n := p.u32(at), p.u32(at+4), p.u32(at+8), p.u32(at+12)
+	data, more := "", ""
+
+	if uint64(in)+uint64(size) <= uint64(len(m)) {
+		data = string(m[in : in+min(size, traceStringMax)])
+	}
+
+	if size > traceStringMax {
+		more = "..."
+	}
+
+	list := make([]string, 0, min(n, ctlFdsMax))
+
+	for i := range min(n, ctlFdsMax) {
+		if uint64(fds)+4*uint64(i+1) <= uint64(len(m)) {
+			list = append(list, strconv.Itoa(int(int32(p.u32(fds+4*i)))))
+		}
+	}
+
+	return fmt.Sprintf("{%s%s, [%s]}", strconv.Quote(data), more, strings.Join(list, ", "))
+}
+
 func (p *Process) traceValue(kind byte, v reflect.Value) string {
 	if v.Kind() == reflect.Float32 || v.Kind() == reflect.Float64 {
 		return strconv.FormatFloat(v.Float(), 'g', -1, 64)
@@ -321,6 +348,8 @@ func (p *Process) traceValue(kind byte, v reflect.Value) string {
 	switch {
 	case kind == 's' && v.Kind() == reflect.Uint32:
 		return p.traceString(uint32(u))
+	case kind == 'c' && v.Kind() == reflect.Uint32 && u != 0:
+		return p.traceCtl(uint32(u))
 	case kind == 'o':
 		return fmt.Sprintf("%#o", u)
 	case kind != 'p' && kind != 's' && n >= -4096 && n < 65536, u == 0:
@@ -442,7 +471,7 @@ func (p *Process) runImage(img *ExecImage, i *Instance, enter func()) (next *Exe
 		p.heap, p.stack, p.static, p.errnoAt, p.environAt, p.siginfo = nil, nil, 0, 0, 0, 0
 		p.nameAt = 0
 		p.constants = map[string]uint32{}
-		p.iconvs, p.spawnFiles = map[uint32]*Iconv{}, map[uint32][]SpawnAction{}
+		p.iconvs = map[uint32]*Iconv{}
 		p.syncs, p.nextSync, p.semOpens, p.keys, p.thread = map[int32]Object{}, 0, map[string]*SemOpen{}, [PTHREAD_KEYS_MAX]Key{}, Thread{}
 		p.defaultStack, p.defaultGuard = 0, 0
 
@@ -933,16 +962,12 @@ func hostLimits() [RLIM_NLIMITS]Rlimit {
 	return out
 }
 
-func (p *Process) exec(path string, argv, envp []string) error {
-	return p.execFrom(path, nil, argv, envp)
-}
-
-func (p *Process) execFrom(path string, f Object, argv, envp []string) error {
-	img, err := p.loadFrom(path, f, argv)
+func (p *Process) execFrom(path, program string, f Object, argv, envp []string) error {
+	img, err := p.loadFrom(path, program, f, argv)
 
 	for err == EINTR {
 		p.interrupts(false)
-		img, err = p.loadFrom(path, f, argv)
+		img, err = p.loadFrom(path, program, f, argv)
 	}
 
 	if err != nil {
@@ -956,107 +981,30 @@ func (p *Process) execFrom(path string, f Object, argv, envp []string) error {
 	return ELOOP
 }
 
-func (p *Process) loadFrom(path string, first Object, argv []string) (*ExecImage, error) {
-	for range 4 {
-		f, program := first, ""
+func (p *Process) loadFrom(path, program string, f Object, argv []string) (*ExecImage, error) {
+	var st Stat
 
-		if first != nil {
-			first.ref()
-			first = nil
-		} else {
-			var err error
-
-			if f, program, err = p.openProgram(path); err != nil {
-				return nil, err
-			}
-		}
-
-		var st Stat
-
-		t := f
-
-		if err := statFile(p, f, &st); err != nil {
-			f.unref()
-
-			return nil, err
-		}
-
-		if fl, _ := p.fileFlags(f); fl&O_PATH != 0 || st.Mode&S_IFMT != S_IFREG {
-			f.unref()
-
-			return nil, EACCES
-		}
-
-		if !p.permits(&st, 1) {
-			f.unref()
-
-			return nil, EACCES
-		}
-
-		head := make([]byte, 256)
-		n, _ := p.filePread(t, bytesFile(head), len(head), 0)
-
-		head = head[:max(n, 0)]
-
-		if bytes.HasPrefix(head, []byte("#!")) {
-			f.unref()
-
-			line, _, _ := bytes.Cut(head[2:], []byte("\n"))
-			fields := strings.Fields(string(line))
-
-			if len(fields) == 0 {
-				return nil, ENOEXEC
-			}
-
-			script := []string{fields[0]}
-
-			if len(fields) > 1 {
-				script = append(script, strings.Join(fields[1:], " "))
-			}
-
-			if len(argv) > 0 {
-				argv = argv[1:]
-			}
-
-			argv = append(append(script, path), argv...)
-			path = fields[0]
-
-			continue
-		}
-
-		code, err := p.k.code(p, f, path)
-
-		f.unref()
-
-		if err != nil {
-			return nil, err
-		}
-
-		return &ExecImage{code: code, argv: argv, path: program}, nil
+	if err := statFile(p, f, &st); err != nil {
+		return nil, err
 	}
 
-	return nil, ELOOP
-}
+	if fl, _ := p.fileFlags(f); fl&O_PATH != 0 || st.Mode&S_IFMT != S_IFREG || !p.permits(&st, 1) {
+		return nil, EACCES
+	}
 
-func (p *Process) openProgram(path string) (Object, string, error) {
-	var f Object
-	var program string
+	head := make([]byte, 2)
 
-	err := p.onPath(AT_FDCWD, path, func(d Object) error {
-		var err error
+	if n, _ := p.filePread(f, bytesFile(head), len(head), 0); n == 2 && string(head) == "#!" {
+		return nil, ENOEXEC
+	}
 
-		if f, err = p.dirOpen(d, path, O_RDONLY, 0); err != nil {
-			return err
-		}
+	code, err := p.k.code(p, f, path)
 
-		if real, err := p.dirRealpath(d, path); err == nil {
-			program = real
-		}
+	if err != nil {
+		return nil, err
+	}
 
-		return nil
-	})
-
-	return f, program, err
+	return &ExecImage{code: code, argv: argv, path: program}, nil
 }
 
 func (p *Process) execReset() {
@@ -1167,401 +1115,14 @@ func (p *Process) libcUmask(mask uint32) uint32 {
 	return old
 }
 
-func (p *Process) libcExecve(path, argv, envp uint32) uint32 {
-	return p.result(0, p.exec(p.str(path), p.strings(argv), p.strings(envp)))
-}
-
-func (p *Process) libcFexecve(fd, argv, envp uint32) uint32 {
+func (p *Process) libc__kernel_exec(fd, path, program, argv, envp uint32) uint32 {
 	obj, err := p.fd(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	path := fmt.Sprintf("/dev/fd/%d", fd)
-
-	return p.result(0, p.execFrom(path, obj, p.strings(argv), p.strings(envp)))
-}
-
-func (p *Process) libcPosix_spawn(pid, path, actions, attr, argv, envp uint32) uint32 {
-	child, err := p.spawn(p.str(path), actions, attr, p.strings(argv), p.strings(envp))
-
-	return p.spawned(pid, child, err)
-}
-
-func (p *Process) spawned(pid uint32, child int32, err error) uint32 {
-	if err != nil {
-		return uint32(errnoOf(err))
-	}
-
-	if pid != 0 {
-		p.put32(pid, uint32(child))
-	}
-
-	return 0
-}
-
-func (p *Process) spawn(file string, actions, attr uint32, argv, envp []string) (int32, error) {
-	var list []SpawnAction
-
-	if actions != 0 {
-		l, ok := p.spawnFiles[p.u32(actions)]
-
-		if !ok {
-			return 0, EINVAL
-		}
-
-		list = l
-	}
-
-	if p.chaosFail("fork") {
-		return 0, EAGAIN
-	}
-
-	c, err := p.k.newProcess(p)
-
-	if err != nil {
-		return 0, err
-	}
-
-	c.inherit(p)
-
-	img, path, err := c.spawnSetup(p, file, list, attr, argv)
-
-	if err != nil {
-		c.unmade()
-
-		return 0, err
-	}
-
-	img.envp = envp
-	c.execReset()
-
-	parent := p.pid
-
-	go func() {
-		c.trace(TRACE_PROCESS, fmt.Sprintf("child of %d", parent))
-		c.trace(TRACE_PROCESS, "exec "+strconv.Quote(path))
-		c.run(img)
-	}()
-
-	return c.pid, nil
-}
-
-func (c *Process) spawnSetup(p *Process, file string, list []SpawnAction, attr uint32, argv []string) (*ExecImage, string, error) {
-	if attr != 0 {
-		if err := c.spawnAttributes(p, attr); err != nil {
-			return nil, "", err
-		}
-	}
-
-	for _, a := range list {
-		if err := c.spawnAction(a); err != nil {
-			return nil, "", err
-		}
-	}
-
-	img, err := c.loadFrom(file, nil, argv)
-
-	return img, file, err
-}
-
-func (c *Process) spawnAttributes(p *Process, attr uint32) error {
-	flags := p.u32(attr)
-
-	switch {
-	case flags&POSIX_SPAWN_SETSID != 0:
-		c.k.mu.Lock()
-		c.sid.Store(c.pid)
-		c.pgid.Store(c.pid)
-		c.k.mu.Unlock()
-	case flags&POSIX_SPAWN_SETPGROUP != 0:
-		group := int32(p.u32(attr + 4))
-
-		if group == 0 {
-			group = c.pid
-		}
-
-		if group < 0 || group != c.pid && !c.groupExists(group) {
-			return EPERM
-		}
-
-		c.k.mu.Lock()
-		c.pgid.Store(group)
-		c.k.mu.Unlock()
-	}
-
-	if flags&POSIX_SPAWN_RESETIDS != 0 {
-		c.k.mu.Lock()
-		c.cred.uids[1], c.cred.gids[1] = c.cred.uids[0], c.cred.gids[0]
-		c.k.mu.Unlock()
-	}
-
-	c.sig.mu.Lock()
-
-	if flags&POSIX_SPAWN_SETSIGMASK != 0 {
-		c.sig.blocked = p.u64(attr+16) &^ unblockable
-	}
-
-	if flags&POSIX_SPAWN_SETSIGDEF != 0 {
-		set := p.u64(attr + 8)
-
-		for sig := 1; sig < NSIG; sig++ {
-			if set&sigBit(sig) != 0 {
-				c.sig.actions[sig] = SigAction{}
-			}
-		}
-	}
-
-	c.sig.mu.Unlock()
-
-	switch {
-	case flags&POSIX_SPAWN_SETSCHEDULER != 0:
-		return p.scheduler(c, p.u32(attr+24), attr+28)
-	case flags&POSIX_SPAWN_SETSCHEDPARAM != 0 && p.u32(attr+28) != 0:
-		return EINVAL
-	}
-
-	return nil
-}
-
-func (c *Process) spawnAction(a SpawnAction) error {
-	switch a.kind {
-	case spawnOpen:
-		if int(a.fd) >= c.fdLimit() {
-			return EBADF
-		}
-
-		mode := uint32(0)
-
-		if a.flags&(O_CREAT|0o20000000) != 0 {
-			mode = a.mode & 0o7777 &^ c.umask
-		}
-
-		c.closeFd(int(a.fd))
-
-		f, err := c.openAt(AT_FDCWD, a.path, int(a.flags&^O_CLOEXEC), mode)
-
-		if err != nil {
-			return err
-		}
-
-		c.files.put(int(a.fd), f, a.flags&O_CLOEXEC != 0)
-	case spawnClose:
-		if !c.closeFd(int(a.fd)) && int(a.fd) >= c.fdLimit() {
-			return EBADF
-		}
-	case spawnDup2:
-		if a.fd != a.to {
-			_, err := c.dupTo(a.fd, a.to, false)
-
-			return err
-		}
-
-		if _, ok := c.files.at(int(a.fd)); !ok {
-			return EBADF
-		}
-
-		c.files.slots[a.fd].cloexec = false
-	case spawnChdir:
-		return c.chdir(a.path)
-	case spawnFchdir:
-		return c.fchdir(a.fd)
-	}
-
-	return nil
-}
-
-func (p *Process) unmade() {
-	for fd := range p.files.size() {
-		p.closeFd(fd)
-	}
-
-	p.root.unref()
-	p.cwd.unref()
-	p.setSink(nil)
-	p.sig.mu.Lock()
-	p.sig.dead = true
-	p.sig.mu.Unlock()
-	p.k.mu.Lock()
-	delete(p.k.procs, p.pid)
-	p.k.mu.Unlock()
-}
-
-func (p *Process) libcPosix_spawn_file_actions_init(actions uint32) uint32 {
-	p.nextSpawnFiles++
-	p.spawnFiles[p.nextSpawnFiles] = nil
-	p.put32(actions, p.nextSpawnFiles)
-
-	return 0
-}
-
-func (p *Process) libcPosix_spawn_file_actions_destroy(actions uint32) uint32 {
-	id := p.u32(actions)
-
-	if _, ok := p.spawnFiles[id]; !ok {
-		return uint32(EINVAL)
-	}
-
-	delete(p.spawnFiles, id)
-	p.put32(actions, 0)
-
-	return 0
-}
-
-func (p *Process) addSpawnAction(actions uint32, a SpawnAction) uint32 {
-	id := p.u32(actions)
-	list, ok := p.spawnFiles[id]
-
-	if !ok {
-		return uint32(EINVAL)
-	}
-
-	p.spawnFiles[id] = append(list, a)
-
-	return 0
-}
-
-func (p *Process) spawnDescriptor(fd uint32) bool {
-	return int32(fd) >= 0 && int(fd) < p.fdLimit()
-}
-
-func (p *Process) libcPosix_spawn_file_actions_addopen(actions, fd, path, flags, mode uint32) uint32 {
-	if !p.spawnDescriptor(fd) {
-		return uint32(EBADF)
-	}
-
-	return p.addSpawnAction(actions, SpawnAction{kind: spawnOpen, fd: fd, path: p.str(path), flags: flags, mode: mode})
-}
-
-func (p *Process) libcPosix_spawn_file_actions_addclose(actions, fd uint32) uint32 {
-	if int32(fd) < 0 {
-		return uint32(EBADF)
-	}
-
-	return p.addSpawnAction(actions, SpawnAction{kind: spawnClose, fd: fd})
-}
-
-func (p *Process) libcPosix_spawn_file_actions_adddup2(actions, fd, to uint32) uint32 {
-	if !p.spawnDescriptor(fd) || !p.spawnDescriptor(to) {
-		return uint32(EBADF)
-	}
-
-	return p.addSpawnAction(actions, SpawnAction{kind: spawnDup2, fd: fd, to: to})
-}
-
-func (p *Process) libcPosix_spawn_file_actions_addchdir(actions, path uint32) uint32 {
-	return p.addSpawnAction(actions, SpawnAction{kind: spawnChdir, path: p.str(path)})
-}
-
-func (p *Process) libcPosix_spawn_file_actions_addfchdir(actions, fd uint32) uint32 {
-	if int32(fd) < 0 {
-		return uint32(EBADF)
-	}
-
-	return p.addSpawnAction(actions, SpawnAction{kind: spawnFchdir, fd: fd})
-}
-
-func (p *Process) libcPosix_spawn_file_actions_addchdir_np(actions, path uint32) uint32 {
-	return p.libcPosix_spawn_file_actions_addchdir(actions, path)
-}
-
-func (p *Process) libcPosix_spawn_file_actions_addfchdir_np(actions, fd uint32) uint32 {
-	return p.libcPosix_spawn_file_actions_addfchdir(actions, fd)
-}
-
-func (p *Process) libcPosix_spawnattr_init(attr uint32) uint32 {
-	p.put32(attr, 0)
-	p.put32(attr+4, 0)
-	p.put64(attr+8, 0)
-	p.put64(attr+16, 0)
-	p.put32(attr+24, SCHED_OTHER)
-	p.put32(attr+28, 0)
-
-	return 0
-}
-
-func (p *Process) libcPosix_spawnattr_destroy(attr uint32) uint32 {
-	return 0
-}
-
-func (p *Process) libcPosix_spawnattr_getflags(attr, out uint32) uint32 {
-	p.put16(out, uint16(p.u32(attr)))
-
-	return 0
-}
-
-func (p *Process) libcPosix_spawnattr_setflags(attr, flags uint32) uint32 {
-	all := uint32(POSIX_SPAWN_RESETIDS | POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSCHEDPARAM |
-		POSIX_SPAWN_SETSCHEDULER | POSIX_SPAWN_SETSID)
-
-	if flags&^all != 0 {
-		return uint32(EINVAL)
-	}
-
-	p.put32(attr, flags)
-
-	return 0
-}
-
-func (p *Process) libcPosix_spawnattr_getpgroup(attr, out uint32) uint32 {
-	p.put32(out, p.u32(attr+4))
-
-	return 0
-}
-
-func (p *Process) libcPosix_spawnattr_setpgroup(attr, pgroup uint32) uint32 {
-	p.put32(attr+4, pgroup)
-
-	return 0
-}
-
-func (p *Process) libcPosix_spawnattr_getsigdefault(attr, out uint32) uint32 {
-	p.put64(out, p.u64(attr+8))
-
-	return 0
-}
-
-func (p *Process) libcPosix_spawnattr_setsigdefault(attr, set uint32) uint32 {
-	p.put64(attr+8, p.u64(set))
-
-	return 0
-}
-
-func (p *Process) libcPosix_spawnattr_getsigmask(attr, out uint32) uint32 {
-	p.put64(out, p.u64(attr+16))
-
-	return 0
-}
-
-func (p *Process) libcPosix_spawnattr_setsigmask(attr, set uint32) uint32 {
-	p.put64(attr+16, p.u64(set))
-
-	return 0
-}
-
-func (p *Process) libcPosix_spawnattr_getschedpolicy(attr, out uint32) uint32 {
-	p.put32(out, p.u32(attr+24))
-
-	return 0
-}
-
-func (p *Process) libcPosix_spawnattr_setschedpolicy(attr, policy uint32) uint32 {
-	p.put32(attr+24, policy)
-
-	return 0
-}
-
-func (p *Process) libcPosix_spawnattr_getschedparam(attr, out uint32) uint32 {
-	p.put32(out, p.u32(attr+28))
-
-	return 0
-}
-
-func (p *Process) libcPosix_spawnattr_setschedparam(attr, param uint32) uint32 {
-	p.put32(attr+28, p.u32(param))
-
-	return 0
+	return p.result(0, p.execFrom(p.str(path), p.str(program), obj, p.strings(argv), p.strings(envp)))
 }
 
 func waitClock(clock uint32) bool {
@@ -2542,7 +2103,6 @@ func (p *Process) startVfork() uint32 {
 	c.heap, c.stack, c.static, c.errnoAt, c.environAt, c.siginfo = p.heap, p.stack, p.static, p.errnoAt, p.environAt, p.siginfo
 	c.constants, c.jumps, c.stackAt = p.constants, p.jumps, p.stackAt
 	c.iconvs, c.nextIconv = p.iconvs, p.nextIconv
-	c.spawnFiles, c.nextSpawnFiles = p.spawnFiles, p.nextSpawnFiles
 	c.syncs, c.nextSync, c.semOpens, c.keys, c.thread = p.syncs, p.nextSync, p.semOpens, p.keys, p.thread
 	c.defaultStack, c.defaultGuard = p.defaultStack, p.defaultGuard
 	c.mappings = p.mappings
@@ -2600,14 +2160,9 @@ func (p *Process) fork() (int32, error) {
 	c.nameAt = p.nameAt
 	c.constants, c.jumps = map[string]uint32{}, map[uint32]*JmpBuf{}
 	c.iconvs, c.nextIconv = map[uint32]*Iconv{}, p.nextIconv
-	c.spawnFiles, c.nextSpawnFiles = map[uint32][]SpawnAction{}, p.nextSpawnFiles
 
 	for id, cd := range p.iconvs {
 		c.iconvs[id] = cd.copy()
-	}
-
-	for id, list := range p.spawnFiles {
-		c.spawnFiles[id] = slices.Clone(list)
 	}
 
 	for s, at := range p.constants {
@@ -6347,186 +5902,6 @@ func (p *Process) libc__kernel_fdioctl(fd, req, arg uint32) uint32 {
 	return p.result(0, ENOTTY)
 }
 
-func checked(path string) error {
-	switch {
-	case path == "":
-		return ENOENT
-	case len(path) >= 4096:
-		return ENAMETOOLONG
-	}
-
-	return nil
-}
-
-func (p *Process) onPath(dirfd int32, path string, call func(d Object) error) error {
-	if err := checked(path); err != nil {
-		return err
-	}
-
-	d, err := p.start(dirfd, path)
-
-	if err != nil {
-		return err
-	}
-
-	defer d.unref()
-
-	return call(d)
-}
-
-func (p *Process) onPaths(olddir int32, old string, newdir int32, new string, call func(from, to Object) error) error {
-	return p.onPath(olddir, old, func(from Object) error {
-		return p.onPath(newdir, new, func(to Object) error {
-			return call(from, to)
-		})
-	})
-}
-
-func (p *Process) start(dirfd int32, path string) (Object, error) {
-	d := p.root
-
-	if !strings.HasPrefix(path, "/") {
-		d = p.cwd
-
-		if dirfd != AT_FDCWD {
-			var err error
-
-			if d, err = p.fd(uint32(dirfd)); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	d.ref()
-
-	return d, nil
-}
-
-func (p *Process) onAt(dirfd int32, path string, flags uint32, byFile func(f Object) error, byPath func(d Object, follow bool) error) error {
-	if path == "" && flags&AT_EMPTY_PATH != 0 {
-		if dirfd == AT_FDCWD {
-			return byFile(p.cwd)
-		}
-
-		obj, err := p.fd(uint32(dirfd))
-
-		if err != nil {
-			return err
-		}
-
-		return byFile(obj)
-	}
-
-	return p.onPath(dirfd, path, func(d Object) error {
-		return byPath(d, flags&AT_SYMLINK_NOFOLLOW == 0)
-	})
-}
-
-func (p *Process) openAt(dirfd int32, path string, flags int, mode uint32) (Object, error) {
-	var f Object
-
-	err := p.onPath(dirfd, path, func(d Object) error {
-		var err error
-		f, err = p.dirOpen(d, path, flags, mode)
-
-		return err
-	})
-
-	return f, err
-}
-
-func (p *Process) open(dirfd int32, path string, flags, va uint32) (int, error) {
-	mode := uint32(0)
-
-	if flags&(O_CREAT|0o20000000) != 0 {
-		mode = p.varArg(va, 0) & 0o7777 &^ p.umask
-	}
-
-	if err := p.descriptorFree(); err != nil {
-		return 0, err
-	}
-
-	f, err := p.openAt(dirfd, path, int(flags&^O_CLOEXEC), mode)
-
-	if err != nil {
-		return 0, err
-	}
-
-	return p.install(f, 0, flags&O_CLOEXEC != 0)
-}
-
-func (p *Process) mkdir(dirfd int32, path string, mode uint32) error {
-	return p.onPath(dirfd, path, func(d Object) error {
-		return p.dirMkdir(d, path, mode&0o7777&^p.umask)
-	})
-}
-
-func (p *Process) mknod(dirfd int32, path string, mode uint32, dev uint64) error {
-	switch mode & S_IFMT {
-	case 0, S_IFREG, S_IFIFO, S_IFSOCK:
-	default:
-		return EPERM
-	}
-
-	return p.onPath(dirfd, path, func(d Object) error {
-		return p.dirMknod(d, path, mode&^(p.umask&0o777))
-	})
-}
-
-func (p *Process) symlink(target string, dirfd int32, path string) error {
-	if target == "" {
-		return ENOENT
-	}
-
-	return p.onPath(dirfd, path, func(d Object) error {
-		return p.dirSymlink(d, target, path)
-	})
-}
-
-func (p *Process) remove(dirfd int32, path string, dir bool) error {
-	return p.onPath(dirfd, path, func(d Object) error {
-		return p.dirUnlink(d, path, dir)
-	})
-}
-
-func (p *Process) rename(olddir int32, old string, newdir int32, new string) error {
-	return p.onPaths(olddir, old, newdir, new, func(from, to Object) error {
-		return p.dirRename(from, old, to, new)
-	})
-}
-
-func (p *Process) link(olddir int32, old string, newdir int32, new string, follow bool) error {
-	return p.onPaths(olddir, old, newdir, new, func(from, to Object) error {
-		return p.dirLink(from, old, to, new, follow)
-	})
-}
-
-func (p *Process) statPath(path string, follow bool, st *Stat) error {
-	return p.onPath(AT_FDCWD, path, func(d Object) error {
-		return p.dirStat(d, path, follow, st)
-	})
-}
-
-func (p *Process) accessAt(dirfd int32, path string, mode, flags uint32) error {
-	return p.onPath(dirfd, path, func(d Object) error {
-		return p.access(d, path, mode, flags)
-	})
-}
-
-func (p *Process) access(d Object, path string, mode, flags uint32) error {
-	var st Stat
-
-	if err := p.dirStat(d, path, flags&AT_SYMLINK_NOFOLLOW == 0, &st); err != nil {
-		return err
-	}
-
-	if !p.permits(&st, mode&7) {
-		return EACCES
-	}
-
-	return nil
-}
-
 func (p *Process) putStatvfs(at uint32, st *Statfs) {
 	b := p.span(at, 72)
 
@@ -6568,78 +5943,6 @@ func (p *Process) putStatfsOf(at uint32, st *Statfs) {
 	le.PutUint32(b[64:], uint32(st.Flags))
 }
 
-func (p *Process) statfsPath(path string, st *Statfs) error {
-	return p.onPath(AT_FDCWD, path, func(d Object) error {
-		return p.dirStatfs(d, path, st)
-	})
-}
-
-func (p *Process) libcOpen(path, flags, va uint32) uint32 {
-	return p.result(p.open(AT_FDCWD, p.str(path), flags, va))
-}
-
-func (p *Process) libcOpenat(dirfd, path, flags, va uint32) uint32 {
-	return p.result(p.open(int32(dirfd), p.str(path), flags, va))
-}
-
-func (p *Process) libcFstatat(dirfd, path, at, flags uint32) uint32 {
-	var st Stat
-
-	err := p.statFlags(int32(dirfd), p.str(path), flags, &st)
-
-	if err == nil {
-		p.putStat(at, &st)
-	}
-
-	return p.result(0, err)
-}
-
-func (p *Process) statFlags(dirfd int32, path string, flags uint32, st *Stat) error {
-	return p.onAt(dirfd, path, flags, func(f Object) error {
-		return statFile(p, f, st)
-	}, func(d Object, follow bool) error {
-		return p.dirStat(d, path, follow, st)
-	})
-}
-
-func (p *Process) statAt(dirfd int32, path string, follow bool, st *Stat) error {
-	if follow {
-		return p.statFlags(dirfd, path, 0, st)
-	}
-
-	return p.statFlags(dirfd, path, AT_SYMLINK_NOFOLLOW, st)
-}
-
-func (p *Process) libcAccess(path, mode uint32) uint32 {
-	return p.result(0, p.accessAt(AT_FDCWD, p.str(path), mode, 0))
-}
-
-func (p *Process) libcFaccessat(dirfd, path, mode, flags uint32) uint32 {
-	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(f Object) error {
-		return nil
-	}, func(d Object, follow bool) error {
-		return p.access(d, p.str(path), mode, flags)
-	}))
-}
-
-func (p *Process) libcTruncate(path uint32, size uint64) uint32 {
-	return p.result(0, p.onPath(AT_FDCWD, p.str(path), func(d Object) error {
-		return p.dirTruncate(d, p.str(path), int64(size))
-	}))
-}
-
-func (p *Process) libcStatvfs(path, at uint32) uint32 {
-	var st Statfs
-
-	err := p.statfsPath(p.str(path), &st)
-
-	if err == nil {
-		p.putStatvfs(at, &st)
-	}
-
-	return p.result(0, err)
-}
-
 func (p *Process) libcFstatvfs(fd, at uint32) uint32 {
 	n, err := p.fd(fd)
 
@@ -6668,48 +5971,6 @@ func (p *Process) setCwd(d Object) {
 	}
 }
 
-func (p *Process) directory(path string) (Object, error) {
-	var nd Object
-
-	err := p.onPath(AT_FDCWD, path, func(d Object) error {
-		f, err := p.dirOpen(d, path, O_PATH|O_DIRECTORY, 0)
-
-		if err != nil {
-			return err
-		}
-
-		h := f
-
-		if err := p.access(h, "", 1, 0); err != nil {
-			h.unref()
-
-			return err
-		}
-
-		nd = h
-
-		return nil
-	})
-
-	return nd, err
-}
-
-func (p *Process) chdir(path string) error {
-	d, err := p.directory(path)
-
-	if err != nil {
-		return err
-	}
-
-	p.setCwd(d)
-
-	return nil
-}
-
-func (p *Process) libcChdir(path uint32) uint32 {
-	return p.result(0, p.chdir(p.str(path)))
-}
-
 func (p *Process) libcAttach(fd uint32) uint32 {
 	obj, err := p.fd(fd)
 
@@ -6730,8 +5991,19 @@ func (p *Process) libcAttach(fd uint32) uint32 {
 	return p.result(p.install(d, 0, false))
 }
 
+func (p *Process) ctlObject(fd int32) (Object, error) {
+	switch fd {
+	case AT_FDCWD:
+		return p.cwd, nil
+	case AT_FDROOT:
+		return p.root, nil
+	}
+
+	return p.fd(uint32(fd))
+}
+
 func (p *Process) libcCtl(fd, at, flags uint32) uint32 {
-	o, err := p.fd(fd)
+	o, err := p.ctlObject(int32(fd))
 
 	if err != nil {
 		return p.result(0, err)
@@ -6740,7 +6012,9 @@ func (p *Process) libcCtl(fd, at, flags uint32) uint32 {
 	in, size, fds, n := p.u32(at), p.u32(at+4), p.u32(at+8), p.u32(at+12)
 
 	switch {
-	case flags&^(O_CLOEXEC|CTL_RESTART) != 0:
+	case p.chaosFail("ctl"):
+		return p.result(0, EIO)
+	case flags&^(O_CLOEXEC|O_NONBLOCK|O_NOCTTY|CTL_RESTART) != 0:
 		return p.result(0, EINVAL)
 	case size > packetMax-remoteHeader:
 		return p.result(0, EMSGSIZE)
@@ -6751,7 +6025,7 @@ func (p *Process) libcCtl(fd, at, flags uint32) uint32 {
 	r := Ctl{data: bytes.Clone(p.span(in, size))}
 
 	for i := range n {
-		f, err := p.fd(p.u32(fds + 4*i))
+		f, err := p.ctlObject(int32(p.u32(fds + 4*i)))
 
 		if err != nil {
 			return p.result(0, err)
@@ -6764,7 +6038,7 @@ func (p *Process) libcCtl(fd, at, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	return p.result(0, p.ctlAnswer(at, &r, flags&O_CLOEXEC != 0))
+	return p.result(0, p.ctlAnswer(at, &r, flags))
 }
 
 func (p *Process) ctlCall(o Object, r *Ctl, restarts bool) error {
@@ -6786,36 +6060,54 @@ func (p *Process) ctlCall(o Object, r *Ctl, restarts bool) error {
 	return err
 }
 
-func (p *Process) ctlAnswer(at uint32, r *Ctl, cloexec bool) error {
+func (p *Process) ctlOpened(opened []byte, files []Object, flags uint32) (Object, []Object, error) {
+	kind, access := binary.LittleEndian.Uint32(opened), int(binary.LittleEndian.Uint32(opened[4:]))
+
+	if kind == openedFifo {
+		st := Stat{Dev: binary.LittleEndian.Uint64(opened[8:]), Ino: binary.LittleEndian.Uint64(opened[16:]), Mode: binary.LittleEndian.Uint32(opened[24:])}
+		obj, err := p.openFifo(&st, access&O_ACCMODE|int(flags&O_NONBLOCK))
+
+		return obj, files, err
+	}
+
+	if len(files) == 0 {
+		return nil, files, EIO
+	}
+
+	obj, err := p.servedOf(files[0], opened)
+
+	if err == nil && kind == openedTerminal && flags&O_NOCTTY == 0 {
+		p.acquire(obj)
+	}
+
+	return obj, files[1:], err
+}
+
+func (p *Process) ctlAnswer(at uint32, r *Ctl, flags uint32) error {
 	n, data, files := int(r.opened), r.answer, r.got
 
-	if n > len(files) || len(data) < n*sizeofOpened {
+	if len(data) < n*sizeofOpened {
 		dropFiles(files)
 
 		return EIO
 	}
 
-	objs := make([]Object, len(files))
+	objs := make([]Object, 0, len(files)+n)
 
-	for i, f := range files {
-		if i >= n {
-			objs[i] = f
-
-			continue
-		}
-
-		obj, err := p.servedOf(f, data[i*sizeofOpened:(i+1)*sizeofOpened])
+	for i := range n {
+		obj, rest, err := p.ctlOpened(data[i*sizeofOpened:(i+1)*sizeofOpened], files, flags)
 
 		if err != nil {
-			dropFiles(objs[:i])
-			dropFiles(files[i+1:])
+			dropFiles(objs)
+			dropFiles(rest)
 
-			return EIO
+			return err
 		}
 
-		objs[i] = obj
+		objs, files = append(objs, obj), rest
 	}
 
+	objs = append(objs, files...)
 	data = data[n*sizeofOpened:]
 
 	out, room, fds, slots := p.u32(at+16), p.u32(at+20), p.u32(at+24), p.u32(at+28)
@@ -6831,7 +6123,7 @@ func (p *Process) ctlAnswer(at uint32, r *Ctl, cloexec bool) error {
 			continue
 		}
 
-		fd, err := p.install(obj, 0, cloexec)
+		fd, err := p.install(obj, 0, flags&O_CLOEXEC != 0)
 
 		if err != nil {
 			dropFiles(objs[i+1:])
@@ -6857,6 +6149,29 @@ func (p *Process) libcFdid(fd, at uint32) uint32 {
 	return 0
 }
 
+func (p *Process) libcFchroot(fd uint32) uint32 {
+	d, err := p.fd(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	var st Stat
+
+	switch err := statFile(p, d, &st); {
+	case err != nil:
+		return p.result(0, err)
+	case st.Mode&S_IFMT != S_IFDIR:
+		return p.result(0, ENOTDIR)
+	}
+
+	d.ref()
+	p.root.unref()
+	p.root = d
+
+	return p.result(0, nil)
+}
+
 func (p *Process) libcFchdir(fd uint32) uint32 {
 	return p.result(0, p.fchdir(fd))
 }
@@ -6874,7 +6189,7 @@ func (p *Process) fchdir(fd uint32) error {
 
 	var st Stat
 
-	if err := p.dirStat(d, "", true, &st); err != nil || st.Mode&S_IFMT != S_IFDIR || !p.permits(&st, 1) {
+	if err := statFile(p, d, &st); err != nil || st.Mode&S_IFMT != S_IFDIR || !p.permits(&st, 1) {
 		d.unref()
 
 		switch {
@@ -6891,193 +6206,6 @@ func (p *Process) fchdir(fd uint32) error {
 	p.setCwd(d)
 
 	return nil
-}
-
-func (p *Process) libcChroot(path uint32) uint32 {
-	d, err := p.directory(p.str(path))
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	p.root.unref()
-	p.root = d
-
-	return p.result(0, nil)
-}
-
-func (p *Process) cwdPath() (string, error) {
-	cwd, err := p.dirPath(p.cwd)
-
-	if err == nil && len(cwd) >= 4096 {
-		err = ENAMETOOLONG
-	}
-
-	return cwd, err
-}
-
-func (p *Process) libcGetcwd(buf, size uint32) uint32 {
-	cwd, err := p.cwdPath()
-
-	if err != nil {
-		return p.pointer(0, err)
-	}
-
-	if buf == 0 {
-		at := p.newString(cwd)
-
-		if at == 0 {
-			return p.pointer(0, ENOMEM)
-		}
-
-		return p.pointer(at, nil)
-	}
-
-	if uint32(len(cwd)) >= size {
-		return p.pointer(0, ERANGE)
-	}
-
-	p.putString(buf, cwd)
-
-	return p.pointer(buf, nil)
-}
-
-func (p *Process) libcMkdir(path, mode uint32) uint32 {
-	return p.result(0, p.mkdir(AT_FDCWD, p.str(path), mode))
-}
-
-func (p *Process) libcMkdirat(dirfd, path, mode uint32) uint32 {
-	return p.result(0, p.mkdir(int32(dirfd), p.str(path), mode))
-}
-
-func (p *Process) libcRmdir(path uint32) uint32 {
-	return p.result(0, p.remove(AT_FDCWD, p.str(path), true))
-}
-
-func (p *Process) libcUnlink(path uint32) uint32 {
-	return p.result(0, p.remove(AT_FDCWD, p.str(path), false))
-}
-
-func (p *Process) libcUnlinkat(dirfd, path, flags uint32) uint32 {
-	if flags&^AT_REMOVEDIR != 0 {
-		return p.result(0, EINVAL)
-	}
-
-	return p.result(0, p.remove(int32(dirfd), p.str(path), flags&AT_REMOVEDIR != 0))
-}
-
-func (p *Process) libcRename(old, new uint32) uint32 {
-	return p.result(0, p.rename(AT_FDCWD, p.str(old), AT_FDCWD, p.str(new)))
-}
-
-func (p *Process) libcRenameat(olddir, old, newdir, new uint32) uint32 {
-	return p.result(0, p.rename(int32(olddir), p.str(old), int32(newdir), p.str(new)))
-}
-
-func (p *Process) libcLink(old, new uint32) uint32 {
-	return p.result(0, p.link(AT_FDCWD, p.str(old), AT_FDCWD, p.str(new), false))
-}
-
-func (p *Process) libcLinkat(olddir, old, newdir, new, flags uint32) uint32 {
-	if flags&^AT_SYMLINK_FOLLOW != 0 {
-		return p.result(0, EINVAL)
-	}
-
-	return p.result(0, p.link(int32(olddir), p.str(old), int32(newdir), p.str(new), flags&AT_SYMLINK_FOLLOW != 0))
-}
-
-func (p *Process) libcSymlink(target, path uint32) uint32 {
-	return p.result(0, p.symlink(p.str(target), AT_FDCWD, p.str(path)))
-}
-
-func (p *Process) libcSymlinkat(target, dirfd, path uint32) uint32 {
-	return p.result(0, p.symlink(p.str(target), int32(dirfd), p.str(path)))
-}
-
-func (p *Process) readlinkAt(dirfd int32, path string, buf, size uint32) (int, error) {
-	if p.chaosFail("readlink") {
-		return 0, EIO
-	}
-
-	var target string
-
-	err := p.onPath(dirfd, path, func(d Object) error {
-		var err error
-		target, err = p.dirReadlink(d, path)
-
-		return err
-	})
-
-	if err != nil {
-		return 0, err
-	}
-
-	return copy(p.span(buf, size), target), nil
-}
-
-func (p *Process) libcReadlink(path, buf, size uint32) uint32 {
-	return p.result(p.readlinkAt(AT_FDCWD, p.str(path), buf, size))
-}
-
-func (p *Process) libcReadlinkat(dirfd, path, buf, size uint32) uint32 {
-	if p.u8(path) != 0 {
-		return p.result(p.readlinkAt(int32(dirfd), p.str(path), buf, size))
-	}
-
-	obj, err := p.fd(dirfd)
-
-	if dirfd == uint32(AT_FDCWD&0xffffffff) {
-		obj, err = p.cwd, nil
-	}
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	if fl, _ := p.fileFlags(obj); fl&O_PATH == 0 {
-		return p.result(0, ENOENT)
-	}
-
-	target, err := p.dirReadlink(obj, "")
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	return p.result(copy(p.span(buf, size), target), nil)
-}
-
-func (p *Process) realpath(path string) (string, error) {
-	var out string
-
-	err := p.onPath(AT_FDCWD, path, func(d Object) error {
-		var err error
-		out, err = p.dirRealpath(d, path)
-
-		return err
-	})
-
-	if err == nil && len(out) >= 4096 {
-		err = ENAMETOOLONG
-	}
-
-	return out, err
-}
-
-func (p *Process) libcEaccess(path, mode uint32) uint32 {
-	return p.result(0, p.accessAt(AT_FDCWD, p.str(path), mode, AT_EACCESS))
-}
-
-func (p *Process) libcStatfs(path, at uint32) uint32 {
-	var st Statfs
-
-	err := p.statfsPath(p.str(path), &st)
-
-	if err == nil {
-		p.putStatfsOf(at, &st)
-	}
-
-	return p.result(0, err)
 }
 
 func (p *Process) libcFstatfs(fd, at uint32) uint32 {
@@ -7098,160 +6226,8 @@ func (p *Process) libcFstatfs(fd, at uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) libcRealpath(path, resolved uint32) uint32 {
-	guest, err := p.realpath(p.str(path))
-
-	if err != nil {
-		return p.pointer(0, err)
-	}
-
-	if resolved == 0 {
-		resolved = p.newString(guest)
-
-		if resolved == 0 {
-			return p.pointer(0, ENOMEM)
-		}
-
-		return p.pointer(resolved, nil)
-	}
-
-	p.putString(resolved, guest)
-
-	return p.pointer(resolved, nil)
-}
-
-func (p *Process) libcChmod(path, mode uint32) uint32 {
-	return p.result(0, p.onPath(AT_FDCWD, p.str(path), func(d Object) error {
-		return p.dirChmod(d, p.str(path), mode&0o7777, true)
-	}))
-}
-
-func (p *Process) libcFchmodat(dirfd, path, mode, flags uint32) uint32 {
-	return p.fchmodat(int32(dirfd), path, mode, flags)
-}
-
-func (p *Process) fchmodat(dirfd int32, path, mode, flags uint32) uint32 {
-	return p.result(0, p.onAt(dirfd, p.str(path), flags, func(a Object) error {
-		return p.request(a, &FileChmod{mode: mode & 0o7777})
-	}, func(d Object, follow bool) error {
-		return p.dirChmod(d, p.str(path), mode&0o7777, follow)
-	}))
-}
-
-func (p *Process) libcFchownat(dirfd, path, uid, gid, flags uint32) uint32 {
-	return p.result(0, p.onAt(int32(dirfd), p.str(path), flags, func(a Object) error {
-		return p.request(a, &FileChown{uid: int(int32(uid)), gid: int(int32(gid))})
-	}, func(d Object, follow bool) error {
-		return p.dirChown(d, p.str(path), int(int32(uid)), int(int32(gid)), follow)
-	}))
-}
-
-func (p *Process) libcMknod(path, mode uint32, dev uint64) uint32 {
-	return p.result(0, p.mknod(AT_FDCWD, p.str(path), mode, dev))
-}
-
-func (p *Process) libcMknodat(dirfd, path, mode uint32, dev uint64) uint32 {
-	return p.result(0, p.mknod(int32(dirfd), p.str(path), mode, dev))
-}
-
-func (p *Process) libcUtimensat(dirfd, path, times, flags uint32) uint32 {
-	if path == 0 {
-		n, err := p.fd(dirfd)
-
-		if err == nil {
-			err = p.request(n, &FileUtimes{ts: p.timespecs(times)})
-		}
-
-		return p.result(0, err)
-	}
-
-	return p.result(0, p.utimens(int32(dirfd), p.str(path), p.timespecs(times), flags&AT_SYMLINK_NOFOLLOW == 0))
-}
-
-func (p *Process) stat(path, at uint32, follow bool) uint32 {
-	var st Stat
-
-	err := p.statPath(p.str(path), follow, &st)
-
-	if err == nil {
-		p.putStat(at, &st)
-	}
-
-	return p.result(0, err)
-}
-
-func (p *Process) chown(path, uid, gid uint32, follow bool) uint32 {
-	return p.result(0, p.onPath(AT_FDCWD, p.str(path), func(d Object) error {
-		return p.dirChown(d, p.str(path), int(int32(uid)), int(int32(gid)), follow)
-	}))
-}
-
-func (p *Process) utimens(dirfd int32, path string, ts []Timespec, follow bool) error {
-	return p.onPath(dirfd, path, func(d Object) error {
-		return p.dirUtimes(d, path, ts, follow)
-	})
-}
-
-func (p *Process) libcStat(path, at uint32) uint32 {
-	return p.stat(path, at, true)
-}
-
-func (p *Process) libcLstat(path, at uint32) uint32 {
-	return p.stat(path, at, false)
-}
-
 func (p *Process) libcAcct(path uint32) uint32 {
 	return p.result(0, EPERM)
-}
-
-func (p *Process) libcChown(path, uid, gid uint32) uint32 {
-	return p.chown(path, uid, gid, true)
-}
-
-func (p *Process) libcLchown(path, uid, gid uint32) uint32 {
-	return p.chown(path, uid, gid, false)
-}
-
-func (p *Process) libcMount(source, target, fstype, flags, data uint32) uint32 {
-	from, to := p.str(source), p.str(target)
-
-	for _, path := range []string{from, to} {
-		if err := checked(path); err != nil {
-			return p.result(0, err)
-		}
-	}
-
-	err := p.onPath(AT_FDCWD, ".", func(v Object) error {
-		var st Stat
-
-		if p.dirStat(v, from, true, &st) != nil || st.Mode&S_IFMT != S_IFSOCK {
-			return p.dirMount(v, to, from, nil)
-		}
-
-		conn, err := p.connectUnix(v, from, SOCK_SEQPACKET, false, new(atomic.Int64))
-
-		if err != nil {
-			return err
-		}
-
-		defer conn.unref()
-
-		return p.dirMount(v, to, from, conn)
-	})
-
-	return p.result(0, err)
-}
-
-func (p *Process) libcUmount2(target, flags uint32) uint32 {
-	err := p.onPath(AT_FDCWD, p.str(target), func(v Object) error {
-		return p.dirUnmount(v, p.str(target), flags&UMOUNT_NOFOLLOW)
-	})
-
-	return p.result(0, err)
-}
-
-func (p *Process) libcUmount(target uint32) uint32 {
-	return p.libcUmount2(target, 0)
 }
 
 func (p *Process) openFifo(st *Stat, flags int) (Object, error) {
@@ -7389,9 +6365,9 @@ func (p *Process) putAddress(addr []byte, at, lenAt uint32) {
 	p.put32(lenAt, uint32(len(addr)))
 }
 
-func (p *Process) libcSocket(domain, kind, protocol uint32) uint32 {
+func (p *Process) socket(domain, kind, protocol uint32) uint32 {
 	if domain == AF_INET || domain == AF_INET6 {
-		return p.result(p.inetSocket(domain, kind, protocol))
+		return p.result(0, EAFNOSUPPORT)
 	}
 
 	if domain != AF_UNIX {
@@ -7418,28 +6394,28 @@ func (p *Process) libcSocket(domain, kind, protocol uint32) uint32 {
 	return p.result(0, ESOCKTNOSUPPORT)
 }
 
-func (p *Process) inetSocket(domain, kind, protocol uint32) (int, error) {
+func (p *Process) libc__kernel_socketon(fd, domain, kind, protocol uint32) uint32 {
+	if int32(fd) < 0 {
+		return p.socket(domain, kind, protocol)
+	}
+
 	if kind&^(sockTypeMask|SOCK_NONBLOCK|SOCK_CLOEXEC) != 0 {
-		return 0, EINVAL
+		return p.result(0, EINVAL)
 	}
 
-	obj, err := p.dirOpen(p.root, sockmgrSocket, O_RDWR|int(bit(kind&SOCK_NONBLOCK != 0))*O_NONBLOCK, 0)
-
-	if err == ENOENT {
-		return 0, EAFNOSUPPORT
-	}
+	obj, err := p.fd(fd)
 
 	if err != nil {
-		return 0, err
+		return p.result(0, err)
 	}
 
 	if err := p.request(obj, &SockCreate{domain: domain, kind: kind &^ SOCK_CLOEXEC, protocol: protocol}); err != nil {
-		obj.unref()
-
-		return 0, err
+		return p.result(0, err)
 	}
 
-	return p.install(newIndirect(obj), 0, kind&SOCK_CLOEXEC != 0)
+	obj.ref()
+
+	return p.result(p.install(newIndirect(obj), 0, kind&SOCK_CLOEXEC != 0))
 }
 
 func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
@@ -7489,21 +6465,43 @@ func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) libcBind(fd, addr, n uint32) uint32 {
+func (p *Process) nodeAddress(node int32, at, n uint32) (Address, error) {
+	a := p.socketAddress(at, n)
+
+	if node >= 0 {
+		var err error
+
+		if a.node, err = p.fd(uint32(node)); err != nil {
+			return a, err
+		}
+	}
+
+	return a, nil
+}
+
+func (p *Process) libc__kernel_bindat(fd, node, addr, n uint32) uint32 {
 	s, err := p.fd(fd)
 
 	if err == nil {
-		err = p.request(s, &SockBind{addr: p.socketAddress(addr, n)})
+		var a Address
+
+		if a, err = p.nodeAddress(int32(node), addr, n); err == nil {
+			err = p.request(s, &SockBind{addr: a})
+		}
 	}
 
 	return p.result(0, err)
 }
 
-func (p *Process) libcConnect(fd, addr, n uint32) uint32 {
+func (p *Process) libc__kernel_connectat(fd, node, addr, n uint32) uint32 {
 	s, err := p.fd(fd)
 
 	if err == nil {
-		err = p.request(s, &SockConnect{addr: p.socketAddress(addr, n)})
+		var a Address
+
+		if a, err = p.nodeAddress(int32(node), addr, n); err == nil {
+			err = p.request(s, &SockConnect{addr: a})
+		}
 	}
 
 	return p.result(0, err)
@@ -7596,10 +6594,6 @@ func (p *Process) libcSend(fd, buf, n, flags uint32) uint32 {
 	return p.socketSend(fd, buf, n, flags, 0, 0)
 }
 
-func (p *Process) libcSendto(fd, buf, n, flags, addr, alen uint32) uint32 {
-	return p.socketSend(fd, buf, n, flags, addr, alen)
-}
-
 func (p *Process) libcRecv(fd, buf, n, flags uint32) uint32 {
 	return p.socketRecv(fd, buf, n, flags, 0, 0)
 }
@@ -7608,11 +6602,11 @@ func (p *Process) libcRecvfrom(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 	return p.socketRecv(fd, buf, n, flags, addr, lenAt)
 }
 
-func (p *Process) libcSendmsg(fd, msg, flags uint32) uint32 {
-	return p.result(p.sendmsg(fd, msg, flags))
+func (p *Process) libc__kernel_sendmsgat(fd, node, msg, flags uint32) uint32 {
+	return p.result(p.sendmsg(fd, int32(node), msg, flags))
 }
 
-func (p *Process) sendmsg(fd, msg, flags uint32) (int, error) {
+func (p *Process) sendmsg(fd uint32, node int32, msg, flags uint32) (int, error) {
 	s, err := p.fd(fd)
 
 	if err != nil {
@@ -7621,6 +6615,13 @@ func (p *Process) sendmsg(fd, msg, flags uint32) (int, error) {
 
 	h := p.span(msg, sizeofMsghdr)
 	to := p.destination(binary.LittleEndian.Uint32(h), binary.LittleEndian.Uint32(h[4:]))
+
+	if node >= 0 {
+		if to.node, err = p.fd(uint32(node)); err != nil {
+			return 0, err
+		}
+	}
+
 	pk := p.packet()
 	files, cred, err := p.rights(pk.files[:0], binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
 
@@ -7642,31 +6643,6 @@ func (p *Process) sendmsg(fd, msg, flags uint32) (int, error) {
 	pk.data, pk.files, pk.cred = data, files, cred
 
 	return p.sockSend(s, pk, to, sendMode(flags))
-}
-
-func (p *Process) libcSendmmsg(fd, vec, vlen, flags uint32) uint32 {
-	if _, err := p.fd(fd); err != nil {
-		return p.result(0, err)
-	}
-
-	vlen = min(vlen, UIO_MAXIOV)
-
-	for i := range vlen {
-		at := vec + i*sizeofMmsghdr
-		n, err := p.sendmsg(fd, at, flags)
-
-		if err != nil {
-			if i == 0 {
-				return p.result(0, err)
-			}
-
-			return i
-		}
-
-		p.put32(at+sizeofMsghdr, uint32(n))
-	}
-
-	return vlen
 }
 
 func (p *Process) packet() *Packet {
@@ -8078,57 +7054,45 @@ func (p *Process) unixSocketPath(at, n uint32) (string, error) {
 	return string(path), nil
 }
 
-func (p *Process) bindName(path string, held Object) (*SocketName, error) {
-	var name *SocketName
-
-	err := p.onPath(AT_FDCWD, path, func(v Object) error {
-		var st Stat
-
-		err := p.dirStat(v, path, false, &st)
-
-		if err == ENOENT {
-			if err = p.dirMknod(v, path, S_IFSOCK|0o777&^p.umask); err != nil {
-				return err
-			}
-
-			err = p.dirStat(v, path, false, &st)
-		}
-
-		switch {
-		case err != nil:
-			return err
-		case st.Mode&S_IFMT != S_IFSOCK:
-			return EADDRINUSE
-		}
-
-		key := FileKey{st.Dev, st.Ino}
-
-		p.k.mu.Lock()
-
-		defer p.k.mu.Unlock()
-
-		if p.k.sockets[key] != nil {
-			return EADDRINUSE
-		}
-
-		held.ref()
-		p.k.sockets[key] = held
-		name = &SocketName{k: p.k, key: key}
-
-		return nil
-	})
-
-	if err == EEXIST {
-		err = EADDRINUSE
+func (p *Process) bindName(a Address, held Object) (*SocketName, error) {
+	if a.node == nil {
+		return nil, EINVAL
 	}
 
-	return name, err
-}
-
-func (p *Process) boundAt(v Object, path string) (Object, error) {
 	var st Stat
 
-	if err := p.dirStat(v, path, true, &st); err != nil {
+	if err := statFile(p, a.node, &st); err != nil {
+		return nil, err
+	}
+
+	if st.Mode&S_IFMT != S_IFSOCK {
+		return nil, EADDRINUSE
+	}
+
+	key := FileKey{st.Dev, st.Ino}
+
+	p.k.mu.Lock()
+
+	defer p.k.mu.Unlock()
+
+	if p.k.sockets[key] != nil {
+		return nil, EADDRINUSE
+	}
+
+	held.ref()
+	p.k.sockets[key] = held
+
+	return &SocketName{k: p.k, key: key}, nil
+}
+
+func (p *Process) boundAt(node Object) (Object, error) {
+	var st Stat
+
+	if node == nil {
+		return nil, EINVAL
+	}
+
+	if err := statFile(p, node, &st); err != nil {
 		return nil, err
 	}
 
@@ -8157,8 +7121,8 @@ func (p *Process) boundAt(v Object, path string) (Object, error) {
 	return held, nil
 }
 
-func (p *Process) connectUnix(v Object, path string, kind int, nonblock bool, to *atomic.Int64) (*PairEnd, error) {
-	f, err := p.boundAt(v, path)
+func (p *Process) connectUnix(node Object, kind int, nonblock bool, to *atomic.Int64) (*PairEnd, error) {
+	f, err := p.boundAt(node)
 
 	if err != nil {
 		return nil, err
@@ -8173,28 +7137,20 @@ func (p *Process) connectUnix(v Object, path string, kind int, nonblock bool, to
 	return r.conn, err
 }
 
-func (p *Process) mouthOf(path string) (Object, error) {
-	var mouth Object
+func (p *Process) mouthOf(node Object) (Object, error) {
+	f, err := p.boundAt(node)
 
-	err := p.onPath(AT_FDCWD, path, func(v Object) error {
-		f, err := p.boundAt(v, path)
+	if err != nil {
+		return nil, err
+	}
 
-		if err != nil {
-			return err
-		}
+	if p.sockKind(f) != SOCK_DGRAM {
+		f.unref()
 
-		if p.sockKind(f) != SOCK_DGRAM {
-			f.unref()
+		return nil, EPROTOTYPE
+	}
 
-			return EPROTOTYPE
-		}
-
-		mouth = f
-
-		return nil
-	})
-
-	return mouth, err
+	return f, nil
 }
 
 func (p *Process) destination(addr, alen uint32) Address {
@@ -9039,16 +7995,6 @@ func (p *Process) libcGetdtablesize() uint32 {
 	return uint32(min(p.limits[RLIMIT_NOFILE].cur, math.MaxInt32))
 }
 
-func (p *Process) libcPathconf(path, name uint32) uint32 {
-	var st Stat
-
-	if err := p.statPath(p.str(path), true, &st); err != nil {
-		return p.result(0, err)
-	}
-
-	return p.pathconf(name)
-}
-
 func (p *Process) libcFpathconf(fd, name uint32) uint32 {
 	if _, err := p.fd(fd); err != nil {
 		return p.result(0, err)
@@ -9829,148 +8775,6 @@ func (p *Process) request(o Object, r Request) error {
 	return err
 }
 
-func (p *Process) vfsRoot(d Object) uint64 {
-	id, _ := p.handleID(d)
-
-	if root, err := p.handleID(p.root); err == nil {
-		id = root
-	}
-
-	return id
-}
-
-func flagOf(follow bool) uint32 {
-	if follow {
-		return 0
-	}
-
-	return AT_SYMLINK_NOFOLLOW
-}
-
-func (p *Process) dirOpen(d Object, path string, flags int, mode uint32) (Object, error) {
-	if p.chaosFail("openat") {
-		return nil, EIO
-	}
-
-	r := VfsOpen{root: p.vfsRoot(d), path: path, flags: flags, mode: mode}
-
-	if err := p.request(d, &r); err != nil {
-		return nil, err
-	}
-
-	switch {
-	case r.fifo:
-		return p.openFifo(&r.st, flags)
-	case r.terminal && flags&O_NOCTTY == 0:
-		p.acquire(r.file)
-	}
-
-	return r.file, nil
-}
-
-func (p *Process) dirStat(d Object, path string, follow bool, st *Stat) error {
-	if p.chaosFail("file-stat") {
-		return EIO
-	}
-
-	r := VfsStat{root: p.vfsRoot(d), path: path, follow: follow}
-	err := p.request(d, &r)
-
-	*st = r.st
-
-	return err
-}
-
-func (p *Process) dirReadlink(d Object, path string) (string, error) {
-	r := VfsReadlink{root: p.vfsRoot(d), path: path}
-	err := p.request(d, &r)
-
-	return r.target, err
-}
-
-func (p *Process) dirMkdir(d Object, path string, mode uint32) error {
-	return p.request(d, &VfsMkdir{root: p.vfsRoot(d), path: path, mode: mode})
-}
-
-func (p *Process) dirMknod(d Object, path string, mode uint32) error {
-	return p.request(d, &VfsMknod{root: p.vfsRoot(d), path: path, mode: mode})
-}
-
-func (p *Process) dirSymlink(d Object, target, path string) error {
-	return p.request(d, &VfsSymlink{root: p.vfsRoot(d), target: target, path: path})
-}
-
-func (p *Process) dirUnlink(d Object, path string, dir bool) error {
-	return p.request(d, &VfsUnlink{root: p.vfsRoot(d), path: path, dir: dir})
-}
-
-func (p *Process) dirRename(d Object, old string, to Object, new string) error {
-	id, err := p.handleID(to)
-
-	if err != nil {
-		return err
-	}
-
-	return p.request(d, &VfsRename{root: p.vfsRoot(d), old: old, to: id, new: new})
-}
-
-func (p *Process) dirLink(d Object, old string, to Object, new string, follow bool) error {
-	id, err := p.handleID(to)
-
-	if err != nil {
-		return err
-	}
-
-	return p.request(d, &VfsLink{root: p.vfsRoot(d), old: old, to: id, new: new, follow: follow})
-}
-
-func (p *Process) dirChmod(d Object, path string, mode uint32, follow bool) error {
-	return p.request(d, &VfsChmod{root: p.vfsRoot(d), path: path, mode: mode, follow: follow})
-}
-
-func (p *Process) dirChown(d Object, path string, uid, gid int, follow bool) error {
-	return p.request(d, &VfsChown{root: p.vfsRoot(d), path: path, uid: uid, gid: gid, follow: follow})
-}
-
-func (p *Process) dirUtimes(d Object, path string, ts []Timespec, follow bool) error {
-	return p.request(d, &VfsUtimes{root: p.vfsRoot(d), path: path, ts: ts, follow: follow})
-}
-
-func (p *Process) dirTruncate(d Object, path string, size int64) error {
-	return p.request(d, &VfsTruncate{root: p.vfsRoot(d), path: path, size: size})
-}
-
-func (p *Process) dirStatfs(d Object, path string, st *Statfs) error {
-	r := VfsStatfs{root: p.vfsRoot(d), path: path}
-	err := p.request(d, &r)
-
-	*st = r.st
-
-	return err
-}
-
-func (p *Process) dirRealpath(d Object, path string) (string, error) {
-	r := VfsRealpath{root: p.vfsRoot(d), path: path}
-	err := p.request(d, &r)
-
-	return r.out, err
-}
-
-func (p *Process) dirPath(d Object) (string, error) {
-	r := VfsPath{root: p.vfsRoot(d)}
-	err := p.request(d, &r)
-
-	return r.out, err
-}
-
-func (p *Process) dirMount(d Object, target, source string, conn Object) error {
-	return p.request(d, &VfsMount{root: p.vfsRoot(d), target: target, source: source, conn: conn})
-}
-
-func (p *Process) dirUnmount(d Object, path string, flags uint32) error {
-	return p.request(d, &VfsUnmount{root: p.vfsRoot(d), path: path, flags: flags})
-}
-
 func (p *Process) ttyControl(t Object, how uint32) error {
 	return p.request(t, &TtyControl{how: how})
 }
@@ -10186,12 +8990,6 @@ func (p *Process) identity(o Object) (FileIdentity, error) {
 	err := p.request(o, &r)
 
 	return r, err
-}
-
-func (p *Process) handleID(o Object) (uint64, error) {
-	r, err := p.identity(o)
-
-	return r.id, err
 }
 
 func (p *Process) device(o Object) FileKey {
@@ -11656,10 +10454,6 @@ func errnoOrNil(code uint32) error {
 	}
 
 	return Errno(code)
-}
-
-func (p *Process) libcLchmod(path, mode uint32) uint32 {
-	return p.fchmodat(AT_FDCWD, path, mode, AT_SYMLINK_NOFOLLOW)
 }
 
 func (p *Process) libcIssetugid() uint32 {

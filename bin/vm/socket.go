@@ -18,6 +18,7 @@ type Address struct {
 	raw   []byte
 	path  string
 	err   error
+	node  Object
 }
 
 func unixAddress(path []byte) []byte {

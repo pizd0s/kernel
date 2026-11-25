@@ -11,7 +11,7 @@ import (
 
 var vmPoints = map[string]uint32{"mmap": 0}
 
-var processPoints = map[string]uint32{"openat": 0, "read": 0, "write": 0, "fork": 0, "file-stat": 0, "readlink": 0, "memory-grow": 0, "memory-move": 0,
+var processPoints = map[string]uint32{"ctl": 0, "read": 0, "write": 0, "fork": 0, "file-stat": 0, "memory-grow": 0, "memory-move": 0,
 	"memory-compact": 0}
 
 var chaosState struct {

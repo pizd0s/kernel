@@ -192,58 +192,6 @@ func libcPpoll(at, atSize, n, ts, tsSize, mask, maskSize uint32) uint32 {
 	return p.libcPpoll(at, n, ts, mask)
 }
 
-func libcOpen(path, flags, va uint32) uint32 {
-	return proc().libcOpen(path, flags, va)
-}
-
-func libcOpenat(dirfd, path, flags, va uint32) uint32 {
-	return proc().libcOpenat(dirfd, path, flags, va)
-}
-
-func libcStat(path, at, atSize uint32) uint32 {
-	p := proc()
-
-	p.sized("stat", atSize, sizeofStat)
-
-	return p.libcStat(path, at)
-}
-
-func libcLstat(path, at, atSize uint32) uint32 {
-	p := proc()
-
-	p.sized("lstat", atSize, sizeofStat)
-
-	return p.libcLstat(path, at)
-}
-
-func libcFstatat(dirfd, path, at, atSize, flags uint32) uint32 {
-	p := proc()
-
-	p.sized("fstatat", atSize, sizeofStat)
-
-	return p.libcFstatat(dirfd, path, at, flags)
-}
-
-func libcAccess(path, mode uint32) uint32 {
-	return proc().libcAccess(path, mode)
-}
-
-func libcFaccessat(dirfd, path, mode, flags uint32) uint32 {
-	return proc().libcFaccessat(dirfd, path, mode, flags)
-}
-
-func libcTruncate(path uint32, size uint64) uint32 {
-	return proc().libcTruncate(path, size)
-}
-
-func libcStatvfs(path, at, atSize uint32) uint32 {
-	p := proc()
-
-	p.sized("statvfs", atSize, sizeofStatvfs)
-
-	return p.libcStatvfs(path, at)
-}
-
 func libcFstatvfs(fd, at, atSize uint32) uint32 {
 	p := proc()
 
@@ -276,94 +224,6 @@ func libcFdid(fd, at uint32) uint32 {
 	return proc().libcFdid(fd, at)
 }
 
-func libcChroot(path uint32) uint32 {
-	return proc().libcChroot(path)
-}
-
-func libcChdir(path uint32) uint32 {
-	return proc().libcChdir(path)
-}
-
-func libcGetcwd(buf, size uint32) uint32 {
-	return proc().libcGetcwd(buf, size)
-}
-
-func libcMkdir(path, mode uint32) uint32 {
-	return proc().libcMkdir(path, mode)
-}
-
-func libcMkdirat(dirfd, path, mode uint32) uint32 {
-	return proc().libcMkdirat(dirfd, path, mode)
-}
-
-func libcRmdir(path uint32) uint32 {
-	return proc().libcRmdir(path)
-}
-
-func libcUnlink(path uint32) uint32 {
-	return proc().libcUnlink(path)
-}
-
-func libcUnlinkat(dirfd, path, flags uint32) uint32 {
-	return proc().libcUnlinkat(dirfd, path, flags)
-}
-
-func libcMount(source, target, fstype, flags, data uint32) uint32 {
-	return proc().libcMount(source, target, fstype, flags, data)
-}
-
-func libcUmount(target uint32) uint32 {
-	return proc().libcUmount(target)
-}
-
-func libcUmount2(target, flags uint32) uint32 {
-	return proc().libcUmount2(target, flags)
-}
-
-func libcRename(old, new uint32) uint32 {
-	return proc().libcRename(old, new)
-}
-
-func libcRenameat(olddir, old, newdir, new uint32) uint32 {
-	return proc().libcRenameat(olddir, old, newdir, new)
-}
-
-func libcLink(old, new uint32) uint32 {
-	return proc().libcLink(old, new)
-}
-
-func libcLinkat(olddir, old, newdir, new, flags uint32) uint32 {
-	return proc().libcLinkat(olddir, old, newdir, new, flags)
-}
-
-func libcSymlink(target, path uint32) uint32 {
-	return proc().libcSymlink(target, path)
-}
-
-func libcSymlinkat(target, dirfd, path uint32) uint32 {
-	return proc().libcSymlinkat(target, dirfd, path)
-}
-
-func libcReadlink(path, buf, size uint32) uint32 {
-	return proc().libcReadlink(path, buf, size)
-}
-
-func libcReadlinkat(dirfd, path, buf, size uint32) uint32 {
-	return proc().libcReadlinkat(dirfd, path, buf, size)
-}
-
-func libcEaccess(path, mode uint32) uint32 {
-	return proc().libcEaccess(path, mode)
-}
-
-func libcStatfs(path, at, atSize uint32) uint32 {
-	p := proc()
-
-	p.sized("statfs", atSize, sizeofStatfs)
-
-	return p.libcStatfs(path, at)
-}
-
 func libcFstatfs(fd, at, atSize uint32) uint32 {
 	p := proc()
 
@@ -374,46 +234,6 @@ func libcFstatfs(fd, at, atSize uint32) uint32 {
 
 func libcAcct(path uint32) uint32 {
 	return proc().libcAcct(path)
-}
-
-func libcRealpath(path, resolved uint32) uint32 {
-	return proc().libcRealpath(path, resolved)
-}
-
-func libcChmod(path, mode uint32) uint32 {
-	return proc().libcChmod(path, mode)
-}
-
-func libcFchmodat(dirfd, path, mode, flags uint32) uint32 {
-	return proc().libcFchmodat(dirfd, path, mode, flags)
-}
-
-func libcChown(path, uid, gid uint32) uint32 {
-	return proc().libcChown(path, uid, gid)
-}
-
-func libcLchown(path, uid, gid uint32) uint32 {
-	return proc().libcLchown(path, uid, gid)
-}
-
-func libcFchownat(dirfd, path, uid, gid, flags uint32) uint32 {
-	return proc().libcFchownat(dirfd, path, uid, gid, flags)
-}
-
-func libcMknod(path, mode uint32, dev uint64) uint32 {
-	return proc().libcMknod(path, mode, dev)
-}
-
-func libcMknodat(dirfd, path, mode uint32, dev uint64) uint32 {
-	return proc().libcMknodat(dirfd, path, mode, dev)
-}
-
-func libcUtimensat(dirfd, path, times, timesSize, flags uint32) uint32 {
-	p := proc()
-
-	p.sized("utimensat", timesSize, sizeofTimespec)
-
-	return p.libcUtimensat(dirfd, path, times, flags)
 }
 
 func libcMalloc(n uint32) uint32 {
@@ -844,206 +664,6 @@ func libcUmask(mask uint32) uint32 {
 	return proc().libcUmask(mask)
 }
 
-func libcExecve(path, argv, envp uint32) uint32 {
-	return proc().libcExecve(path, argv, envp)
-}
-
-func libcFexecve(fd, argv, envp uint32) uint32 {
-	return proc().libcFexecve(fd, argv, envp)
-}
-
-func libcPosix_spawn(pid, path, actions, actionsSize, attr, attrSize, argv, envp uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawn", actionsSize, sizeofPosixSpawnFileActions, attrSize, sizeofPosixSpawnattr)
-
-	return p.libcPosix_spawn(pid, path, actions, attr, argv, envp)
-}
-
-func libcPosix_spawn_file_actions_init(actions, actionsSize uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawn_file_actions_init", actionsSize, sizeofPosixSpawnFileActions)
-
-	return p.libcPosix_spawn_file_actions_init(actions)
-}
-
-func libcPosix_spawn_file_actions_destroy(actions, actionsSize uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawn_file_actions_destroy", actionsSize, sizeofPosixSpawnFileActions)
-
-	return p.libcPosix_spawn_file_actions_destroy(actions)
-}
-
-func libcPosix_spawn_file_actions_addopen(actions, actionsSize, fd, path, flags, mode uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawn_file_actions_addopen", actionsSize, sizeofPosixSpawnFileActions)
-
-	return p.libcPosix_spawn_file_actions_addopen(actions, fd, path, flags, mode)
-}
-
-func libcPosix_spawn_file_actions_addclose(actions, actionsSize, fd uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawn_file_actions_addclose", actionsSize, sizeofPosixSpawnFileActions)
-
-	return p.libcPosix_spawn_file_actions_addclose(actions, fd)
-}
-
-func libcPosix_spawn_file_actions_adddup2(actions, actionsSize, fd, to uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawn_file_actions_adddup2", actionsSize, sizeofPosixSpawnFileActions)
-
-	return p.libcPosix_spawn_file_actions_adddup2(actions, fd, to)
-}
-
-func libcPosix_spawn_file_actions_addchdir(actions, actionsSize, path uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawn_file_actions_addchdir", actionsSize, sizeofPosixSpawnFileActions)
-
-	return p.libcPosix_spawn_file_actions_addchdir(actions, path)
-}
-
-func libcPosix_spawn_file_actions_addfchdir(actions, actionsSize, fd uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawn_file_actions_addfchdir", actionsSize, sizeofPosixSpawnFileActions)
-
-	return p.libcPosix_spawn_file_actions_addfchdir(actions, fd)
-}
-
-func libcPosix_spawn_file_actions_addchdir_np(actions, actionsSize, path uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawn_file_actions_addchdir_np", actionsSize, sizeofPosixSpawnFileActions)
-
-	return p.libcPosix_spawn_file_actions_addchdir_np(actions, path)
-}
-
-func libcPosix_spawn_file_actions_addfchdir_np(actions, actionsSize, fd uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawn_file_actions_addfchdir_np", actionsSize, sizeofPosixSpawnFileActions)
-
-	return p.libcPosix_spawn_file_actions_addfchdir_np(actions, fd)
-}
-
-func libcPosix_spawnattr_init(attr, attrSize uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_init", attrSize, sizeofPosixSpawnattr)
-
-	return p.libcPosix_spawnattr_init(attr)
-}
-
-func libcPosix_spawnattr_destroy(attr, attrSize uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_destroy", attrSize, sizeofPosixSpawnattr)
-
-	return p.libcPosix_spawnattr_destroy(attr)
-}
-
-func libcPosix_spawnattr_getflags(attr, attrSize, out uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_getflags", attrSize, sizeofPosixSpawnattr)
-
-	return p.libcPosix_spawnattr_getflags(attr, out)
-}
-
-func libcPosix_spawnattr_setflags(attr, attrSize, flags uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_setflags", attrSize, sizeofPosixSpawnattr)
-
-	return p.libcPosix_spawnattr_setflags(attr, flags)
-}
-
-func libcPosix_spawnattr_getpgroup(attr, attrSize, out uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_getpgroup", attrSize, sizeofPosixSpawnattr)
-
-	return p.libcPosix_spawnattr_getpgroup(attr, out)
-}
-
-func libcPosix_spawnattr_setpgroup(attr, attrSize, pgroup uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_setpgroup", attrSize, sizeofPosixSpawnattr)
-
-	return p.libcPosix_spawnattr_setpgroup(attr, pgroup)
-}
-
-func libcPosix_spawnattr_getsigdefault(attr, attrSize, out, outSize uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_getsigdefault", attrSize, sizeofPosixSpawnattr, outSize, sizeofSigset)
-
-	return p.libcPosix_spawnattr_getsigdefault(attr, out)
-}
-
-func libcPosix_spawnattr_setsigdefault(attr, attrSize, set, setSize uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_setsigdefault", attrSize, sizeofPosixSpawnattr, setSize, sizeofSigset)
-
-	return p.libcPosix_spawnattr_setsigdefault(attr, set)
-}
-
-func libcPosix_spawnattr_getsigmask(attr, attrSize, out, outSize uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_getsigmask", attrSize, sizeofPosixSpawnattr, outSize, sizeofSigset)
-
-	return p.libcPosix_spawnattr_getsigmask(attr, out)
-}
-
-func libcPosix_spawnattr_setsigmask(attr, attrSize, set, setSize uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_setsigmask", attrSize, sizeofPosixSpawnattr, setSize, sizeofSigset)
-
-	return p.libcPosix_spawnattr_setsigmask(attr, set)
-}
-
-func libcPosix_spawnattr_getschedpolicy(attr, attrSize, out uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_getschedpolicy", attrSize, sizeofPosixSpawnattr)
-
-	return p.libcPosix_spawnattr_getschedpolicy(attr, out)
-}
-
-func libcPosix_spawnattr_setschedpolicy(attr, attrSize, policy uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_setschedpolicy", attrSize, sizeofPosixSpawnattr)
-
-	return p.libcPosix_spawnattr_setschedpolicy(attr, policy)
-}
-
-func libcPosix_spawnattr_getschedparam(attr, attrSize, out, outSize uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_getschedparam", attrSize, sizeofPosixSpawnattr, outSize, sizeofSchedParam)
-
-	return p.libcPosix_spawnattr_getschedparam(attr, out)
-}
-
-func libcPosix_spawnattr_setschedparam(attr, attrSize, param, paramSize uint32) uint32 {
-	p := proc()
-
-	p.sized("posix_spawnattr_setschedparam", attrSize, sizeofPosixSpawnattr, paramSize, sizeofSchedParam)
-
-	return p.libcPosix_spawnattr_setschedparam(attr, param)
-}
-
 func libc_exit(code uint32) {
 	proc().libc_exit(code)
 }
@@ -1280,10 +900,6 @@ func libcGetdtablesize() uint32 {
 	return proc().libcGetdtablesize()
 }
 
-func libcPathconf(path, name uint32) uint32 {
-	return proc().libcPathconf(path, name)
-}
-
 func libcFpathconf(fd, name uint32) uint32 {
 	return proc().libcFpathconf(fd, name)
 }
@@ -1304,20 +920,8 @@ func libcGethostid() uint32 {
 	return proc().libcGethostid()
 }
 
-func libcSocket(domain, kind, protocol uint32) uint32 {
-	return proc().libcSocket(domain, kind, protocol)
-}
-
 func libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 	return proc().libcSocketpair(domain, kind, protocol, at)
-}
-
-func libcBind(fd, addr, n uint32) uint32 {
-	return proc().libcBind(fd, addr, n)
-}
-
-func libcConnect(fd, addr, n uint32) uint32 {
-	return proc().libcConnect(fd, addr, n)
 }
 
 func libcListen(fd, backlog uint32) uint32 {
@@ -1352,10 +956,6 @@ func libcSend(fd, buf, n, flags uint32) uint32 {
 	return proc().libcSend(fd, buf, n, flags)
 }
 
-func libcSendto(fd, buf, n, flags, addr, alen uint32) uint32 {
-	return proc().libcSendto(fd, buf, n, flags, addr, alen)
-}
-
 func libcRecv(fd, buf, n, flags uint32) uint32 {
 	return proc().libcRecv(fd, buf, n, flags)
 }
@@ -1364,28 +964,12 @@ func libcRecvfrom(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 	return proc().libcRecvfrom(fd, buf, n, flags, addr, lenAt)
 }
 
-func libcSendmsg(fd, msg, msgSize, iovSize, flags uint32) uint32 {
-	p := proc()
-
-	p.sized("sendmsg", msgSize, sizeofMsghdr, iovSize, sizeofIovec)
-
-	return p.libcSendmsg(fd, msg, flags)
-}
-
 func libcRecvmsg(fd, msg, msgSize, iovSize, flags uint32) uint32 {
 	p := proc()
 
 	p.sized("recvmsg", msgSize, sizeofMsghdr, iovSize, sizeofIovec)
 
 	return p.libcRecvmsg(fd, msg, flags)
-}
-
-func libcSendmmsg(fd, vec, vecSize, iovSize, vlen, flags uint32) uint32 {
-	p := proc()
-
-	p.sized("sendmmsg", vecSize, sizeofMmsghdr, iovSize, sizeofIovec)
-
-	return p.libcSendmmsg(fd, vec, vlen, flags)
 }
 
 func libcRecvmmsg(fd, vec, vecSize, iovSize, vlen, flags, timeout, timeoutSize uint32) uint32 {
@@ -2505,10 +2089,6 @@ func libcSem_open(name, flags, va, semSize uint32) uint32 {
 	return p.libcSem_open(name, flags, va)
 }
 
-func libcLchmod(path, mode uint32) uint32 {
-	return proc().libcLchmod(path, mode)
-}
-
 func libcIssetugid() uint32 {
 	return proc().libcIssetugid()
 }
@@ -2700,4 +2280,28 @@ func libcGetrandom(buf, n, flags uint32) uint32 {
 
 func libcPosix_madvise(addr, n, advice uint32) uint32 {
 	return proc().libcPosix_madvise(addr, n, advice)
+}
+
+func libc__kernel_bindat(fd, node, addr, n uint32) uint32 {
+	return proc().libc__kernel_bindat(fd, node, addr, n)
+}
+
+func libc__kernel_connectat(fd, node, addr, n uint32) uint32 {
+	return proc().libc__kernel_connectat(fd, node, addr, n)
+}
+
+func libc__kernel_exec(fd, path, program, argv, envp uint32) uint32 {
+	return proc().libc__kernel_exec(fd, path, program, argv, envp)
+}
+
+func libc__kernel_sendmsgat(fd, node, msg, flags uint32) uint32 {
+	return proc().libc__kernel_sendmsgat(fd, node, msg, flags)
+}
+
+func libcFchroot(fd uint32) uint32 {
+	return proc().libcFchroot(fd)
+}
+
+func libc__kernel_socketon(fd, domain, kind, protocol uint32) uint32 {
+	return proc().libc__kernel_socketon(fd, domain, kind, protocol)
 }

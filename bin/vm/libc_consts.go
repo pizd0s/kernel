@@ -30,11 +30,7 @@ const (
 	FIOCLEX                           = 0x5451
 	O_PATH                            = 0o10000000
 	AT_FDCWD                          = -100
-	AT_SYMLINK_NOFOLLOW               = 0x100
-	AT_REMOVEDIR                      = 0x200
-	AT_EACCESS                        = 0x200
-	AT_SYMLINK_FOLLOW                 = 0x400
-	AT_EMPTY_PATH                     = 0x1000
+	AT_FDROOT                         = -101
 	S_IFIFO                           = 0o10000
 	RLIM_NLIMITS                      = 16
 	RLIMIT_NOFILE                     = 7
@@ -84,13 +80,6 @@ const (
 	MADV_DONTNEED                     = 4
 	FD_SETSIZE                        = 1024
 	POSIX_FADV_NOREUSE                = 5
-	POSIX_SPAWN_RESETIDS              = 1
-	POSIX_SPAWN_SETPGROUP             = 2
-	POSIX_SPAWN_SETSIGDEF             = 4
-	POSIX_SPAWN_SETSIGMASK            = 8
-	POSIX_SPAWN_SETSCHEDPARAM         = 16
-	POSIX_SPAWN_SETSCHEDULER          = 32
-	POSIX_SPAWN_SETSID                = 128
 	AIO_CANCELED                      = 0
 	GRND_NONBLOCK                     = 0x0001
 	GRND_RANDOM                       = 0x0002
@@ -139,7 +128,6 @@ const (
 	IEXTEN                            = 0o100000
 	VTIME                             = 5
 	VMIN                              = 6
-	UMOUNT_NOFOLLOW                   = 8
 	TIOCSCTTY                         = 0x540e
 	TIOCNOTTY                         = 0x5422
 	ITIMER_PROF                       = 2
@@ -215,9 +203,7 @@ const (
 	sizeofRlimit                      = 16
 	sizeofRusage                      = 88
 	sizeofSchedParam                  = 4
-	sizeofPosixSpawnattr              = 32
 	sizeofAiocb                       = 48
-	sizeofPosixSpawnFileActions       = 4
 	sizeofPthreadAttr                 = 32
 	sizeofPthreadMutex                = 4
 	sizeofPthreadMutexattr            = 20
@@ -472,7 +458,6 @@ const (
 	O_TRUNC                           = 0o1000
 	O_APPEND                          = 0o2000
 	O_NONBLOCK                        = 0o4000
-	O_DIRECTORY                       = 0o200000
 	O_CLOEXEC                         = 0o2000000
 	S_IFCHR                           = 0o20000
 	S_IFDIR                           = 0o40000

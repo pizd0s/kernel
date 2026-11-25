@@ -2,8 +2,9 @@
 
 // The file protocol of the system: three interfaces on one wire.
 //
-//   The VFS's: the kernel's calls with a path (bin/vm's Vfs* requests),
-//   on a handle of rootfs's (bin/rootfs). rootfs is the VFS: it alone
+//   The VFS's: the calls with a path, libc's ctls (lib/libc/vfs.c, the
+//   calls of calls.h), on a handle of rootfs's (bin/rootfs), the kernel's
+//   to pass and not to read. rootfs is the VFS: it alone
 //   walks a path, follows symbolic links, knows the mounts and where ".."
 //   goes, and makes the last step of a call as Linux makes it.
 //
@@ -57,48 +58,51 @@
 // A reply's are zero.
 //
 //   The VFS's, on a handle: a directory of the VFS's tree, or what O_PATH
-//   opened; the root, the working directory and the directory descriptors
-//   of a process are handles. A path walks from the handle, or from the
-//   root when it is absolute: root is the id of the process's root, its
-//   pair's, the kernel's, as rootfs asked it of its end of the handle. A
-//   call
-//   follows a last link as Linux's does, and checks what Linux checks
-//   before the file system.
-//     OPEN      arg flags   root u64, mode u32, path
-//                                         OK Opened, fds[0] the open file
-//                                         or the handle; a FIFO's OK is its
-//                                         stat alone: the kernel makes its
+//   opened; the working directory and the root of a process, which the
+//   kernel keeps for it and names AT_FDCWD and AT_FDROOT, and its
+//   directory descriptors are handles. A path walks from the handle the
+//   CTL is of, the root itself where it is absolute, and never above the
+//   root, its first descriptor: a handle of ours rootfs knows by its id,
+//   the kernel's (fdid), so a process walks from what it holds and from
+//   nothing else, its lib/c choosing. A call follows a last link as
+//   Linux's does, and checks what Linux checks before the file system.
+//   Its CTLs (calls.h), each call u32, then arg u32, then:
+//     ctlOpen      flags   mode u32, path    OK 1, opened, fds[0] the open
+//                                         file or the handle; of a FIFO an
+//                                         opened of openedFifo and no
+//                                         descriptor: the kernel makes its
 //                                         pipe
-//     STAT      arg follow  root u64, path    OK stat
-//     READLINK              root u64, path    OK target
-//     MKDIR     arg mode    root u64, path
-//     MKNOD     arg mode    root u64, path    a FIFO, a socket or a regular
+//     ctlStat      follow  path              OK stat
+//     ctlReadlink          path              OK target
+//     ctlMkdir     mode    path
+//     ctlMknod     mode    path              a FIFO, a socket or a regular
 //                                         file
-//     SYMLINK               root u64, target 0 path
-//     UNLINK    arg flags   root u64, path    AT_REMOVEDIR
-//     RENAME                root u64, to u64, old 0 new   new from the
-//                                         handle of id to
-//     LINK      arg follow  root u64, to u64, old 0 new
-//     CHMOD     arg mode    root u64, flags u32, path   AT_SYMLINK_NOFOLLOW
-//     CHOWN                 root u64, flags u32, uid u32, gid u32, path
-//     UTIMES    arg when    root u64, flags u32, atime u64, mtime u64, path
+//     ctlSymlink           target 0 path
+//     ctlUnlink    flags   path              AT_REMOVEDIR
+//     ctlRename            old 0 new         new from fds[1], a handle
+//     ctlLink      follow  old 0 new         the same
+//     ctlChmod     mode    flags u32, path   AT_SYMLINK_NOFOLLOW
+//     ctlChown             flags u32, uid u32, gid u32, path
+//     ctlUtimes    when    flags u32, atime u64, mtime u64, path
 //                                         when: 2 atime now, 4 mtime now,
 //                                         8 atime kept, 16 mtime kept
-//     TRUNCATE              root u64, size u64, path
-//     STATFS                root u64, path    OK statfs
-//     REALPATH              root u64, path    OK the path from the root,
+//     ctlTruncate          size u64, path
+//     ctlStatfs            path              OK statfs
+//     ctlRealpath          path              OK the path from the root,
 //                                         with no link, "." or ".."
-//     MOUNT                 root u64, target 0 source   a directory is
-//                                         mounted on target too; with
-//                                         fds[0] a connection to a file
-//                                         system's socket, its root: the
-//                                         connection is its channel
-//     UNMOUNT   arg flags   root u64, path    UMOUNT_NOFOLLOW
-//     PATH                  root u64          OK the handle's path from the root
+//     ctlMount             target 0 source   a directory is mounted on
+//                                         target too; with fds[1] a
+//                                         connection to a file system's
+//                                         socket, its root: the connection
+//                                         is its channel
+//     ctlUnmount   flags   path              UMOUNT_NOFOLLOW
+//     ctlPath                                OK the handle's path from the
+//                                         root
 //   and an open file's calls but READ and WRITE. A FIFO and a socket are
 //   names of the file systems' and nothing more: the kernel makes the pipe
 //   a FIFO's openers share, and keeps what a socket bound to a socket node
-//   is, by the node's dev and ino, which bind(2) and connect(2) find.
+//   is, by the node's dev and ino, which lib/c's bind(2), connect(2) and
+//   sendto(2) give it as a handle of the node.
 //
 //   A file system's, on its channel, by node: a node is its inode number,
 //   the root's in the stat its connection answered, 1 for a file system
@@ -450,7 +454,11 @@
 //          openedFile, an open file; openedTerminal, a terminal's, which
 //          takes a terminal's calls too; openedDir, a handle of a directory
 //          of the VFS's, which calls with a path go to; openedPath, a handle
-//          of what O_PATH opened that is no directory. events are its
+//          of what O_PATH opened that is no directory; openedFifo, a FIFO's,
+//          of no descriptor, which the kernel makes the pipe of, by its dev
+//          and ino, events the node's mode, access the open's. An OK that
+//          brings openeds says how many in its arg, a descriptor each but a
+//          FIFO's, its descriptors' first. events are its
 //          readiness as it opens, READY's events: POLLIN and POLLOUT of
 //          what is always ready, a file's, a directory's, a device's; a
 //          terminal's as it is, which READY tells when it changes. access
@@ -482,25 +490,6 @@
 struct iovec;
 
 enum : uint32_t {
-    // The VFS's.
-    vfsOpen = 1,
-    vfsStat,
-    vfsReadlink,
-    vfsMkdir,
-    vfsMknod,
-    vfsSymlink,
-    vfsUnlink,
-    vfsRename,
-    vfsLink,
-    vfsChmod,
-    vfsChown,
-    vfsUtimes,
-    vfsTruncate,
-    vfsStatfs,
-    vfsRealpath,
-    vfsMount,
-    vfsUnmount,
-    vfsPath,
     // A file system's.
     fsLookup = 32,
     fsGetattr,
@@ -622,6 +611,7 @@ constexpr uint32_t openedFile = 1;
 constexpr uint32_t openedTerminal = 2;
 constexpr uint32_t openedDir = 3;
 constexpr uint32_t openedPath = 4;
+constexpr uint32_t openedFifo = 5;
 
 // A READ's and a WRITE's body.
 struct [[gnu::packed]] Io {

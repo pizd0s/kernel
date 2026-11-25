@@ -174,7 +174,9 @@ int main(int argc, char** argv) {
         assert(WIFEXITED(status) && WEXITSTATUS(status) == 5);
         const char* const lines[] = {
             "exec \"/tests/unit/exec_modes\"",
-            "open(\"/run/none\", ...) = -1 ENOENT (no such file or directory)",
+            // open is libc's: the kernel's call is its ctl, a request of
+            // the path.
+            "ctl(-101, {...run/none\", [-101]}, 32, 0) = -1 ENOENT (no such file or directory)",
             "wait4(...",
             "signal SIGUSR1",
         };
@@ -182,7 +184,7 @@ int main(int argc, char** argv) {
         const pid_t grandchild = childOf(text, child);
         const char* const childLines[] = {"child of ...", "exit 3"};
         assert(grandchild > 0 && has(text, grandchild, childLines, 2));
-        const char* const after[] = {"access(..."};
+        const char* const after[] = {"ctl(...untraced\", [-101]}, 32, 0) = -1 ENOENT (no such file or directory)"};
         const char* const end[] = {"exit 5"};
         assert(!has(text, child, after, 1) && !has(text, child, end, 1));
         printf("a trace: the image's calls with their errors, its child, its signal, till it ends the trace\n");

@@ -299,7 +299,7 @@ Endpoint* tools::openFile(int fd, u32 flags, void* node, u64 dev, u64 ino, bool 
     ep->append = (flags & O_APPEND) != 0;
     ep->nonblock = (flags & O_NONBLOCK) != 0;
     const iovec said = part(&what, sizeof what);
-    reply(fd, opOk, 0, &said, 1, &pair[1], 1);
+    reply(fd, opOk, 1, &said, 1, &pair[1], 1);
     close(pair[1]);
     return ep;
 }

@@ -20,7 +20,7 @@ HEX = r"0x[0-9a-f]+"
 CASES = {
     "a trace on the standard error": (
         "spawn --strace --wait -- cat /run/none", 1, [],
-        [r'\[(\d+)\] exec "/bin/cat"', rf'\[\d+\] open\("/run/none", 0, {HEX}\) = -1 ENOENT \(no such file or directory\)',
+        [r'\[(\d+)\] exec "/bin/cat"', rf'\[\d+\] ctl\(-101, \{{".*/run/none", \[-101\]\}}, 32, \d+\) = -1 ENOENT \(no such file or directory\)',
          r"cat: can't open '/run/none': No such file or directory", r"\[\d+\] write\(2, 0x[0-9a-f]+, \d+\) = \d+", r"\[\d+\] exit 1"]),
     "spawn becomes the command": (
         "spawn --strace=process --exec -- sh -c 'echo $$; exit 4'", 4, [r"(\d+)"], [r'\[(\d+)\] exec "/bin/sh"', r"\[\d+\] exit 4"]),

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -59,100 +58,12 @@ func (r *NoRoot) readdir(p *Process, into *MemfdFile, n int) (int, error) {
 	return 0, nil
 }
 
-func (r *NoRoot) itself(path string) bool {
-	for _, name := range strings.Split(path, "/") {
-		if name != "" && name != "." && name != ".." {
-			return false
-		}
-	}
-
-	return true
-}
-
-func (r *NoRoot) gone(path string, own error) error {
-	if r.itself(path) {
-		return own
-	}
-
-	return ENOENT
-}
-
-func (r *NoRoot) makes(path string) error {
-	if r.itself(path) {
-		return EEXIST
-	}
-
-	return EROFS
-}
-
 func (r *NoRoot) call(p *Process, q Request, group uint32, waits bool) (bool, error) {
 	switch q := q.(type) {
 	case *FileStat:
 		return false, r.stat(p, q.st)
-	case *VfsOpen:
-		switch {
-		case !r.itself(q.path) && q.flags&O_CREAT != 0:
-			return false, EROFS
-		case !r.itself(q.path):
-			return false, ENOENT
-		case q.flags&O_CREAT != 0 || q.flags&3 != O_RDONLY:
-			return false, EISDIR
-		}
-
-		r.ref()
-		q.file = r
-
-		return false, nil
-	case *VfsStat:
-		if !r.itself(q.path) {
-			return false, ENOENT
-		}
-
-		return false, r.stat(p, &q.st)
-	case *VfsStatfs:
-		if !r.itself(q.path) {
-			return false, ENOENT
-		}
-
-		q.st = Statfs{Bsize: 4096, Frsize: 4096, Namelen: 255}
-
-		return false, nil
-	case *VfsRealpath:
-		q.out = "/"
-
-		return false, r.gone(q.path, nil)
-	case *VfsPath:
-		q.out = "/"
-
-		return false, nil
-	case *VfsReadlink:
-		return false, r.gone(q.path, EINVAL)
-	case *VfsMkdir:
-		return false, r.makes(q.path)
-	case *VfsMknod:
-		return false, r.makes(q.path)
-	case *VfsSymlink:
-		return false, r.makes(q.path)
-	case *VfsUnlink:
-		if q.dir {
-			return false, r.gone(q.path, EBUSY)
-		}
-
-		return false, r.gone(q.path, EISDIR)
-	case *VfsRename:
-		return false, r.gone(q.old, EBUSY)
-	case *VfsLink:
-		return false, r.gone(q.old, EPERM)
-	case *VfsChmod:
-		return false, r.gone(q.path, EROFS)
-	case *VfsChown:
-		return false, r.gone(q.path, EROFS)
-	case *VfsUtimes:
-		return false, r.gone(q.path, EROFS)
-	case *VfsTruncate:
-		return false, r.gone(q.path, EISDIR)
-	case *VfsMount, *VfsUnmount:
-		return false, EINVAL
+	case *Ctl:
+		return false, ENOENT
 	case *FileGetfl:
 		var err error
 

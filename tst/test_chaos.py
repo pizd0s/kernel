@@ -111,11 +111,11 @@ def main():
             expected = f"{operation}: failures={failures}\n".encode()
             assert (result.returncode, result.stdout, result.stderr) == (0, expected, b""), (operation, rule, result)
 
-        for operation, point, skip in (("read", "read", 2), ("write", "write", 2), ("openat", "openat", 2), ("fork", "fork", 2),
-                                       ("memory-grow", "memory-grow", 2), ("fstat", "file-stat", 2), ("fstatat", "file-stat", 2),
-                                       ("stat", "file-stat", 2), ("lstat", "file-stat", 2), ("fdopendir", "file-stat", 2),
-                                       ("msync", "file-stat", 2), ("chdir", "file-stat", 2), ("relative-open", "openat", 1),
-                                       ("fexecve", "file-stat", 1), ("system", "openat", 1), ("daemon", "openat", 2)):
+        for operation, point, skip in (("read", "read", 2), ("write", "write", 2), ("openat", "ctl", 2), ("fork", "fork", 2),
+                                       ("memory-grow", "memory-grow", 2), ("fstat", "file-stat", 2), ("fstatat", "ctl", 2),
+                                       ("stat", "ctl", 2), ("lstat", "ctl", 2), ("fdopendir", "file-stat", 2),
+                                       ("msync", "file-stat", 2), ("chdir", "file-stat", 2), ("relative-open", "ctl", 1),
+                                       ("fexecve", "file-stat", 1), ("system", "ctl", 0), ("daemon", "ctl", 2)):
             rule = f"{point}@{skip}"
             run_guest(vm, operation, 0, rule)
             run_guest(vm_chaos, operation, 0)

@@ -176,6 +176,11 @@ int chroot(const char*);
  */
 int attach(int);
 /*
+ * fchroot makes the directory of the descriptor the process's root, where
+ * its absolute paths start (AT_FDROOT); chroot is fchroot of the path's.
+ */
+int fchroot(int);
+/*
  * fdid gives the id of the kernel's object of a descriptor: the same for
  * the descriptors of one object, dup's, fork's and SCM_RIGHTS's among
  * them, and never another's, while the system runs. A pipe's two ends

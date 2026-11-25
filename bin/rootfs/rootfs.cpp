@@ -1,6 +1,7 @@
 // rootfs: the system, the first process, and its VFS. Every call with a
-// path of the system's processes comes here whole from the kernel, and
-// rootfs walks it: names, "." and "..", symbolic links, mounts, the root
+// path of the system's processes comes here whole, a ctl of libc's on the
+// process's root or working directory or a directory of it, and rootfs
+// walks it: names, "." and "..", symbolic links, mounts, the root
 // of the process that asks, and the last step of the call as Linux makes
 // it (lib/protocol/protocol.h is the protocol, the VFS's calls on handles,
 // a file system's calls by node, an open file's). Every file system is
@@ -2104,7 +2105,7 @@ static void openHandle(int fd, const Place& at, int flags) {
     const Opened what{u32(isDir(at) ? openedDir : openedPath), u32(flags) & (O_ACCMODE | O_PATH), at.st.dev, ino, POLLIN | POLLOUT};
     listenHandle(pair[0], at, flags, id);
     const iovec said = part(&what, sizeof what);
-    reply(fd, opOk, 0, &said, 1, &pair[1], 1);
+    reply(fd, opOk, 1, &said, 1, &pair[1], 1);
     close(pair[1]);
 }
 
@@ -2911,7 +2912,7 @@ static Task makeCall(Header h, int fd, Place root, Place from, Name target, Name
         error(fd, EEXIST);
         co_return;
     }
-    if (w.slash && h.op != vfsMkdir) {
+    if (w.slash && h.op != ctlMkdir) {
         if (kept) {
             error(fd, ENOENT);
             co_return;
@@ -2926,14 +2927,14 @@ static Task makeCall(Header h, int fd, Place root, Place from, Name target, Name
     forgetStat(knownAt(w.here), false);
     Buffer names;
     Name made = w.last;
-    if (h.op == vfsSymlink) {
+    if (h.op == ctlSymlink) {
         names.append(to.at, to.length);
         names.append("", 1);
         names.append(w.last.at, w.last.length);
         made = {static_cast<const char*>(names.data()), names.size()};
     }
-    const u32 op = h.op == vfsSymlink ? fsSymlink : h.op == vfsMkdir ? fsMkdir : fsMknod;
-    const u32 arg = h.op == vfsSymlink ? 0 : h.arg;
+    const u32 op = h.op == ctlSymlink ? fsSymlink : h.op == ctlMkdir ? fsMkdir : fsMknod;
+    const u32 arg = h.op == ctlSymlink ? 0 : h.arg;
     if (watched(w.here)) {
         const Answer a = co_await changeAsk(w.here, h, op, arg, nullptr, 0, made);
         if (a.error == 0) {
@@ -3649,63 +3650,83 @@ static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
     }
 }
 
-// A call on a handle, answered on fd: one of the VFS's, which names
-// the process's root by its handle's id and walks from this one; or an
-// open file's. Whether fd is kept: a call of the VFS's keeps it, and
-// closes it when it is done.
-static bool onHandle(Endpoint* ep, const Header& h, Body body, int fd) {
-    if (h.op < vfsOpen || h.op > vfsPath) {
-        return onPlace(ep, h, body, fd);
+// A call on a handle, answered on fd: a CTL of the VFS's (calls.h), call
+// u32, then arg u32, the flags, mode or follow of the call, then what it
+// takes, its descriptors the process's root, which the path walks from
+// when it is absolute and does not leave, our tree's top of a root not
+// ours, then where a second path
+// starts (ctlRename, ctlLink) or the connection a ctlMount brings, each
+// a handle of ours known by its id (fdid); or another call of an open
+// file's. Whether fd is kept: a call of the VFS's keeps it, and closes it
+// when it is done.
+static bool onHandle(Endpoint* ep, const Header& head, Body body, int fd) {
+    u32 call = 0;
+    if (head.op == opCtl && body.size() >= 8) {
+        memcpy(&call, body.at, sizeof call);
     }
-    Place root;
-    if (body.size() < 8 || !placeOf(body.take<u64>(), root)) {
-        return error(fd, EIO);
+    if (call < ctlOpen || call > ctlPath) {
+        return onPlace(ep, head, body, fd);
+    }
+    body.take<u32>();
+    Header h = head;
+    h.op = call;
+    h.arg = body.take<u32>();
+    // A root of no handle of ours, another server's or none, is the top
+    // of our tree, which a walk does not leave.
+    Place root = rootOf(rootMount);
+    unsigned long long id = 0;
+    if (packetFdCount < 2) {
+        return error(fd, EINVAL);
+    }
+    if (fdid(packetFds[0], &id) == 0) {
+        placeOf(id, root);
     }
     const Place from = ep->at;
     switch (h.op) {
-        case vfsOpen: {
+        case ctlOpen: {
             const u32 mode = body.take<u32>();
             openCall(h, fd, root, from, mode, body.rest());
             break;
         }
-        case vfsStat:
+        case ctlStat:
             statCall(h, fd, root, from, body.rest());
             break;
-        case vfsReadlink:
+        case ctlReadlink:
             readlinkCall(h, fd, root, from, body.rest());
             break;
-        case vfsMkdir:
-        case vfsMknod:
+        case ctlMkdir:
+        case ctlMknod:
             makeCall(h, fd, root, from, {}, body.rest());
             break;
-        case vfsSymlink: {
+        case ctlSymlink: {
             const Name target = body.string();
             makeCall(h, fd, root, from, target, body.rest());
             break;
         }
-        case vfsUnlink:
+        case ctlUnlink:
             unlinkCall(h, fd, root, from, body.rest());
             break;
-        case vfsRename:
-        case vfsLink: {
+        case ctlRename:
+        case ctlLink: {
             Place to;
-            if (!placeOf(body.take<u64>(), to)) {
-                return error(fd, EIO);
+            unsigned long long where = 0;
+            if (packetFdCount < 3 || fdid(packetFds[1], &where) != 0 || !placeOf(where, to)) {
+                return error(fd, EBADF);
             }
             const Name old = body.string();
-            if (h.op == vfsRename) {
+            if (h.op == ctlRename) {
                 renameCall(h, fd, root, from, to, old, body.rest());
             } else {
                 linkCall(h, fd, root, from, to, old, body.rest());
             }
             break;
         }
-        case vfsChmod:
-        case vfsChown:
-        case vfsUtimes:
-        case vfsTruncate: {
-            const u32 flags = h.op == vfsTruncate ? 0 : body.take<u32>();
-            const usize size = h.op == vfsChown || h.op == vfsTruncate ? 8 : h.op == vfsUtimes ? 16 : 0;
+        case ctlChmod:
+        case ctlChown:
+        case ctlUtimes:
+        case ctlTruncate: {
+            const u32 flags = h.op == ctlTruncate ? 0 : body.take<u32>();
+            const usize size = h.op == ctlChown || h.op == ctlTruncate ? 8 : h.op == ctlUtimes ? 16 : 0;
             Args args{};
             if (body.size() < size) {
                 return error(fd, EINVAL);
@@ -3713,29 +3734,29 @@ static bool onHandle(Endpoint* ep, const Header& h, Body body, int fd) {
             memcpy(args.bytes, body.at, size);
             args.size = size;
             body.at += size;
-            const u32 op = h.op == vfsChmod ? fsChmod : h.op == vfsChown ? fsChown : h.op == vfsUtimes ? fsUtimes : fsTruncate;
+            const u32 op = h.op == ctlChmod ? fsChmod : h.op == ctlChown ? fsChown : h.op == ctlUtimes ? fsUtimes : fsTruncate;
             changeCall(h, fd, root, from, op, (flags & AT_SYMLINK_NOFOLLOW) == 0, args, body.rest());
             break;
         }
-        case vfsStatfs:
+        case ctlStatfs:
             statfsCall(h, fd, root, from, body.rest());
             break;
-        case vfsRealpath:
+        case ctlRealpath:
             pathCall(h, fd, root, from, true, body.rest());
             break;
-        case vfsMount: {
+        case ctlMount: {
             const Name target = body.string();
-            const int conn = packetFdCount == 2 ? packetFds[0] : -1;
+            const int conn = packetFdCount == 3 ? packetFds[1] : -1;
             if (conn >= 0) {
-                packetFds[0] = -1; // the call's now
+                packetFds[1] = -1; // the call's now
             }
             mountCall(h, fd, root, from, conn, target, body.rest());
             break;
         }
-        case vfsUnmount:
+        case ctlUnmount:
             unmountCall(h, fd, root, from, body.rest());
             break;
-        case vfsPath:
+        case ctlPath:
             pathCall(h, fd, root, from, false, {});
             break;
     }

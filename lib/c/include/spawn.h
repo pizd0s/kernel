@@ -8,11 +8,10 @@
 __BEGIN_DECLS
 
 /*
- * posix_spawn and posix_spawnp, as POSIX.1-2024 has them: the kernel makes
- * the child, does what the attributes and the file actions ask in it and
- * runs the program in it, or makes none and returns the error. The
- * attributes are the kernel's to read and write; the file actions are a
- * list the kernel keeps, of which the object is the handle.
+ * posix_spawn and posix_spawnp, as POSIX.1-2024 has them: a child of
+ * vfork does what the attributes and the file actions ask and runs the
+ * program, or ends, and posix_spawn returns its error. The file actions
+ * are a list of the heap, of which the object is the address.
  */
 #define POSIX_SPAWN_RESETIDS 1
 #define POSIX_SPAWN_SETPGROUP 2

@@ -149,7 +149,7 @@ func (s *UnixDgram) bind(p *Process, a Address) error {
 		return EINVAL
 	}
 
-	b, err := p.bindName(path, s.mouth)
+	b, err := p.bindName(a, s.mouth)
 
 	if err == nil {
 		s.mu.Lock()
@@ -167,7 +167,7 @@ func (s *UnixDgram) connect(p *Process, a Address) error {
 		return err
 	}
 
-	mouth, err := p.mouthOf(path)
+	mouth, err := p.mouthOf(a.node)
 
 	if err != nil {
 		return err
@@ -255,7 +255,7 @@ func (s *UnixDgram) send(p *Process, r *SockSend) error {
 	if r.to.given {
 		var err error
 
-		if t, err = p.mouthOf(r.to.path); err != nil {
+		if t, err = p.mouthOf(r.to.node); err != nil {
 			return err
 		}
 	} else if t = s.targetEnd(); t == nil {

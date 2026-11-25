@@ -54,7 +54,7 @@ Endpoint* answerOpen(int epoll, const Request& r, Opened what, void* of) {
     opened.append = (r.h.arg & O_APPEND) != 0;
     opened.nonblock = (r.h.arg & O_NONBLOCK) != 0;
     Endpoint* e = watch(epoll, opened);
-    Header h{opOk, 0, 0, 0, 0, 0};
+    Header h{opOk, 1, 0, 0, 0, 0}; // one open file, what
     const iovec parts[] = {{&h, sizeof h}, {&what, sizeof what}};
     sendPacket(r.reply(), parts, 2, &pair[1], 1); // a gone asker is its own loss
     close(pair[1]);

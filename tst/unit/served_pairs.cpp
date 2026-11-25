@@ -1,6 +1,6 @@
 //@ host: false
 //@ compile-flags: -D_GNU_SOURCE
-//@ stdout: "a kind the kernel does not know: EIO\nready as the OPEN said: POLLOUT, then as READY said: POLLIN POLLOUT\nserved: READ of 16 at 0\nread: 'hello'\nserved: READ of 8 at 0\npassed on, read: 'world'\nserved: SEND of 'ping'\nserved: RECV of 8\nsend and recv on it: 4 'pong'\nfchdir: a path's ENOTDIR, a file's ENOTDIR, a stream socket's ENOTDIR\nserved: STAT of ''\nserved: STAT of 'name'\na pair's end: fchdir ENOTDIR; a directory over it, the working directory: fchdir 0, a name there ENOENT\n"
+//@ stdout: "a kind the kernel does not know: EIO\nready as the OPEN said: POLLOUT, then as READY said: POLLIN POLLOUT\nserved: READ of 16 at 0\nread: 'hello'\nserved: READ of 8 at 0\npassed on, read: 'world'\nserved: SEND of 'ping'\nserved: RECV of 8\nsend and recv on it: 4 'pong'\nfchdir: a path's ENOTDIR, a file's ENOTDIR, a stream socket's ENOTDIR\nserved: FSTAT\nserved: CTL ctlStat of 'name'\na pair's end: fchdir ENOTDIR; a directory over it, the working directory: fchdir 0, a name there ENOENT\n"
 
 // An open file is the end of a pair its server made, which an OPEN's OK
 // brings with what it is (lib/protocol/protocol.h): the kernel makes it
@@ -177,7 +177,7 @@ static int opened(int channel, Opened what, int& end) {
     struct {
         Header h;
         Opened what;
-    } ok{{opOk, 0, 0, 0, 0, 0}, what};
+    } ok{{opOk, 1, 0, 0, 0, 0}, what};
 
     sendWith(reply, &ok, sizeof ok, pair[1]);
     close(pair[1]);
@@ -204,7 +204,9 @@ struct [[gnu::packed]] Io {
     uint32_t flags;
 };
 
-constexpr uint32_t vfsStat = 2;
+constexpr uint32_t opFstat = 67;
+constexpr uint32_t opCtl = 79;
+constexpr uint32_t ctlStat = 129;
 constexpr uint32_t opSend = 148;
 constexpr uint32_t opRecv = 149;
 constexpr uint32_t opRead = 64;
@@ -356,16 +358,23 @@ static pid_t directoryServer(int end, int other) {
         unsigned char packet[256];
         int reply;
         const ssize_t n = receiveWith(end, packet, sizeof packet, reply);
-        if (n < ssize_t(sizeof(Header) + 8) || reply < 0) {
+        if (n < ssize_t(sizeof(Header)) || reply < 0) {
             _exit(0);
         }
         Header h;
         memcpy(&h, packet, sizeof h);
-        // A path's call: the root's id, then the path.
-        const int length = int(n - ssize_t(sizeof h) - 8);
-        printf("served: %s of '%.*s'\n", h.op == vfsStat ? "STAT" : "another call", length, reinterpret_cast<const char*>(packet) + sizeof h + 8);
+        // A path's call: a CTL, its call, its arg, then the path.
+        uint32_t call = 0;
+        const int length = h.op == opCtl && n >= ssize_t(sizeof h + 8) ? int(n - ssize_t(sizeof h) - 8) : 0;
+        if (length > 0 || h.op == opCtl) {
+            memcpy(&call, packet + sizeof h, sizeof call);
+            printf("served: CTL %s of '%.*s'\n", call == ctlStat ? "ctlStat" : "another call", length,
+                   reinterpret_cast<const char*>(packet) + sizeof h + 8);
+        } else {
+            printf("served: %s\n", h.op == opFstat ? "FSTAT" : "another call");
+        }
         fflush(stdout);
-        if (h.op == vfsStat && length == 0) {
+        if (h.op == opFstat) {
             struct {
                 Header h;
                 Stat st;

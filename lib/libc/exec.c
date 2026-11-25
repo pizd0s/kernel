@@ -1,18 +1,27 @@
 /*
- * execv, execl and execle are execve's, of environ or of execle's own
+ * execve opens the file of the path and has the kernel run it from the
+ * descriptor (kernel.h), the program's path realpath's. A file of "#!",
+ * which the kernel does not run, ENOEXEC once its checks pass, is its
+ * interpreter's to run, the interpreter's argument and the script's path
+ * before the arguments after argv[0], as many as four deep, ELOOP past.
+ * fexecve runs its descriptor so, the script's path /dev/fd/N. execv,
+ * execl and execle are execve's, of environ or of execle's own
  * environment; execvp, execvpe, execlp and posix_spawnp: a file of no
- * slash is looked for in each directory of PATH, an empty one the working directory, and
- * of /usr/local/bin:/bin:/usr/bin where PATH is unset. One that is not
- * there, ENOENT or ENOTDIR, is passed over, and so is one that may not be
- * run, EACCES, which is the error where none is found; any other error
- * ends the search. They use no heap, so that a child of vfork can call
- * them.
+ * slash is looked for in each directory of PATH, an empty one the working
+ * directory, and of /usr/local/bin:/bin:/usr/bin where PATH is unset. One
+ * that is not there, ENOENT or ENOTDIR, is passed over, and so is one
+ * that may not be run, EACCES, which is the error where none is found;
+ * any other error ends the search. They use no heap, so that a child of
+ * vfork can call them.
  */
 #include "kernel.h"
 #include "sized.h"
 
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <spawn.h>
+#include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,6 +65,131 @@ static int searched(const char* file, int (*attempt)(const char* path, void* dat
             return e;
         }
     }
+}
+
+// A script's interpreter, of a file's head, n bytes of its "#!" line:
+// the interpreter and its argument, the line's other words, cut at their
+// ends in head; -1 of none, ENOEXEC.
+static int interpreter(char* head, size_t n, char** interp, char** arg) {
+    char* end = memchr(head, '\n', n);
+    char* at = head + 2;
+
+    *(end ? end : head + n) = 0;
+    at += strspn(at, " \t");
+
+    if (!*at) {
+        errno = ENOEXEC;
+
+        return -1;
+    }
+
+    *interp = at;
+    at += strcspn(at, " \t");
+    *arg = NULL;
+
+    if (*at) {
+        *at++ = 0;
+        at += strspn(at, " \t");
+
+        size_t k = strlen(at);
+
+        while (k && (at[k - 1] == ' ' || at[k - 1] == '\t')) {
+            at[--k] = 0;
+        }
+
+        *arg = k ? at : NULL;
+    }
+
+    return 0;
+}
+
+// Runs the file of fd, path the script's path and the name exec says:
+// a script's interpreter, depth more deep at most, or the program,
+// which the kernel runs. The descriptor is closed when it fails.
+static int run(int fd, const char* path, const char* program, char* const argv[], char* const envp[], int depth) {
+    char head[256];
+    ssize_t n = pread(fd, head, sizeof head - 1, 0);
+
+    // The kernel's checks are a script's too: ENOEXEC is its answer of
+    // one it may run.
+    __kernel_exec(fd, path, program, argv, envp);
+
+    int saved = errno;
+
+    close(fd);
+    errno = saved;
+
+    if (saved != ENOEXEC || n < 2 || head[0] != '#' || head[1] != '!') {
+        return -1;
+    }
+
+    char* interp;
+    char* arg;
+    size_t count = 0;
+
+    if (interpreter(head, (size_t)n, &interp, &arg) != 0) {
+        return -1;
+    }
+
+    if (depth == 0) {
+        errno = ELOOP;
+
+        return -1;
+    }
+
+    while (argv && argv[count]) {
+        count++;
+    }
+
+    char* args[count + 3];
+    size_t k = 0;
+
+    args[k++] = interp;
+
+    if (arg) {
+        args[k++] = arg;
+    }
+
+    args[k++] = (char*)path;
+
+    for (size_t i = 1; i < count; i++) {
+        args[k++] = argv[i];
+    }
+
+    args[k] = NULL;
+
+    int next = open(interp, O_RDONLY | O_CLOEXEC);
+    char real[PATH_MAX];
+
+    if (next < 0) {
+        return -1;
+    }
+
+    return run(next, interp, realpath(interp, real) ? real : "", args, envp, depth - 1);
+}
+
+int __kernel_execve(const char* path, char* const argv[], char* const envp[]) {
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    char real[PATH_MAX];
+
+    if (fd < 0) {
+        return -1;
+    }
+
+    return run(fd, path, realpath(path, real) ? real : "", argv, envp, 4);
+}
+
+int __kernel_fexecve(int fd, char* const argv[], char* const envp[]) {
+    char path[32];
+    int copy = fcntl(fd, F_DUPFD_CLOEXEC, 0);
+
+    if (copy < 0) {
+        return -1;
+    }
+
+    snprintf(path, sizeof path, "/dev/fd/%d", fd);
+
+    return run(copy, path, "", argv, envp, 4);
 }
 
 struct Exec {

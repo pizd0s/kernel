@@ -282,8 +282,8 @@ static bool nameAt(const Request& r, size_t at, const char*& name, size_t& lengt
 
 // An open of a file at path, answered where its request says: emptied with
 // O_TRUNC, the file system's open of it; made with O_CREAT. A link is
-// ELOOP, a FIFO is its stat, the kernel makes its pipe, a device has no
-// driver here.
+// ELOOP, a FIFO an opened of openedFifo, whose pipe the kernel makes, and
+// a device has no driver here.
 static void openFile(Request& r, char* path, uint32_t mode, bool creates) {
     const uint32_t flags = r.h.arg;
     const uint32_t access = flags & O_ACCMODE;
@@ -317,8 +317,10 @@ static void openFile(Request& r, char* path, uint32_t mode, bool creates) {
     } else if (e == 0 && (S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode) || S_ISSOCK(st.st_mode))) {
         e = ENXIO;
     } else if (e == 0 && S_ISFIFO(st.st_mode)) {
+        // A FIFO's open is the kernel's pipe, of the node's dev and ino.
         free(path);
-        return answerStat(r.reply(), st);
+        const Opened fifo{openedFifo, access, device, uint64_t(st.st_ino), uint32_t(st.st_mode), 0};
+        return answer(r.reply(), opOk, 1, &fifo, sizeof fifo);
     }
     if (e == 0 && !opened) {
         if (writes && (flags & O_TRUNC) != 0 && operations.truncate) {

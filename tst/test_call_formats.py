@@ -3,7 +3,8 @@
 callFormats) against lib/c's declarations of the kernel's functions
 (lib/c/src/kernel.c, as clang has it for wasm32): a function's format is
 a letter for its result and one for each argument the kernel gets, by its
-C type: s a string, const char* and a result of char*; p another pointer,
+C type: s a string, const char* and a result of char*; c a struct ctl*,
+whose request's bytes and descriptors the trace shows; p another pointer,
 a va_list among them; o a mode_t; f a floating number; d any other number;
 v no result.
 
@@ -44,6 +45,9 @@ def kind(text, result=False):
 
     if text == "void":
         return "v"
+
+    if re.fullmatch(r"(const )?struct ctl ?\*( ?\w+)?", text):
+        return "c"
 
     if "*" in text or "[" in text or "va_list" in text or re.search(r"\b\w*jmp_buf\b", text):
         string = r"char ?\*( ?\w+)?" if result else r"const char ?\*( ?\w+)?"

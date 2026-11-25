@@ -9,12 +9,12 @@ const (
 	openedTerminal        = 2
 	openedDir             = 3
 	openedPath            = 4
+	openedFifo            = 5
 	sizeofOpened          = 32
 	ctlFdsMax             = 3
 	ctlGetWinsize         = 9
 	ctlGetPgrp            = 12
 	ctlSetPgrp            = 13
-	sockmgrSocket         = "/dev/sockmgr/socket"
 	rOk            uint32 = 128
 	rErr           uint32 = 129
 	rBackground    uint32 = 130
@@ -65,27 +65,6 @@ const (
 	sShutdown
 	sType
 	sCreate
-)
-
-const (
-	vOpen uint32 = iota + 1
-	vStat
-	vReadlink
-	vMkdir
-	vMknod
-	vSymlink
-	vUnlink
-	vRename
-	vLink
-	vChmod
-	vChown
-	vUtimes
-	vTruncate
-	vStatfs
-	vRealpath
-	vMount
-	vUnmount
-	vPath
 )
 
 func served(p *Process, kind uint32, access int, dev, ino uint64, events uint32, end Object) (*RemoteFD, error) {

@@ -176,7 +176,7 @@ func (s *UnixSocket) bind(p *Process, a Address) error {
 
 	l.refs.Store(1)
 
-	b, err := p.bindName(path, l)
+	b, err := p.bindName(a, l)
 
 	if err != nil {
 		l.unref()
@@ -236,14 +236,7 @@ func (s *UnixSocket) connect(p *Process, a Address) error {
 		return EINVAL
 	}
 
-	var conn *PairEnd
-
-	err = p.onPath(AT_FDCWD, path, func(v Object) error {
-		var err error
-		conn, err = p.connectUnix(v, path, s.kind, s.nonblock.Load(), &s.options.sndTimeout)
-
-		return err
-	})
+	conn, err := p.connectUnix(a.node, s.kind, s.nonblock.Load(), &s.options.sndTimeout)
 
 	if err != nil {
 		return err

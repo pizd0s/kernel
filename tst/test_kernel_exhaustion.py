@@ -70,7 +70,7 @@ def main():
     cases = [("startup-array", *startup, False, None), ("startup-string", *startup, True, None),
              # strtok's place is the static area's.
              ("static-result", "strtok", [0, 0], True, False, None),
-             ("working-directory", "getcwd", [0, 0], True, False, 12),
+             ("string-copy", "strndup", [0, 0], True, False, 12),
              ("large-allocation", "malloc", [4194304], True, False, 12),
              ("growing-allocation", "realloc", [0, 4194304], True, False, 12)]
     env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")

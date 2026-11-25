@@ -63,6 +63,9 @@ struct flock {
 #define F_UNLCK 2
 
 #define AT_FDCWD (-100)
+/* The process's root, as the kernel keeps it: where ctl's absolute paths
+ * start, lib/c's (unistd.h). */
+#define AT_FDROOT (-101)
 #define AT_SYMLINK_NOFOLLOW 0x100
 #define AT_REMOVEDIR 0x200
 #define AT_EACCESS 0x200

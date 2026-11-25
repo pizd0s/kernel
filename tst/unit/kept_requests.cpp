@@ -174,7 +174,7 @@ static int opened(int channel, Opened what, int& end) {
     struct {
         Header h;
         Opened what;
-    } ok{{opOk, 0, 0, 0, 0, 0}, what};
+    } ok{{opOk, 1, 0, 0, 0, 0}, what};
 
     sendWith(reply, &ok, sizeof ok, pair[1]);
     close(pair[1]);
@@ -408,7 +408,7 @@ int main() {
     struct {
         Header h;
         Opened what;
-    } ok{{opOk, 0, 0, 0, 0, 0}, {openedFile, O_RDWR, 0, 0, POLLIN | POLLOUT}};
+    } ok{{opOk, 1, 0, 0, 0, 0}, {openedFile, O_RDWR, 0, 0, POLLIN | POLLOUT}};
 
     sendWith(reply, &ok, sizeof ok, pair[1]);
     close(pair[1]);

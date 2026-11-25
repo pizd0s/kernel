@@ -52,9 +52,6 @@ ssize_t receivePacket(int fd, void* buffer, size_t size, int* fds, size_t& fdCou
 }
 
 int unserved(uint32_t op) {
-    if (op >= vfsOpen && op <= vfsPath) {
-        return ENOTDIR;
-    }
     if (op == opSetCtty || op == opCtl) {
         return ENOTTY;
     }

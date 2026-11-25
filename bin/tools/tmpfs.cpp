@@ -607,9 +607,9 @@ static int makeOurs(Server& s, Node* dir, u32 op, u32 mode, Name name, Name targ
         return e;
     }
     Kind kind = Kind::Dir;
-    if (op == vfsSymlink) {
+    if (op == fsSymlink) {
         kind = Kind::Link;
-    } else if (op == vfsMknod) {
+    } else if (op == fsMknod) {
         switch (mode & S_IFMT) {
             case S_IFIFO:
                 kind = Kind::Fifo;
@@ -1010,8 +1010,8 @@ static void pathOf(const Node* n, int fd) {
 // An open of a node, answered where its request says with a new open
 // file: read or written as its access mode says and who asks may,
 // emptied when O_TRUNC asks. A link is ELOOP, ENOTDIR with O_DIRECTORY; a
-// directory is rootfs's to open, EISDIR here; a FIFO is its stat, the
-// kernel makes its pipe. made: who asks made it now.
+// directory is rootfs's to open, EISDIR here; a FIFO is an opened of
+// openedFifo, its dev, ino and mode: the kernel makes its pipe. made: who asks made it now.
 static void openNode(Node* n, u32 flags, bool made, const Header& h, int fd) {
     const u32 access = flags & O_ACCMODE;
     const bool reads = access != O_WRONLY;
@@ -1031,7 +1031,9 @@ static void openNode(Node* n, u32 flags, bool made, const Header& h, int fd) {
     }
     const Stat st = statOf(tree, n);
     if (n->kind == Kind::Fifo) {
-        ok(fd, &st, sizeof st);
+        const Opened fifo{openedFifo, access, st.dev, st.ino, st.mode, 0};
+        const iovec said = part(&fifo, sizeof fifo);
+        reply(fd, opOk, 1, &said, 1);
         return;
     }
     if (truncates && n->content.size() > 0) {
@@ -1114,10 +1116,10 @@ static void fsCall(const Header& h, Body body, int fd) {
         }
         case fsMkdir:
         case fsMknod:
-            return answer(fd, makeOurs(tree, n, h.op == fsMkdir ? vfsMkdir : vfsMknod, h.arg, body.rest(), {}, h));
+            return answer(fd, makeOurs(tree, n, h.op, h.arg, body.rest(), {}, h));
         case fsSymlink: {
             const Name target = body.string();
-            return answer(fd, makeOurs(tree, n, vfsSymlink, 0, body.rest(), target, h));
+            return answer(fd, makeOurs(tree, n, fsSymlink, 0, body.rest(), target, h));
         }
         case fsLink:
         case fsRename: {

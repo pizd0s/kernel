@@ -48,6 +48,23 @@ char* __kernel_program(char* path, size_t size) __KERNEL(__kernel_program);
 // which lib/c's ioctl calls (ctl).
 int __kernel_fdioctl(int fd, unsigned long request, void* arg) __KERNEL(__kernel_fdioctl);
 
+// The kernel's of what lib/c's functions of paths and of sockets make of
+// them (vfs.c, sockets.c, exec.c): the kernel knows no path. __kernel_exec
+// runs the program of a descriptor, path the name it was asked by and
+// program its path from the root, __kernel_program's, "" for none; a
+// file of "#!" is ENOEXEC. __kernel_bindat, __kernel_connectat and
+// __kernel_sendmsgat take, of an AF_UNIX address of a path, node, a
+// handle of the path's node, -1 of another address. __kernel_socketon
+// makes a socket of the network's of file, an open of sockmgr's socket,
+// or with -1 a socket of the kernel's.
+struct sockaddr;
+struct msghdr;
+int __kernel_exec(int fd, const char* path, const char* program, char* const argv[], char* const envp[]) __KERNEL(__kernel_exec);
+int __kernel_bindat(int fd, int node, const struct sockaddr* addr, unsigned size) __KERNEL(__kernel_bindat);
+int __kernel_connectat(int fd, int node, const struct sockaddr* addr, unsigned size) __KERNEL(__kernel_connectat);
+long __kernel_sendmsgat(int fd, int node, const struct msghdr* msg, int flags) __KERNEL(__kernel_sendmsgat);
+int __kernel_socketon(int file, int domain, int type, int protocol) __KERNEL(__kernel_socketon);
+
 // __kernel_name is the name the program was started by, the last component
 // of its argv[0], or null where it has no arguments: what a message of
 // lib/c's begins with.
