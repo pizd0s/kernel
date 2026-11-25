@@ -1,0 +1,23 @@
+A NaN's n-char-sequence, as C has it (7.22.1.3): digits, letters and
+underscores between the parentheses, and nothing else. gdtoa takes hex
+digits between blanks too, so that strtod("nan(1 2)") reads all of it,
+where the number is "nan" and the rest not of it.
+
+--- a/contrib/gdtoa/hexnan.c
++++ b/contrib/gdtoa/hexnan.c
+@@ -71,6 +71,15 @@
+ 	x1 = xe = x;
+ 	havedig = hd0 = i = 0;
+ 	s = *sp;
++	/* C's NAN(n-char-sequence): digits, letters and underscores, then
++	 * the parenthesis; else only "nan" is the number's. */
++	{
++		CONST char *t = s + 1;
++		while ((*t >= '0' && *t <= '9') || ((*t | 0x20) >= 'a' && (*t | 0x20) <= 'z') || *t == '_')
++			t++;
++		if (*t != ')')
++			return STRTOG_NaN;
++	}
+ 	/* allow optional initial 0x or 0X */
+ 	while((c = *(CONST unsigned char*)(s+1)) && c <= ' ')
+ 		++s;

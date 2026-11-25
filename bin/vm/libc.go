@@ -798,30 +798,6 @@ func libcStrverscmp(a, b uint32) uint32 {
 	return proc().libcStrverscmp(a, b)
 }
 
-func libcStrtod(s, end uint32) float64 {
-	return proc().libcStrtod(s, end)
-}
-
-func libcStrtof(s, end uint32) float32 {
-	return proc().libcStrtof(s, end)
-}
-
-func libcStrtold(s, end uint32) float64 {
-	return proc().libcStrtod(s, end)
-}
-
-func libcWcstod(s, end uint32) float64 {
-	return proc().libcWcstod(s, end)
-}
-
-func libcWcstof(s, end uint32) float32 {
-	return proc().libcWcstof(s, end)
-}
-
-func libcWcstold(s, end uint32) float64 {
-	return proc().libcWcstod(s, end)
-}
-
 func libcIconv_open(to, from uint32) uint32 {
 	return proc().libcIconv_open(to, from)
 }
@@ -832,70 +808,6 @@ func libcIconv(cd, inbuf, inleft, outbuf, outleft uint32) uint32 {
 
 func libcIconv_close(cd uint32) uint32 {
 	return proc().libcIconv_close(cd)
-}
-
-func libcStrtol(s, end, base uint32) uint32 {
-	return proc().libcStrtol(s, end, base)
-}
-
-func libcStrtoul(s, end, base uint32) uint32 {
-	return proc().libcStrtoul(s, end, base)
-}
-
-func libcStrtoll(s, end, base uint32) uint64 {
-	return proc().libcStrtoll(s, end, base)
-}
-
-func libcStrtoull(s, end, base uint32) uint64 {
-	return proc().libcStrtoull(s, end, base)
-}
-
-func libcWcstol(s, end, base uint32) uint32 {
-	return proc().libcWcstol(s, end, base)
-}
-
-func libcWcstoul(s, end, base uint32) uint32 {
-	return proc().libcWcstoul(s, end, base)
-}
-
-func libcWcstoll(s, end, base uint32) uint64 {
-	return proc().libcWcstoll(s, end, base)
-}
-
-func libcWcstoull(s, end, base uint32) uint64 {
-	return proc().libcWcstoull(s, end, base)
-}
-
-func libcAtoi(s uint32) uint32 {
-	return proc().libcAtol(s)
-}
-
-func libcAtol(s uint32) uint32 {
-	return proc().libcAtol(s)
-}
-
-func libcAtoll(s uint32) uint64 {
-	return proc().libcAtoll(s)
-}
-
-func libcAtof(s uint32) float64 {
-	return proc().libcAtof(s)
-}
-
-func libc__dtoa(v float64, mode, n, decpt, sign, end uint32) uint32 {
-	return proc().libc__dtoa(v, mode, n, decpt, sign, end)
-}
-
-func libc__ldtoa(v, mode, n, decpt, sign, end uint32) uint32 {
-	return proc().libc__ldtoa(v, mode, n, decpt, sign, end)
-}
-
-func libc__hdtoa(v float64, xdigits, n, decpt, sign, end uint32) uint32 {
-	return proc().libc__hdtoa(v, xdigits, n, decpt, sign, end)
-}
-
-func libc__hldtoa(v float64, xdigits, n, decpt, sign, end uint32) uint32 {
-	return proc().libc__hdtoa(v, xdigits, n, decpt, sign, end)
 }
 
 func libcAbs(n uint32) uint32 {

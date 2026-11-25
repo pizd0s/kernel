@@ -2,8 +2,9 @@
 # src.txz once after the download (dev/slice.py): msun, its math and
 # complex functions; of its libc the stdio, the multibyte functions, the
 # trees, getopt, the drand48 family, quick_exit and popen, the
-# declarations of their functions of a locale, the regex with its header
-# and the wide strings' functions; and the copyright.
+# declarations of their functions of a locale, the regex with its header,
+# the wide strings' functions and the numbers' conversions, gdtoa's among
+# them; and the copyright.
 COPYRIGHT
 lib/libc/regex
 lib/msun/src
@@ -82,3 +83,46 @@ lib/libc/string/wmemcmp.c
 lib/libc/string/wmemcpy.c
 lib/libc/string/wmemmove.c
 lib/libc/string/wmemset.c
+contrib/gdtoa/dmisc.c
+contrib/gdtoa/dtoa.c
+contrib/gdtoa/gdtoa.c
+contrib/gdtoa/gethex.c
+contrib/gdtoa/gmisc.c
+contrib/gdtoa/hd_init.c
+contrib/gdtoa/hexnan.c
+contrib/gdtoa/misc.c
+contrib/gdtoa/smisc.c
+contrib/gdtoa/strtod.c
+contrib/gdtoa/strtodg.c
+contrib/gdtoa/strtof.c
+contrib/gdtoa/strtord.c
+contrib/gdtoa/sum.c
+contrib/gdtoa/ulp.c
+contrib/gdtoa/gdtoa.h
+contrib/gdtoa/gdtoaimp.h
+contrib/gdtoa/gdtoa_fltrnds.h
+lib/libc/gdtoa/_hdtoa.c
+lib/libc/gdtoa/_hldtoa.c
+lib/libc/gdtoa/_ldtoa.c
+lib/libc/gdtoa/glue.c
+lib/libc/gdtoa/machdep_ldisd.c
+lib/libc/stdlib/strtol.c
+lib/libc/stdlib/strtoll.c
+lib/libc/stdlib/strtoul.c
+lib/libc/stdlib/strtoull.c
+lib/libc/stdlib/strtoimax.c
+lib/libc/stdlib/strtoumax.c
+lib/libc/stdlib/atoi.c
+lib/libc/stdlib/atol.c
+lib/libc/stdlib/atoll.c
+lib/libc/stdlib/atof.c
+lib/libc/stdlib/strtold.c
+lib/libc/locale/wcstol.c
+lib/libc/locale/wcstoll.c
+lib/libc/locale/wcstoul.c
+lib/libc/locale/wcstoull.c
+lib/libc/locale/wcstoimax.c
+lib/libc/locale/wcstoumax.c
+lib/libc/locale/wcstod.c
+lib/libc/locale/wcstof.c
+lib/libc/locale/wcstold.c

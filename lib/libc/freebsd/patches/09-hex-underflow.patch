@@ -1,0 +1,17 @@
+An inexact subnormal value of a hexadecimal number is an underflow
+(7.12.1), which POSIX's strtod fails with ERANGE, as gdtoa's decimal
+numbers do; gdtoa's hexadecimal ones set no errno for it.
+
+--- a/contrib/gdtoa/gethex.c
++++ b/contrib/gdtoa/gethex.c
+@@ -343,6 +343,10 @@
+ 			}
+ 		else
+ 			irv |= STRTOG_Inexlo;
++#ifndef NO_ERRNO
++		if ((irv & STRTOG_Retmask) == STRTOG_Denormal)
++			errno = ERANGE;
++#endif
+ 		}
+ 	*bp = b;
+ 	*exp = e;

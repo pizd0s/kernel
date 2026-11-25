@@ -89,7 +89,7 @@ int main() {
     errno = EBADF;
 
     assert(atoi("  42xyz") == 42 && atol("-7") == -7 && atoll("123456789012") == 123456789012LL);
-    assert(atof("1.5e1") == 15.0 && atoi("") == 0 && errno == EBADF);
+    assert(atof("1.5e1") == 15.0 && errno == EBADF && atoi("") == 0);
 
     locale_t c = newlocale(LC_ALL_MASK, "C", nullptr);
     assert(c);

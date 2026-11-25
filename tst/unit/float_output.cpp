@@ -30,6 +30,17 @@ static void is(const char* want, const char* format, double v) {
     }
 }
 
+// Either of two, where C leaves the text to the implementation.
+static void isEither(const char* one, const char* other, const char* format, double v) {
+    char got[512];
+    snprintf(got, sizeof got, format, v);
+
+    if (strcmp(got, one) != 0 && strcmp(got, other) != 0) {
+        fprintf(stderr, "%s of %a: \"%s\", not \"%s\" or \"%s\"\n", format, v, got, one, other);
+        assert(false);
+    }
+}
+
 int main() {
     is("0", "%.0f", 0.5);
     is("2", "%.0f", 1.5);
@@ -77,7 +88,9 @@ int main() {
     is("0x1.2p+0", "%.1a", 0x1.28p0);
     is("0x1.3p+0", "%.1a", 0x1.281p0);
     is("0x1.1p+0", "%.1a", 0x1.0801p0);
-    is("0x2p+0", "%.0a", 0x1.8p0);
+    // The digit before the point is the implementation's but for zero
+    // (7.21.6.1): 0x1.8 rounded up is 0x2p+0 or 0x1p+1.
+    isEither("0x2p+0", "0x1p+1", "%.0a", 0x1.8p0);
     is("0x1.000p+0", "%.3a", 1.0);
 
     is("inf", "%f", INFINITY);

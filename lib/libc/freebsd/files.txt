@@ -252,3 +252,46 @@ lib/libc/string/wmemcmp.c
 lib/libc/string/wmemcpy.c
 lib/libc/string/wmemmove.c
 lib/libc/string/wmemset.c
+# The numbers' conversions: strtol and its kind, atoi and its, strtod,
+# strtof and strtold of gdtoa, which printf's __dtoa, __hdtoa and __ldtoa
+# are of too, and the wide strings' wcstol and its kind.
+contrib/gdtoa/dmisc.c -fno-strict-aliasing
+contrib/gdtoa/dtoa.c -fno-strict-aliasing
+contrib/gdtoa/gdtoa.c -fno-strict-aliasing
+contrib/gdtoa/gethex.c -fno-strict-aliasing
+contrib/gdtoa/gmisc.c -fno-strict-aliasing
+contrib/gdtoa/hd_init.c -fno-strict-aliasing
+contrib/gdtoa/hexnan.c -fno-strict-aliasing
+contrib/gdtoa/misc.c -fno-strict-aliasing
+contrib/gdtoa/smisc.c -fno-strict-aliasing
+contrib/gdtoa/strtod.c -fno-strict-aliasing
+contrib/gdtoa/strtodg.c -fno-strict-aliasing
+contrib/gdtoa/strtof.c -fno-strict-aliasing
+contrib/gdtoa/strtord.c -fno-strict-aliasing
+contrib/gdtoa/sum.c -fno-strict-aliasing
+contrib/gdtoa/ulp.c -fno-strict-aliasing
+lib/libc/gdtoa/_hdtoa.c
+lib/libc/gdtoa/_hldtoa.c
+lib/libc/gdtoa/_ldtoa.c
+lib/libc/gdtoa/glue.c
+lib/libc/gdtoa/machdep_ldisd.c
+lib/libc/stdlib/strtol.c
+lib/libc/stdlib/strtoll.c
+lib/libc/stdlib/strtoul.c
+lib/libc/stdlib/strtoull.c
+lib/libc/stdlib/strtoimax.c
+lib/libc/stdlib/strtoumax.c
+lib/libc/stdlib/atoi.c
+lib/libc/stdlib/atol.c
+lib/libc/stdlib/atoll.c
+lib/libc/stdlib/atof.c
+lib/libc/stdlib/strtold.c
+lib/libc/locale/wcstol.c
+lib/libc/locale/wcstoll.c
+lib/libc/locale/wcstoul.c
+lib/libc/locale/wcstoull.c
+lib/libc/locale/wcstoimax.c
+lib/libc/locale/wcstoumax.c
+lib/libc/locale/wcstod.c
+lib/libc/locale/wcstof.c
+lib/libc/locale/wcstold.c

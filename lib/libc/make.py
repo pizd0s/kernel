@@ -219,14 +219,15 @@ def main():
             *(f"-D{name}=__freebsd{name[1:]}" for name in sorted(kernels))]
     libc = freebsd / "lib" / "libc"
     bsd = ["-O2", "-std=gnu11", "-w", "-include", str(ROOT / "freebsd" / "sys" / "cdefs.h"), "-I", str(ROOT / "freebsd"),
-           "-I", str(libc / "locale"), "-I", str(libc / "stdio"), "-I", str(freebsd / "include"), *INCLUDE]
+           "-I", str(libc / "locale"), "-I", str(libc / "stdio"), "-I", str(freebsd / "contrib" / "gdtoa"), "-I", str(freebsd / "include"), *INCLUDE]
 
     for line in listed(ROOT / "freebsd" / "files.txt"):
         path, *flags = shlex.split(line)
 
-        if path.startswith("lib/libc/"):
+        if path.startswith(("lib/libc/", "contrib/gdtoa/")):
             # Named by the path, as its files of one name are of more than one place.
-            units.append((freebsd / path, objects / "freebsd" / "-".join(Path(path).with_suffix(".o").parts[2:]), bsd + flags))
+            parts = Path(path).with_suffix(".o").parts
+            units.append((freebsd / path, objects / "freebsd" / "-".join(parts[2:] if path.startswith("lib/") else parts[1:]), bsd + flags))
         else:
             units.append((freebsd / path, objects / "freebsd" / Path(path).with_suffix(".o").name, msun + flags))
 
