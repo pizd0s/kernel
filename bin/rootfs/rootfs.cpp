@@ -494,7 +494,7 @@ namespace {
         Fs,      // ours of the channel of a file system: the answers to its questions come on it
         Watcher, // a watcher's open file: its READs come on it
         Kept,    // where a READ a watcher or an events file keeps is answered: its CANCEL comes on it
-        Events,  // an events file's, inotify's: its READs and SENDs come on it
+        Events,  // an events file's, inotify's: its READs and CTLs come on it
     };
 
     // A file system of the VFS's, another process's behind the channel
@@ -554,7 +554,6 @@ namespace {
         u64 pos;         // a Handle's: where its READDIR goes on, an entry's pos
         bool append;     // a Handle's O_APPEND and O_NONBLOCK, the open's, then SETFL's
         bool nonblock;
-        bool giveEvents; // a Handle's: its next ACCEPT gives an events file (SEND watchEventsNew)
         Fs* fs;           // a Fs's
         Watcher* watcher; // a Watcher's and a Kept's
         Events* events;   // an Events's and a Kept's
@@ -563,12 +562,12 @@ namespace {
         Endpoint* before;
     };
 
-    // A watcher of a directory (an ACCEPT of its handle), the VFS's: the
-    // directory, a node of a file system, and its mount, which it holds;
-    // its open file's endpoint, none while it lists the directory; the
-    // records it has yet
-    // to tell, kind, name, 0, in their order; whether it told watchIdle;
-    // and a READ it keeps, where that is answered, its memfd and length.
+    // A watcher of a directory (a ctlWatchDirectory of its handle), the
+    // VFS's: the directory, a node of a file system, and its mount, which
+    // it holds; its open file's endpoint, none while it lists the
+    // directory; the records it has yet to tell, kind, name, 0, in their
+    // order; whether it told watchIdle; and a READ it keeps, where that is
+    // answered, its memfd and length.
     struct Watcher {
         Fs* fs = nullptr;
         u64 node = 0;
@@ -585,11 +584,11 @@ namespace {
         Watcher* next = nullptr; // among its file system's
     };
 
-    // An events file, inotify's instance (an ACCEPT of a handle after
-    // watchEventsNew): its endpoint and id, its pair's; the events it
-    // queued, struct inotify_event's, how
-    // many, and where the last is; its marks and the number of the next;
-    // a READ it keeps, as a watcher's; who made it and when, its FSTAT's.
+    // An events file, inotify's instance (a ctlWatchEvents of a handle):
+    // its endpoint and id, its pair's; the events it queued, struct
+    // inotify_event's, how many, and where the last is; its marks and the
+    // number of the next; a READ it keeps, as a watcher's; who made it and
+    // when, its FSTAT's.
     struct Events {
         Endpoint* end = nullptr;
         u64 id = 0;
@@ -1070,20 +1069,21 @@ static void gone(Fs* fs) {
 
 // ---- watchers ---------------------------------------------------------------------
 //
-// A directory's watchers are the VFS's (an ACCEPT of its handle), as
-// <sys/watchdir.h> says: a watcher tells the names there as it starts,
-// watchIdle, then what was added and removed since its last READ, a name
-// that came and went between two READs not at all; a READ with nothing to
-// tell waits, kept, until there is, or until its CANCEL; its directory
-// gone, its READs give what is left, then 0. rootfs makes the calls that
-// change a file system's names, and asks one of a watched directory where
-// it would hand it on, and every rmdir and rename of a file system it
-// watches a directory of, which may take a watched directory away: the
-// answer says what changed, and rootfs answers with it then. A file system
-// that changes by itself tells it its changes instead (NOTICE), in order
-// with its answers. A watcher starts by listing its directory, READDIR
-// after READDIR, and what changes meanwhile, heard in the order of the
-// answers, makes the names it starts with; then its ACCEPT is answered.
+// A directory's watchers are the VFS's (a ctlWatchDirectory of its
+// handle), as <sys/watchdir.h> says: a watcher tells the names there as it
+// starts, watchIdle, then what was added and removed since its last READ,
+// a name that came and went between two READs not at all; a READ with
+// nothing to tell waits, kept, until there is, or until its CANCEL; its
+// directory gone, its READs give what is left, then 0. rootfs makes the
+// calls that change a file system's names, and asks one of a watched
+// directory where it would hand it on, and every rmdir and rename of a
+// file system it watches a directory of, which may take a watched
+// directory away: the answer says what changed, and rootfs answers with it
+// then. A file system that changes by itself tells it its changes instead
+// (NOTICE), in order with its answers. A watcher starts by listing its
+// directory, READDIR after READDIR, and what changes meanwhile, heard in
+// the order of the answers, makes the names it starts with; then its CTL
+// is answered.
 
 // A record of a log: kind, the name, 0.
 static void put(Buffer& log, u8 kind, Name name) {
@@ -1243,18 +1243,17 @@ static void listed(Watcher& w, Name name) {
 
 // ---- inotify's events -------------------------------------------------------------
 //
-// An events file is inotify's instance, the VFS's (an ACCEPT of a handle
-// after its SEND of watchEventsNew), its marks of directories by number,
-// wd: it queues the events of a mark's directory as struct
-// inotify_event's, IN_CREATE and IN_DELETE of the names its watchers hear,
-// IN_ISDIR of a directory's, IN_DELETE_SELF and then IN_IGNORED of the
-// directory gone, IN_IGNORED of a mark taken away, as IN_ONESHOT's is
-// after its event. An event the same as the last queued is not queued
-// again, and of 16384 the last is IN_Q_OVERFLOW. A READ gives as many
-// whole events as fit, EINVAL of none, or waits as a watcher's does; INQ
-// is the bytes queued. A mark of a directory the file marks already
-// changes its mask: EEXIST with IN_MASK_CREATE, more of it with
-// IN_MASK_ADD. A SEND marks a directory or takes a mark away
+// An events file is inotify's instance, the VFS's (a ctlWatchEvents of a
+// handle), its marks of directories by number, wd: it queues the events of
+// a mark's directory as struct inotify_event's, IN_CREATE and IN_DELETE of
+// the names its watchers hear, IN_ISDIR of a directory's, IN_DELETE_SELF
+// and then IN_IGNORED of the directory gone, IN_IGNORED of a mark taken
+// away, as IN_ONESHOT's is after its event. An event the same as the last
+// queued is not queued again, and of 16384 the last is IN_Q_OVERFLOW. A
+// READ gives as many whole events as fit, EINVAL of none, or waits as a
+// watcher's does; INQ is the bytes queued. A mark of a directory the file
+// marks already changes its mask: EEXIST with IN_MASK_CREATE, more of it
+// with IN_MASK_ADD. A CTL marks a directory or takes a mark away
 // (lib/protocol). The file's id is its pair's, its FSTAT's ino.
 
 constexpr u32 eventsMax = 16384;
@@ -1409,9 +1408,9 @@ static void forgetEvents(Events* in) {
     free(in);
 }
 
-// An ACCEPT of a handle after watchEventsNew, answered on fd: an events
-// file of its O_NONBLOCK, made by who the header says.
-static void eventsAccept(const Header& h, int fd) {
+// A ctlWatchEvents of a handle's, answered on fd: an events file of
+// O_NONBLOCK of the flags, made by who the header says.
+static void eventsNew(const Header& h, u32 flags, int fd) {
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         error(fd, errno);
@@ -1427,43 +1426,37 @@ static void eventsAccept(const Header& h, int fd) {
     in->end = listen(pair[0], Role::Events);
     in->end->events = in;
     in->end->reads = true;
-    in->end->nonblock = (h.arg & O_NONBLOCK) != 0;
+    in->end->nonblock = (flags & O_NONBLOCK) != 0;
     const Opened what{openedFile, O_RDONLY, 0, in->id, 0, 0};
     const iovec said = part(&what, sizeof what);
-    reply(fd, opOk, 0, &said, 1, &pair[1], 1);
+    reply(fd, opOk, 1, &said, 1, &pair[1], 1);
     close(pair[1]);
 }
 
-// A mark of an events file's of a directory, at, its number sent on
-// told, or a mark taken away, its number value: 0, or the errno.
-static int markCall(Events& in, u32 how, u32 value, const Place& at, int told) {
+// A mark of an events file's of a directory, at, its number into wd, or
+// a mark taken away, its number value: 0, or the errno.
+static int markCall(Events& in, u32 how, u32 value, const Place& at, u32& wd) {
     Fs* fs = at.m ? at.m->fs : nullptr;
     for (Mark* k = in.marks; k; k = k->sibling) {
-        if (how == watchEventsRemove && k->wd == i32(value)) {
+        if (how == ctlWatchRemove && k->wd == i32(value)) {
             queueEvent(in, k->wd, IN_IGNORED, {});
             dropMark(k);
             eventsTold(in);
             return 0;
         }
-        if (how == watchEventsAdd && k->fs == fs && k->node == at.node) {
-            const u32 wd = u32(k->wd);
+        if (how == ctlWatchAdd && k->fs == fs && k->node == at.node) {
             if ((value & IN_MASK_CREATE) != 0) {
                 return EEXIST;
             }
-            if (send(told, &wd, sizeof wd, MSG_DONTWAIT) != sizeof wd) {
-                return EINVAL;
-            }
+            wd = u32(k->wd);
             k->mask = (value & IN_MASK_ADD) != 0 ? k->mask | (value & ~u32(IN_MASK_ADD)) : value;
             return 0;
         }
     }
-    if (how == watchEventsRemove) {
+    if (how == ctlWatchRemove) {
         return EINVAL;
     }
-    const u32 wd = u32(in.nextWd);
-    if (send(told, &wd, sizeof wd, MSG_DONTWAIT) != sizeof wd) {
-        return EINVAL;
-    }
+    wd = u32(in.nextWd);
     auto* k = new (allocate(sizeof(Mark))) Mark();
     k->in = &in;
     k->wd = in.nextWd++;
@@ -3374,10 +3367,11 @@ static Task readdirCall(Header h, int fd, Place at, u64 id, u64 after) {
     ok(fd, a.body.at, a.body.size());
 }
 
-// An ACCEPT of a handle's directory: a watcher, which lists the
+// A ctlWatchDirectory of a handle's: a watcher, which lists the
 // directory first, READDIR after READDIR, a change that comes meanwhile
 // heard in the order of the answers, and is then answered: an open file
-// of the ACCEPT's O_NONBLOCK, whose READs give its records. A directory
+// of O_NONBLOCK of the flags, the header's arg, whose READs give its
+// records. A directory
 // gone while it lists ends it at once.
 static Task watchCall(Header h, int fd, Place at) {
     Reply r{fd};
@@ -3428,7 +3422,7 @@ static Task watchCall(Header h, int fd, Place at) {
     w->end->nonblock = (h.arg & O_NONBLOCK) != 0;
     const Opened what{openedFile, O_RDONLY, at.st.dev, 0, u32(POLLIN | (w->gone ? POLLHUP : 0)), 0};
     const iovec said = part(&what, sizeof what);
-    reply(fd, opOk, 0, &said, 1, &pair[1], 1);
+    reply(fd, opOk, 1, &said, 1, &pair[1], 1);
     close(pair[1]);
 }
 
@@ -3551,66 +3545,63 @@ static const Endpoint* directoryOf(int fd, int& e) {
     return e == 0 ? dir : nullptr;
 }
 
-// A SEND's call of ours: how and a value, after its address, which it
-// has none of; false of another.
-static bool sendCall(Body body, u32& how, u32& value) {
-    if (body.size() < 4) {
-        return false;
-    }
-    const u32 length = body.take<u32>();
-    if (body.size() != usize(length) + 8) {
-        return false;
-    }
-    body.at += length;
-    how = body.take<u32>();
-    value = body.take<u32>();
-    return true;
-}
-
-// A SEND of an events file's, answered on fd: watchEventsAdd, its rights
-// a handle of a directory and where the mark's number goes, or
-// watchEventsRemove, of none.
-static void eventsSend(Events& in, Body body, int fd) {
-    u32 how = 0;
-    u32 value = 0;
-    const bool ours = sendCall(body, how, value);
+// A CTL of an events file's, answered on fd: ctlWatchAdd, mask u32, its
+// descriptor a handle of a directory, answered the mark's number;
+// ctlWatchRemove, wd u32; ctlInq, the bytes queued.
+static void eventsCtl(Events& in, Body body, int fd) {
+    const u32 call = body.size() >= 4 ? body.take<u32>() : 0;
+    const u32 value = body.size() >= 4 ? body.take<u32>() : 0;
     const usize rights = packetFdCount - 1;
-    int e = EINVAL;
+    if (call == ctlInq) {
+        const u32 n = u32(in.queue.size());
+        ok(fd, &n, sizeof n);
+        return;
+    }
+    int e = ENOTTY;
+    u32 wd = 0;
     const Endpoint* dir = nullptr;
-    if (ours && how == watchEventsRemove && rights == 0) {
-        e = markCall(in, how, value, {}, -1);
-    } else if (ours && how == watchEventsAdd && rights == 2 && (dir = directoryOf(packetFds[0], e))) {
-        e = markCall(in, how, value, dir->at, packetFds[1]);
+    if (call == ctlWatchRemove) {
+        e = rights == 0 ? markCall(in, call, value, {}, wd) : EINVAL;
+    } else if (call == ctlWatchAdd) {
+        e = rights != 1 ? EINVAL : (dir = directoryOf(packetFds[0], e)) ? markCall(in, call, value, dir->at, wd) : e;
     }
     if (e != 0) {
         error(fd, e);
         return;
     }
-    const u32 sent = 8;
-    ok(fd, &sent, sizeof sent);
+    ok(fd, &wd, call == ctlWatchAdd ? sizeof wd : 0);
 }
 
-// A SEND of a handle's, answered on fd: watchEventsNew, of no rights, and
-// its next ACCEPT gives an events file; another is ENOTSOCK, as of what is
-// no socket.
-static void handleSend(Endpoint* ep, Body body, int fd) {
-    u32 how = 0;
-    u32 value = 0;
-    if (!sendCall(body, how, value) || how != watchEventsNew || value != 0 || packetFdCount != 1) {
-        error(fd, ENOTSOCK);
-        return;
+// A CTL of a handle's, answered on fd: ctlWatchEvents, flags u32, an
+// events file; ctlWatchDirectory, flags u32, the watcher of its directory,
+// EBADF of O_PATH's handle; O_NONBLOCK of the flags the file's. Whether fd
+// is kept.
+static bool handleCtl(Endpoint* ep, Header h, Body body, int fd) {
+    const u32 call = body.size() >= 4 ? body.take<u32>() : 0;
+    const u32 flags = body.size() >= 4 ? body.take<u32>() : 0;
+    if (call == ctlWatchEvents) {
+        eventsNew(h, flags, fd);
+        return false;
     }
-    ep->giveEvents = true;
-    const u32 sent = 8;
-    ok(fd, &sent, sizeof sent);
+    if (call != ctlWatchDirectory) {
+        return error(fd, ENOTTY);
+    }
+    if (!ep->reads) {
+        return error(fd, EBADF);
+    }
+    if (!isDir(ep->at)) {
+        return error(fd, ENOTDIR);
+    }
+    h.arg = flags;
+    watchCall(h, fd, ep->at);
+    return true;
 }
 
 // An open file's call on a handle: FSTAT rootfs answers, with the handle's
 // id, and SEEK, GETFL and SETFL of the position and the flags the handle
 // keeps; READDIR asks the file system for the entries after the position;
-// SEND and ACCEPT give an events file or a watcher of rootfs's
-// (lib/protocol); the others are handed on to the file system its place is
-// of. O_PATH's handle reads, changes and locks nothing: EBADF; a handle
+// a CTL gives an events file or a watcher of rootfs's (lib/protocol); the
+// others are handed on to the file system its place is of. O_PATH's handle reads, changes and locks nothing: EBADF; a handle
 // locks nothing, EINVAL; a directory reads by READDIR, not READ, EISDIR; a
 // call no handle serves fails as the protocol has it.
 static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
@@ -3631,23 +3622,8 @@ static bool onPlace(Endpoint* ep, const Header& h, Body body, int fd) {
             }
             readdirCall(h, fd, at, ep->id, ep->pos);
             return true;
-        case opSend:
-            handleSend(ep, body, fd);
-            return false;
-        case opAccept:
-            if (ep->giveEvents) {
-                ep->giveEvents = false;
-                eventsAccept(h, fd);
-                return false;
-            }
-            if (opath) {
-                return error(fd, EBADF);
-            }
-            if (!isDir(at)) {
-                return error(fd, ENOTDIR);
-            }
-            watchCall(h, fd, at);
-            return true;
+        case opCtl:
+            return handleCtl(ep, h, body, fd);
         case opSeek:
             return seekCall(ep, h, body, fd);
         case opGetfl:
@@ -3878,13 +3854,12 @@ static bool onWatcher(Endpoint* ep, const Header& h, Body body, int fd) {
     }
 }
 
-// A request on an events file, answered on fd: READ, its events, or,
-// with none, the READ kept until there are, but of O_NONBLOCK, one at a
-// time; CTL's ctlInq, the bytes queued; FSTAT, of its id and who made it when;
-// GETFL and SETFL of its flags; SEND, a mark's, or its watcher's; WRITE,
-// EBADF; what else an open file
-// takes, as the protocol has it of what is none of it. Whether fd is
-// kept.
+// A request on an events file, answered on fd: READ, its events, or, with
+// none, the READ kept until there are, but of O_NONBLOCK, one at a time;
+// CTL's ctlInq, the bytes queued; FSTAT, of its id and who made it when;
+// GETFL and SETFL of its flags; CTL's ctlWatchAdd and ctlWatchRemove of a
+// mark; WRITE, EBADF; what else an open file takes, as the protocol has it
+// of what is none of it. Whether fd is kept.
 static bool onEvents(Endpoint* ep, const Header& h, Body body, int fd) {
     Events& in = *ep->events;
     switch (h.op) {
@@ -3917,18 +3892,9 @@ static bool onEvents(Endpoint* ep, const Header& h, Body body, int fd) {
         }
         case opWrite:
             return error(fd, EBADF);
-        case opSend:
-            eventsSend(in, body, fd);
+        case opCtl:
+            eventsCtl(in, body, fd);
             return false;
-        case opCtl: {
-            u32 call = 0;
-            if (body.size() < 4 || (call = body.take<u32>()) != ctlInq) {
-                return error(fd, ENOTTY);
-            }
-            const u32 n = u32(in.queue.size());
-            ok(fd, &n, sizeof n);
-            return false;
-        }
         case opFstat: {
             const Stat st{in.id, 0, in.made, 0600, 1, in.uid, in.gid, in.made, 0, in.made};
             ok(fd, &st, sizeof st);

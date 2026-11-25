@@ -1,43 +1,33 @@
 /*
- * XSI's message queues and semaphore sets, xsi's (bin/tools/xsi,
- * lib/protocol): a call is an open of /dev/ipc/xsi of its own, its SEND,
- * sendmsg here, the call, and its RECV, recv, the answer, which waits as
- * long as the call does; who calls is the header's ids and the pid the
- * call says. A semop of SEM_UNDO brings the process's undo file, an open
- * of /dev/ipc/xsi this keeps, which closes when the process ends, or
- * execs, and then gives back what SEM_UNDO took: a child of fork lets go
- * of its parent's. ftok is the key of a file's device and inode and the
- * id's low byte.
+ * XSI's message queues and semaphore sets, xsi's (bin/tools/xsi), each
+ * call a ctl (lib/protocol/calls.h) of the process's open of
+ * /dev/ipc/xsi, made at its first call, and again where the program
+ * closed it, which the kernel's id tells (fdid): the answer waits as long
+ * as the call does; who calls is the header's ids and the pid the call
+ * says. SEM_UNDO's adjustments are that open's, and come back to the
+ * semaphores when it closes, as the process ends or execs; a child of
+ * fork lets go of its parent's. ftok is the key of a file's device and
+ * inode and the id's low byte.
  */
 #include "sized.h"
+#include "../protocol/calls.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <sys/sem.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 
 _Static_assert(sizeof(long) == 4, "a message's mtype is the answer's");
 _Static_assert(sizeof(struct sembuf) == 6, "a semop's operations are the call's");
-
-enum {
-    xsiMsgget = 1,
-    xsiMsgsnd = 2,
-    xsiMsgrcv = 3,
-    xsiMsgctl = 4,
-    xsiSemget = 5,
-    xsiSemop = 6,
-    xsiSemctl = 7,
-};
 
 static const char device[] = "/dev/ipc/xsi";
 
@@ -51,90 +41,75 @@ struct __attribute__((packed)) Perm {
     int32_t seq;
 };
 
-// A call of parts, the undo file's rights with it but for -1: the
-// answer's size, in room bytes of out, or -1 and errno.
-static ssize_t call(const struct iovec* parts, int count, int undo, void* out, size_t room) {
-    int x = open(device, O_RDWR | O_CLOEXEC);
+static int xsiFile = -1;
+static unsigned long long xsiId;
+static pthread_mutex_t xsiLock = PTHREAD_MUTEX_INITIALIZER;
+
+static void forget(void) {
+    if (xsiFile >= 0) {
+        close(xsiFile);
+        xsiFile = -1;
+    }
+}
+
+// The process's open of ipc/xsi, made once, and again where the program
+// closed it: a child of fork lets go of its parent's.
+static int xsiOf(void) {
+    static int registered;
+    unsigned long long id;
+
+    pthread_mutex_lock(&xsiLock);
+
+    if (xsiFile < 0 || fdid(xsiFile, &id) != 0 || id != xsiId) {
+        int x = open(device, O_RDWR | O_CLOEXEC);
+
+        xsiFile = x >= 0 && fdid(x, &xsiId) == 0 ? x : -1;
+
+        if (!registered && xsiFile >= 0) {
+            registered = 1;
+            pthread_atfork(NULL, NULL, forget);
+        }
+    }
+
+    int x = xsiFile;
+
+    pthread_mutex_unlock(&xsiLock);
+
+    return x;
+}
+
+// A call of size bytes, its answer into out of room: the answer's size,
+// or -1 and errno.
+static ssize_t call(const void* in, size_t size, void* out, size_t room) {
+    int x = xsiOf();
 
     if (x < 0) {
         return -1;
     }
 
-    union {
-        struct cmsghdr h;
-        char room[CMSG_SPACE(sizeof(int))];
-    } rights;
-    struct msghdr m = {0};
+    struct ctl c = {in, size, NULL, 0, out, room, NULL, 0};
 
-    m.msg_iov = (struct iovec*)parts;
-    m.msg_iovlen = count;
+    return ctl(x, &c, 0) < 0 ? -1 : (ssize_t)c.room;
+}
 
-    if (undo >= 0) {
-        m.msg_control = rights.room;
-        m.msg_controllen = sizeof rights.room;
+// A call of two parts, joined: as call.
+static ssize_t joined(const void* head, size_t size, const void* tail, size_t n, void* out, size_t room) {
+    char* in = malloc(size + n);
 
-        struct cmsghdr* c = CMSG_FIRSTHDR(&m);
-
-        c->cmsg_level = SOL_SOCKET;
-        c->cmsg_type = SCM_RIGHTS;
-        c->cmsg_len = CMSG_LEN(sizeof(int));
-        memcpy(CMSG_DATA(c), &undo, sizeof undo);
+    if (!in) {
+        return -1;
     }
 
-    ssize_t n = sendmsg(x, &m, 0);
+    memcpy(in, head, size);
+    memcpy(in + size, tail, n);
 
-    if (n >= 0) {
-        n = recv(x, out, room, 0);
-    }
-
+    ssize_t r = call(in, size + n, out, room);
     int saved = errno;
 
-    close(x);
+    free(in);
     errno = saved;
 
-    return n;
-}
-
-static ssize_t callOf(const void* body, size_t size, void* out, size_t room) {
-    struct iovec part = {(void*)body, size};
-
-    return call(&part, 1, -1, out, room);
-}
-
-static int undoFile = -1;
-
-static void forgetUndo(void) {
-    if (undoFile >= 0) {
-        close(undoFile);
-        undoFile = -1;
-    }
-}
-
-// The process's undo file, made once: a child of fork lets go of its
-// parent's.
-static int undoOf(void) {
-    static int registered;
-
-    if (__atomic_load_n(&undoFile, __ATOMIC_ACQUIRE) >= 0) {
-        return undoFile;
-    }
-
-    int x = open(device, O_RDWR | O_CLOEXEC);
-    int none = -1;
-
-    if (x < 0) {
-        return -1;
-    }
-
-    if (!__atomic_compare_exchange_n(&undoFile, &none, x, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        close(x);
-    }
-
-    if (!__atomic_exchange_n(&registered, 1, __ATOMIC_ACQ_REL)) {
-        pthread_atfork(NULL, NULL, forgetUndo);
-    }
-
-    return undoFile;
+    return r;
 }
 
 key_t __kernel_ftok(const char* path, int id) {
@@ -148,17 +123,17 @@ key_t __kernel_ftok(const char* path, int id) {
 }
 
 int __kernel_msgget(key_t key, int flags) {
-    const uint32_t c[3] = {xsiMsgget, (uint32_t)key, (uint32_t)flags};
+    const uint32_t c[3] = {ctlMsgget, (uint32_t)key, (uint32_t)flags};
     int32_t id;
 
-    return callOf(c, sizeof c, &id, sizeof id) == sizeof id ? id : -1;
+    return call(c, sizeof c, &id, sizeof id) == sizeof id ? id : -1;
 }
 
 int __kernel_semget(key_t key, int n, int flags) {
-    const uint32_t c[4] = {xsiSemget, (uint32_t)key, (uint32_t)n, (uint32_t)flags};
+    const uint32_t c[4] = {ctlSemget, (uint32_t)key, (uint32_t)n, (uint32_t)flags};
     int32_t id;
 
-    return callOf(c, sizeof c, &id, sizeof id) == sizeof id ? id : -1;
+    return call(c, sizeof c, &id, sizeof id) == sizeof id ? id : -1;
 }
 
 int __kernel_msgsnd(int id, const void* msg, size_t n, int flags) {
@@ -168,7 +143,7 @@ int __kernel_msgsnd(int id, const void* msg, size_t n, int flags) {
         uint32_t flags;
         uint32_t pid;
         int32_t mtype;
-    } c = {xsiMsgsnd, id, (uint32_t)flags, (uint32_t)getpid(), 0};
+    } c = {ctlMsgsnd, id, (uint32_t)flags, (uint32_t)getpid(), 0};
 
     if (n > MSGMAX) {
         errno = EINVAL;
@@ -178,14 +153,11 @@ int __kernel_msgsnd(int id, const void* msg, size_t n, int flags) {
 
     memcpy(&c.mtype, msg, sizeof c.mtype);
 
-    struct iovec parts[2] = {{&c, sizeof c}, {(char*)msg + sizeof(long), n}};
-    char none;
-
-    return call(parts, 2, -1, &none, sizeof none) < 0 ? -1 : 0;
+    return joined(&c, sizeof c, (const char*)msg + sizeof(long), n, NULL, 0) < 0 ? -1 : 0;
 }
 
 ssize_t __kernel_msgrcv(int id, void* msg, size_t n, long type, int flags) {
-    const int32_t c[6] = {xsiMsgrcv, id, (int32_t)n, (int32_t)type, flags, (int32_t)getpid()};
+    const int32_t c[6] = {ctlMsgrcv, id, (int32_t)n, (int32_t)type, flags, (int32_t)getpid()};
 
     if ((int32_t)n < 0) {
         errno = EINVAL;
@@ -193,7 +165,7 @@ ssize_t __kernel_msgrcv(int id, void* msg, size_t n, long type, int flags) {
         return -1;
     }
 
-    ssize_t got = callOf(c, sizeof c, msg, sizeof(long) + n);
+    ssize_t got = call(c, sizeof c, msg, sizeof(long) + n);
 
     return got < 0 ? -1 : got - (ssize_t)sizeof(long);
 }
@@ -211,7 +183,7 @@ static void permOf(struct ipc_perm* out, const struct Perm* m) {
 int __kernel_msgctl(int id, int cmd, struct msqid_ds* buf, size_t size) {
     sized("msgctl", size, sizeof(struct msqid_ds));
 
-    uint32_t c[7] = {xsiMsgctl, (uint32_t)id, (uint32_t)cmd, 0, 0, 0, 0};
+    uint32_t c[7] = {ctlMsgctl, (uint32_t)id, (uint32_t)cmd, 0, 0, 0, 0};
     struct __attribute__((packed)) {
         struct Perm perm;
         int64_t stime;
@@ -231,7 +203,7 @@ int __kernel_msgctl(int id, int cmd, struct msqid_ds* buf, size_t size) {
         c[6] = (uint32_t)buf->msg_qbytes;
     }
 
-    ssize_t got = callOf(c, sizeof c, &st, sizeof st);
+    ssize_t got = call(c, sizeof c, &st, sizeof st);
 
     if (got < 0) {
         return -1;
@@ -262,7 +234,7 @@ static int semopOf(int id, struct sembuf* ops, size_t n, const struct timespec* 
         int64_t sec;
         int64_t nsec;
         uint32_t pid;
-    } c = {xsiSemop, id, (uint32_t)n, timeout != NULL, timeout ? timeout->tv_sec : 0, timeout ? timeout->tv_nsec : 0,
+    } c = {ctlSemop, id, (uint32_t)n, timeout != NULL, timeout ? timeout->tv_sec : 0, timeout ? timeout->tv_nsec : 0,
            (uint32_t)getpid()};
 
     if (n > SEMOPM) {
@@ -271,22 +243,7 @@ static int semopOf(int id, struct sembuf* ops, size_t n, const struct timespec* 
         return -1;
     }
 
-    int undo = -1;
-
-    for (size_t i = 0; i < n; i++) {
-        if (ops[i].sem_flg & SEM_UNDO) {
-            if ((undo = undoOf()) < 0) {
-                return -1;
-            }
-
-            break;
-        }
-    }
-
-    struct iovec parts[2] = {{&c, sizeof c}, {ops, n * sizeof *ops}};
-    char none;
-
-    return call(parts, 2, undo, &none, sizeof none) < 0 ? -1 : 0;
+    return joined(&c, sizeof c, ops, n * sizeof *ops, NULL, 0) < 0 ? -1 : 0;
 }
 
 int __kernel_semop(int id, struct sembuf* ops, size_t size, size_t n) {
@@ -328,15 +285,15 @@ struct __attribute__((packed)) SemStat {
 };
 
 static int semStat(int id, struct SemStat* out) {
-    struct SemCtl c = {xsiSemctl, id, 0, IPC_STAT, (uint32_t)getpid(), 0, 0, 0, 0};
+    struct SemCtl c = {ctlSemctl, id, 0, IPC_STAT, (uint32_t)getpid(), 0, 0, 0, 0};
 
-    return callOf(&c, sizeof c, out, sizeof *out) == sizeof *out ? 0 : -1;
+    return call(&c, sizeof c, out, sizeof *out) == sizeof *out ? 0 : -1;
 }
 
 int __kernel_semctl(int id, int num, int cmd, va_list ap, size_t size) {
     sized("semctl", size, sizeof(struct semid_ds));
 
-    struct SemCtl c = {xsiSemctl, id, num, (uint32_t)cmd, (uint32_t)getpid(), 0, 0, 0, 0};
+    struct SemCtl c = {ctlSemctl, id, num, (uint32_t)cmd, (uint32_t)getpid(), 0, 0, 0, 0};
     union semun arg = {0};
     struct SemStat st;
     int32_t value;
@@ -346,9 +303,9 @@ int __kernel_semctl(int id, int num, int cmd, va_list ap, size_t size) {
         case GETPID:
         case GETNCNT:
         case GETZCNT:
-            return callOf(&c, sizeof c, &value, sizeof value) == sizeof value ? value : -1;
+            return call(&c, sizeof c, &value, sizeof value) == sizeof value ? value : -1;
         case IPC_RMID:
-            return callOf(&c, sizeof c, &value, sizeof value) < 0 ? -1 : 0;
+            return call(&c, sizeof c, &value, sizeof value) < 0 ? -1 : 0;
         case SETVAL:
         case GETALL:
         case SETALL:
@@ -366,13 +323,13 @@ int __kernel_semctl(int id, int num, int cmd, va_list ap, size_t size) {
         case SETVAL:
             c.value = arg.val;
 
-            return callOf(&c, sizeof c, &value, sizeof value) < 0 ? -1 : 0;
+            return call(&c, sizeof c, &value, sizeof value) < 0 ? -1 : 0;
         case IPC_SET:
             c.uid = arg.buf->sem_perm.uid;
             c.gid = arg.buf->sem_perm.gid;
             c.mode = arg.buf->sem_perm.mode;
 
-            return callOf(&c, sizeof c, &value, sizeof value) < 0 ? -1 : 0;
+            return call(&c, sizeof c, &value, sizeof value) < 0 ? -1 : 0;
         case IPC_STAT:
             if (semStat(id, &st) != 0) {
                 return -1;
@@ -392,10 +349,8 @@ int __kernel_semctl(int id, int num, int cmd, va_list ap, size_t size) {
     }
 
     if (cmd == GETALL) {
-        return callOf(&c, sizeof c, arg.array, st.nsems * sizeof *arg.array) < 0 ? -1 : 0;
+        return call(&c, sizeof c, arg.array, st.nsems * sizeof *arg.array) < 0 ? -1 : 0;
     }
 
-    struct iovec parts[2] = {{&c, sizeof c}, {arg.array, st.nsems * sizeof *arg.array}};
-
-    return call(parts, 2, -1, &value, sizeof value) < 0 ? -1 : 0;
+    return joined(&c, sizeof c, arg.array, st.nsems * sizeof *arg.array, NULL, 0) < 0 ? -1 : 0;
 }

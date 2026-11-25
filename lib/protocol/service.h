@@ -101,13 +101,6 @@ bool Request::at(size_t offset, T& out) const {
     return copy(offset, &out, sizeof out);
 }
 
-// A request's data as a SEND brings it, after its address: false of a
-// body that is none.
-bool sentData(const Request& r, const unsigned char*& data, size_t& size);
-
-// Answers a SEND: the count of its data.
-void answerSent(int fd, uint32_t count);
-
 // Where a READ or a WRITE of an open file goes: off with ioAt, else its
 // position, or the file's end, size, for a WRITE that appends.
 uint64_t offsetOf(const Endpoint& e, const Io& io, bool write, uint64_t size);

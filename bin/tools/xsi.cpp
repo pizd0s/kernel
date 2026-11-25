@@ -1,13 +1,12 @@
 // xsi: XSI's message queues and semaphore sets of the system, a service
-// of rootfs's /dev/init/ctl (lib/protocol/service.h). An open of ipc/xsi
-// takes a call of XSI's in its SEND and answers it to its RECV, which
-// waits as long as the call does, a deadline's EAGAIN or a CANCEL's EINTR
-// ending it, and EIDRM the removal of what it waits for. The calls and
-// their bodies are lib/protocol's; who calls is the header's ids, and the
-// pid the call says. A semop of SEM_UNDO brings the process's undo file,
-// an open of ipc/xsi its lib/c keeps, which the kernel's id names (fdid):
-// its adjustments are that file's, and come back to the semaphores when
-// it closes.
+// of rootfs's /dev/init/ctl (lib/protocol/service.h), its calls ctls
+// (lib/protocol/calls.h). An open of ipc/xsi takes a call of XSI's,
+// answered once it is done, which waits as long as the call does, a
+// deadline's EAGAIN or a CANCEL's EINTR ending it, and EIDRM the removal
+// of what it waits for. Who calls is the header's ids, and the pid the
+// call says. A process makes its calls on an open of its own, which its
+// lib/c keeps: a semop's adjustments of SEM_UNDO are that open's, and
+// come back to the semaphores when it closes.
 //
 //     xsi [-r fd]
 //
@@ -98,21 +97,17 @@ namespace {
         int32_t by[];
     };
 
-    // An open of ipc/xsi: its pair's id; the call its SEND brought, the
-    // undo file's id with it; as a process's undo file, its adjustments
-    // and the process's pid.
+    // An open of ipc/xsi, a process's: its pair's id, SEM_UNDO's
+    // adjustments of its semops and the process's pid.
     struct Xsi {
         Kind kind;
         uint64_t id;
-        unsigned char* call;
-        uint32_t size;
-        uint64_t undo;
         Adjust* adjusts;
         uint32_t pid;
         Xsi* next; // among all
     };
 
-    // A RECV whose call waits: who asked it, its deadline, 0 for none, and
+    // A CTL whose call waits: who asked it, its deadline, 0 for none, and
     // what it waits for, a semaphore's of a set, to grow or be 0.
     struct XsiWaiter {
         Kind kind;
@@ -788,36 +783,33 @@ static int perform(const Header& h, const unsigned char* call, size_t size, uint
         memcpy(&id, call + 4, sizeof id);
     }
     w.on = id;
-    w.sem = kind == xsiSemop;
+    w.sem = kind == ctlSemop;
     switch (kind) {
-        case xsiMsgget:
+        case ctlMsgget:
             return msgget(h, call, size, out);
-        case xsiMsgsnd:
+        case ctlMsgsnd:
             return msgsnd(h, call, size, out);
-        case xsiMsgrcv:
+        case ctlMsgrcv:
             return msgrcv(h, call, size, out);
-        case xsiMsgctl:
+        case ctlMsgctl:
             return msgctl(h, call, size, out);
-        case xsiSemget:
+        case ctlSemget:
             return semget(h, call, size, out);
-        case xsiSemop:
+        case ctlSemop:
             return semop(h, call, size, undo, w.num, w.zero, out);
-        case xsiSemctl:
+        case ctlSemctl:
             return semctl(h, call, size, out);
         default:
             return EINVAL;
     }
 }
 
-// A RECV's answer: flags, no address, the outcome.
+// A call's answer: the outcome, or the errno.
 static void answerOutcome(int fd, int e, size_t size) {
     if (e != 0) {
         return fail(fd, e);
     }
-    static unsigned char out[8 + sizeof outcome];
-    memset(out, 0, 8);
-    memcpy(out + 8, outcome, size);
-    answer(fd, opOk, 0, out, 8 + size);
+    answer(fd, opOk, 0, outcome, size);
 }
 
 // The waiters tried again, in order, until none can go on: after a
@@ -843,79 +835,53 @@ static void retry() {
     }
 }
 
-// An ipc/xsi's call: a SEND's kept for its RECV, the undo file's id with
-// it.
+// An ipc/xsi's CTL: its call, done or kept until it can be, a
+// semop's adjustments of SEM_UNDO the file's.
 static void xsiCall(Xsi& x, Request& r) {
-    const unsigned char* data;
-    size_t size;
-    switch (r.h.op) {
-        case opSend: {
-            if (!sentData(r, data, size) || size < 4 || r.count > 2) {
-                return fail(r.reply(), EINVAL);
-            }
-            unsigned long long undo = 0;
-            if (r.count == 2 && fdid(r.fds[0], &undo) != 0) {
-                return fail(r.reply(), EBADF);
-            }
-            auto* call = static_cast<unsigned char*>(malloc(size));
-            if (!call) {
-                return fail(r.reply(), ENOMEM);
-            }
-            memcpy(call, data, size);
-            free(x.call);
-            x.call = call;
-            x.size = uint32_t(size);
-            x.undo = undo;
-            return answerSent(r.reply(), uint32_t(size));
-        }
-        case opRecv: {
-            if (!x.call) {
-                return fail(r.reply(), EINVAL);
-            }
-            auto* w = static_cast<XsiWaiter*>(calloc(1, sizeof(XsiWaiter)));
-            if (!w) {
-                return fail(r.reply(), ENOMEM);
-            }
-            size_t out = 0;
-            const int e = perform(r.h, x.call, x.size, x.undo, *w, out);
-            if (e != waits) {
-                free(w);
-                answerOutcome(r.reply(), e, out);
-                free(x.call);
-                x.call = nullptr;
-                if (e == 0) {
-                    retry();
-                }
-                return;
-            }
-            SemCall c{};
-            if (w->sem && x.size >= sizeof c) {
-                memcpy(&c, x.call, sizeof c);
-                if (c.timed) {
-                    if (c.nsec < 0 || c.nsec >= 1000000000 || c.sec < 0) {
-                        free(w);
-                        return fail(r.reply(), EINVAL);
-                    }
-                    w->deadline = monotonic() + uint64_t(c.sec) * 1000000000 + uint64_t(c.nsec);
-                }
-            }
-            w->kind = Kind::XsiWaiter;
-            w->h = r.h;
-            w->call = x.call;
-            w->size = x.size;
-            w->undo = x.undo;
-            x.call = nullptr;
-            w->kept = keep(epoll, r, w);
-            XsiWaiter** at = &xsiWaiters;
-            while (*at) {
-                at = &(*at)->next;
-            }
-            *at = w;
-            return;
-        }
-        default:
-            return fail(r.reply(), unserved(r.h.op));
+    if (r.h.op != opCtl) {
+        return fail(r.reply(), unserved(r.h.op));
     }
+    auto* w = static_cast<XsiWaiter*>(calloc(1, sizeof(XsiWaiter)));
+    if (!w) {
+        return fail(r.reply(), ENOMEM);
+    }
+    size_t out = 0;
+    const int e = perform(r.h, r.body, r.size, x.id, *w, out);
+    if (e != waits) {
+        free(w);
+        answerOutcome(r.reply(), e, out);
+        if (e == 0) {
+            retry();
+        }
+        return;
+    }
+    SemCall c{};
+    if (w->sem && r.size >= sizeof c) {
+        memcpy(&c, r.body, sizeof c);
+        if (c.timed) {
+            if (c.nsec < 0 || c.nsec >= 1000000000 || c.sec < 0) {
+                free(w);
+                return fail(r.reply(), EINVAL);
+            }
+            w->deadline = monotonic() + uint64_t(c.sec) * 1000000000 + uint64_t(c.nsec);
+        }
+    }
+    w->call = static_cast<unsigned char*>(malloc(r.size));
+    if (!w->call) {
+        free(w);
+        return fail(r.reply(), ENOMEM);
+    }
+    memcpy(w->call, r.body, r.size);
+    w->kind = Kind::XsiWaiter;
+    w->h = r.h;
+    w->size = uint32_t(r.size);
+    w->undo = x.id;
+    w->kept = keep(epoll, r, w);
+    XsiWaiter** at = &xsiWaiters;
+    while (*at) {
+        at = &(*at)->next;
+    }
+    *at = w;
 }
 
 static void unwaitXsi(XsiWaiter* w) {
@@ -948,7 +914,6 @@ static void xsiGone(Xsi* x) {
             break;
         }
     }
-    free(x->call);
     free(x);
     if (changed) {
         retry();

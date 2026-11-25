@@ -349,92 +349,81 @@
 //                                         bind(2) its socket to; only
 //                                         REGISTER makes a name in /dev
 //
-//   rootfs's, of inotify and watchdir. A SEND, sendmsg's, is a call of
-//   how u32, value u32 and its rights; an ACCEPT of a handle gives a file
-//   of rootfs's, OK opened, fds[0] the file.
-//     SEND      watchEventsNew, 0         on a handle: its next ACCEPT
-//                                         gives an events file, inotify's
-//                                         instance, whose READ gives struct
-//                                         inotify_event's as inotify(7) has
-//                                         them, as many as fit, waiting for
-//                                         one but of O_NONBLOCK, and whose
-//                                         INQ is the bytes queued
-//     ACCEPT    arg flags                 on a handle of a directory, of no
-//                                         SEND before: the directory's
-//                                         watcher, of the flags' O_NONBLOCK,
-//                                         whose READ gives records of its
-//                                         names, kind u8, name, 0, as many
-//                                         as fit: watchExisting of each name
-//                                         there, then watchIdle once, then
+//   rootfs's CTLs, of inotify and watchdir:
+//     ctlWatchEvents    flags u32         on a handle: OK 1, an events
+//                                         file, inotify's instance, of
+//                                         O_NONBLOCK of the flags, whose
+//                                         READ gives struct inotify_event's
+//                                         as inotify(7) has them, as many as
+//                                         fit, waiting for one but of
+//                                         O_NONBLOCK, and whose ctlInq is
+//                                         the bytes queued
+//     ctlWatchDirectory flags u32         on a handle of a directory: OK 1,
+//                                         once it listed it, the
+//                                         directory's watcher, of O_NONBLOCK
+//                                         of the flags, whose READ gives
+//                                         records of its names, kind u8,
+//                                         name, 0, as many as fit:
+//                                         watchExisting of each name there,
+//                                         then watchIdle once, then
 //                                         watchAdded and watchRemoved, each
 //                                         of what changed since the READ
 //                                         before; a name gone and back is
 //                                         another, removed and added. A READ
 //                                         that finds none waits, but of
-//                                         O_NONBLOCK; one of a directory gone
-//                                         is 0
-//     SEND      watchEventsAdd, mask      on an events file, fds a
+//                                         O_NONBLOCK; one of a directory
+//                                         gone is 0
+//     ctlWatchAdd       mask u32          on an events file, fds a
 //                                         directory, a handle, which rootfs
 //                                         knows by its id, the kernel's
-//                                         (fdid), then where the mark's
-//                                         number goes: its events to the
-//                                         file's; wd u32 there, then OK count
-//     SEND      watchEventsRemove, wd     on an events file: the mark taken
+//                                         (fdid): its events to the file's;
+//                                         OK wd u32
+//     ctlWatchRemove    wd u32            on an events file: the mark taken
 //                                         away
 //
 //   mqueue's and xsi's (bin/tools), of /dev/ipc/mq and /dev/ipc/xsi, whose
-//   opens devfs hands on. An open of ipc/mq is a control file:
-//     SEND      mqOpen u32, flags u32, mode u32, maxmsg u32, msgsize u32,
-//                           name, 0       the queue of the name, made of
-//                                         O_CREAT, the mode the umask's,
-//                                         limits of 0 the defaults: OK count
-//     SEND      mqUnlink u32, name, 0     the name goes, the queue with its
+//   opens devfs hands on, their calls CTLs. Of an open of ipc/mq:
+//     ctlMqOpen     flags u32, mode u32, maxmsg u32, msgsize u32, name, 0
+//                                         OK 1, a descriptor of the queue of
+//                                         the name, made of O_CREAT, the
+//                                         mode the umask's, limits of 0 the
+//                                         defaults; of the flags' access and
+//                                         O_NONBLOCK
+//     ctlMqUnlink   name, 0               the name goes, the queue with its
 //                                         last descriptor
-//     ACCEPT    arg flags                 OK opened, fds[0] a descriptor of
-//                                         the queue the SEND before opened,
-//                                         of its access, O_NONBLOCK of the
-//                                         flags
-//   and a descriptor of a queue, which tells its readiness (READY), POLLIN
-//   of a message and POLLOUT of room:
-//     SEND      arg flags   prio u32, pid u32, uid u32, message   OK count;
-//                                         waiting for room but of
-//                                         O_NONBLOCK or MSG_DONTWAIT, EAGAIN
-//     RECV      arg flags   want u32      OK flags 0, len 0, prio u32,
-//                                         message: the first of the highest
-//                                         priority, waiting as SEND does;
-//                                         EMSGSIZE of want short of msgsize
-//                                         and 4
-//     GETSOCKOPT            ipcLevel, mqAttributes   OK maxmsg u32, msgsize
-//                                         u32, curmsgs u32, flags u32
-//     SETSOCKOPT            ipcLevel, mqNotify, pid u32, how u32, signal
-//                                         u32, value u32: the process's
-//                                         notification, EBUSY while
-//                                         another's lives; mqUnnotify, pid
-//                                         u32, its own taken away
-//   An open of ipc/xsi takes a call of XSI's and answers it:
-//     SEND                  call          the call, kept for the RECV, its
-//                                         rights a semop of SEM_UNDO's undo
-//                                         file, an open of ipc/xsi the
-//                                         process keeps, whose close gives
-//                                         its adjustments back: OK count
-//     RECV      arg flags   want u32      OK flags 0, len 0, the call's
-//                                         answer, when the call is done
-//   A call is its kind u32, then:
-//     xsiMsgget key i32, flags u32        id i32
-//     xsiMsgsnd id i32, flags u32, pid u32, mtype i32, text
-//     xsiMsgrcv id i32, room i32, mtype i32, flags u32, pid u32
-//                                         mtype i32, text
-//     xsiMsgctl id i32, cmd u32, uid u32, gid u32, mode u32, qbytes u32
-//                                         IPC_STAT's perm, stime i64, rtime
-//                                         i64, ctime i64, qnum u32, qbytes
-//                                         u32, lspid u32, lrpid u32, cbytes
-//                                         u32
-//     xsiSemget key i32, nsems i32, flags u32   id i32
-//     xsiSemop  id i32, nops u32, timed u32, sec i64, nsec i64, pid u32,
-//               (num u16, op i16, flg i16)*
-//     xsiSemctl id i32, num i32, cmd u32, pid u32, value i32, uid u32,
-//               gid u32, mode u32, SETALL's values u16*
-//                                         a value i32, GETALL's u16*, or
+//   of a descriptor of a queue, which tells its readiness (READY), POLLIN
+//   of a message and POLLOUT of room; until is timed u32, sec i64, nsec
+//   i64, of CLOCK_REALTIME, past which a call that waits is ETIMEDOUT:
+//     ctlMqSend     prio u32, pid u32, uid u32, until, message
+//                                         waits for room but of O_NONBLOCK,
+//                                         EAGAIN
+//     ctlMqReceive  room u32, until       OK prio u32, message: the first of
+//                                         the highest priority, waiting as a
+//                                         send does; EMSGSIZE of room short
+//                                         of msgsize
+//     ctlMqAttributes                     OK maxmsg u32, msgsize u32,
+//                                         curmsgs u32, flags u32
+//     ctlMqNotify   pid u32, how u32, signal u32, value u32
+//                                         the process's notification, EBUSY
+//                                         while another's lives
+//     ctlMqUnnotify pid u32               its own taken away
+//   Of an open of ipc/xsi, a process's, whose semops' adjustments of
+//   SEM_UNDO it keeps and gives back as it closes, answered once done:
+//     ctlMsgget     key i32, flags u32    OK id i32
+//     ctlMsgsnd     id i32, flags u32, pid u32, mtype i32, text
+//     ctlMsgrcv     id i32, room i32, mtype i32, flags u32, pid u32
+//                                         OK mtype i32, text
+//     ctlMsgctl     id i32, cmd u32, uid u32, gid u32, mode u32, qbytes u32
+//                                         IPC_STAT's OK perm, stime i64,
+//                                         rtime i64, ctime i64, qnum u32,
+//                                         qbytes u32, lspid u32, lrpid u32,
+//                                         cbytes u32
+//     ctlSemget     key i32, nsems i32, flags u32   OK id i32
+//     ctlSemop      id i32, nops u32, timed u32, sec i64, nsec i64, pid u32,
+//                   (num u16, op i16, flg i16)*
+//     ctlSemctl     id i32, num i32, cmd u32, pid u32, value i32, uid u32,
+//                   gid u32, mode u32, SETALL's values u16*
+//                                         OK a value i32, GETALL's u16*, or
 //                                         IPC_STAT's perm, otime i64, ctime
 //                                         i64, nsems u32
 //   perm is key i32, uid u32, gid u32, cuid u32, cgid u32, mode u32, seq
@@ -598,25 +587,6 @@ constexpr uint8_t watchRemoved = 4;
 // flag of a name that is a directory's.
 constexpr uint8_t noticeGone = 5;
 constexpr uint8_t noticeDirectory = 0x80;
-// mqueue's: a SEND's of ipc/mq's control file and a queue's options
-// (getsockopt and setsockopt, of ipcLevel); xsi's: the calls of ipc/xsi.
-constexpr uint32_t mqOpen = 1;
-constexpr uint32_t mqUnlink = 2;
-constexpr uint32_t ipcLevel = 0x6970;
-constexpr uint32_t mqAttributes = 1;
-constexpr uint32_t mqNotify = 2;
-constexpr uint32_t mqUnnotify = 3;
-constexpr uint32_t xsiMsgget = 1;
-constexpr uint32_t xsiMsgsnd = 2;
-constexpr uint32_t xsiMsgrcv = 3;
-constexpr uint32_t xsiMsgctl = 4;
-constexpr uint32_t xsiSemget = 5;
-constexpr uint32_t xsiSemop = 6;
-constexpr uint32_t xsiSemctl = 7;
-// A SEND's of inotify's, rootfs's: its how.
-constexpr uint32_t watchEventsNew = 1;
-constexpr uint32_t watchEventsAdd = 2;
-constexpr uint32_t watchEventsRemove = 3;
 
 // The room an entry of a READDIR's takes of struct dirent64, of a name of
 // length.

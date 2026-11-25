@@ -9,7 +9,7 @@ __BEGIN_DECLS
 /*
  * inotify, Linux's, of names: a descriptor of events of watched
  * directories, rootfs's, the VFS's, which hears every change of the names
- * (an ACCEPT of a handle, lib/protocol). A watch tells IN_CREATE and
+ * (a ctl of a handle, lib/protocol). A watch tells IN_CREATE and
  * IN_DELETE of the names in its directory, with IN_ISDIR for a directory,
  * and IN_DELETE_SELF and then IN_IGNORED when the directory goes; a rename
  * is a removed name and an added one. File systems tell of names only, so

@@ -1,15 +1,17 @@
 // mqueue: POSIX's message queues of the system, a service of rootfs's
-// /dev/init/ctl (lib/protocol/service.h). An open of ipc/mq is a control
-// file, whose SEND opens or unlinks a queue by its name and whose ACCEPT
-// then gives a descriptor of the queue opened: its SEND a message's, its
-// RECV the first of the highest priority, waiting where the queue is full
-// or empty but of O_NONBLOCK or MSG_DONTWAIT, its readiness POLLIN while
-// there is a message and POLLOUT while there is room. The calls and their
-// bodies are lib/protocol's; who asks is the header's ids, and a message
-// says who sent it. A queue unlinked stays while a descriptor of it is
-// open. A notification is a signal of the system's (sigqueueinfo),
-// SI_MESGQ, to the process that asked for it, of the sender's, as a
-// message comes to an empty queue no one waits for, and once.
+// /dev/init/ctl (lib/protocol/service.h), its calls ctls
+// (lib/protocol/calls.h). An open of ipc/mq is a control file: its
+// ctlMqOpen opens a queue by its name, or makes it, answered with a
+// descriptor of it, and its ctlMqUnlink takes the name away. A queue's
+// ctlMqSend is a message's, its ctlMqReceive takes the first of the
+// highest priority, each waiting where the queue is full or empty but of
+// O_NONBLOCK, as long as its deadline lets it, ETIMEDOUT past it; its
+// readiness is POLLIN while there is a message and POLLOUT while there
+// is room. Who asks is the header's ids, and a message says who sent it.
+// A queue unlinked stays while a descriptor of it is open. A
+// notification is a signal of the system's (sigqueueinfo), SI_MESGQ, to
+// the process that asked for it, of the sender's, as a message comes to
+// an empty queue no one waits for, and once.
 //
 //     mqueue [-r fd]
 //
@@ -53,9 +55,9 @@ namespace {
 
     // A queue: its name, its owner and mode, its limits; its messages,
     // the highest priority first and in order within one; its open
-    // descriptors and the controls that opened it, which keep it once it
-    // is unlinked; the sends and receives that wait, in order; and the
-    // notification asked of it, a description's.
+    // descriptors, which keep it once it is unlinked; the sends and
+    // receives that wait, in order; and the notification asked of it, a
+    // description's.
     struct Queue {
         char name[NAME_MAX + 1];
         uint32_t mode;
@@ -77,15 +79,13 @@ namespace {
         uint32_t notify;
         uint32_t signo;
         uint32_t value;
-        Queue* next; // among the linked
+        Queue* next;  // among the linked
+        Queue* among; // among all, unlinked too
     };
 
-    // An open of ipc/mq: the queue its last SEND opened and how, which
-    // its ACCEPT gives.
+    // An open of ipc/mq.
     struct Control {
         Kind kind;
-        Queue* opened;
-        uint32_t access;
     };
 
     // A descriptor of a queue: its open file's endpoint.
@@ -97,15 +97,48 @@ namespace {
         Description* next; // among its queue's
     };
 
-    // A SEND or a RECV kept: where it is answered, of which description;
-    // a SEND's message, a RECV's room.
+    // A send or a receive kept: where it is answered, of which
+    // description; a send's message, a receive's room; its deadline, of
+    // CLOCK_REALTIME, 0 for none.
     struct Waiter {
         Kind kind;
         Endpoint* kept;
         Description* d;
         Message* message;
         uint32_t want;
+        uint64_t deadline;
         Waiter* next;
+    };
+
+    struct [[gnu::packed]] Open {
+        uint32_t call;
+        uint32_t flags;
+        uint32_t mode;
+        uint32_t maxmsg;
+        uint32_t msgsize;
+    };
+
+    // What a send or a receive waits until: timed, then the time.
+    struct [[gnu::packed]] Until {
+        uint32_t timed;
+        int64_t sec;
+        int64_t nsec;
+    };
+
+    // A send's: its priority, who sends it, until when, then the message.
+    struct [[gnu::packed]] Sent {
+        uint32_t call;
+        uint32_t prio;
+        uint32_t pid;
+        uint32_t uid;
+        Until until;
+    };
+
+    // A receive's: the room for the message, until when.
+    struct [[gnu::packed]] Received {
+        uint32_t call;
+        uint32_t room;
+        Until until;
     };
 }
 
@@ -116,15 +149,9 @@ constexpr uint32_t maxMsgsize = 32768;
 constexpr uint64_t maxBytes = 1 << 26;
 constexpr uint32_t prioMax = 32768;
 
-// The header of a SEND's message: its priority and who sends it.
-struct Sent {
-    uint32_t prio;
-    uint32_t pid;
-    uint32_t uid;
-};
-
 static int epoll = -1;
 static Queue* queues;
+static Queue* allQueues;
 static uint64_t inodes;
 
 static uint64_t now() {
@@ -154,6 +181,12 @@ static void release(Queue* q) {
     while (Message* m = q->messages) {
         q->messages = m->next;
         free(m);
+    }
+    for (Queue** at = &allQueues; *at; at = &(*at)->among) {
+        if (*at == q) {
+            *at = q->among;
+            break;
+        }
     }
     free(q);
 }
@@ -223,13 +256,12 @@ static void unwait(Waiter*& list, Waiter* w) {
     }
 }
 
-// A RECV's answer: flags, no address, the priority and the message.
+// A receive's answer: the priority, then the message.
 static void answerMessage(int fd, const Message& m) {
-    static unsigned char out[12 + maxMsgsize];
-    const uint32_t head[3] = {0, 0, m.prio};
-    memcpy(out, head, sizeof head);
-    memcpy(out + sizeof head, m.data, m.size);
-    answer(fd, opOk, 0, out, sizeof head + m.size);
+    static unsigned char out[4 + maxMsgsize];
+    memcpy(out, &m.prio, sizeof m.prio);
+    memcpy(out + sizeof m.prio, m.data, m.size);
+    answer(fd, opOk, 0, out, sizeof m.prio + m.size);
 }
 
 static void doneWaiting(Waiter* w) {
@@ -245,7 +277,7 @@ static Message* take(Queue& q) {
     --q.count;
     if (Waiter* w = q.senders) {
         q.senders = w->next;
-        answerSent(w->kept->fd, w->message->size + sizeof(Sent));
+        answer(w->kept->fd, opOk, 0);
         enqueue(q, w->message);
         w->message = nullptr;
         doneWaiting(w);
@@ -253,19 +285,38 @@ static Message* take(Queue& q) {
     return m;
 }
 
-static void controlOpen(Control& c, const Request& r, const unsigned char* data, size_t size) {
-    struct {
-        uint32_t call;
-        uint32_t flags;
-        uint32_t mode;
-        uint32_t maxmsg;
-        uint32_t msgsize;
-    } o;
-    if (size <= sizeof o || data[size - 1] != 0) {
+// A descriptor of a queue, answered on fd: OK 1, an open file of the
+// access and of O_NONBLOCK of the flags.
+static void openQueue(Queue& q, uint32_t access, uint32_t flags, const Request& r) {
+    auto* d = static_cast<Description*>(calloc(1, sizeof(Description)));
+    int pair[2];
+    if (!d || socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+        free(d);
+        return fail(r.reply(), ENOMEM);
+    }
+    d->kind = Kind::Description;
+    d->q = &q;
+    d->access = access;
+    Endpoint opened{pair[0], false, access != O_WRONLY, access != O_RDONLY, d};
+    opened.nonblock = (flags & O_NONBLOCK) != 0;
+    d->end = watch(epoll, opened);
+    ++q.refs;
+    d->next = q.descriptions;
+    q.descriptions = d;
+    const Header h{opOk, 1, 0, 0, 0, 0};
+    const Opened what{openedFile, access, 0, 0, eventsOf(q), 0};
+    const iovec parts[] = {{const_cast<Header*>(&h), sizeof h}, {const_cast<Opened*>(&what), sizeof what}};
+    sendPacket(r.reply(), parts, 2, &pair[1], 1);
+    close(pair[1]);
+}
+
+static void controlOpen(const Request& r) {
+    Open o;
+    if (r.size <= sizeof o || r.body[r.size - 1] != 0) {
         return fail(r.reply(), EINVAL);
     }
-    memcpy(&o, data, sizeof o);
-    const char* name = reinterpret_cast<const char*>(data + sizeof o);
+    memcpy(&o, r.body, sizeof o);
+    const char* name = reinterpret_cast<const char*>(r.body + sizeof o);
     const size_t length = strlen(name);
     const uint32_t access = o.flags & O_ACCMODE;
     if (length == 0 || strchr(name, '/') || access == O_ACCMODE) {
@@ -287,42 +338,38 @@ static void controlOpen(Control& c, const Request& r, const unsigned char* data,
         if (r.h.uid != 0 && (bits & want) != want) {
             return fail(r.reply(), EACCES);
         }
-    } else {
-        const uint32_t maxmsg = o.maxmsg ? o.maxmsg : defaultMaxmsg;
-        const uint32_t msgsize = o.msgsize ? o.msgsize : defaultMsgsize;
-        if (maxmsg > maxMaxmsg || msgsize > maxMsgsize || uint64_t(maxmsg) * msgsize > maxBytes || int32_t(maxmsg) < 0) {
-            return fail(r.reply(), EINVAL);
-        }
-        q = static_cast<Queue*>(calloc(1, sizeof(Queue)));
-        if (!q) {
-            return fail(r.reply(), ENOMEM);
-        }
-        memcpy(q->name, name, length + 1);
-        q->mode = o.mode & 0777;
-        q->uid = r.h.uid;
-        q->gid = r.h.gid;
-        q->maxmsg = maxmsg;
-        q->msgsize = msgsize;
-        q->ino = ++inodes;
-        q->made = now();
-        q->linked = true;
-        q->next = queues;
-        queues = q;
+        return openQueue(*q, access, o.flags, r);
     }
-    ++q->refs;
-    if (c.opened) {
-        release(c.opened);
-    }
-    c.opened = q;
-    c.access = access;
-    answerSent(r.reply(), uint32_t(size));
-}
-
-static void controlUnlink(const Request& r, const unsigned char* data, size_t size) {
-    if (size <= 4 || data[size - 1] != 0) {
+    const uint32_t maxmsg = o.maxmsg ? o.maxmsg : defaultMaxmsg;
+    const uint32_t msgsize = o.msgsize ? o.msgsize : defaultMsgsize;
+    if (maxmsg > maxMaxmsg || msgsize > maxMsgsize || uint64_t(maxmsg) * msgsize > maxBytes || int32_t(maxmsg) < 0) {
         return fail(r.reply(), EINVAL);
     }
-    Queue* q = named(reinterpret_cast<const char*>(data + 4));
+    q = static_cast<Queue*>(calloc(1, sizeof(Queue)));
+    if (!q) {
+        return fail(r.reply(), ENOMEM);
+    }
+    memcpy(q->name, name, length + 1);
+    q->mode = o.mode & 0777;
+    q->uid = r.h.uid;
+    q->gid = r.h.gid;
+    q->maxmsg = maxmsg;
+    q->msgsize = msgsize;
+    q->ino = ++inodes;
+    q->made = now();
+    q->linked = true;
+    q->next = queues;
+    queues = q;
+    q->among = allQueues;
+    allQueues = q;
+    openQueue(*q, access, o.flags, r);
+}
+
+static void controlUnlink(const Request& r) {
+    if (r.size <= 4 || r.body[r.size - 1] != 0) {
+        return fail(r.reply(), EINVAL);
+    }
+    Queue* q = named(reinterpret_cast<const char*>(r.body + 4));
     if (!q) {
         return fail(r.reply(), ENOENT);
     }
@@ -330,106 +377,99 @@ static void controlUnlink(const Request& r, const unsigned char* data, size_t si
         return fail(r.reply(), EACCES);
     }
     unlinkQueue(q);
-    answerSent(r.reply(), uint32_t(size));
+    answer(r.reply(), opOk, 0);
 }
 
-// The ACCEPT of a control file: a descriptor of the queue its SEND
-// opened, of the access asked then and the ACCEPT's O_NONBLOCK.
-static void controlAccept(Control& c, Request& r) {
-    Queue* q = c.opened;
-    if (!q) {
-        return fail(r.reply(), EINVAL);
+static void controlCall(const Request& r) {
+    uint32_t call = 0;
+    if (r.h.op != opCtl) {
+        return fail(r.reply(), unserved(r.h.op));
     }
-    auto* d = static_cast<Description*>(calloc(1, sizeof(Description)));
-    if (!d) {
-        return fail(r.reply(), ENOMEM);
-    }
-    d->kind = Kind::Description;
-    d->q = q;
-    d->access = c.access;
-    // answerOpen's flags are an OPEN's: the access, and the ACCEPT's
-    // O_NONBLOCK.
-    r.h.arg = (r.h.arg & O_NONBLOCK) | c.access;
-    d->end = answerOpen(epoll, r, {openedFile, 0, 0, 0, eventsOf(*q), 0}, d);
-    if (!d->end) {
-        free(d);
-        return;
-    }
-    c.opened = nullptr; // its reference is the description's
-    d->next = q->descriptions;
-    q->descriptions = d;
-}
-
-static void controlCall(Control& c, Request& r) {
-    const unsigned char* data;
-    size_t size;
-    uint32_t call;
-    switch (r.h.op) {
-        case opSend:
-            if (!sentData(r, data, size) || size < 4) {
-                return fail(r.reply(), EINVAL);
-            }
-            memcpy(&call, data, sizeof call);
-            if (call == mqOpen) {
-                return controlOpen(c, r, data, size);
-            }
-            if (call == mqUnlink) {
-                return controlUnlink(r, data, size);
-            }
-            return fail(r.reply(), EINVAL);
-        case opAccept:
-            return controlAccept(c, r);
+    r.at(0, call);
+    switch (call) {
+        case ctlMqOpen:
+            return controlOpen(r);
+        case ctlMqUnlink:
+            return controlUnlink(r);
         default:
-            return fail(r.reply(), unserved(r.h.op));
+            return fail(r.reply(), ENOTTY);
     }
+}
+
+// The deadline of a call that would wait, of CLOCK_REALTIME, 0 for none,
+// into at: 0, or the errno, EINVAL of a time that is none and ETIMEDOUT
+// of one past.
+static int deadlineOf(const Until& u, uint64_t& at) {
+    at = 0;
+    if (!u.timed) {
+        return 0;
+    }
+    if (u.nsec < 0 || u.nsec >= 1000000000) {
+        return EINVAL;
+    }
+    if (u.sec < 0) {
+        return ETIMEDOUT;
+    }
+    at = uint64_t(u.sec) * 1000000000 + uint64_t(u.nsec);
+    return at <= now() ? ETIMEDOUT : 0;
+}
+
+// A call kept in a list of waiters, last.
+static void wait(Waiter*& list, Waiter* w, Request& r) {
+    w->kind = Kind::Waiter;
+    w->kept = keep(epoll, r, w);
+    Waiter** at = &list;
+    while (*at) {
+        at = &(*at)->next;
+    }
+    *at = w;
 }
 
 static void queueSend(Description& d, Request& r) {
     Queue& q = *d.q;
-    const unsigned char* data;
-    size_t size;
     Sent by;
     if (d.access == O_RDONLY) {
         return fail(r.reply(), EBADF);
     }
-    if (!sentData(r, data, size) || size < sizeof by) {
+    if (r.size < sizeof by) {
         return fail(r.reply(), EINVAL);
     }
-    memcpy(&by, data, sizeof by);
-    if (size - sizeof by > q.msgsize) {
+    memcpy(&by, r.body, sizeof by);
+    const size_t size = r.size - sizeof by;
+    if (size > q.msgsize) {
         return fail(r.reply(), EMSGSIZE);
     }
     if (by.prio >= prioMax) {
         return fail(r.reply(), EINVAL);
     }
-    if (q.count >= q.maxmsg && (d.end->nonblock || (r.h.arg & MSG_DONTWAIT) != 0)) {
-        return fail(r.reply(), EAGAIN);
+    uint64_t deadline = 0;
+    if (q.count >= q.maxmsg) {
+        if (d.end->nonblock) {
+            return fail(r.reply(), EAGAIN);
+        }
+        if (const int e = deadlineOf(by.until, deadline)) {
+            return fail(r.reply(), e);
+        }
     }
-    auto* m = static_cast<Message*>(malloc(sizeof(Message) + size - sizeof by));
+    auto* m = static_cast<Message*>(malloc(sizeof(Message) + size));
     if (!m) {
         return fail(r.reply(), ENOMEM);
     }
     m->prio = by.prio;
-    m->size = uint32_t(size - sizeof by);
-    memcpy(m->data, data + sizeof by, m->size);
+    m->size = uint32_t(size);
+    memcpy(m->data, r.body + sizeof by, size);
     if (q.count >= q.maxmsg) {
         auto* w = static_cast<Waiter*>(calloc(1, sizeof(Waiter)));
         if (!w) {
             free(m);
             return fail(r.reply(), ENOMEM);
         }
-        w->kind = Kind::Waiter;
         w->d = &d;
         w->message = m;
-        w->kept = keep(epoll, r, w);
-        Waiter** at = &q.senders;
-        while (*at) {
-            at = &(*at)->next;
-        }
-        *at = w;
-        return;
+        w->deadline = deadline;
+        return wait(q.senders, w, r);
     }
-    answerSent(r.reply(), uint32_t(size));
+    answer(r.reply(), opOk, 0);
     if (Waiter* w = q.receivers) {
         q.receivers = w->next;
         answerMessage(w->kept->fd, *m);
@@ -446,14 +486,15 @@ static void queueSend(Description& d, Request& r) {
 
 static void queueReceive(Description& d, Request& r) {
     Queue& q = *d.q;
-    uint32_t want;
+    Received c;
     if (d.access == O_WRONLY) {
         return fail(r.reply(), EBADF);
     }
-    if (!r.at(0, want)) {
+    if (r.size != sizeof c) {
         return fail(r.reply(), EINVAL);
     }
-    if (want < 4 || want - 4 < q.msgsize) {
+    memcpy(&c, r.body, sizeof c);
+    if (c.room < q.msgsize) {
         return fail(r.reply(), EMSGSIZE);
     }
     if (q.count > 0) {
@@ -463,60 +504,38 @@ static void queueReceive(Description& d, Request& r) {
         ready(q);
         return;
     }
-    if (d.end->nonblock || (r.h.arg & MSG_DONTWAIT) != 0) {
+    if (d.end->nonblock) {
         return fail(r.reply(), EAGAIN);
+    }
+    uint64_t deadline = 0;
+    if (const int e = deadlineOf(c.until, deadline)) {
+        return fail(r.reply(), e);
     }
     auto* w = static_cast<Waiter*>(calloc(1, sizeof(Waiter)));
     if (!w) {
         return fail(r.reply(), ENOMEM);
     }
-    w->kind = Kind::Waiter;
     w->d = &d;
-    w->want = want;
-    w->kept = keep(epoll, r, w);
-    Waiter** at = &q.receivers;
-    while (*at) {
-        at = &(*at)->next;
-    }
-    *at = w;
+    w->want = c.room;
+    w->deadline = deadline;
+    wait(q.receivers, w, r);
 }
 
-// getsockopt of mqAttributes: maxmsg, msgsize, curmsgs and the
-// description's flags.
-static void queueOption(Description& d, const Request& r) {
-    uint32_t level;
-    uint32_t name;
-    if (!r.at(0, level) || !r.at(4, name)) {
-        return fail(r.reply(), EINVAL);
-    }
-    if (level != ipcLevel || name != mqAttributes) {
-        return fail(r.reply(), ENOPROTOOPT);
-    }
-    const Queue& q = *d.q;
-    const uint32_t attr[4] = {q.maxmsg, q.msgsize, q.count, d.end->nonblock ? uint32_t(O_NONBLOCK) : 0};
-    answer(r.reply(), opOk, 0, attr, sizeof attr);
-}
-
-// setsockopt of mqNotify, pid, how, signal and value, which a process
-// asks once while it lives; mqUnnotify, pid, which takes its own away.
-static void queueSetOption(Description& d, const Request& r) {
+// A notification a process asks once while it lives: pid, how, signal
+// and value; or its own taken away, pid.
+static void queueNotify(Description& d, uint32_t call, const Request& r) {
     Queue& q = *d.q;
-    uint32_t level;
-    uint32_t name;
     uint32_t value[4] = {};
-    if (!r.at(0, level) || !r.at(4, name) || !r.at(8, value[0])) {
+    if (!r.at(4, value[0])) {
         return fail(r.reply(), EINVAL);
     }
-    if (level != ipcLevel || (name != mqNotify && name != mqUnnotify)) {
-        return fail(r.reply(), ENOPROTOOPT);
-    }
-    if (name == mqUnnotify) {
+    if (call == ctlMqUnnotify) {
         if (q.notified && q.notifier == value[0]) {
             q.notified = nullptr;
         }
         return answer(r.reply(), opOk, 0);
     }
-    if (!r.at(8, value)) {
+    if (!r.at(4, value)) {
         return fail(r.reply(), EINVAL);
     }
     if (q.notified && alive(q.notifier)) {
@@ -531,20 +550,10 @@ static void queueSetOption(Description& d, const Request& r) {
 }
 
 static void queueCall(Description& d, Request& r) {
+    uint32_t call = 0;
     switch (r.h.op) {
-        case opSend:
-            return queueSend(d, r);
-        case opRecv:
-            return queueReceive(d, r);
-        case opGetsockopt:
-            return queueOption(d, r);
-        case opSetsockopt:
-            return queueSetOption(d, r);
-        case opSocktype: {
-            // Of a message too big for a packet: EMSGSIZE, as a datagram's.
-            const uint32_t type = SOCK_SEQPACKET;
-            return answer(r.reply(), opOk, 0, &type, sizeof type);
-        }
+        case opCtl:
+            break;
         case opFstat: {
             const Queue& q = *d.q;
             const Stat st{q.ino, 0, q.made, S_IFREG | q.mode, 1, q.uid, q.gid, q.made, 0, q.made};
@@ -552,6 +561,23 @@ static void queueCall(Description& d, Request& r) {
         }
         default:
             return fail(r.reply(), unserved(r.h.op));
+    }
+    r.at(0, call);
+    switch (call) {
+        case ctlMqSend:
+            return queueSend(d, r);
+        case ctlMqReceive:
+            return queueReceive(d, r);
+        case ctlMqAttributes: {
+            const Queue& q = *d.q;
+            const uint32_t attr[4] = {q.maxmsg, q.msgsize, q.count, d.end->nonblock ? uint32_t(O_NONBLOCK) : 0};
+            return answer(r.reply(), opOk, 0, attr, sizeof attr);
+        }
+        case ctlMqNotify:
+        case ctlMqUnnotify:
+            return queueNotify(d, call, r);
+        default:
+            return fail(r.reply(), ENOTTY);
     }
 }
 
@@ -581,12 +607,39 @@ static void handle(Endpoint& e, Request& r) {
     }
     switch (kindOf(e)) {
         case Kind::Control:
-            return controlCall(*static_cast<Control*>(e.of), r);
+            return controlCall(r);
         case Kind::Description:
             return queueCall(*static_cast<Description*>(e.of), r);
         case Kind::Waiter:
             return cancelled(static_cast<Waiter*>(e.of), r);
     }
+}
+
+// The waiters of a list past their deadlines: ETIMEDOUT; the next
+// deadline, the earliest, into next.
+static void expireOf(Waiter*& list, uint64_t at, uint64_t& next) {
+    for (Waiter *w = list, *after; w; w = after) {
+        after = w->next;
+        if (w->deadline == 0 || w->deadline > at) {
+            next = w->deadline != 0 && (next == 0 || w->deadline < next) ? w->deadline : next;
+            continue;
+        }
+        unwait(list, w);
+        fail(w->kept->fd, ETIMEDOUT);
+        doneWaiting(w);
+    }
+}
+
+// The waiters past their deadlines; the time to the next, in
+// milliseconds, -1 of none.
+static int expire() {
+    const uint64_t at = now();
+    uint64_t next = 0;
+    for (Queue* q = allQueues; q; q = q->among) {
+        expireOf(q->senders, at, next);
+        expireOf(q->receivers, at, next);
+    }
+    return next == 0 ? -1 : int((next - at + 999999) / 1000000);
 }
 
 // A description closed: its notification and the calls it keeps go, and
@@ -621,14 +674,9 @@ static void descriptionGone(Description* d) {
 // An endpoint whose other end closed; the loop closes it after.
 static void gone(Endpoint& e) {
     switch (kindOf(e)) {
-        case Kind::Control: {
-            auto* c = static_cast<Control*>(e.of);
-            if (c->opened) {
-                release(c->opened);
-            }
-            free(c);
+        case Kind::Control:
+            free(e.of);
             return;
-        }
         case Kind::Description:
             return descriptionGone(static_cast<Description*>(e.of));
         case Kind::Waiter: {
@@ -659,6 +707,6 @@ int mqueueMain(int argc, char** argv) {
     if (ready >= 0) {
         close(ready);
     }
-    serve(epoll, handle, gone);
+    serve(epoll, handle, gone, nullptr, expire);
     return 0;
 }

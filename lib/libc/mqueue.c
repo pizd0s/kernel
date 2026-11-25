@@ -1,38 +1,39 @@
 /*
- * POSIX's message queues, mqueue's (bin/tools/mqueue, lib/protocol): an
- * open of /dev/ipc/mq is a control file, whose SEND, send here, opens or
- * unlinks a queue by its name, and whose ACCEPT then gives a descriptor
- * of the queue, exec closing it. A message's SEND, sendmsg, brings its
- * priority and who sends it, and a RECV, recvmsg, takes the priority and
- * the message; each waits in mqueue but of O_NONBLOCK, and a timed one
- * waits here, in ppoll, for the queue's readiness, trying again until its
- * time is past. The attributes are getsockopt's of the queue, and so is a
- * notification, setsockopt's. A name is one of a slash, the slashes
- * before it not part of it. What is no queue is EBADF, a socket sent
- * nothing.
+ * POSIX's message queues, mqueue's (bin/tools/mqueue), each call a ctl
+ * (lib/protocol/calls.h): mq_open's and mq_unlink's of an open of
+ * /dev/ipc/mq, the first answered with a descriptor of the queue, exec
+ * closing it; the others' of the queue. A send brings its priority, who
+ * sends it and until when, then the message; a receive, the room and
+ * until when, answered the priority, then the message: each waits in
+ * mqueue but of O_NONBLOCK, and a signal of SA_RESTART restarts it. A
+ * name is one of a slash, the slashes before it not part of it. What is
+ * no queue is EBADF.
  */
 #include "sized.h"
+#include "../protocol/calls.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <mqueue.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 
-enum { mqOpen = 1, mqUnlink = 2 };
-enum { ipcLevel = 0x6970, mqAttributes = 1, mqNotify = 2, mqUnnotify = 3 };
-
 static const char control[] = "/dev/ipc/mq";
+
+// A send's or a receive's deadline: timed, then the time.
+struct __attribute__((packed)) Until {
+    uint32_t timed;
+    int64_t sec;
+    int64_t nsec;
+};
 
 // The name past its slashes, or null with errno.
 static const char* queueName(const char* name) {
@@ -57,59 +58,58 @@ static const char* queueName(const char* name) {
     return name;
 }
 
-// A control file's call of size bytes: the control, or -1 with errno.
-static int controlCall(const void* call, size_t size) {
+// A control's call, of size bytes, a descriptor of its answer's into got
+// but for null: 0, or -1 and errno.
+static int controlCall(const void* call, size_t size, int* got) {
     int c = open(control, O_RDWR | O_CLOEXEC);
 
     if (c < 0) {
         return -1;
     }
 
-    if (send(c, call, size, 0) < 0) {
-        int saved = errno;
+    struct ctl x = {call, size, NULL, 0, NULL, 0, got, got != NULL};
+    int r = ctl(c, &x, O_CLOEXEC);
+    int saved = errno;
 
-        close(c);
-        errno = saved;
+    close(c);
+    errno = saved;
 
-        return -1;
-    }
-
-    return c;
-}
-
-// A queue's descriptor, as far as a socket is none: 0, or -1 and EBADF.
-static int queueOf(mqd_t q) {
-    struct stat st;
-
-    if (fstat(q, &st) != 0 || S_ISSOCK(st.st_mode)) {
-        errno = EBADF;
+    if (r == 0 && got && x.ngot != 1) {
+        errno = EIO;
 
         return -1;
     }
 
-    return 0;
+    return r;
 }
 
-// A queue's errno of what is none of a queue's: EBADF.
-static int failed(void) {
-    if (errno == ENOTSOCK || errno == ENOPROTOOPT) {
-        errno = EBADF;
+// A queue's call, its answer into out of room: the answer's size, or -1
+// and errno, EBADF of what is no queue.
+static ssize_t queueCall(mqd_t q, const void* in, size_t size, void* out, size_t room, int flags) {
+    struct ctl c = {in, size, NULL, 0, out, room, NULL, 0};
+
+    if (ctl(q, &c, flags) != 0) {
+        if (errno == ENOTTY) {
+            errno = EBADF;
+        }
+
+        return -1;
     }
 
-    return -1;
+    return (ssize_t)c.room;
 }
 
 mqd_t __kernel_mq_open(const char* name, int flags, va_list ap, size_t size) {
     sized("mq_open", size, sizeof(struct mq_attr));
 
-    struct {
+    struct __attribute__((packed)) {
         uint32_t call;
         uint32_t flags;
         uint32_t mode;
         uint32_t maxmsg;
         uint32_t msgsize;
         char name[NAME_MAX + 1];
-    } o = {mqOpen, (uint32_t)flags, 0, 0, 0, {0}};
+    } o = {ctlMqOpen, (uint32_t)flags, 0, 0, 0, {0}};
     const char* key = queueName(name);
 
     if (!key) {
@@ -138,29 +138,18 @@ mqd_t __kernel_mq_open(const char* name, int flags, va_list ap, size_t size) {
     }
 
     size_t n = strlen(key);
+    int q = -1;
 
     memcpy(o.name, key, n + 1);
 
-    int c = controlCall(&o, offsetof(__typeof__(o), name) + n + 1);
-
-    if (c < 0) {
-        return -1;
-    }
-
-    int q = accept4(c, NULL, NULL, SOCK_CLOEXEC | (flags & O_NONBLOCK ? SOCK_NONBLOCK : 0));
-    int saved = errno;
-
-    close(c);
-    errno = saved;
-
-    return q;
+    return controlCall(&o, offsetof(__typeof__(o), name) + n + 1, &q) == 0 ? q : -1;
 }
 
 int __kernel_mq_unlink(const char* name) {
     struct {
         uint32_t call;
         char name[NAME_MAX + 1];
-    } o = {mqUnlink, {0}};
+    } o = {ctlMqUnlink, {0}};
     const char* key = queueName(name);
 
     if (!key) {
@@ -171,29 +160,15 @@ int __kernel_mq_unlink(const char* name) {
 
     memcpy(o.name, key, n + 1);
 
-    int c = controlCall(&o, sizeof o.call + n + 1);
-
-    if (c < 0) {
-        return -1;
-    }
-
-    close(c);
-
-    return 0;
+    return controlCall(&o, sizeof o.call + n + 1, NULL);
 }
 
 // The attributes: maxmsg, msgsize, curmsgs and the description's flags.
 static int attributes(mqd_t q, struct mq_attr* out) {
+    const uint32_t call = ctlMqAttributes;
     uint32_t a[4];
-    socklen_t n = sizeof a;
 
-    if (queueOf(q) != 0) {
-        return -1;
-    }
-
-    if (getsockopt(q, ipcLevel, mqAttributes, a, &n) != 0 || n != sizeof a) {
-        errno = EBADF;
-
+    if (queueCall(q, &call, sizeof call, a, sizeof a, 0) != sizeof a) {
         return -1;
     }
 
@@ -230,7 +205,7 @@ int __kernel_mq_setattr(mqd_t q, const struct mq_attr* attr, size_t size, struct
     int flags = fcntl(q, F_GETFL);
 
     if (flags < 0 || fcntl(q, F_SETFL, (flags & ~O_NONBLOCK) | (attr->mq_flags & O_NONBLOCK)) != 0) {
-        return failed();
+        return -1;
     }
 
     if (old) {
@@ -240,69 +215,21 @@ int __kernel_mq_setattr(mqd_t q, const struct mq_attr* attr, size_t size, struct
     return 0;
 }
 
-// The deadline's time left, 0 past it, or -1 of a time that is none,
-// EINVAL.
-static int left(const struct timespec* at, struct timespec* out) {
-    if (at->tv_nsec < 0 || at->tv_nsec >= 1000000000) {
-        errno = EINVAL;
+static struct Until until(const struct timespec* at) {
+    struct Until u = {at != NULL, at ? at->tv_sec : 0, at ? at->tv_nsec : 0};
 
-        return -1;
-    }
-
-    struct timespec now;
-
-    clock_gettime(CLOCK_REALTIME, &now);
-    out->tv_sec = at->tv_sec - now.tv_sec;
-    out->tv_nsec = at->tv_nsec - now.tv_nsec;
-
-    if (out->tv_nsec < 0) {
-        out->tv_nsec += 1000000000;
-        out->tv_sec--;
-    }
-
-    return out->tv_sec >= 0 && (out->tv_sec > 0 || out->tv_nsec > 0);
+    return u;
 }
 
-// A call that waits until a deadline: tried without waiting, and again
-// once the queue is ready for it, events, until the time is past,
-// ETIMEDOUT; of a queue of O_NONBLOCK, EAGAIN at once.
-static ssize_t timed(mqd_t q, struct msghdr* m, int receives, short events, const struct timespec* at) {
-    int flags = fcntl(q, F_GETFL);
-
-    if (flags < 0) {
-        return failed();
-    }
-
-    for (;;) {
-        ssize_t n = receives ? recvmsg(q, m, MSG_DONTWAIT) : sendmsg(q, m, MSG_DONTWAIT);
-
-        if (n >= 0 || errno != EAGAIN || (flags & O_NONBLOCK)) {
-            return n < 0 ? failed() : n;
-        }
-
-        struct timespec wait;
-        int r = left(at, &wait);
-
-        if (r <= 0) {
-            errno = r < 0 ? EINVAL : ETIMEDOUT;
-
-            return -1;
-        }
-
-        struct pollfd p = {q, events, 0};
-
-        if (ppoll(&p, 1, &wait, NULL) < 0) {
-            return -1;
-        }
-    }
-}
-
-// A message's SEND: its header, the priority and who sends it, then the
-// message.
-static ssize_t sendOf(mqd_t q, const char* msg, size_t n, unsigned prio, const struct timespec* at) {
-    uint32_t head[3] = {prio, (uint32_t)getpid(), (uint32_t)getuid()};
-    struct iovec io[2] = {{head, sizeof head}, {(void*)msg, n}};
-    struct msghdr m = {0};
+// A message's send: its header, then the message.
+static int sendOf(mqd_t q, const char* msg, size_t n, unsigned prio, const struct timespec* at) {
+    struct __attribute__((packed)) {
+        uint32_t call;
+        uint32_t prio;
+        uint32_t pid;
+        uint32_t uid;
+        struct Until until;
+    } head = {ctlMqSend, prio, (uint32_t)getpid(), (uint32_t)getuid(), until(at)};
 
     if (prio >= MQ_PRIO_MAX) {
         errno = EINVAL;
@@ -310,54 +237,73 @@ static ssize_t sendOf(mqd_t q, const char* msg, size_t n, unsigned prio, const s
         return -1;
     }
 
-    if (queueOf(q) != 0) {
+    if (n > 65536) {
+        errno = EMSGSIZE;
+
         return -1;
     }
 
-    m.msg_iov = io;
-    m.msg_iovlen = 2;
+    char* in = malloc(sizeof head + n);
 
-    if (at) {
-        return timed(q, &m, 0, POLLOUT, at) < 0 ? -1 : 0;
+    if (!in) {
+        return -1;
     }
 
-    return sendmsg(q, &m, 0) < 0 ? failed() : 0;
+    memcpy(in, &head, sizeof head);
+    memcpy(in + sizeof head, msg, n);
+
+    ssize_t r = queueCall(q, in, sizeof head + n, NULL, 0, CTL_RESTART);
+    int saved = errno;
+
+    free(in);
+    errno = saved;
+
+    return r < 0 ? -1 : 0;
 }
 
 int __kernel_mq_send(mqd_t q, const char* msg, size_t n, unsigned prio) {
-    return (int)sendOf(q, msg, n, prio, NULL);
+    return sendOf(q, msg, n, prio, NULL);
 }
 
 int __kernel_mq_timedsend(mqd_t q, const char* msg, size_t n, unsigned prio, const struct timespec* at, size_t size) {
     sized("mq_timedsend", size, sizeof(struct timespec));
 
-    return (int)sendOf(q, msg, n, prio, at);
+    return sendOf(q, msg, n, prio, at);
 }
 
-// A RECV: the priority, then the message, its size the answer's.
+// A receive: the priority, then the message, its size the answer's.
 static ssize_t receiveOf(mqd_t q, char* buf, size_t n, unsigned* prio, const struct timespec* at) {
-    uint32_t got = 0;
-    struct iovec io[2] = {{&got, sizeof got}, {buf, n}};
-    struct msghdr m = {0};
+    struct __attribute__((packed)) {
+        uint32_t call;
+        uint32_t room;
+        struct Until until;
+    } in = {ctlMqReceive, n > UINT32_MAX ? UINT32_MAX : (uint32_t)n, until(at)};
+    size_t room = sizeof(uint32_t) + (n < 65536 ? n : 65536);
+    char* out = malloc(room);
 
-    if (queueOf(q) != 0) {
+    if (!out) {
         return -1;
     }
 
-    m.msg_iov = io;
-    m.msg_iovlen = 2;
+    ssize_t r = queueCall(q, &in, sizeof in, out, room, CTL_RESTART);
+    int saved = errno;
 
-    ssize_t r = at ? timed(q, &m, 1, POLLIN, at) : recvmsg(q, &m, 0);
+    if (r >= (ssize_t)sizeof(uint32_t)) {
+        r -= (ssize_t)sizeof(uint32_t);
+        memcpy(buf, out + sizeof(uint32_t), (size_t)r);
 
-    if (r < 0) {
-        return at ? -1 : failed();
+        if (prio) {
+            memcpy(prio, out, sizeof *prio);
+        }
+    } else if (r >= 0) {
+        r = -1;
+        saved = EIO;
     }
 
-    if (prio) {
-        *prio = got;
-    }
+    free(out);
+    errno = saved;
 
-    return r - (ssize_t)sizeof got;
+    return r;
 }
 
 ssize_t __kernel_mq_receive(mqd_t q, char* buf, size_t n, unsigned* prio) {
@@ -376,17 +322,12 @@ ssize_t __kernel_mq_timedreceive(mqd_t q, char* restrict buf, size_t n, unsigned
 int __kernel_mq_notify(mqd_t q, const struct sigevent* event, size_t size) {
     sized("mq_notify", size, sizeof(struct sigevent));
 
-    uint32_t value[4] = {(uint32_t)getpid(), 0, 0, 0};
-
-    if (queueOf(q) != 0) {
-        return -1;
-    }
+    uint32_t in[5] = {ctlMqUnnotify, (uint32_t)getpid(), 0, 0, 0};
+    sigset_t set;
 
     if (!event) {
-        return setsockopt(q, ipcLevel, mqUnnotify, value, sizeof value[0]) == 0 ? 0 : failed();
+        return queueCall(q, in, 2 * sizeof *in, NULL, 0, 0) < 0 ? -1 : 0;
     }
-
-    sigset_t set;
 
     sigemptyset(&set);
 
@@ -409,9 +350,10 @@ int __kernel_mq_notify(mqd_t q, const struct sigevent* event, size_t size) {
             return -1;
     }
 
-    value[1] = (uint32_t)event->sigev_notify;
-    value[2] = (uint32_t)event->sigev_signo;
-    value[3] = (uint32_t)event->sigev_value.sival_int;
+    in[0] = ctlMqNotify;
+    in[2] = (uint32_t)event->sigev_notify;
+    in[3] = (uint32_t)event->sigev_signo;
+    in[4] = (uint32_t)event->sigev_value.sival_int;
 
-    return setsockopt(q, ipcLevel, mqNotify, value, sizeof value) == 0 ? 0 : failed();
+    return queueCall(q, in, sizeof in, NULL, 0, 0) < 0 ? -1 : 0;
 }
