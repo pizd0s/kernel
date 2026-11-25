@@ -19,7 +19,7 @@
  * size of one it returns last (the _SIZED forms, whose import parameters
  * are their own). A layout only grows at its end, so the kernel can serve
  * each size it has known; it ends a process that passes another by
- * SIGSYS. DIR is the kernel's handle, of no size here.
+ * SIGSYS. DIR is libc.wasm's, of no size here.
  */
 #include <aio.h>
 #include <arpa/inet.h>

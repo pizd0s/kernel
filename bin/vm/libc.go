@@ -448,50 +448,6 @@ func libcUtimensat(dirfd, path, times, timesSize, flags uint32) uint32 {
 	return p.libcUtimensat(dirfd, path, times, flags)
 }
 
-func libcDirfd(dir uint32) uint32 {
-	return proc().libcDirfd(dir)
-}
-
-func libcReaddir_r(dir, entry, entrySize, result, resultSize uint32) uint32 {
-	p := proc()
-
-	p.sized("readdir_r", entrySize, sizeofDirent, resultSize, sizeofDirent)
-
-	return p.libcReaddir_r(dir, entry, result)
-}
-
-func libcTelldir(dir uint32) uint32 {
-	return proc().libcTelldir(dir)
-}
-
-func libcSeekdir(dir, at uint32) {
-	proc().libcSeekdir(dir, at)
-}
-
-func libcOpendir(path uint32) uint32 {
-	return proc().libcOpendir(path)
-}
-
-func libcFdopendir(fd uint32) uint32 {
-	return proc().libcFdopendir(fd)
-}
-
-func libcRewinddir(dir uint32) {
-	proc().libcRewinddir(dir)
-}
-
-func libcReaddir(dir, size uint32) uint32 {
-	p := proc()
-
-	p.sized("readdir", size, sizeofDirent)
-
-	return p.libcReaddir(dir)
-}
-
-func libcClosedir(dir uint32) uint32 {
-	return proc().libcClosedir(dir)
-}
-
 func libcMalloc(n uint32) uint32 {
 	return proc().libcMalloc(n)
 }

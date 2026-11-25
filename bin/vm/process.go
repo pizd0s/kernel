@@ -72,12 +72,6 @@ const (
 	sysCopyFileRange = 326
 	pollInSet        = POLLIN | POLLHUP | POLLERR
 	pollOutSet       = POLLOUT | POLLERR
-	dirFd            = 0
-	dirPos           = 4
-	dirEnd           = 8
-	dirIndex         = 12
-	dirBuf           = 16
-	dirBufLen        = 4096
 	utsSysname       = "pizdos"
 	utsRelease       = "1"
 	utsVersion       = "#1"
@@ -7751,35 +7745,6 @@ func (p *Process) libcUtimensat(dirfd, path, times, flags uint32) uint32 {
 	return p.result(0, p.utimens(int32(dirfd), p.str(path), p.timespecs(times), flags&AT_SYMLINK_NOFOLLOW == 0))
 }
 
-func (p *Process) libcReaddir_r(dir, entry, result uint32) uint32 {
-	e, err := p.readdir(dir)
-
-	p.put32(result, 0)
-
-	if err != nil {
-		return uint32(errnoOf(err))
-	}
-
-	if e != 0 {
-		n := 19 + uint32(len(p.cstr(e+19))) + 1
-
-		copy(p.span(entry, n), p.span(e, n))
-		p.put32(result, entry)
-	}
-
-	return 0
-}
-
-func (p *Process) libcSeekdir(dir, at uint32) {
-	p.rewinddir(dir)
-
-	for p.u32(dir+dirIndex) < at {
-		if e, _ := p.readdir(dir); e == 0 {
-			return
-		}
-	}
-}
-
 func (p *Process) stat(path, at uint32, follow bool) uint32 {
 	var st Stat
 
@@ -7804,130 +7769,6 @@ func (p *Process) utimens(dirfd int32, path string, ts []Timespec, follow bool) 
 	})
 }
 
-func (p *Process) libcOpendir(path uint32) uint32 {
-	f, err := p.openPath(p.str(path), O_RDONLY|O_DIRECTORY, 0)
-
-	if err != nil {
-		return p.pointer(0, err)
-	}
-
-	fd, err := p.install(f, 0, true)
-
-	if err != nil {
-		return p.pointer(0, err)
-	}
-
-	dir := p.newDir(fd)
-
-	if dir == 0 {
-		p.closeFd(fd)
-
-		return p.pointer(0, ENOMEM)
-	}
-
-	return p.pointer(dir, nil)
-}
-
-func (p *Process) newDir(fd int) uint32 {
-	dir := p.malloc(dirBuf + dirBufLen)
-
-	if dir != 0 {
-		p.put32(dir+dirFd, uint32(fd))
-		p.put32(dir+dirPos, 0)
-		p.put32(dir+dirEnd, 0)
-		p.put32(dir+dirIndex, 0)
-	}
-
-	return dir
-}
-
-func (p *Process) libcFdopendir(fd uint32) uint32 {
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return p.pointer(0, err)
-	}
-
-	var st Stat
-
-	if err := statFile(p, obj, &st); err != nil {
-		return p.pointer(0, err)
-	}
-
-	if st.Mode&S_IFMT != S_IFDIR {
-		return p.pointer(0, ENOTDIR)
-	}
-
-	dir := p.newDir(int(fd))
-
-	if dir == 0 {
-		return p.pointer(0, ENOMEM)
-	}
-
-	p.files.slots[fd].cloexec = true
-
-	return p.pointer(dir, nil)
-}
-
-func (p *Process) rewinddir(dir uint32) {
-	if s, err := p.fd(p.u32(dir + dirFd)); err == nil {
-		p.fileSeek(s, 0, 0)
-	}
-
-	p.put32(dir+dirPos, 0)
-	p.put32(dir+dirEnd, 0)
-	p.put32(dir+dirIndex, 0)
-}
-
-func (p *Process) libcReaddir(dir uint32) uint32 {
-	entry, err := p.readdir(dir)
-
-	return p.pointer(entry, err)
-}
-
-func (p *Process) readdir(dir uint32) (uint32, error) {
-	pos, end := p.u32(dir+dirPos), p.u32(dir+dirEnd)
-
-	if pos >= end {
-		d, err := p.fd(p.u32(dir + dirFd))
-
-		if err != nil {
-			return 0, err
-		}
-
-		w := p.memory(dir+dirBuf, dirBufLen, O_WRONLY)
-		n, err := p.fileReaddir(d, w, dirBufLen)
-
-		p.memoryDone(w)
-
-		if err != nil || n == 0 {
-			return 0, err
-		}
-
-		pos, end = 0, uint32(n)
-		p.put32(dir+dirEnd, end)
-	}
-
-	entry := dir + dirBuf + pos
-
-	p.put32(dir+dirPos, pos+uint32(p.u16(entry+16)))
-	p.put32(dir+dirIndex, p.u32(dir+dirIndex)+1)
-
-	return entry, nil
-}
-
-func (p *Process) libcClosedir(dir uint32) uint32 {
-	fd := p.u32(dir + dirFd)
-
-	p.free(dir)
-
-	if !p.closeFd(int(fd)) {
-		return p.result(0, EBADF)
-	}
-
-	return p.result(0, nil)
-}
-
 func (p *Process) libcStat(path, at uint32) uint32 {
 	return p.stat(path, at, true)
 }
@@ -7946,18 +7787,6 @@ func (p *Process) libcChown(path, uid, gid uint32) uint32 {
 
 func (p *Process) libcLchown(path, uid, gid uint32) uint32 {
 	return p.chown(path, uid, gid, false)
-}
-
-func (p *Process) libcDirfd(dir uint32) uint32 {
-	return p.u32(dir + dirFd)
-}
-
-func (p *Process) libcTelldir(dir uint32) uint32 {
-	return p.u32(dir + dirIndex)
-}
-
-func (p *Process) libcRewinddir(dir uint32) {
-	p.rewinddir(dir)
 }
 
 func (p *Process) libcMount(source, target, fstype, flags, data uint32) uint32 {

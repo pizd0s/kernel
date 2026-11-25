@@ -234,7 +234,6 @@ const (
 	CLOCK_BOOTTIME                    = 7
 	TIMER_ABSTIME                     = 1
 	SOMAXCONN                         = 4096
-	sizeofDirent                      = 280
 	sizeofFdSet                       = 128
 	sizeofFlock                       = 32
 	sizeofIovec                       = 8

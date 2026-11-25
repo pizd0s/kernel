@@ -26,7 +26,6 @@ from pathlib import Path
 
 # The C type each size of the kernel's is of.
 TYPES = {
-    "sizeofDirent": "struct dirent",
     "sizeofEpollEvent": "struct epoll_event",
     "sizeofFdSet": "fd_set",
     "sizeofFlock": "struct flock",
