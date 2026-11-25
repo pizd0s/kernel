@@ -44,7 +44,6 @@ const (
 	rSeek
 	rGetfl
 	rSetfl
-	rWatch
 )
 
 const (

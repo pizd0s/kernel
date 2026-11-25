@@ -63,7 +63,6 @@ int unserved(uint32_t op) {
     }
     switch (op) {
         case opReaddir:
-        case opWatch:
             return ENOTDIR;
         case opSeek:
             return ESPIPE;

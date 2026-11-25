@@ -10,7 +10,9 @@
 // with O_NONBLOCK, else a wait that a child's change ends, or a signal,
 // EINTR; poll's IN, and HUP once the directory is gone, whose watch then
 // tells what is left and reads 0; EINVAL for a buffer too small for the
-// next record; a big directory's names over several reads. host: false:
+// next record; a big directory's names over several reads; ENOTDIR of
+// what is no directory, EBADF of O_PATH's, and a watch no events file of
+// inotify's. host: false:
 // watchdir is the system's.
 
 #include <assert.h>
@@ -20,6 +22,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/inotify.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
@@ -84,6 +87,26 @@ int main() {
     assert(records[2].kind == WATCH_IDLE && records[2].name[0] == 0);
     errno = 0;
     assert(take(w) == -1 && errno == EAGAIN && revents(w) == 0);
+
+    int pipes[2];
+    assert(pipe(pipes) == 0);
+    const int file = open("w/a", O_RDONLY);
+    const int path = open("w", O_PATH | O_DIRECTORY);
+    const struct {
+        int fd;
+        int flags;
+        int error;
+    } wrong[] = {{pipes[0], 0, ENOTDIR}, {file, 0, ENOTDIR}, {path, 0, EBADF}, {-1, 0, EBADF}, {dir, O_APPEND, EINVAL}};
+    for (const auto& c : wrong) {
+        errno = 0;
+        assert(watchdir(c.fd, c.flags) == -1 && errno == c.error);
+    }
+    errno = 0;
+    assert(inotify_add_watch(w, "w", IN_CREATE) == -1 && errno == EINVAL);
+    close(pipes[0]);
+    close(pipes[1]);
+    close(file);
+    close(path);
 
     touch("w/c");
     assert(revents(w) == POLLIN && take(w) > 0 && count == 1 && has(WATCH_ADDED, "c"));

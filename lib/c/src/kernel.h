@@ -41,12 +41,6 @@ void __kernel_begin(int* errnoAt, char*** environAt, int* argc, char*** argv) __
 // through its links, or a failure when it is outside the root.
 char* __kernel_program(char* path, size_t size) __KERNEL(__kernel_program);
 
-// __kernel_watch is a WATCH of the directory's server, rootfs's (lib/protocol):
-// of the flags O_CLOEXEC and O_NONBLOCK and a body of the server's, at
-// most 64 bytes; the answer is an open file, its descriptor, or a number.
-// watchdir is one of no body, inotify's of theirs (watch.c).
-int __kernel_watch(int dirfd, int flags, const void* body, size_t size) __KERNEL(__kernel_watch);
-
 // __kernel_name is the name the program was started by, the last component
 // of its argv[0], or null where it has no arguments: what a message of
 // lib/c's begins with.

@@ -588,7 +588,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"fchdir":                                libcFchdir,
 		"chroot":                                libcChroot,
 		"attach":                                libcAttach,
-		"__kernel_watch":                        libc__kernel_watch,
 		"fdid":                                  libcFdid,
 		"chdir":                                 libcChdir,
 		"getcwd":                                libcGetcwd,

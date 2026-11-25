@@ -8,15 +8,15 @@ __BEGIN_DECLS
 
 /*
  * inotify, Linux's, of names: a descriptor of events of watched
- * directories, rootfs's, the VFS's, which hears every change of the
- * names (lib/protocol's WATCH of inotify's). A watch tells IN_CREATE and
- * IN_DELETE of the names in its directory, with IN_ISDIR for a
- * directory, and IN_DELETE_SELF and then IN_IGNORED when the directory
- * goes; a rename is a removed name and an added one. File systems tell
- * of names only, so IN_ACCESS, IN_MODIFY, IN_ATTRIB, IN_OPEN, IN_CLOSE_*,
- * IN_MOVED_* and IN_MOVE_SELF never come, and a watch of anything but a
- * directory is ENOTDIR. A read gives as many whole events as fit,
- * EINVAL if not one does, and waits while there are none.
+ * directories, rootfs's, the VFS's, which hears every change of the names
+ * (an open of /dev/vfs/watch, lib/protocol). A watch tells IN_CREATE and
+ * IN_DELETE of the names in its directory, with IN_ISDIR for a directory,
+ * and IN_DELETE_SELF and then IN_IGNORED when the directory goes; a rename
+ * is a removed name and an added one. File systems tell of names only, so
+ * IN_ACCESS, IN_MODIFY, IN_ATTRIB, IN_OPEN, IN_CLOSE_*, IN_MOVED_* and
+ * IN_MOVE_SELF never come, and a watch of anything but a directory is
+ * ENOTDIR. A read gives as many whole events as fit, EINVAL if not one
+ * does, and waits while there are none.
  */
 struct inotify_event {
     int wd;

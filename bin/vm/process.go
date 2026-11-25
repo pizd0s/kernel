@@ -7431,30 +7431,6 @@ func (p *Process) libcFdid(fd, at uint32) uint32 {
 	return 0
 }
 
-func (p *Process) libc__kernel_watch(fd, flags, body, size uint32) uint32 {
-	if flags&^(O_CLOEXEC|O_NONBLOCK) != 0 || size > watchBodyMax {
-		return p.result(0, EINVAL)
-	}
-
-	obj, err := p.fd(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	r := DirWatch{flags: O_RDONLY | flags&O_NONBLOCK, body: bytes.Clone(p.span(body, size))}
-
-	if err := p.request(obj, &r); err != nil {
-		return p.result(0, err)
-	}
-
-	if r.file == nil {
-		return p.result(int(int32(r.value)), nil)
-	}
-
-	return p.result(p.install(r.file, 0, flags&O_CLOEXEC != 0))
-}
-
 func (p *Process) libcFchdir(fd uint32) uint32 {
 	return p.result(0, p.fchdir(fd))
 }

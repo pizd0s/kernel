@@ -81,6 +81,7 @@ random
 sockmgr
 tty
 urandom
+vfs
 zero
 /dev/blk:
 raw

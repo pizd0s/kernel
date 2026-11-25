@@ -1,51 +1,77 @@
 /*
- * The watches of directories, rootfs's, the VFS's, by WATCH of their
- * server (kernel.h): watchdir's of no body, and inotify's, whose
- * instance is an events file of rootfs's named by its id, its fstat's
- * ino. inotify_init1 asks one of the root; inotify_add_watch marks the
- * directory of the path, opened as a directory, not following its last
- * link with IN_DONT_FOLLOW, of which no directory is ENOTDIR, and gives
- * the mark's number; inotify_rm_watch takes the mark away. The bodies
- * are lib/protocol's: how, then a mask or a number, and the id.
+ * The watches of directories, rootfs's, the VFS's: an open file of
+ * /dev/vfs/watch is an events file, inotify's instance, and a SEND of it,
+ * sendmsg here, a call of how and a value, its rights a directory, which
+ * rootfs knows by its id (lib/protocol). inotify_init1 opens one;
+ * inotify_add_watch marks the directory of the path, opened as a
+ * directory, not following its last link with IN_DONT_FOLLOW, of which
+ * no directory is ENOTDIR, and gives the mark's number, which rootfs
+ * sends on a pair of ours; inotify_rm_watch takes the mark away; watchdir
+ * opens one and makes it the directory's watcher. A socket is no events
+ * file, nor is what takes no SEND: EINVAL.
  */
-#include "kernel.h"
-
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/inotify.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/watchdir.h>
 #include <unistd.h>
 
-enum { watchEventsNew = 1, watchEventsAdd = 2, watchEventsRemove = 3 };
+enum { watchEventsAdd = 1, watchEventsRemove = 2, watchDirectory = 3 };
 
-struct __attribute__((packed)) Body {
-    uint32_t how;
-    uint32_t value;
-    uint64_t id;
-};
+static const char watches[] = "/dev/vfs/watch";
 
-int __kernel_watchdir(int dirfd, int flags) {
-    return __kernel_watch(dirfd, flags, NULL, 0);
-}
+// An events file's call, its rights count descriptors: 0, or -1 and errno.
+static int call(int fd, uint32_t how, uint32_t value, const int* fds, int count) {
+    uint32_t body[2] = {how, value};
+    struct iovec io = {body, sizeof body};
+    union {
+        struct cmsghdr h;
+        char room[CMSG_SPACE(2 * sizeof(int))];
+    } control;
+    struct msghdr m = {0};
+    struct stat st;
 
-// A WATCH of the body of a directory of the path, opened with flags and
-// closed after, errno the WATCH's.
-static int watchOf(const char* path, int flags, int watchFlags, const struct Body* body, size_t size) {
-    int dir = open(path, flags | O_CLOEXEC);
+    if (fstat(fd, &st) == 0 && S_ISSOCK(st.st_mode)) {
+        errno = EINVAL;
 
-    if (dir < 0) {
         return -1;
     }
 
-    int r = __kernel_watch(dir, watchFlags, body, size);
+    m.msg_iov = &io;
+    m.msg_iovlen = 1;
+
+    if (count > 0) {
+        m.msg_control = control.room;
+        m.msg_controllen = CMSG_SPACE(count * sizeof(int));
+
+        struct cmsghdr* c = CMSG_FIRSTHDR(&m);
+
+        c->cmsg_level = SOL_SOCKET;
+        c->cmsg_type = SCM_RIGHTS;
+        c->cmsg_len = CMSG_LEN(count * sizeof(int));
+        memcpy(CMSG_DATA(c), fds, count * sizeof(int));
+    }
+
+    if (sendmsg(fd, &m, MSG_NOSIGNAL) < 0) {
+        if (errno == ENOTSOCK) {
+            errno = EINVAL;
+        }
+
+        return -1;
+    }
+
+    return 0;
+}
+
+static void closeKeeping(int fd) {
     int saved = errno;
 
-    close(dir);
+    close(fd);
     errno = saved;
-
-    return r;
 }
 
 int __kernel_inotify_init1(int flags) {
@@ -55,50 +81,72 @@ int __kernel_inotify_init1(int flags) {
         return -1;
     }
 
-    const struct Body body = {watchEventsNew, 0, 0};
-
-    return watchOf("/", O_RDONLY | O_DIRECTORY, flags, &body, sizeof body.how);
+    return open(watches, O_RDONLY | flags);
 }
 
 int __kernel_inotify_init(void) {
     return __kernel_inotify_init1(0);
 }
 
-// The id of an events file, or 0 with errno.
-static uint64_t idOf(int fd) {
-    struct stat st;
-
-    return fstat(fd, &st) == 0 ? st.st_ino : 0;
-}
-
 int __kernel_inotify_add_watch(int fd, const char* path, uint32_t mask) {
+    if (fcntl(fd, F_GETFD) < 0) {
+        return -1;
+    }
+
     if (!(mask & IN_ALL_EVENTS) || ((mask & IN_MASK_ADD) && (mask & IN_MASK_CREATE))) {
         errno = EINVAL;
 
         return -1;
     }
 
-    const struct Body body = {watchEventsAdd, mask, idOf(fd)};
+    int pair[2];
 
-    if (!body.id) {
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         return -1;
     }
 
-    int wd = watchOf(path, O_RDONLY | O_DIRECTORY | (mask & IN_DONT_FOLLOW ? O_NOFOLLOW : 0), 0, &body, sizeof body);
+    int dir = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | (mask & IN_DONT_FOLLOW ? O_NOFOLLOW : 0));
+    int fds[2] = {dir, pair[1]};
+    uint32_t wd = 0;
+    int r = -1;
 
-    if (wd < 0 && errno == ELOOP && (mask & IN_DONT_FOLLOW)) {
-        errno = ENOTDIR;
+    if (dir < 0) {
+        if (errno == ELOOP && (mask & IN_DONT_FOLLOW)) {
+            errno = ENOTDIR;
+        }
+    } else if (call(fd, watchEventsAdd, mask, fds, 2) == 0) {
+        r = recv(pair[0], &wd, sizeof wd, MSG_DONTWAIT) == sizeof wd ? (int)wd : -1;
+        errno = r < 0 ? EINVAL : errno;
     }
 
-    return wd;
+    if (dir >= 0) {
+        closeKeeping(dir);
+    }
+
+    closeKeeping(pair[0]);
+    closeKeeping(pair[1]);
+
+    return r;
 }
 
 int __kernel_inotify_rm_watch(int fd, int wd) {
-    const struct Body body = {watchEventsRemove, (uint32_t)wd, idOf(fd)};
+    return call(fd, watchEventsRemove, (uint32_t)wd, NULL, 0);
+}
 
-    if (!body.id) {
+int __kernel_watchdir(int dirfd, int flags) {
+    if (flags & ~(O_CLOEXEC | O_NONBLOCK)) {
+        errno = EINVAL;
+
         return -1;
     }
 
-    return watchOf("/", O_RDONLY | O_DIRECTORY, 0, &body, sizeof body) < 0 ? -1 : 0;
+    int fd = open(watches, O_RDONLY | flags);
+
+    if (fd >= 0 && call(fd, watchDirectory, 0, &dirfd, 1) != 0) {
+        closeKeeping(fd);
+
+        return -1;
+    }
+
+    return fd;
 }

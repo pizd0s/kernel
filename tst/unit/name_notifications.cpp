@@ -10,7 +10,8 @@
 // IN_ONESHOT end a watch with IN_IGNORED; a read gives whole events, a
 // name NUL-padded to 16 bytes, EINVAL for a buffer too small for the
 // next, FIONREAD their bytes, EAGAIN with nothing or a wait that a
-// child's mkdir ends; poll's IN; the calls' errors.
+// child's mkdir ends; poll's IN; the calls' errors, EINVAL of a socket,
+// which is sent nothing, a pipe and a directory.
 
 #include <assert.h>
 #include <errno.h>
@@ -21,6 +22,7 @@
 #include <sys/eventfd.h>
 #include <sys/inotify.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -129,6 +131,22 @@ int main() {
     close(other);
     errno = 0;
     assert(inotify_add_watch(-1, "watched", IN_CREATE) == -1 && errno == EBADF);
+    int ends[2];
+    int pipes[2];
+    assert(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, ends) == 0 && pipe(pipes) == 0);
+    const int nots[] = {ends[0], pipes[0], pipes[1], open(".", O_RDONLY | O_DIRECTORY)};
+    for (int fd : nots) {
+        errno = 0;
+        assert(inotify_add_watch(fd, "watched", IN_CREATE) == -1 && errno == EINVAL);
+        errno = 0;
+        assert(inotify_rm_watch(fd, 1) == -1 && errno == EINVAL);
+    }
+    char sent;
+    assert(recv(ends[1], &sent, 1, MSG_DONTWAIT) == -1 && errno == EAGAIN);
+    for (int fd : nots) {
+        close(fd);
+    }
+    close(ends[1]);
 
     assert(mkdir("gone", 0755) == 0);
     int gone = inotify_add_watch(in, "gone", IN_CREATE | IN_DELETE_SELF);
