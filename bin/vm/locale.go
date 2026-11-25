@@ -87,7 +87,3 @@ func iswClass(class int, c uint32) bool {
 
 	return false
 }
-
-func ctype(class string, c uint32) uint32 {
-	return bit(c < 0x80 && inClass(class, byte(c)))
-}

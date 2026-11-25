@@ -1658,78 +1658,6 @@ func libcWaitid(idtype, id, info, infoSize, options uint32) uint32 {
 	return p.libcWaitid(idtype, id, info, options)
 }
 
-func libcTowlower(c uint32) uint32 {
-	return proc().libcTowlower(c)
-}
-
-func libcTowupper(c uint32) uint32 {
-	return proc().libcTowupper(c)
-}
-
-func libcWctype(name uint32) uint32 {
-	return proc().libcWctype(name)
-}
-
-func libcIswctype(c, class uint32) uint32 {
-	return proc().libcIswctype(c, class)
-}
-
-func libcWctrans(name uint32) uint32 {
-	return proc().libcWctrans(name)
-}
-
-func libcTowctrans(c, trans uint32) uint32 {
-	return proc().libcTowctrans(c, trans)
-}
-
-func libcIswalnum(c uint32) uint32 {
-	return proc().libcIswalnum(c)
-}
-
-func libcIswalpha(c uint32) uint32 {
-	return proc().libcIswalpha(c)
-}
-
-func libcIswblank(c uint32) uint32 {
-	return proc().libcIswblank(c)
-}
-
-func libcIswcntrl(c uint32) uint32 {
-	return proc().libcIswcntrl(c)
-}
-
-func libcIswdigit(c uint32) uint32 {
-	return proc().libcIswdigit(c)
-}
-
-func libcIswgraph(c uint32) uint32 {
-	return proc().libcIswgraph(c)
-}
-
-func libcIswlower(c uint32) uint32 {
-	return proc().libcIswlower(c)
-}
-
-func libcIswprint(c uint32) uint32 {
-	return proc().libcIswprint(c)
-}
-
-func libcIswpunct(c uint32) uint32 {
-	return proc().libcIswpunct(c)
-}
-
-func libcIswspace(c uint32) uint32 {
-	return proc().libcIswspace(c)
-}
-
-func libcIswupper(c uint32) uint32 {
-	return proc().libcIswupper(c)
-}
-
-func libcIswxdigit(c uint32) uint32 {
-	return proc().libcIswxdigit(c)
-}
-
 func libcWcslen(s uint32) uint32 {
 	return proc().libcWcslen(s)
 }
@@ -1808,14 +1736,6 @@ func libcWmemmove(d, s, n uint32) uint32 {
 
 func libcWmemset(d, c, n uint32) uint32 {
 	return proc().libcWmemset(d, c, n)
-}
-
-func libcWcwidth(c uint32) uint32 {
-	return proc().libcWcwidth(c)
-}
-
-func libcWcswidth(s, n uint32) uint32 {
-	return proc().libcWcswidth(s, n)
 }
 
 func libcSetuid(uid uint32) uint32 {
@@ -2292,66 +2212,6 @@ func libcEpoll_pwait(epfd, at, atSize, max, timeout, mask, maskSize uint32) uint
 	p.sized("epoll_pwait", atSize, sizeofEpollEvent, maskSize, sizeofSigset)
 
 	return p.libcEpoll_pwait(epfd, at, max, timeout, mask)
-}
-
-func libcIsalnum(c uint32) uint32 {
-	return proc().libcIsalnum(c)
-}
-
-func libcIsalpha(c uint32) uint32 {
-	return proc().libcIsalpha(c)
-}
-
-func libcIsascii(c uint32) uint32 {
-	return proc().libcIsascii(c)
-}
-
-func libcIsblank(c uint32) uint32 {
-	return proc().libcIsblank(c)
-}
-
-func libcIscntrl(c uint32) uint32 {
-	return proc().libcIscntrl(c)
-}
-
-func libcIsdigit(c uint32) uint32 {
-	return proc().libcIsdigit(c)
-}
-
-func libcIsgraph(c uint32) uint32 {
-	return proc().libcIsgraph(c)
-}
-
-func libcIslower(c uint32) uint32 {
-	return proc().libcIslower(c)
-}
-
-func libcIsprint(c uint32) uint32 {
-	return proc().libcIsprint(c)
-}
-
-func libcIspunct(c uint32) uint32 {
-	return proc().libcIspunct(c)
-}
-
-func libcIsspace(c uint32) uint32 {
-	return proc().libcIsspace(c)
-}
-
-func libcIsupper(c uint32) uint32 {
-	return proc().libcIsupper(c)
-}
-
-func libcIsxdigit(c uint32) uint32 {
-	return proc().libcIsxdigit(c)
-}
-
-func libcTolower(c uint32) uint32 {
-	return proc().libcTolower(c)
-}
-
-func libcToupper(c uint32) uint32 {
-	return proc().libcToupper(c)
 }
 
 func libcMemmem(h, hn, n, nn uint32) uint32 {

@@ -759,7 +759,8 @@ def heaped(name, path, blocks, args):
 
 
 def references(path):
-    """The undefined symbols an object's functions refer to, by function."""
+    """The undefined symbols an object's functions refer to, by function,
+    each of its functions there, of none or more."""
     data = path.read_bytes()
     offset, size, count = struct.unpack_from("<Q", data, 0x28)[0], *struct.unpack_from("<HH", data, 0x3a)
     sections = [struct.unpack_from("<IIQQQQIIQQ", data, offset + i * size) for i in range(count)]
@@ -770,7 +771,7 @@ def references(path):
     def named(symbol):
         return data[names + symbol[0]:data.index(0, names + symbol[0])].decode()
 
-    result = {}
+    result = {named(s): set() for s in symbols if s[1] & 15 == 2}
 
     for relocations in sections:
         # Those of the code.

@@ -30,7 +30,6 @@ import (
 var (
 	itimerSignals  = [3]int{SIGALRM, SIGVTALRM, SIGPROF}
 	pathconfValues = []int32{8, 255, 255, 255, 4096, 4096, 1, 1, 0, 1, -1, -1, -1, 64, 4096, 4096, 4096, 4096, 4096, -1, 1}
-	wcClassNames   = []string{"alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"}
 	devctlValues   = map[uint32]bool{TCFLSH: true, TCXONC: true, TCSBRK: true}
 )
 
@@ -11622,144 +11621,6 @@ func (p *Process) libcInet_ntop(family, src, dst, size uint32) uint32 {
 	return dst
 }
 
-func (p *Process) libcTowlower(c uint32) uint32 {
-	return towlower(c)
-}
-
-func (p *Process) libcTowupper(c uint32) uint32 {
-	return towupper(c)
-}
-
-func (p *Process) libcWctype(name uint32) uint32 {
-	s := p.str(name)
-
-	for i, n := range wcClassNames {
-		if n == s {
-			return uint32(i + 1)
-		}
-	}
-
-	return 0
-}
-
-func (p *Process) libcIswctype(c, class uint32) uint32 {
-	return bit(iswClass(int(class), c))
-}
-
-func (p *Process) libcWctrans(name uint32) uint32 {
-	switch p.str(name) {
-	case "toupper":
-		return 1
-	case "tolower":
-		return 2
-	}
-
-	return 0
-}
-
-func (p *Process) libcTowctrans(c, trans uint32) uint32 {
-	switch trans {
-	case 1:
-		return towupper(c)
-	case 2:
-		return towlower(c)
-	}
-
-	return c
-}
-
-func (p *Process) libcIswalnum(c uint32) uint32 {
-	return bit(iswClass(wcAlnum, c))
-}
-
-func (p *Process) libcIswalpha(c uint32) uint32 {
-	return bit(iswClass(wcAlpha, c))
-}
-
-func (p *Process) libcIswblank(c uint32) uint32 {
-	return bit(iswClass(wcBlank, c))
-}
-
-func (p *Process) libcIswcntrl(c uint32) uint32 {
-	return bit(iswClass(wcCntrl, c))
-}
-
-func (p *Process) libcIswdigit(c uint32) uint32 {
-	return bit(iswClass(wcDigit, c))
-}
-
-func (p *Process) libcIswgraph(c uint32) uint32 {
-	return bit(iswClass(wcGraph, c))
-}
-
-func (p *Process) libcIswlower(c uint32) uint32 {
-	return bit(iswClass(wcLower, c))
-}
-
-func (p *Process) libcIswprint(c uint32) uint32 {
-	return bit(iswClass(wcPrint, c))
-}
-
-func (p *Process) libcIswpunct(c uint32) uint32 {
-	return bit(iswClass(wcPunct, c))
-}
-
-func (p *Process) libcIswspace(c uint32) uint32 {
-	return bit(iswClass(wcSpace, c))
-}
-
-func (p *Process) libcIswupper(c uint32) uint32 {
-	return bit(iswClass(wcUpper, c))
-}
-
-func (p *Process) libcIswxdigit(c uint32) uint32 {
-	return bit(iswClass(wcXdigit, c))
-}
-
-func (p *Process) libcIsalnum(c uint32) uint32 {
-	return ctype("alnum", c)
-}
-
-func (p *Process) libcIsalpha(c uint32) uint32 {
-	return ctype("alpha", c)
-}
-
-func (p *Process) libcIsascii(c uint32) uint32 {
-	return bit(c < 0x80)
-}
-
-func (p *Process) libcIsblank(c uint32) uint32 {
-	return ctype("blank", c)
-}
-
-func (p *Process) libcIscntrl(c uint32) uint32 {
-	return ctype("cntrl", c)
-}
-
-func (p *Process) libcIsgraph(c uint32) uint32 {
-	return ctype("graph", c)
-}
-
-func (p *Process) libcIslower(c uint32) uint32 {
-	return ctype("lower", c)
-}
-
-func (p *Process) libcIsprint(c uint32) uint32 {
-	return ctype("print", c)
-}
-
-func (p *Process) libcIspunct(c uint32) uint32 {
-	return ctype("punct", c)
-}
-
-func (p *Process) libcIsupper(c uint32) uint32 {
-	return ctype("upper", c)
-}
-
-func (p *Process) libcIsxdigit(c uint32) uint32 {
-	return ctype("xdigit", c)
-}
-
 func (p *Process) bounded(at, n uint32) []byte {
 	m := p.mem()
 
@@ -12426,39 +12287,6 @@ func (p *Process) libcStrndup(s, n uint32) uint32 {
 	return p.strndup(s, n)
 }
 
-func (p *Process) libcIsdigit(c uint32) uint32 {
-	if c >= '0' && c <= '9' {
-		return 1
-	}
-
-	return 0
-}
-
-func (p *Process) libcIsspace(c uint32) uint32 {
-	switch c {
-	case ' ', '\t', '\n', '\v', '\f', '\r':
-		return 1
-	}
-
-	return 0
-}
-
-func (p *Process) libcTolower(c uint32) uint32 {
-	if c >= 'A' && c <= 'Z' {
-		return c + ('a' - 'A')
-	}
-
-	return c
-}
-
-func (p *Process) libcToupper(c uint32) uint32 {
-	if c >= 'a' && c <= 'z' {
-		return c - ('a' - 'A')
-	}
-
-	return c
-}
-
 func (p *Process) libcMemmem(h, hn, n, nn uint32) uint32 {
 	if i := bytes.Index(p.span(h, hn), p.span(n, nn)); i >= 0 {
 		return h + uint32(i)
@@ -12871,32 +12699,6 @@ func (p *Process) libcWmemset(d, c, n uint32) uint32 {
 	}
 
 	return d
-}
-
-func (p *Process) libcWcwidth(c uint32) uint32 {
-	return uint32(wcwidth(c))
-}
-
-func (p *Process) libcWcswidth(s, n uint32) uint32 {
-	total := int32(0)
-
-	for i := uint32(0); i < n; i++ {
-		c := p.wcharAt(s, i)
-
-		if c == 0 {
-			break
-		}
-
-		w := wcwidth(c)
-
-		if w < 0 {
-			return uint32(w)
-		}
-
-		total += w
-	}
-
-	return uint32(total)
 }
 
 func (p *Process) libcWcslen(s uint32) uint32 {
