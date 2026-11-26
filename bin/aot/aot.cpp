@@ -3279,24 +3279,21 @@ namespace {
         Slice<Int> positions{};
         Vec<Int> reach;
         Vec<i32> forward;
-        // shorts and trapShorts tell, in the order of the jumps to blocks
-        // and to traps, which take the short form: the first emission of a
-        // function finds them, a second uses them. aligned are the starts of
-        // the aligned loop headers and padded their padding; trapTo is where
+        // aligned are the starts of the aligned loop headers and padded
+        // their padding, 32 bytes where a header is at a boundary already:
+        // no padding is empty, so that what is before one and what is
+        // after it are two positions to the compaction. trapTo is where
         // each trap jump goes.
-        Slice<u8> shorts{};
-        Slice<u8> trapShorts{};
         Vec<i32> aligned;
         Vec<i32> padded;
         Vec<i32> trapTo;
-        // spans are the sizes of the aligned loops of the first emission,
-        // from the header to the end of the last block that returns to it,
-        // in the order of their headers; plan is those the second uses.
+        // spans are the sizes of the aligned loops, from the header to the
+        // end of the last block that returns to it, in the order of their
+        // headers, as they are where an empty padding is empty.
         Vec<i32> spans;
-        Slice<i32> plan{};
-        // checkBlocks are the blocks that check the stack in place of the
-        // prologue (objCodeStackCheckBlocks).
-        Slice<i32> checkBlocks{};
+        // tablePads are the paddings before the tables, a position and a
+        // length, of at least a byte for the same reason.
+        Vec<Array<i32, 2>> tablePads;
     };
 }
 
@@ -3310,6 +3307,11 @@ inline u64 AddressTerm::hash() const {
     result = combineHash(result, hashValue(mul));
     return result;
 }
+
+// The kinds of the pieces of code a compaction changes (CodeSite).
+static constexpr u8 codeSiteJump = 0;
+static constexpr u8 codeSiteHeader = 1;
+static constexpr u8 codeSiteTable = 2;
 
 // alignPad is the padding before a loop header at pos: to 32 bytes, and
 // to 64 when the loop, of span bytes, fits in 64 but would cross a
@@ -3528,6 +3530,14 @@ namespace {
         u8 kind{};
     };
 
+    // A displacement written into the code: of width bytes at at, to
+    // target.
+    struct CodePatch {
+        i32 at{};
+        i32 target{};
+        u8 width{};
+    };
+
     struct Asm {
         PageVec<u8> buf{};
         Slice<RipFixup> fixups{};
@@ -3539,6 +3549,46 @@ namespace {
         Slice<LineMark> lines{};
         u32 lastPos{};
         bool keepLines{};
+        // patches are the displacements written while logPatches is set,
+        // in the emission of a function, which its compaction writes
+        // again (objCodeCompact).
+        Slice<CodePatch> patches{};
+        bool logPatches{};
+    };
+
+    // The lengths of the records of the code when the emission of a
+    // function begins: what follows them is the function's.
+    struct CodeMarks {
+        Int fixups{};
+        Int sps{};
+        Int lines{};
+        Int calls{};
+        Int jumpCalls{};
+        Int trampolineCalls{};
+        Int addresses{};
+    };
+
+    // A jump of a function's code as it is emitted, long, to a block or to
+    // a trap: its first byte, its size, the position it goes to, and its
+    // place in the plan of which jumps are short.
+    struct JumpSite {
+        i32 from{};
+        i32 size{};
+        i32 to{};
+        u8* plan{};
+    };
+
+    // A piece of a function's code its compaction gives another length: a
+    // jump made short, or the padding of a loop header, of the loop's span,
+    // or of a table. from and size are its place as emitted, to and length
+    // its place after.
+    struct CodeSite {
+        i32 from{};
+        i32 size{};
+        i32 span{};
+        i32 to{};
+        i32 length{};
+        u8 kind{};
     };
 
     struct Anonymous93 {
@@ -3566,7 +3616,6 @@ namespace {
         i32 at{};
         i64 code{};
         i32 sp{};
-        bool small{};
         // An asan trap reports the access: its address is reg + disp, or
         // disp alone without a register, of width bytes, kind a load, a
         // store or a range (asanLoad and kin).
@@ -3714,8 +3763,6 @@ namespace {
     struct JumpFixup {
         i32 at{};
         i32 block{};
-        // small jumps have an 8-bit displacement at at, others 32 bits.
-        bool small{};
     };
 
     // A counter of the tail profile: of function's code, counting what kind
@@ -5555,6 +5602,8 @@ static void asmFstore(Asm* a, u8 size, VReg src, Amem m);
 
 static void asmHere8(Asm* a, i32 at);
 
+static void asmLogPatch(Asm* a, i32 at, i32 target, u8 width);
+
 static void asmImul3(Asm* a, u8 size, VReg dst, VReg src, i64 x);
 
 static i32 asmJcc8(Asm* a, u8 cc);
@@ -6069,7 +6118,7 @@ static Meta* objCodeDescription(ObjCode* oc);
 
 static void objCodeEmitFunction(ObjCode* oc, Int index, MFunc* mf, Allocator* al);
 
-static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al, Slice<u8> shorts, Slice<u8> trapShorts, Slice<i32> plan, FuncEmitter* first);
+static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al);
 
 static void objCodeEndRegion(ObjCode* oc, i32 start);
 
@@ -11445,6 +11494,15 @@ static void asmFstore(Asm* a, u8 size, VReg src, Amem m) {
 static void asmHere8(Asm* a, i32 at) {
     i32 d = asmPos(a) - (at + 1);
     a->buf[at] = convert<u8>(d);
+    asmLogPatch(a, at, asmPos(a), 1);
+}
+
+// logPatch keeps a displacement of a function's emission for its
+// compaction.
+static void asmLogPatch(Asm* a, i32 at, i32 target, u8 width) {
+    if (a->logPatches) {
+        a->patches = appendValues(a->patches, CodePatch{at, target, width});
+    }
 }
 
 static void asmImul3(Asm* a, u8 size, VReg dst, VReg src, i64 x) {
@@ -11664,10 +11722,11 @@ static void asmOpRR(Asm* a, bool w, Span<const u8> op, Int reg, Int rm, bool byt
 // field at at.
 static void asmPatch32(Asm* a, i32 at, i32 target) {
     littlePutUint32(subslice(a->buf, at, length(a->buf)), convert<u32>(target - (at + 4)));
+    asmLogPatch(a, at, target, 4);
 }
 
-// ShortJumps has checked the final displacement, including alignment,
-// before the second emission selects either caller's short encoding.
+// The compaction writes the displacements of a byte: of a jump made short,
+// which objCodeShortJumps found fits, and of a local sequence's.
 static void asmPatch8(Asm* a, i32 at, i32 target) {
     i32 d = target - (at + 1);
     a->buf[at] = convert<u8>(convert<i8>(d));
@@ -14213,16 +14272,10 @@ static void funcEmitterInst(FuncEmitter* e, MInst* in) {
     }
 }
 
+// A jump to a block is long; the compaction makes it short where it can be.
 static void funcEmitterJumpTo(FuncEmitter* e, Int cc, i32 block) {
-    const Int k = length(e->jumps);
-    const bool small = k < length(e->shorts) && e->shorts[k] != 0;
-    i32 at = {};
-    if (cc < 0) {
-        at = small ? asmJmp8(e->a) : asmJmpRel(e->a);
-    } else {
-        at = small ? asmJcc8(e->a, convert<u8>(cc)) : asmJccRel(e->a, convert<u8>(cc));
-    }
-    e->jumps = appendValues(e->jumps, JumpFixup{at, funcEmitterTarget(e, block), small});
+    const i32 at = cc < 0 ? asmJmpRel(e->a) : asmJccRel(e->a, convert<u8>(cc));
+    e->jumps = appendValues(e->jumps, JumpFixup{at, funcEmitterTarget(e, block)});
 }
 
 static Amem funcEmitterMem(FuncEmitter* e, Mem m) {
@@ -14438,17 +14491,13 @@ static void funcEmitterSwitchTable(FuncEmitter* e, MInst* in) {
 }
 
 static void funcEmitterTrapJcc(FuncEmitter* e, u8 cc, i64 code) {
-    const Int k = length(e->traps);
-    const bool small = k < length(e->trapShorts) && e->trapShorts[k] != 0;
-    TrapFixup t{small ? asmJcc8(e->a, cc) : asmJccRel(e->a, cc), code, e->a->sp, small};
+    TrapFixup t{asmJccRel(e->a, cc), code, e->a->sp};
     t.pos = e->a->lastPos;
     e->traps = appendValues(e->traps, t);
 }
 
 static void funcEmitterTrapJmp(FuncEmitter* e, i64 code) {
-    const Int k = length(e->traps);
-    const bool small = k < length(e->trapShorts) && e->trapShorts[k] != 0;
-    TrapFixup t{small ? asmJmp8(e->a) : asmJmpRel(e->a), code, e->a->sp, small};
+    TrapFixup t{asmJmpRel(e->a), code, e->a->sp};
     t.pos = e->a->lastPos;
     e->traps = appendValues(e->traps, t);
 }
@@ -14456,9 +14505,7 @@ static void funcEmitterTrapJmp(FuncEmitter* e, i64 code) {
 // trapJccAt is trapJcc of an asan trap, which reports the access at
 // reg + disp, or disp alone when reg is noReg, of width bytes and kind.
 static void funcEmitterTrapJccAt(FuncEmitter* e, u8 cc, i64 code, VReg reg, i32 disp, u8 width, u8 kind) {
-    const Int k = length(e->traps);
-    const bool small = k < length(e->trapShorts) && e->trapShorts[k] != 0;
-    TrapFixup t{small ? asmJcc8(e->a, cc) : asmJccRel(e->a, cc), code, e->a->sp, small};
+    TrapFixup t{asmJccRel(e->a, cc), code, e->a->sp};
     t.reg = reg;
     t.disp = disp;
     t.width = width;
@@ -19549,56 +19596,65 @@ static Meta* objCodeDescription(ObjCode* oc) {
     return meta;
 }
 
+// jumpSites are the jumps of an emission with every jump long, to blocks
+// and to traps, in the order of the code, each with its place in shorts or
+// in trapShorts.
+static Slice<JumpSite> objCodeJumpSites(FuncEmitter* e, Slice<u8> shorts, Slice<u8> trapShorts) {
+    Asm* a = e->a;
+    Slice<JumpSite> sites = makeSlice<JumpSite>(0, length(e->jumps) + length(e->traps));
+    Int j = 0;
+    Int t = 0;
+    i32 last = -1;
+    // Either list is in the order of the code: their merge is that order.
+    while (j < length(e->jumps) || t < length(e->traps)) {
+        const bool block = t == length(e->traps) || (j < length(e->jumps) && e->jumps[j].at < e->traps[t].at);
+        const i32 at = block ? e->jumps[j].at : e->traps[t].at;
+        require(at > last, "jumps out of order");
+        last = at;
+        const bool conditional = a->buf[usize(at - 1)] != 233;
+        const i32 to = block ? e->blockAt[e->jumps[j].block] : e->trapTo[usize(t)];
+        u8* plan = block ? &shorts[j] : &trapShorts[t];
+        j += Int(block);
+        t += Int(!block);
+        sites = appendValues(sites, JumpSite{at - (conditional ? 2 : 1), conditional ? 6 : 5, to, plan});
+    }
+    return sites;
+}
+
 // shortJumps chooses the jumps of an emission with every jump long that
 // can be short. Starting from all of them short, it drops those that
 // do not fit where the others' sizes and the padding of the aligned
 // loop headers put them, until all fit: the layout follows exactly
 // from the jumps' sizes and the headers' alignment.
-static bool objCodeShortJumps(FuncEmitter* e, Slice<u8> shorts, Slice<u8> trapShorts) {
-    Asm* a = e->a;
-
-    struct Site {
-        i32 from;
-        i32 size;
-        i32 to;
-        u8* plan;
-    };
-
-    Slice<Site> sites = makeSlice<Site>(0, length(e->jumps) + length(e->traps));
-    for (Int k = 0; k < length(e->jumps); ++k) {
-        const JumpFixup j = e->jumps[k];
-        const bool conditional = a->buf[usize(j.at - 1)] != 233;
-        sites = appendValues(sites, Site{j.at - (conditional ? 2 : 1), conditional ? 6 : 5, e->blockAt[j.block], &shorts[k]});
-    }
-    for (Int k = 0; k < length(e->traps); ++k) {
-        const TrapFixup t = e->traps[k];
-        const bool conditional = a->buf[usize(t.at - 1)] != 233;
-        sites = appendValues(sites, Site{t.at - (conditional ? 2 : 1), conditional ? 6 : 5, e->trapTo[usize(k)], &trapShorts[k]});
-    }
+static bool objCodeShortJumps(FuncEmitter* e, Slice<JumpSite> sites) {
     if (!length(sites)) {
         return false;
     }
-    sortValues(sites, [&](Int x, Int y) {
-        return sites[x].from < sites[y].from;
-    });
+    // padsTo are the paddings of the headers before each header, and
+    // headersTo the headers that start at a position or before it.
+    Slice<i64> padsTo = makeSlice<i64>(i64(e->aligned.size()) + 1);
+    for (usize h = 0; h < e->aligned.size(); ++h) {
+        padsTo[i64(h) + 1] = padsTo[i64(h)] + e->padded[h];
+    }
+    auto headersTo = [&](i32 x) {
+        return sortSearch(Int(e->aligned.size()), [&](Int h) {
+            return e->aligned[usize(h)] > x;
+        });
+    };
     // A jump can be short only when it fits with every jump between
-    // its ends short and no padding there.
+    // its ends short and no padding there. One end is the jump's own
+    // start: the jumps from first to last start between the two.
     for (Int k = 0; k < length(sites); ++k) {
         const i32 to = sites[k].to;
-        const i32 lo = minimum(sites[k].from, to);
-        const i32 hi = maximum(sites[k].from, to);
-        const Int first = sortSearch(length(sites), [&](Int i) {
-            return sites[i].from >= lo;
+        const bool forward = to > sites[k].from;
+        const i32 lo = forward ? sites[k].from : to;
+        const i32 hi = forward ? to : sites[k].from;
+        const Int other = sortSearch(length(sites), [&](Int i) {
+            return sites[i].from >= (forward ? hi : lo);
         });
-        const Int last = sortSearch(length(sites), [&](Int i) {
-            return sites[i].from >= hi;
-        });
-        i64 pads = 0;
-        for (usize h = 0; h < e->aligned.size(); ++h) {
-            if (e->aligned[h] > lo && e->aligned[h] <= hi) {
-                pads += e->padded[h];
-            }
-        }
+        const Int first = forward ? k : other;
+        const Int last = forward ? other : k;
+        const i64 pads = padsTo[headersTo(hi)] - padsTo[headersTo(lo)];
         const i64 d = i64(to) - i64(sites[k].from + 2);
         const i64 room = 4 * (last - first) + pads;
         *sites[k].plan = d >= -128 - room && d <= 127 + room;
@@ -19655,58 +19711,197 @@ static bool objCodeShortJumps(FuncEmitter* e, Slice<u8> shorts, Slice<u8> trapSh
     return false;
 }
 
-// emitFunction emits a function with every jump long, then, when some
-// can be short, again with those short.
+// appendPaged appends to to n bytes of from from at on, a page of from at
+// a time.
+static void appendPaged(PageVec<u8>& to, PageVec<u8>& from, usize at, usize n) {
+    while (n) {
+        const usize offset = at % pageBytes;
+        const usize take = n < pageBytes - offset ? n : pageBytes - offset;
+        to.append(from.pages.data()[at / pageBytes] + offset, take);
+        at += take;
+        n -= take;
+    }
+}
+
+// codeSiteAt is the last of the sites that starts at x or before it, -1
+// for none.
+static Int codeSiteAt(Slice<CodeSite> sites, i32 x) {
+    return sortSearch(length(sites), [&](Int i) {
+        return sites[i].from > x;
+    }) - 1;
+}
+
+// codeSiteMove is where the compaction puts the position x, by the site k
+// that starts at x or the last before it: inside a site only a short
+// jump's displacement is a position.
+static i32 codeSiteMove(Slice<CodeSite> sites, Int k, i32 x) {
+    if (k < 0) {
+        return x;
+    }
+    const CodeSite s = sites[k];
+    if (x == s.from) {
+        return s.to;
+    }
+    if (x >= s.from + s.size) {
+        return x - s.from - s.size + s.to + s.length;
+    }
+    require(s.kind == codeSiteJump && x == s.from + s.size - 4, "a position inside compacted code");
+    return s.to + 1;
+}
+
+// compact makes short the jumps of jumps whose plan says they can be, and
+// gives the paddings of the loop headers and of the tables the length they
+// have where those jumps are short, the code between the pieces moving as
+// it is; the displacements of the function's emission, the positions the
+// module keeps of its code and the stack pointer and line tables move with
+// it. What comes of it is what an emission with those jumps short makes.
+static void objCodeCompact(ObjCode* oc, FuncEmitter* e, i32 start, Slice<JumpSite> jumps, CodeMarks marks) {
+    Asm* a = &oc->a;
+    // The pieces in the order of the code: the jumps made short and the
+    // paddings of the loop headers among them, then those of the tables,
+    // which follow all of the code.
+    Slice<CodeSite> sites = makeSlice<CodeSite>(0, length(jumps) + i64(e->aligned.size() + e->tablePads.size()));
+    usize h = 0;
+    for (Int k = 0; k <= length(jumps); ++k) {
+        const i32 next = k < length(jumps) ? jumps[k].from : i32(2147483647);
+        for (; h < e->aligned.size() && e->aligned[h] - e->padded[h] < next; ++h) {
+            sites = appendValues(sites, CodeSite{e->aligned[h] - e->padded[h], e->padded[h], e->spans[h], 0, 0, codeSiteHeader});
+        }
+        if (k < length(jumps) && *jumps[k].plan) {
+            sites = appendValues(sites, CodeSite{jumps[k].from, jumps[k].size, 0, 0, 0, codeSiteJump});
+        }
+    }
+    for (usize k = 0; k < e->tablePads.size(); ++k) {
+        sites = appendValues(sites, CodeSite{e->tablePads[k][0], e->tablePads[k][1], 0, 0, 0, codeSiteTable});
+    }
+    // The code as emitted, and the code made of it piece by piece.
+    const i32 end = asmPos(a);
+    PageVec<u8> code;
+    appendPaged(code, a->buf, usize(start), usize(end - start));
+    a->buf.resize(usize(start));
+    i32 at = start;
+    for (Int k = 0; k < length(sites); ++k) {
+        CodeSite& s = sites[k];
+        appendPaged(a->buf, code, usize(at - start), usize(s.from - at));
+        s.to = asmPos(a);
+        if (s.kind == codeSiteJump) {
+            // A jmp of E9 and four bytes is EB and one; a jcc of 0F 8x and
+            // four is 7x and one.
+            const u8 op = code[usize(s.from - start)];
+            asmBytes(a, {u8(op == 233 ? 235 : code[usize(s.from - start + 1)] - 16), u8(0)});
+        } else if (s.kind == codeSiteHeader) {
+            asmNops(a, alignPad(asmPos(a), s.span));
+        } else {
+            while (length(a->buf) % Int(8LL) != Int(0LL)) {
+                asmBytes(a, {u8(u8(204LL))});
+            }
+        }
+        s.length = asmPos(a) - s.to;
+        at = s.from + s.size;
+    }
+    appendPaged(a->buf, code, usize(at - start), usize(end - at));
+    // The records of the code, each list in the order of the code: the
+    // site of a position is found from the last one's on.
+    Int cursor = -1;
+    i32 previous = -1;
+    auto restart = [&]() {
+        cursor = -1;
+        previous = -1;
+    };
+    auto moved = [&](i32 x) {
+        require(x >= previous, "records out of order");
+        previous = x;
+        while (cursor + 1 < length(sites) && sites[cursor + 1].from <= x) {
+            ++cursor;
+        }
+        return codeSiteMove(sites, cursor, x);
+    };
+    for (Int i = marks.fixups; i < length(a->fixups); ++i) {
+        const i32 to = moved(a->fixups[i].at);
+        a->fixups[i].end += to - a->fixups[i].at;
+        a->fixups[i].at = to;
+    }
+    // Entries that come to one position are one, the last, as asmSetSP and
+    // asmMarkPos make them.
+    restart();
+    Int kept = marks.sps;
+    for (Int i = marks.sps; i < length(a->sps); ++i) {
+        SpEntry entry = a->sps[i];
+        entry.pc = moved(entry.pc);
+        kept -= Int(a->sps[kept - 1].pc == entry.pc);
+        a->sps[kept++] = entry;
+    }
+    a->sps = subslice(a->sps, 0, kept);
+    restart();
+    kept = marks.lines;
+    for (Int i = marks.lines; i < length(a->lines); ++i) {
+        LineMark mark = a->lines[i];
+        mark.pc = moved(mark.pc);
+        kept -= Int(kept > 0 && a->lines[kept - 1].pc == mark.pc);
+        a->lines[kept++] = mark;
+    }
+    a->lines = subslice(a->lines, 0, kept);
+    auto calls = [&](Slice<CallFixup> list, Int from) {
+        restart();
+        for (Int i = from; i < length(list); ++i) {
+            list[i].at = moved(list[i].at);
+        }
+    };
+    calls(oc->calls, marks.calls);
+    calls(oc->jumpCalls, marks.jumpCalls);
+    calls(oc->trampolineCalls, marks.trampolineCalls);
+    restart();
+    for (Int i = marks.addresses; i < length(oc->addresses); ++i) {
+        const i32 target = oc->addresses[i].target;
+        oc->addresses[i].at = moved(oc->addresses[i].at);
+        oc->addresses[i].target = codeSiteMove(sites, codeSiteAt(sites, target), target);
+    }
+    // The displacements again, in the order they were written: a jump
+    // made short has its displacement in a byte.
+    for (Int i = 0; i < length(a->patches); ++i) {
+        const CodePatch patch = a->patches[i];
+        const Int k = codeSiteAt(sites, patch.at);
+        const i32 to = codeSiteMove(sites, k, patch.at);
+        const i32 target = codeSiteMove(sites, codeSiteAt(sites, patch.target), patch.target);
+        if (patch.width == 1 || (k >= 0 && patch.at < sites[k].from + sites[k].size)) {
+            asmPatch8(a, to, target);
+        } else {
+            asmPatch32(a, to, target);
+        }
+    }
+}
+
+// emitFunction emits a function with every jump long, then makes those
+// that can be short short and gives its paddings their length
+// (objCodeCompact).
 static void objCodeEmitFunction(ObjCode* oc, Int index, MFunc* mf, Allocator* al) {
     Asm* a = &oc->a;
     i32 start = objCodeBeginRegion(oc, objCodeFuncName(oc, index));
     oc->funcAt[index] = start;
-    const Int fixups = length(a->fixups);
-    const Int sps = length(a->sps);
-    const SpEntry lastSp = sps ? a->sps[sps - 1] : SpEntry{};
-    const i32 sp = a->sp;
-    const Int lines = length(a->lines);
+    const CodeMarks marks{length(a->fixups), length(a->sps), length(a->lines), length(oc->calls), length(oc->jumpCalls), length(oc->trampolineCalls), length(oc->addresses)};
     a->lastPos = 0;
-    const Int calls = length(oc->calls);
-    const Int jumpCalls = length(oc->jumpCalls);
-    const Int trampolineCalls = length(oc->trampolineCalls);
-    const Int addresses = length(oc->addresses);
-    FuncEmitter* e = objCodeEmitBody(oc, mf, al, {}, {}, {}, nullptr);
-    Slice<u8> shorts = makeSlice<u8>(length(e->jumps));
-    Slice<u8> trapShorts = makeSlice<u8>(length(e->traps));
-    Slice<i32> plan = makeSlice<i32>(i64(e->spans.size()));
+    a->patches = Slice<CodePatch>{};
+    a->logPatches = true;
+    FuncEmitter* e = objCodeEmitBody(oc, mf, al);
+    a->logPatches = false;
     bool realign = false;
     for (usize k = 0; k < e->spans.size(); ++k) {
-        plan[i64(k)] = e->spans[k];
         realign = realign || alignPad(e->aligned[k] - e->padded[k], e->spans[k]) != e->padded[k];
     }
-    if (objCodeShortJumps(e, shorts, trapShorts) || realign) {
-        a->buf.resize(usize(start));
-        a->fixups = subslice(a->fixups, 0, fixups);
-        a->sps = subslice(a->sps, 0, sps);
-        if (sps) {
-            a->sps[sps - 1] = lastSp;
-        }
-        a->sp = sp;
-        a->lines = subslice(a->lines, 0, lines);
-        a->lastPos = 0;
-        oc->calls = subslice(oc->calls, 0, calls);
-        oc->jumpCalls = subslice(oc->jumpCalls, 0, jumpCalls);
-        oc->trampolineCalls = subslice(oc->trampolineCalls, 0, trampolineCalls);
-        oc->addresses = subslice(oc->addresses, 0, addresses);
-        objCodeEmitBody(oc, mf, al, shorts, trapShorts, plan, e);
+    for (usize k = 0; k < e->tablePads.size(); ++k) {
+        realign = realign || (-e->tablePads[k][0] & 7) != e->tablePads[k][1];
     }
+    Slice<JumpSite> sites = objCodeJumpSites(e, makeSlice<u8>(length(e->jumps)), makeSlice<u8>(length(e->traps)));
+    if (objCodeShortJumps(e, sites) || realign) {
+        objCodeCompact(oc, e, start, sites, marks);
+    }
+    a->patches = Slice<CodePatch>{};
     objCodeEndRegion(oc, start);
 }
 
-// first is the emission before this one, of every jump long, or null in
-// that one: what follows from the function alone is found in it only.
-static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al, Slice<u8> shorts, Slice<u8> trapShorts, Slice<i32> plan, FuncEmitter* first) {
+static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al) {
     Asm* a = &oc->a;
     FuncEmitter* e = activePool->make<FuncEmitter>(FuncEmitter{oc, a, mf, al, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}});
-    e->shorts = shorts;
-    e->trapShorts = trapShorts;
-    e->plan = plan;
     e->pushes = allocatorCalleeSavedUsed(al);
     e->frame = convert<i32>(mf->stackArgs) + 8 * al->nslots;
     // The stack check follows the pushes: the arguments fill the
@@ -19716,9 +19911,8 @@ static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al, Slice
     // instead, against the stack pointer the body has.
     Slice<i32> checkBlocks = {};
     if (mf->hasCalls && e->frame <= leafFrame && !mf->returnsTwice) {
-        checkBlocks = first ? first->checkBlocks : objCodeStackCheckBlocks(mf);
+        checkBlocks = objCodeStackCheckBlocks(mf);
     }
-    e->checkBlocks = checkBlocks;
     Slice<bool> checksAt = makeSlice<bool>(length(mf->blocks));
     for (Int i = 0; i < length(checkBlocks); ++i) {
         checksAt[checkBlocks[i]] = true;
@@ -19837,6 +20031,10 @@ static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al, Slice
     blockEnd.resize(mf->blocks.size());
     blockEnd.fill(-1);
     Vec<i32> headers;
+    // filled are the bytes of the paddings of 32 where there would be
+    // none, of the headers before each.
+    Vec<i32> filled;
+    filled.pushBack(0);
     Vec<Array<i32, 2>> bodyChecks;
     for (Int i = 0; i < length(order); ++i) {
         i32 b = order[i];
@@ -19845,11 +20043,12 @@ static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al, Slice
             continue;
         }
         if (header[usize(b)]) {
-            const usize k = e->aligned.size();
-            const i32 pad = alignPad(asmPos(a), k < usize(length(e->plan)) ? e->plan[k] : 0);
-            asmNops(a, pad);
+            const i32 pad = alignPad(asmPos(a), 0);
+            const i32 width = pad ? pad : 32;
+            asmNops(a, width);
             e->aligned.pushBack(asmPos(a));
-            e->padded.pushBack(pad);
+            e->padded.pushBack(width);
+            filled.pushBack(filled[filled.size() - 1] + width - pad);
             headers.pushBack(b);
         }
         e->blockAt[b] = asmPos(a);
@@ -19863,7 +20062,13 @@ static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al, Slice
     for (usize k = 0; k < headers.size(); ++k) {
         const i32 l = latch[usize(headers[k])];
         const i32 end = l >= 0 ? blockEnd[usize(l)] : -1;
-        e->spans.pushBack(end > e->aligned[k] ? end - e->aligned[k] : 0);
+        // Less the paddings of 32 within, of the headers after this one
+        // that start before the end.
+        const Int within = sortSearch(Int(e->aligned.size()), [&](Int h) {
+            return e->aligned[usize(h)] > end;
+        });
+        const i32 extra = filled[usize(maximum(within, Int(k) + 1))] - filled[k + 1];
+        e->spans.pushBack(end > e->aligned[k] ? end - e->aligned[k] - extra : 0);
     }
     Int i = 0;
     for (; i < length(e->late); i++) {
@@ -19901,20 +20106,12 @@ static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al, Slice
             objCodeTrapCall(oc, t.code);
         }
         e->trapTo.pushBack(at);
-        if (t.small) {
-            asmPatch8(a, t.at, at);
-        } else {
-            asmPatch32(a, t.at, at);
-        }
+        asmPatch32(a, t.at, at);
     }
     auto range1011 = e->jumps;
     for (Int index1012 = 0, rangeEnd1013 = length(range1011); index1012 < rangeEnd1013; ++index1012) {
         JumpFixup j = range1011[index1012];
-        if (j.small) {
-            asmPatch8(a, j.at, e->blockAt[j.block]);
-        } else {
-            asmPatch32(a, j.at, e->blockAt[j.block]);
-        }
+        asmPatch32(a, j.at, e->blockAt[j.block]);
     }
     auto tables = e->tables;
     // Copies of one dispatch share its table.
@@ -19927,9 +20124,13 @@ static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al, Slice
             asmPatch32(a, t.lea, known.v0);
             continue;
         }
+        // Never empty, as a loop header's padding.
+        const i32 from = asmPos(a);
+        asmBytes(a, {u8(u8(204LL))});
         while (length(a->buf) % Int(8LL) != Int(0LL)) {
             asmBytes(a, {u8(u8(204LL))});
         }
+        e->tablePads.pushBack(Array<i32, 2>{{from, asmPos(a) - from}});
         i32 base = asmPos(a);
         setMap(bases, key, base);
         asmPatch32(a, t.lea, base);
@@ -20549,6 +20750,18 @@ static i32 objCodeStackCheck(ObjCode* oc, i32 total, VReg temp) {
     return asmJccRel(a, ccBE);
 }
 
+// blockCalls tells whether a block calls or allocates on the stack, what
+// the stack check must come before.
+static bool objCodeBlockCalls(MBlock* block) {
+    auto insts = block->insts.view();
+    for (Int k = 0; k < length(insts); ++k) {
+        if (insts[k].op == mCall || insts[k].op == mCallInd || insts[k].op == mStackAlloc) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // stackCheckBlocks gives the block that checks the stack where it
 // begins, in place of the prologue, of a function with calls whose frame
 // a leaf could have: until its first call it runs as a leaf does. The
@@ -20556,6 +20769,12 @@ static i32 objCodeStackCheck(ObjCode* oc, i32 total, VReg temp) {
 // every loop, and there is none when that is the entry. The check takes
 // the room of the prologue's.
 static Slice<i32> objCodeStackCheckBlocks(MFunc* mf) {
+    // An entry that calls is a block that calls whose dominators outside
+    // every loop end at the entry: there is none, and no dominator needs
+    // finding.
+    if (objCodeBlockCalls(&mf->blocks[0])) {
+        return {};
+    }
     const Int n = length(mf->blocks);
     // The blocks in postorder from the entry, block 0.
     Slice<i32> post = makeSlice<i32>(0);
@@ -20629,12 +20848,7 @@ static Slice<i32> objCodeStackCheckBlocks(MFunc* mf) {
     Slice<bool> checks = makeSlice<bool>(n);
     for (Int i = 0; i < length(post); ++i) {
         const i32 b = post[i];
-        auto insts = mf->blocks[b].insts.view();
-        bool calls = false;
-        for (Int k = 0; k < length(insts) && !calls; ++k) {
-            calls = insts[k].op == mCall || insts[k].op == mCallInd || insts[k].op == mStackAlloc;
-        }
-        if (!calls) {
+        if (!objCodeBlockCalls(&mf->blocks[b])) {
             continue;
         }
         i32 at = b;
