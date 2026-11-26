@@ -16,7 +16,7 @@ func newNoRoot() *NoRoot {
 	return r
 }
 
-func (r *NoRoot) closed() {
+func (r *NoRoot) closed(d *Description) {
 }
 
 func (r *NoRoot) stat(p *Process, st *Stat) error {
@@ -27,46 +27,30 @@ func (r *NoRoot) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (r *NoRoot) poll(events int16, through []*Epoll) int16 {
+func (r *NoRoot) poll(d *Description, events int16, through []*Epoll) int16 {
 	return events & (POLLIN | POLLOUT | POLLRDNORM | POLLWRNORM)
 }
 
-func (r *NoRoot) subscribe(s *Subscription, events int16) {
+func (r *NoRoot) subscribe(d *Description, s *Subscription, events int16) {
 }
 
-func (r *NoRoot) unsubscribe(s *Subscription) {
-}
-
-func (r *NoRoot) flags(p *Process) (int, error) {
-	return O_RDONLY, nil
-}
-
-func (r *NoRoot) setFlags(p *Process, fl int) error {
-	return nil
+func (r *NoRoot) unsubscribe(d *Description, s *Subscription) {
 }
 
 func (r *NoRoot) readdir(p *Process, into *MemfdFile, n int) (int, error) {
 	return 0, nil
 }
 
-func (r *NoRoot) call(p *Process, q Request, group uint32, waits bool) (bool, error) {
+func (r *NoRoot) call(p *Process, d *Description, q Request, group uint32, waits bool) (bool, error) {
 	switch q := q.(type) {
 	case *FileStat:
 		return false, r.stat(p, q.st)
 	case *Ctl:
 		return false, ENOENT
-	case *FileGetfl:
-		var err error
-
-		q.flags, err = r.flags(p)
-
-		return false, err
-	case *FileSetfl:
-		return false, r.setFlags(p, q.flags)
 	case *FileReaddir:
 		var err error
 
-		q.count, err = r.readdir(p, q.into, q.n)
+		q.count, err = r.readdir(p, q.into.memory(), q.n)
 
 		return false, err
 	case *FileRead:

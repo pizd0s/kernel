@@ -17,20 +17,20 @@ func newSpinLock() *SpinLock {
 	return l
 }
 
-func (l *SpinLock) closed() {
+func (l *SpinLock) closed(d *Description) {
 }
 
-func (l *SpinLock) poll(events int16, through []*Epoll) int16 {
+func (l *SpinLock) poll(d *Description, events int16, through []*Epoll) int16 {
 	return 0
 }
 
-func (l *SpinLock) subscribe(s *Subscription, events int16) {
+func (l *SpinLock) subscribe(d *Description, s *Subscription, events int16) {
 }
 
-func (l *SpinLock) unsubscribe(s *Subscription) {
+func (l *SpinLock) unsubscribe(d *Description, s *Subscription) {
 }
 
-func (l *SpinLock) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (l *SpinLock) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	l.mu.Lock()
 
 	defer l.mu.Unlock()

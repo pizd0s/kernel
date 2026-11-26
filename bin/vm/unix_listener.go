@@ -19,7 +19,7 @@ type UnixListener struct {
 	kind      int
 }
 
-func (l *UnixListener) closed() {
+func (l *UnixListener) closed(d *Description) {
 }
 
 func (l *UnixListener) shut() {
@@ -36,7 +36,7 @@ func (l *UnixListener) shut() {
 	l.mu.Unlock()
 
 	for _, e := range dropped {
-		e.closed()
+		e.closed(nil)
 	}
 }
 
@@ -81,7 +81,7 @@ func (l *UnixListener) next(p *Process, nonblock bool) (*PairEnd, error) {
 		l.mu.Unlock()
 
 		if err != nil && ok {
-			e.closed()
+			e.closed(nil)
 		}
 
 		if err != nil {
@@ -129,7 +129,7 @@ func (l *UnixListener) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (l *UnixListener) poll(events int16, through []*Epoll) int16 {
+func (l *UnixListener) poll(d *Description, events int16, through []*Epoll) int16 {
 	l.mu.Lock()
 
 	shut, n, room := l.gone, l.conns.len(), l.conns.len() < l.backlog
@@ -153,7 +153,7 @@ func (l *UnixListener) poll(events int16, through []*Epoll) int16 {
 	return mask & (events | POLLERR | POLLHUP)
 }
 
-func (l *UnixListener) subscribe(s *Subscription, events int16) {
+func (l *UnixListener) subscribe(d *Description, s *Subscription, events int16) {
 	in, out := l.sides(events)
 
 	l.mu.Lock()
@@ -169,7 +169,7 @@ func (l *UnixListener) subscribe(s *Subscription, events int16) {
 	l.mu.Unlock()
 }
 
-func (l *UnixListener) unsubscribe(s *Subscription) {
+func (l *UnixListener) unsubscribe(d *Description, s *Subscription) {
 	l.mu.Lock()
 	l.watchers.remove(&s.in)
 	l.watchers.remove(&s.out)
@@ -186,15 +186,7 @@ func (l *UnixListener) sides(events int16) (in, out bool) {
 	return in, out
 }
 
-func (l *UnixListener) flags(p *Process) (int, error) {
-	return O_RDWR, nil
-}
-
-func (l *UnixListener) setFlags(p *Process, fl int) error {
-	return nil
-}
-
-func (l *UnixListener) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (l *UnixListener) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, l.stat(p, r.st)
@@ -204,14 +196,6 @@ func (l *UnixListener) call(p *Process, r Request, group uint32, waits bool) (bo
 		r.conn, err = l.knock(p, r.kind, r.nonblock, r.timeout)
 
 		return false, err
-	case *FileGetfl:
-		var err error
-
-		r.flags, err = l.flags(p)
-
-		return false, err
-	case *FileSetfl:
-		return false, l.setFlags(p, r.flags)
 	case *FileRead:
 		return false, EBADF
 	case *FileWrite:
@@ -255,8 +239,8 @@ func (l *UnixListener) knock(p *Process, kind int, nonblock bool, timeout *atomi
 			err = EAGAIN
 		}
 
-		mine.closed()
-		theirs.closed()
+		mine.closed(nil)
+		theirs.closed(nil)
 
 		return nil, err
 	}

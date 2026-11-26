@@ -41,10 +41,10 @@ func (op *AioOp) transfer(a *Process) (int, error) {
 	switch op.kind {
 	case aioRead:
 		buf := make([]byte, op.n)
-		n, err := a.filePread(op.file.object(), bytesFile(buf), op.n, op.offset)
+		n, err := a.filePread(op.file, bytesFile(buf), op.n, op.offset)
 
 		if err == ESPIPE {
-			n, err = a.fileRead(op.file.object(), bytesFile(buf), op.n, op.file.mode())
+			n, err = a.fileRead(op.file, bytesFile(buf), op.n, op.file.mode())
 		}
 
 		op.data = buf[:max(n, 0)]
@@ -52,17 +52,17 @@ func (op *AioOp) transfer(a *Process) (int, error) {
 		return n, err
 	case aioWrite:
 		if !op.stream {
-			n, err := a.filePwrite(op.file.object(), bytesFile(op.data), len(op.data), op.offset)
+			n, err := a.filePwrite(op.file, bytesFile(op.data), len(op.data), op.offset)
 
 			if err != ESPIPE {
 				return n, err
 			}
 		}
 
-		return a.fileWrite(op.file.object(), bytesFile(op.data), len(op.data), op.file.mode())
+		return a.fileWrite(op.file, bytesFile(op.data), len(op.data), op.file.mode())
 	}
 
-	return 0, a.request(op.file.object(), &FileSync{data: op.kind == aioDataSync})
+	return 0, a.request(op.file, &FileSync{data: op.kind == aioDataSync})
 }
 
 func (op *AioOp) stopped() bool {

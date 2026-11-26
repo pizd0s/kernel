@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 var pipeInodes atomic.Uint64
@@ -196,4 +197,238 @@ func (pp *Pipe) unread() int {
 	defer pp.mu.Unlock()
 
 	return pp.bytes
+}
+
+func (pp *Pipe) quit(reads, writes bool) {
+	if pp.leave(reads, writes) && pp.name != nil {
+		pp.name.forget(pp)
+	}
+}
+
+func (pp *Pipe) closed(d *Description) {
+	pp.quit(d.reads(), d.writes())
+}
+
+func (pp *Pipe) hang(reads, writes bool, s *Subscription, events int16) {
+	if reads && writes && events&(POLLIN|POLLRDNORM|POLLOUT|POLLWRNORM) != 0 {
+		reads, writes = events&(POLLIN|POLLRDNORM) != 0, events&(POLLOUT|POLLWRNORM) != 0
+	}
+
+	pp.mu.Lock()
+
+	if reads {
+		pp.watchers.add(&s.in)
+	}
+
+	if writes {
+		pp.watchers.add(&s.out)
+	}
+
+	pp.mu.Unlock()
+}
+
+func (pp *Pipe) unhang(s *Subscription) {
+	pp.mu.Lock()
+	pp.watchers.remove(&s.in)
+	pp.watchers.remove(&s.out)
+	pp.mu.Unlock()
+}
+
+func (pp *Pipe) subscribe(d *Description, s *Subscription, events int16) {
+	pp.hang(d.reads(), d.writes(), s, events)
+}
+
+func (pp *Pipe) unsubscribe(d *Description, s *Subscription) {
+	pp.unhang(s)
+}
+
+func (pp *Pipe) poll(d *Description, events int16, through []*Epoll) int16 {
+	return pp.ready(d.reads(), d.writes(), events)
+}
+
+func (pp *Pipe) stat(p *Process, st *Stat) error {
+	*st = Stat{Ino: pp.ino, Mode: S_IFIFO | 0o600, Nlink: 1, Uid: p.cred.euid(), Gid: p.cred.egid(), Blksize: pipeChunk}
+
+	if n := pp.name; n != nil {
+		st.Dev, st.Ino, st.Mode = n.key.dev, n.key.ino, n.mode
+	}
+
+	st.Atim = nsecToTimespec(pp.made.UnixNano())
+	st.Mtim, st.Ctim = st.Atim, st.Atim
+
+	return nil
+}
+
+func (pp *Pipe) ready(reads, writes bool, events int16) int16 {
+	pp.mu.Lock()
+
+	unread, readers, writers := pp.bytes, pp.readers, pp.writers
+
+	pp.mu.Unlock()
+
+	mask := int16(0)
+
+	if writes {
+		if pipeSize-unread >= pipeChunk {
+			mask |= POLLOUT | POLLWRNORM
+		}
+
+		if readers == 0 {
+			mask |= POLLERR
+		}
+	}
+
+	if reads {
+		if unread > 0 || writers == 0 {
+			mask |= POLLIN | POLLRDNORM
+		}
+
+		if writers == 0 {
+			mask |= POLLHUP
+		}
+	}
+
+	return mask & (events | POLLERR | POLLHUP)
+}
+
+func (pp *Pipe) ioctl(reads bool, req uintptr, arg unsafe.Pointer) error {
+	if req != FIONREAD || !reads {
+		return ENOTTY
+	}
+
+	*(*int32)(arg) = int32(pp.unread())
+
+	return nil
+}
+
+func (pp *Pipe) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
+	if p.chaosFail("read") {
+		return 0, EIO
+	}
+
+	if n == 0 {
+		return 0, nil
+	}
+
+	pp.mu.Lock()
+
+	for {
+		eof := false
+
+		got, err := into.with(0, n, true, func(b []byte) (int, error) {
+			taken, ended := pp.take(b)
+
+			eof = ended
+
+			return taken, nil
+		})
+
+		if err != nil || got > 0 || eof {
+			pp.mu.Unlock()
+
+			return got, err
+		}
+
+		if mode.nonblock {
+			pp.mu.Unlock()
+
+			return 0, EAGAIN
+		}
+
+		if _, err := p.watch(&pp.mu, &pp.watchers, false, time.Time{}, restarts); err != nil {
+			pp.mu.Unlock()
+
+			return 0, err
+		}
+	}
+}
+
+func (pp *Pipe) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, error) {
+	if p.chaosFail("write") {
+		return 0, EIO
+	}
+
+	total := 0
+
+	var err error
+
+	pp.mu.Lock()
+
+	for total < n && err == nil {
+		var full, gone bool
+
+		put, failed := from.with(int64(total), min(n-total, pipeChunk), false, func(b []byte) (int, error) {
+			if full, gone = pp.put(b); full || gone {
+				return 0, nil
+			}
+
+			return len(b), nil
+		})
+
+		switch {
+		case failed != nil:
+			err = failed
+		case gone:
+			err = EPIPE
+		case !full:
+			total += put
+
+			if put == 0 {
+				n = total
+			}
+		case mode.nonblock:
+			err = EAGAIN
+		default:
+			_, err = p.watch(&pp.mu, &pp.watchers, true, time.Time{}, restarts)
+		}
+	}
+
+	pp.mu.Unlock()
+
+	if err == EPIPE && !mode.quiet {
+		p.sendSelf(SIGPIPE)
+	}
+
+	if total > 0 {
+		return total, nil
+	}
+
+	return 0, err
+}
+
+func (pp *Pipe) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
+	switch r := r.(type) {
+	case *FileStat:
+		return false, pp.stat(p, r.st)
+	case *FileRead:
+		switch {
+		case r.explicit:
+			return false, errUnserved
+		case !d.reads():
+			return false, EBADF
+		}
+
+		var err error
+
+		r.count, err = pp.read(p, r.into.memory(), r.n, r.mode)
+
+		return false, err
+	case *FileWrite:
+		switch {
+		case r.explicit:
+			return false, errUnserved
+		case !d.writes():
+			return false, EBADF
+		}
+
+		var err error
+
+		r.count, err = pp.write(p, r.from.memory(), r.n, r.mode)
+
+		return false, err
+	case *FileIoctl:
+		return false, pp.ioctl(d.reads(), r.req, r.arg)
+	}
+
+	return false, errUnserved
 }

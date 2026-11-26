@@ -39,6 +39,16 @@
 // its descriptors close with it, and a request closed with no answer
 // written is EIO to who asked.
 //
+// An answer may be MOVE where it would be OK: fds[0] is what the open
+// file is from then on, an end of a pair, a file of the kernel's with no
+// server. The kernel puts it in the open file's place as the answer
+// comes, for every descriptor of the open file, and whoever waits on the
+// open file waits on it then. The server is done with the open file: it
+// closes its endpoint, and a call on its way to it, lost with the
+// endpoint, the kernel makes again on what took its place. An answer
+// nobody is there to take moves nothing: the send fails, and the open
+// file is the server's still.
+//
 // Who asked may take a signal while the request waits: where the request
 // is answered is readable then, and a receive there gives CANCEL, a
 // header with the ids of who asked. A server that keeps the request, a
@@ -448,7 +458,8 @@
 //   that changes by itself tells it its changes.
 //
 //   replies: OK, ERR with arg the errno, BACKGROUND with arg the signal
-//   of a call out of the foreground (a terminal's)
+//   of a call out of the foreground (a terminal's), MOVE as OK of a call
+//   whose open file is fds[0] from then on
 //   opened { kind u32, access u32, dev u64, ino u64, events u32, made u32 }
 //          kind:
 //          openedFile, an open file; openedTerminal, a terminal's, which
@@ -537,6 +548,7 @@ enum : uint32_t {
     opOk = 128,
     opErr,
     opBackground,
+    opMove,
     // A socket's.
     opBind = 144,
     opConnect,

@@ -5,7 +5,7 @@ import (
 )
 
 type FileReaddir struct {
-	into  *MemfdFile
+	into  *Description
 	n     int
 	count int
 }
@@ -56,7 +56,7 @@ func (r *FileReaddir) des(p *Process, pk *Packet) error {
 		data = data[min(end+1, len(data)):]
 	}
 
-	count, err := r.into.with(0, n, true, func(dst []byte) (int, error) {
+	count, err := r.into.memory().with(0, n, true, func(dst []byte) (int, error) {
 		return copy(dst, b[:n]), nil
 	})
 

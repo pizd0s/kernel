@@ -20,7 +20,7 @@ func newCapture(size func(first []byte) int) *Capture {
 	return c
 }
 
-func (c *Capture) closed() {
+func (c *Capture) closed(d *Description) {
 }
 
 func (c *Capture) bytes() []byte {
@@ -37,22 +37,14 @@ func (c *Capture) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (c *Capture) poll(events int16, through []*Epoll) int16 {
+func (c *Capture) poll(d *Description, events int16, through []*Epoll) int16 {
 	return events & (POLLOUT | POLLWRNORM)
 }
 
-func (c *Capture) subscribe(s *Subscription, events int16) {
+func (c *Capture) subscribe(d *Description, s *Subscription, events int16) {
 }
 
-func (c *Capture) unsubscribe(s *Subscription) {
-}
-
-func (c *Capture) flags(p *Process) (int, error) {
-	return O_WRONLY, nil
-}
-
-func (c *Capture) setFlags(p *Process, fl int) error {
-	return nil
+func (c *Capture) unsubscribe(d *Description, s *Subscription) {
 }
 
 func (c *Capture) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, error) {
@@ -71,18 +63,10 @@ func (c *Capture) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, e
 	})
 }
 
-func (c *Capture) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (c *Capture) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, c.stat(p, r.st)
-	case *FileGetfl:
-		var err error
-
-		r.flags, err = c.flags(p)
-
-		return false, err
-	case *FileSetfl:
-		return false, c.setFlags(p, r.flags)
 	case *FileWrite:
 		if r.explicit {
 			return false, errUnserved
@@ -90,7 +74,7 @@ func (c *Capture) call(p *Process, r Request, group uint32, waits bool) (bool, e
 
 		var err error
 
-		r.count, err = c.write(p, r.from, r.n, r.mode)
+		r.count, err = c.write(p, r.from.memory(), r.n, r.mode)
 
 		return false, err
 	}

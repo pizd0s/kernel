@@ -20,20 +20,20 @@ func newMutex(kind uint32) *Mutex {
 	return m
 }
 
-func (m *Mutex) closed() {
+func (m *Mutex) closed(d *Description) {
 }
 
-func (m *Mutex) poll(events int16, through []*Epoll) int16 {
+func (m *Mutex) poll(d *Description, events int16, through []*Epoll) int16 {
 	return 0
 }
 
-func (m *Mutex) subscribe(s *Subscription, events int16) {
+func (m *Mutex) subscribe(d *Description, s *Subscription, events int16) {
 }
 
-func (m *Mutex) unsubscribe(s *Subscription) {
+func (m *Mutex) unsubscribe(d *Description, s *Subscription) {
 }
 
-func (m *Mutex) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (m *Mutex) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *SyncLock:
 		return false, m.lock(p, r)

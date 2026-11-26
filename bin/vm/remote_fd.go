@@ -7,21 +7,19 @@ import (
 )
 
 type RemoteFD struct {
-	end  *Description
-	desc *Description
+	end *Description
 
 	mu       sync.Mutex
 	watchers Subscribers
 	key      FileKey
-	access   int
 	ready    int16
 }
 
-func (f *RemoteFD) closed() {
+func (f *RemoteFD) closed(d *Description) {
 	f.end.release()
 }
 
-func (f *RemoteFD) subscribe(s *Subscription, events int16) {
+func (f *RemoteFD) subscribe(d *Description, s *Subscription, events int16) {
 	in, out := ioSides(events)
 
 	f.mu.Lock()
@@ -37,46 +35,33 @@ func (f *RemoteFD) subscribe(s *Subscription, events int16) {
 	f.mu.Unlock()
 }
 
-func (f *RemoteFD) unsubscribe(s *Subscription) {
+func (f *RemoteFD) unsubscribe(d *Description, s *Subscription) {
 	f.mu.Lock()
 	f.watchers.remove(&s.in)
 	f.watchers.remove(&s.out)
 	f.mu.Unlock()
 }
 
-func (f *RemoteFD) move(to *Description) {
-	d, obj := f.desc, to.object()
-
-	d.mu.Lock()
-	f.mu.Lock()
-
-	hooks := f.watchers.hooks(nil)
-
-	for _, h := range hooks {
-		f.watchers.remove(h)
+func (f *RemoteFD) move(d, to *Description) error {
+	if d == nil || !d.grab() {
+		return EPIPE
 	}
 
-	f.mu.Unlock()
+	defer d.release()
 
-	for _, h := range hooks {
-		if h == &h.sub.in {
-			obj.subscribe(h.sub, POLLIN)
-		} else {
-			obj.subscribe(h.sub, POLLOUT)
-		}
+	if d.object() != Object(f) {
+		return EINVAL
 	}
 
 	d.swap(to)
-	f.desc = to
-	d.mu.Unlock()
-	to.release()
+	f.mu.Lock()
+	f.watchers.drop()
+	f.mu.Unlock()
 
-	for _, h := range hooks {
-		h.sub.to.wake(h)
-	}
+	return nil
 }
 
-func (f *RemoteFD) poll(events int16, through []*Epoll) int16 {
+func (f *RemoteFD) poll(d *Description, events int16, through []*Epoll) int16 {
 	f.mu.Lock()
 
 	ready := f.ready
@@ -96,12 +81,6 @@ func (f *RemoteFD) deliver(pk *Packet) {
 		return
 	}
 
-	if len(pk.data) >= remoteHeader && binary.LittleEndian.Uint32(pk.data) == rMove && len(pk.files) == 1 {
-		f.move(pk.files[0])
-
-		return
-	}
-
 	if len(pk.data) >= remoteHeader && binary.LittleEndian.Uint32(pk.data) == rReady {
 		f.mu.Lock()
 		f.ready = readiness(binary.LittleEndian.Uint32(pk.data[4:]))
@@ -112,16 +91,16 @@ func (f *RemoteFD) deliver(pk *Packet) {
 	dropFiles(pk.files)
 }
 
-func (f *RemoteFD) exchange(p *Process, data []byte, files []*Description, interruptible bool) (pk Packet, cancelled bool, err error) {
+func (f *RemoteFD) exchange(p *Process, d *Description, data []byte, files []*Description, interruptible bool) (pk Packet, cancelled bool, err error) {
 	if interruptible && p.interrupts(true) {
 		return Packet{}, false, EINTR
 	}
 
-	a := &Answer{ObjectIdent: newObjectIdent(), asker: p}
+	a := &Answer{ObjectIdent: newObjectIdent(), asker: p, of: d, on: f}
 
 	defer a.leave()
 
-	if _, err := p.sockSend(f.end.object(), &Packet{data: data, files: append(files, newDescription(a))}, Address{}, IoMode{quiet: true, kernel: true}); err != nil {
+	if _, err := p.sockSend(f.end, &Packet{data: data, files: append(files, newDescription(a, O_RDWR))}, Address{}, IoMode{quiet: true, kernel: true}); err != nil {
 		return Packet{}, false, EIO
 	}
 
@@ -134,10 +113,10 @@ func (f *RemoteFD) exchange(p *Process, data []byte, files []*Description, inter
 	return a.taken(), cancelled, nil
 }
 
-func (f *RemoteFD) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (f *RemoteFD) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileIdentity:
-		r.id, r.key, r.access = f.objectID(), f.key, f.access
+		r.id, r.key = f.objectID(), f.key
 
 		return false, nil
 	case *FileRead:
@@ -162,7 +141,7 @@ func (f *RemoteFD) call(p *Process, r Request, group uint32, waits bool) (bool, 
 		if room := packetMax - remoteHeader - 4 - len(r.to.raw); len(r.pk.data) > room {
 			kind := SockType{}
 
-			if err := p.request(f, &kind); err != nil {
+			if _, err := f.call(p, d, &kind, group, false); err != nil {
 				return false, err
 			}
 
@@ -175,13 +154,13 @@ func (f *RemoteFD) call(p *Process, r Request, group uint32, waits bool) (bool, 
 	case *FileCopyTo:
 		var err error
 
-		r.count, err = p.fileCopyFrom(r.out, f, r.from, r.to, r.n)
+		r.count, err = p.fileCopyFrom(r.out, d, r.from, r.to, r.n)
 
 		return false, err
 	case *FileCopyFrom:
 		var err error
 
-		r.count, err = copyThrough(p, r.in, f, r.from, r.to, r.n)
+		r.count, err = copyThrough(p, r.in, d, r.from, r.to, r.n)
 
 		return false, err
 	}
@@ -200,7 +179,13 @@ func (f *RemoteFD) call(p *Process, r Request, group uint32, waits bool) (bool, 
 
 	p.head(data, op, arg, group)
 
-	pk, cancelled, err := f.exchange(p, data, files, waits)
+	pk, cancelled, err := f.exchange(p, d, data, files, waits)
+
+	if (err == EIO || err == nil && len(pk.data) < remoteHeader) && d != nil && d.object() != Object(f) {
+		dropFiles(pk.files)
+
+		return d.object().call(p, d, r, group, waits)
+	}
 
 	if err != nil {
 		return false, err

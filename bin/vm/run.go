@@ -161,7 +161,7 @@ func runKernel(k *Kernel, path string, argv []string, asan, network bool, data [
 			names[i] = d.name
 
 			if d.mem != nil {
-				p.files.put(max(p.files.size(), 3), newMemfd(&LinearMemory{data: d.mem}, 0, int64(len(d.mem)), O_RDONLY).desc, false)
+				p.files.put(max(p.files.size(), 3), opened(newMemfd(&LinearMemory{data: d.mem}, 0, int64(len(d.mem))), O_RDONLY), false)
 
 				continue
 			}

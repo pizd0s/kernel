@@ -31,7 +31,7 @@ func newTimerFd(clock uint32) *TimerFd {
 	return t
 }
 
-func (t *TimerFd) closed() {
+func (t *TimerFd) closed(d *Description) {
 	t.mu.Lock()
 	t.disarm()
 	t.mu.Unlock()
@@ -118,7 +118,7 @@ func (t *TimerFd) get() (time.Duration, time.Duration) {
 	return t.left(), t.interval
 }
 
-func (t *TimerFd) poll(events int16, through []*Epoll) int16 {
+func (t *TimerFd) poll(d *Description, events int16, through []*Epoll) int16 {
 	t.mu.Lock()
 
 	ticks := t.ticks
@@ -132,7 +132,7 @@ func (t *TimerFd) poll(events int16, through []*Epoll) int16 {
 	return 0
 }
 
-func (t *TimerFd) subscribe(s *Subscription, events int16) {
+func (t *TimerFd) subscribe(d *Description, s *Subscription, events int16) {
 	if events&(POLLIN|POLLRDNORM) == 0 {
 		return
 	}
@@ -142,7 +142,7 @@ func (t *TimerFd) subscribe(s *Subscription, events int16) {
 	t.mu.Unlock()
 }
 
-func (t *TimerFd) unsubscribe(s *Subscription) {
+func (t *TimerFd) unsubscribe(d *Description, s *Subscription) {
 	t.mu.Lock()
 	t.watchers.remove(&s.in)
 	t.mu.Unlock()
@@ -194,16 +194,10 @@ func (t *TimerFd) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, er
 	return got, err
 }
 
-func (t *TimerFd) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (t *TimerFd) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, t.stat(p, r.st)
-	case *FileGetfl:
-		r.flags = O_RDWR
-
-		return false, nil
-	case *FileSetfl:
-		return false, nil
 	case *FileRead:
 		if r.explicit {
 			return false, ESPIPE
@@ -211,7 +205,7 @@ func (t *TimerFd) call(p *Process, r Request, group uint32, waits bool) (bool, e
 
 		var err error
 
-		r.count, err = t.read(p, r.into, r.n, r.mode)
+		r.count, err = t.read(p, r.into.memory(), r.n, r.mode)
 
 		return false, err
 	case *FileWrite:

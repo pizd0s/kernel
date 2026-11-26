@@ -44,7 +44,7 @@ func newPairOf(kind int) (*PairEnd, *PairEnd) {
 	return a, b
 }
 
-func (e *PairEnd) closed() {
+func (e *PairEnd) closed(d *Description) {
 	var dropped []*Packet
 
 	e.dead.Store(true)
@@ -105,7 +105,7 @@ func (e *PairEnd) consume(sink func(pk *Packet)) {
 	}
 }
 
-func (e *PairEnd) subscribe(s *Subscription, events int16) {
+func (e *PairEnd) subscribe(d *Description, s *Subscription, events int16) {
 	in, out := ioSides(events)
 
 	if in {
@@ -123,7 +123,7 @@ func (e *PairEnd) subscribe(s *Subscription, events int16) {
 	}
 }
 
-func (e *PairEnd) unsubscribe(s *Subscription) {
+func (e *PairEnd) unsubscribe(d *Description, s *Subscription) {
 	r := e.peer
 
 	e.mu.Lock()
@@ -144,7 +144,7 @@ func (e *PairEnd) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (e *PairEnd) poll(events int16, through []*Epoll) int16 {
+func (e *PairEnd) poll(d *Description, events int16, through []*Epoll) int16 {
 	mask := int16(0)
 	dgram := e.shared.kind == SOCK_DGRAM
 	r := e.peer
@@ -637,7 +637,7 @@ func senderAddress(path []byte) []byte {
 	return unixAddress(path)
 }
 
-func (e *PairEnd) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (e *PairEnd) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, e.stat(p, r.st)
@@ -687,12 +687,6 @@ func (e *PairEnd) call(p *Process, r Request, group uint32, waits bool) (bool, e
 		return false, nil
 	case *SockKnock:
 		return false, EPROTOTYPE
-	case *FileGetfl:
-		r.flags = O_RDWR
-
-		return false, nil
-	case *FileSetfl:
-		return false, nil
 	case *FileRead:
 		if r.explicit {
 			return false, errUnserved
@@ -700,7 +694,7 @@ func (e *PairEnd) call(p *Process, r Request, group uint32, waits bool) (bool, e
 
 		var err error
 
-		r.count, err = e.read(p, r.into, r.n, r.mode)
+		r.count, err = e.read(p, r.into.memory(), r.n, r.mode)
 
 		return false, err
 	case *FileWrite:
@@ -710,7 +704,7 @@ func (e *PairEnd) call(p *Process, r Request, group uint32, waits bool) (bool, e
 
 		var err error
 
-		r.count, err = e.write(p, r.from, r.n, r.mode)
+		r.count, err = e.write(p, r.from.memory(), r.n, r.mode)
 
 		return false, err
 	}

@@ -15,6 +15,8 @@ type Answer struct {
 	ObjectIdent
 
 	asker *Process
+	of    *Description
+	on    *RemoteFD
 	done  atomic.Bool
 
 	mu       sync.Mutex
@@ -25,7 +27,7 @@ type Answer struct {
 	watchers Subscribers
 }
 
-func (a *Answer) closed() {
+func (a *Answer) closed(d *Description) {
 	a.done.Store(true)
 	a.asker.ring()
 }
@@ -101,6 +103,16 @@ func (a *Answer) put(data []byte, files []*Description) (int, error) {
 		return 0, EMSGSIZE
 	}
 
+	if len(a.data) == 0 && len(data) >= remoteHeader && binary.LittleEndian.Uint32(data) == rMove {
+		if a.on == nil || len(files) != 1 {
+			return 0, EINVAL
+		}
+
+		if err := a.on.move(a.of, files[0]); err != nil {
+			return 0, err
+		}
+	}
+
 	holdFiles(files)
 
 	if len(a.data) > 0 {
@@ -114,7 +126,7 @@ func (a *Answer) put(data []byte, files []*Description) (int, error) {
 	return len(data), nil
 }
 
-func (a *Answer) poll(events int16, through []*Epoll) int16 {
+func (a *Answer) poll(d *Description, events int16, through []*Epoll) int16 {
 	a.mu.Lock()
 
 	said := a.said
@@ -134,13 +146,13 @@ func (a *Answer) poll(events int16, through []*Epoll) int16 {
 	return mask & (events | POLLERR | POLLHUP)
 }
 
-func (a *Answer) subscribe(s *Subscription, events int16) {
+func (a *Answer) subscribe(d *Description, s *Subscription, events int16) {
 	a.mu.Lock()
 	a.watchers.add(&s.in)
 	a.mu.Unlock()
 }
 
-func (a *Answer) unsubscribe(s *Subscription) {
+func (a *Answer) unsubscribe(d *Description, s *Subscription) {
 	a.mu.Lock()
 	a.watchers.remove(&s.in)
 	a.mu.Unlock()
@@ -233,7 +245,7 @@ func (a *Answer) recv(p *Process, r *SockRecv) error {
 func (a *Answer) consume(sink func(pk *Packet)) {
 }
 
-func (a *Answer) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (a *Answer) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *SockBind:
 		return false, a.bind(p, r.addr)
@@ -286,7 +298,7 @@ func (a *Answer) call(p *Process, r Request, group uint32, waits bool) (bool, er
 
 		var err error
 
-		r.count, err = a.read(p, r.into, r.n, r.mode)
+		r.count, err = a.read(p, r.into.memory(), r.n, r.mode)
 
 		return false, err
 	case *FileWrite:
@@ -296,7 +308,7 @@ func (a *Answer) call(p *Process, r Request, group uint32, waits bool) (bool, er
 
 		var err error
 
-		r.count, err = a.write(p, r.from, r.n, r.mode)
+		r.count, err = a.write(p, r.from.memory(), r.n, r.mode)
 
 		return false, err
 	}

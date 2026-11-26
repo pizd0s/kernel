@@ -19,7 +19,7 @@ func newDiskFile(fd int) *DiskFile {
 	return f
 }
 
-func (f *DiskFile) closed() {
+func (f *DiskFile) closed(d *Description) {
 	syscall.Close(f.fd)
 }
 
@@ -46,22 +46,14 @@ func (f *DiskFile) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (f *DiskFile) poll(events int16, through []*Epoll) int16 {
+func (f *DiskFile) poll(d *Description, events int16, through []*Epoll) int16 {
 	return events & (POLLIN | POLLRDNORM | POLLOUT | POLLWRNORM)
 }
 
-func (f *DiskFile) subscribe(s *Subscription, events int16) {
+func (f *DiskFile) subscribe(d *Description, s *Subscription, events int16) {
 }
 
-func (f *DiskFile) unsubscribe(s *Subscription) {
-}
-
-func (f *DiskFile) flags(p *Process) (int, error) {
-	return O_RDWR, nil
-}
-
-func (f *DiskFile) setFlags(p *Process, fl int) error {
-	return nil
+func (f *DiskFile) unsubscribe(d *Description, s *Subscription) {
 }
 
 func (f *DiskFile) at(b []byte, off int64, write bool) (int, error) {
@@ -179,15 +171,15 @@ func (f *DiskFile) statfs(p *Process, st *Statfs) error {
 	return nil
 }
 
-func (f *DiskFile) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
-	return p.fileCopyFrom(out, f, from, to, n)
+func (f *DiskFile) copyTo(p *Process, d, out *Description, from, to int64, n int) (int, error) {
+	return p.fileCopyFrom(out, d, from, to, n)
 }
 
-func (f *DiskFile) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
-	return copyThrough(p, in, f, from, to, n)
+func (f *DiskFile) copyFrom(p *Process, d, in *Description, from, to int64, n int) (int, error) {
+	return copyThrough(p, in, d, from, to, n)
 }
 
-func (f *DiskFile) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (f *DiskFile) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, f.stat(p, r.st)
@@ -201,21 +193,13 @@ func (f *DiskFile) call(p *Process, r Request, group uint32, waits bool) (bool, 
 		return false, f.utimes(p, r.ts)
 	case *FileStatfs:
 		return false, f.statfs(p, r.st)
-	case *FileGetfl:
-		var err error
-
-		r.flags, err = f.flags(p)
-
-		return false, err
-	case *FileSetfl:
-		return false, f.setFlags(p, r.flags)
 	case *FileRead:
 		var err error
 
 		if r.explicit {
-			r.count, err = f.pread(p, r.into, r.n, r.at)
+			r.count, err = f.pread(p, r.into.memory(), r.n, r.at)
 		} else {
-			r.count, err = f.read(p, r.into, r.n, r.mode)
+			r.count, err = f.read(p, r.into.memory(), r.n, r.mode)
 		}
 
 		return false, err
@@ -223,9 +207,9 @@ func (f *DiskFile) call(p *Process, r Request, group uint32, waits bool) (bool, 
 		var err error
 
 		if r.explicit {
-			r.count, err = f.pwrite(p, r.from, r.n, r.at)
+			r.count, err = f.pwrite(p, r.from.memory(), r.n, r.at)
 		} else {
-			r.count, err = f.write(p, r.from, r.n, r.mode)
+			r.count, err = f.write(p, r.from.memory(), r.n, r.mode)
 		}
 
 		return false, err
@@ -238,13 +222,13 @@ func (f *DiskFile) call(p *Process, r Request, group uint32, waits bool) (bool, 
 	case *FileCopyTo:
 		var err error
 
-		r.count, err = f.copyTo(p, r.out, r.from, r.to, r.n)
+		r.count, err = f.copyTo(p, d, r.out, r.from, r.to, r.n)
 
 		return false, err
 	case *FileCopyFrom:
 		var err error
 
-		r.count, err = f.copyFrom(p, r.in, r.from, r.to, r.n)
+		r.count, err = f.copyFrom(p, d, r.in, r.from, r.to, r.n)
 
 		return false, err
 	}

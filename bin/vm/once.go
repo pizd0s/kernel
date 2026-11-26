@@ -23,20 +23,20 @@ func newOnce(state uint32) *Once {
 	return o
 }
 
-func (o *Once) closed() {
+func (o *Once) closed(d *Description) {
 }
 
-func (o *Once) poll(events int16, through []*Epoll) int16 {
+func (o *Once) poll(d *Description, events int16, through []*Epoll) int16 {
 	return 0
 }
 
-func (o *Once) subscribe(s *Subscription, events int16) {
+func (o *Once) subscribe(d *Description, s *Subscription, events int16) {
 }
 
-func (o *Once) unsubscribe(s *Subscription) {
+func (o *Once) unsubscribe(d *Description, s *Subscription) {
 }
 
-func (o *Once) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (o *Once) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	o.mu.Lock()
 
 	defer o.mu.Unlock()

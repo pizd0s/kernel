@@ -101,8 +101,8 @@ func hostWindow() ([sizeofWinsize]byte, error) {
 	return w, nil
 }
 
-func (m *Mover) fill(host int, w *PipeEnd) {
-	defer w.closed()
+func (m *Mover) fill(host int, w *Pipe) {
+	defer w.quit(false, true)
 
 	buf := make([]byte, pipeChunk)
 
@@ -113,7 +113,7 @@ func (m *Mover) fill(host int, w *PipeEnd) {
 			continue
 		}
 
-		if n <= 0 || !m.put(w.pipe, buf[:n]) {
+		if n <= 0 || !m.put(w, buf[:n]) {
 			return
 		}
 	}
@@ -139,12 +139,11 @@ func (m *Mover) put(pp *Pipe, b []byte) bool {
 	}
 }
 
-func (m *Mover) drain(r *PipeEnd, host int, c *Console) {
+func (m *Mover) drain(pp *Pipe, host int, c *Console) {
 	defer c.out.Done()
 
-	defer r.closed()
+	defer pp.quit(true, false)
 
-	pp := r.pipe
 	buf := make([]byte, 65536)
 
 	for {

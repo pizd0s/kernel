@@ -18,6 +18,7 @@ const (
 	rOk            uint32 = 128
 	rErr           uint32 = 129
 	rBackground    uint32 = 130
+	rMove          uint32 = 131
 	remoteHeader          = 24
 	remoteStat            = 64
 	remoteStatfs          = 52
@@ -50,7 +51,6 @@ const (
 	rGetfl
 	rSetfl
 	rCtl
-	rMove
 )
 
 const (
@@ -77,12 +77,11 @@ func served(p *Process, kind uint32, access int, dev, ino uint64, events uint32,
 		access |= O_PATH
 	}
 
-	f := &RemoteFD{end: end, key: FileKey{dev, ino}, access: access & (O_ACCMODE | O_PATH), ready: readiness(events)}
+	f := &RemoteFD{end: end, key: FileKey{dev, ino}, ready: readiness(events)}
 
-	f.desc = held(f)
-	p.request(end.object(), &SockConsume{sink: f.deliver})
+	p.request(end, &SockConsume{sink: f.deliver})
 
-	return f.desc, nil
+	return opened(f, access&(O_ACCMODE|O_PATH)), nil
 }
 
 func readiness(events uint32) int16 {
@@ -118,6 +117,9 @@ func replyOf(pk *Packet, eof bool) error {
 		pk.files = nil
 
 		return Background(binary.LittleEndian.Uint32(pk.data[4:]))
+	case rMove:
+		dropFiles(pk.files)
+		pk.files = nil
 	}
 
 	pk.arg = binary.LittleEndian.Uint32(pk.data[4:])

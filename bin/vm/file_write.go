@@ -5,7 +5,7 @@ import (
 )
 
 type FileWrite struct {
-	from     *MemfdFile
+	from     *Description
 	n        int
 	mode     IoMode
 	at       int64
@@ -26,7 +26,7 @@ func (r *FileWrite) unserved() error {
 }
 
 func (r *FileWrite) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
-	return uint32(r.n), ioBody(b, r.at, r.explicit), []*Description{r.from.desc}
+	return uint32(r.n), ioBody(b, r.at, r.explicit), []*Description{r.from}
 }
 
 func (r *FileWrite) des(p *Process, pk *Packet) error {

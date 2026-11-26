@@ -1,7 +1,7 @@
 package main
 
 type FileCopyTo struct {
-	out      Object
+	out      *Description
 	from, to int64
 	n        int
 	count    int

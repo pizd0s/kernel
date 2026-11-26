@@ -53,7 +53,7 @@ type Kernel struct {
 func newKernel(user Cred, memory uint64) *Kernel {
 	k := &Kernel{procs: map[int32]*Process{}, codes: map[CodeKey]*CodeEntry{}, fifos: map[FileKey]*Pipe{}, sockets: map[FileKey]Object{},
 		semaphores: map[string]*Semaphore{},
-		exit:       make(chan int, 1), root: held(newNoRoot()), user: user, cttys: map[int32]*Description{}, pool: newPool(memory)}
+		exit:       make(chan int, 1), root: opened(newNoRoot(), O_RDONLY), user: user, cttys: map[int32]*Description{}, pool: newPool(memory)}
 
 	k.locks.files = map[FileKey]*LockedFile{}
 	k.names.host, k.names.domain = "pizdos", "(none)"
@@ -130,7 +130,7 @@ func (k *Kernel) process(pid int32, parent *Process) *Process {
 	return p
 }
 
-func (k *Kernel) code(p *Process, f Object, name string) (*Code, error) {
+func (k *Kernel) code(p *Process, f *Description, name string) (*Code, error) {
 	exe, ok, err := programData(p, f, false)
 
 	if err != nil {
@@ -144,7 +144,7 @@ func (k *Kernel) code(p *Process, f Object, name string) (*Code, error) {
 	return k.codeOf(p, exe, name, nil)
 }
 
-func programData(p *Process, f Object, module bool) (data []byte, ok bool, err error) {
+func programData(p *Process, f *Description, module bool) (data []byte, ok bool, err error) {
 	var st Stat
 
 	if err := p.fileStat(f, &st); err == EBADF {
@@ -153,7 +153,7 @@ func programData(p *Process, f Object, module bool) (data []byte, ok bool, err e
 		return nil, false, err
 	}
 
-	if fl, _ := p.fileFlags(f); fl&O_PATH != 0 {
+	if f.status()&O_PATH != 0 {
 		return nil, false, EACCES
 	}
 
@@ -187,7 +187,7 @@ func readProgram(size int64, readAt func(b []byte, off int64) error, module bool
 	return data, length > 0, nil
 }
 
-func readAt(p *Process, t Object, b []byte, off int64) error {
+func readAt(p *Process, t *Description, b []byte, off int64) error {
 	for at := 0; at < len(b); {
 		n, err := p.filePread(t, bytesFile(b[at:]), len(b)-at, off+int64(at))
 
@@ -453,7 +453,7 @@ func (k *Kernel) newConsole() []Object {
 	c := &Console{}
 
 	rawHostTerminal()
-	var pipes [3]*PipeEnd
+	var pipes [3]*Pipe
 
 	for fd := range 3 {
 		var st syscall.Stat_t
@@ -465,38 +465,36 @@ func (k *Kernel) newConsole() []Object {
 		pp := newPipe()
 
 		pp.readers, pp.writers = 1, 1
+		pipes[fd] = pp
 
-		reader, writer := &PipeEnd{pipe: pp, reads: true}, &PipeEnd{pipe: pp, writes: true}
 		m := newMover()
 
 		c.movers = append(c.movers, m)
 
 		if fd == 0 {
-			pipes[fd] = reader
-			go m.fill(fd, writer)
+			go m.fill(fd, pp)
 
 			continue
 		}
 
-		pipes[fd] = writer
 		m.pipe = pp
 		c.out.Add(1)
-		go m.drain(reader, fd, c)
+		go m.drain(pp, fd, c)
 	}
 
 	k.console = c
 
 	files := make([]Object, 3)
 
-	for fd, out := range []*PipeEnd{pipes[1], pipes[1], pipes[2]} {
+	for fd, out := range []*Pipe{pipes[1], pipes[1], pipes[2]} {
 		if pipes[fd] != nil {
 			files[fd] = newConsoleEnd(pipes[0], out)
 		}
 	}
 
-	for _, e := range pipes {
-		if e != nil {
-			e.closed()
+	for fd, pp := range pipes {
+		if pp != nil {
+			pp.quit(fd == 0, fd != 0)
 		}
 	}
 

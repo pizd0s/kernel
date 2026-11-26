@@ -13,13 +13,13 @@ const (
 )
 
 type Object interface {
-	closed()
+	closed(d *Description)
 
-	poll(events int16, through []*Epoll) int16
-	subscribe(s *Subscription, events int16)
-	unsubscribe(s *Subscription)
+	poll(d *Description, events int16, through []*Epoll) int16
+	subscribe(d *Description, s *Subscription, events int16)
+	unsubscribe(d *Description, s *Subscription)
 
-	call(p *Process, r Request, group uint32, waits bool) (bool, error)
+	call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error)
 
 	objectID() uint64
 }

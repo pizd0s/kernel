@@ -30,7 +30,7 @@ func newUnixSocket(kind int) *UnixSocket {
 	return s
 }
 
-func (s *UnixSocket) closed() {
+func (s *UnixSocket) closed(d *Description) {
 	s.mu.Lock()
 
 	l, c, b := s.listener, s.conn, s.bound
@@ -39,7 +39,7 @@ func (s *UnixSocket) closed() {
 	s.mu.Unlock()
 
 	if l != nil {
-		l.unsubscribe(&s.inner)
+		l.unsubscribe(nil, &s.inner)
 		l.shut()
 
 		if b != nil {
@@ -48,8 +48,8 @@ func (s *UnixSocket) closed() {
 	}
 
 	if c != nil {
-		c.unsubscribe(&s.inner)
-		c.closed()
+		c.unsubscribe(nil, &s.inner)
+		c.closed(nil)
 	}
 }
 
@@ -71,20 +71,20 @@ func (s *UnixSocket) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (s *UnixSocket) poll(events int16, through []*Epoll) int16 {
+func (s *UnixSocket) poll(d *Description, events int16, through []*Epoll) int16 {
 	l, c := s.state()
 
 	switch {
 	case c != nil:
-		return c.poll(events, through)
+		return c.poll(nil, events, through)
 	case l != nil:
-		return l.poll(events, through) & (POLLIN | POLLRDNORM | POLLERR | POLLHUP)
+		return l.poll(nil, events, through) & (POLLIN | POLLRDNORM | POLLERR | POLLHUP)
 	}
 
 	return 0
 }
 
-func (s *UnixSocket) subscribe(sub *Subscription, events int16) {
+func (s *UnixSocket) subscribe(d *Description, sub *Subscription, events int16) {
 	in, out := ioSides(events)
 
 	s.mu.Lock()
@@ -100,7 +100,7 @@ func (s *UnixSocket) subscribe(sub *Subscription, events int16) {
 	s.mu.Unlock()
 }
 
-func (s *UnixSocket) unsubscribe(sub *Subscription) {
+func (s *UnixSocket) unsubscribe(d *Description, sub *Subscription) {
 	s.mu.Lock()
 	s.watchers.remove(&sub.in)
 	s.watchers.remove(&sub.out)
@@ -108,7 +108,7 @@ func (s *UnixSocket) unsubscribe(sub *Subscription) {
 }
 
 func (s *UnixSocket) attach(to Object) {
-	to.subscribe(&s.inner, POLLIN|POLLOUT)
+	to.subscribe(nil, &s.inner, POLLIN|POLLOUT)
 	s.mu.Lock()
 	s.watchers.tell()
 	s.mu.Unlock()
@@ -321,7 +321,7 @@ func (s *UnixSocket) write(p *Process, from *MemfdFile, n int, mode IoMode) (int
 	return c.write(p, from, n, mode)
 }
 
-func (s *UnixSocket) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (s *UnixSocket) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, s.stat(p, r.st)
@@ -369,12 +369,6 @@ func (s *UnixSocket) call(p *Process, r Request, group uint32, waits bool) (bool
 		s.consume(r.sink)
 
 		return false, nil
-	case *FileGetfl:
-		r.flags = O_RDWR
-
-		return false, nil
-	case *FileSetfl:
-		return false, nil
 	case *FileRead:
 		if r.explicit {
 			return false, errUnserved
@@ -382,7 +376,7 @@ func (s *UnixSocket) call(p *Process, r Request, group uint32, waits bool) (bool
 
 		var err error
 
-		r.count, err = s.read(p, r.into, r.n, r.mode)
+		r.count, err = s.read(p, r.into.memory(), r.n, r.mode)
 
 		return false, err
 	case *FileWrite:
@@ -392,7 +386,7 @@ func (s *UnixSocket) call(p *Process, r Request, group uint32, waits bool) (bool
 
 		var err error
 
-		r.count, err = s.write(p, r.from, r.n, r.mode)
+		r.count, err = s.write(p, r.from.memory(), r.n, r.mode)
 
 		return false, err
 	}

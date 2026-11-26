@@ -5,7 +5,7 @@ import (
 )
 
 type FileRead struct {
-	into     *MemfdFile
+	into     *Description
 	n        int
 	mode     IoMode
 	at       int64
@@ -26,7 +26,7 @@ func (r *FileRead) unserved() error {
 }
 
 func (r *FileRead) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
-	return uint32(r.n), ioBody(b, r.at, r.explicit), []*Description{r.into.desc}
+	return uint32(r.n), ioBody(b, r.at, r.explicit), []*Description{r.into}
 }
 
 func (r *FileRead) des(p *Process, pk *Packet) error {

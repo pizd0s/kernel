@@ -1,41 +1,38 @@
 package main
 
 import (
-	"sync"
 	"sync/atomic"
 )
 
-type Description struct {
-	holders  atomic.Int32
-	obj      atomic.Pointer[Object]
-	locks    atomic.Pointer[LockTable]
-	nonblock atomic.Bool
+const statusFlags = O_APPEND | O_NONBLOCK | O_DSYNC | O_SYNC
 
-	mu sync.Mutex
+type Description struct {
+	holders atomic.Int32
+	obj     atomic.Pointer[Object]
+	locks   atomic.Pointer[LockTable]
+	flags   atomic.Int32
+	offset  int64
 }
 
-func newDescription(obj Object) *Description {
+func newDescription(obj Object, flags int) *Description {
 	d := &Description{}
 
 	d.obj.Store(&obj)
+	d.flags.Store(int32(flags))
 
 	return d
 }
 
-func held(obj Object) *Description {
-	d := newDescription(obj)
+func opened(obj Object, flags int) *Description {
+	d := newDescription(obj, flags)
 
 	d.holders.Store(1)
 
 	return d
 }
 
-func opened(obj Object, nonblock bool) *Description {
-	d := held(obj)
-
-	d.nonblock.Store(nonblock)
-
-	return d
+func held(obj Object) *Description {
+	return opened(obj, O_RDWR)
 }
 
 func (d *Description) object() Object {
@@ -44,6 +41,20 @@ func (d *Description) object() Object {
 
 func (d *Description) hold() {
 	d.holders.Add(1)
+}
+
+func (d *Description) grab() bool {
+	for {
+		n := d.holders.Load()
+
+		if n <= 0 {
+			return false
+		}
+
+		if d.holders.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
 }
 
 func (d *Description) release() {
@@ -55,37 +66,74 @@ func (d *Description) release() {
 		t.forget(d)
 	}
 
-	d.object().closed()
+	d.object().closed(d)
+}
+
+func (d *Description) reads() bool {
+	return d.flags.Load()&O_ACCMODE != O_WRONLY
+}
+
+func (d *Description) writes() bool {
+	return d.flags.Load()&O_ACCMODE != O_RDONLY
+}
+
+func (d *Description) nonblock() bool {
+	return d.flags.Load()&O_NONBLOCK != 0
+}
+
+func (d *Description) status() int {
+	return int(d.flags.Load())
+}
+
+func rdwr(nonblock bool) int {
+	return O_RDWR | int(bit(nonblock))*O_NONBLOCK
+}
+
+func (d *Description) setStatus(fl int) {
+	for {
+		was := d.flags.Load()
+
+		if d.flags.CompareAndSwap(was, was&^statusFlags|int32(fl&statusFlags)) {
+			return
+		}
+	}
 }
 
 func (d *Description) mode() IoMode {
-	return IoMode{nonblock: d.nonblock.Load()}
+	return IoMode{nonblock: d.nonblock()}
 }
 
 func (d *Description) dontwait() uint32 {
-	return bit(d.nonblock.Load()) * MSG_DONTWAIT
+	return bit(d.nonblock()) * MSG_DONTWAIT
+}
+
+func (d *Description) poll(events int16, through []*Epoll) int16 {
+	return d.object().poll(d, events, through)
 }
 
 func (d *Description) subscribe(s *Subscription, events int16) {
-	d.mu.Lock()
-	d.object().subscribe(s, events)
-	d.mu.Unlock()
+	for {
+		at := d.obj.Load()
+
+		(*at).subscribe(d, s, events)
+
+		if d.obj.Load() == at {
+			return
+		}
+
+		(*at).unsubscribe(d, s)
+	}
 }
 
 func (d *Description) unsubscribe(s *Subscription) {
-	d.mu.Lock()
-	d.object().unsubscribe(s)
-	d.mu.Unlock()
+	d.object().unsubscribe(d, s)
 }
 
 func (d *Description) swap(with *Description) {
-	with.mu.Lock()
+	a, b := d.obj.Load(), with.obj.Load()
 
-	a, b := d.object(), with.object()
-
-	d.obj.Store(&b)
-	with.obj.Store(&a)
-	with.mu.Unlock()
+	d.obj.Store(b)
+	with.obj.Store(a)
 }
 
 func dropFiles(files []*Description) {

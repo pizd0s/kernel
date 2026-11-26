@@ -22,20 +22,20 @@ func newSemaphore(value uint32) *Semaphore {
 	return s
 }
 
-func (s *Semaphore) closed() {
+func (s *Semaphore) closed(d *Description) {
 }
 
-func (s *Semaphore) poll(events int16, through []*Epoll) int16 {
+func (s *Semaphore) poll(d *Description, events int16, through []*Epoll) int16 {
 	return 0
 }
 
-func (s *Semaphore) subscribe(sub *Subscription, events int16) {
+func (s *Semaphore) subscribe(d *Description, sub *Subscription, events int16) {
 }
 
-func (s *Semaphore) unsubscribe(sub *Subscription) {
+func (s *Semaphore) unsubscribe(d *Description, sub *Subscription) {
 }
 
-func (s *Semaphore) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (s *Semaphore) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *SyncLock:
 		return false, s.take(p, r)

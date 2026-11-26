@@ -1,5 +1,9 @@
 package main
 
+import (
+	"sync/atomic"
+)
+
 type Waker interface {
 	wake(l *Hook)
 }
@@ -15,6 +19,7 @@ type Subscription struct {
 	id      uint64
 	in, out Hook
 	event   Event
+	dropped atomic.Bool
 	spare   *Subscription
 }
 
@@ -22,6 +27,7 @@ func (s *Subscription) init(to Waker, id uint64) {
 	s.to, s.id = to, id
 	s.in.sub, s.out.sub = s, s
 	s.event.kind, s.event.id = eventChanged, id
+	s.dropped.Store(false)
 }
 
 type Subscribers struct {
@@ -60,6 +66,19 @@ func (s *Subscribers) tell() {
 	for l := s.first; l != nil; l = l.next {
 		l.sub.to.wake(l)
 	}
+}
+
+func (s *Subscribers) drop() {
+	for l := s.first; l != nil; {
+		next := l.next
+
+		l.list, l.prev, l.next = nil, nil, nil
+		l.sub.dropped.Store(true)
+		l.sub.to.wake(l)
+		l = next
+	}
+
+	s.first = nil
 }
 
 func (s *Subscribers) hooks(into []*Hook) []*Hook {

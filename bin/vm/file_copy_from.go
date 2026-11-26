@@ -1,7 +1,7 @@
 package main
 
 type FileCopyFrom struct {
-	in       Object
+	in       *Description
 	from, to int64
 	n        int
 	count    int

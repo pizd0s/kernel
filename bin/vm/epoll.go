@@ -45,6 +45,12 @@ type EpollMember struct {
 	disabled bool
 }
 
+func (m *EpollMember) again(events uint32) {
+	if m.sub.dropped.Load() && m.sub.dropped.Swap(false) {
+		m.key.desc.subscribe(&m.sub, int16(events))
+	}
+}
+
 func newEpoll() *Epoll {
 	ep := &Epoll{ObjectIdent: newObjectIdent(), members: map[EpollKey]*EpollMember{}, ino: epollInodes.Add(1), made: time.Now()}
 
@@ -53,7 +59,7 @@ func newEpoll() *Epoll {
 	return ep
 }
 
-func (ep *Epoll) closed() {
+func (ep *Epoll) closed(d *Description) {
 	ep.mu.Lock()
 
 	members := ep.members
@@ -75,7 +81,7 @@ func (ep *Epoll) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (ep *Epoll) poll(events int16, through []*Epoll) int16 {
+func (ep *Epoll) poll(d *Description, events int16, through []*Epoll) int16 {
 	if slices.Contains(through, ep) {
 		return 0
 	}
@@ -87,7 +93,7 @@ func (ep *Epoll) poll(events int16, through []*Epoll) int16 {
 	}
 
 	type asked struct {
-		obj    Object
+		m      *EpollMember
 		events uint32
 	}
 
@@ -103,14 +109,16 @@ func (ep *Epoll) poll(events int16, through []*Epoll) int16 {
 		ep.ready.put(m)
 
 		if !m.disabled && ep.members[m.key] == m {
-			marked = append(marked, asked{m.key.desc.object(), m.events})
+			marked = append(marked, asked{m, m.events})
 		}
 	}
 
 	ep.mu.Unlock()
 
-	for _, m := range marked {
-		if m.obj.poll(int16(m.events), inner) != 0 {
+	for _, a := range marked {
+		a.m.again(a.events)
+
+		if a.m.key.desc.poll(int16(a.events), inner) != 0 {
 			return (POLLIN | POLLRDNORM) & events
 		}
 	}
@@ -118,13 +126,13 @@ func (ep *Epoll) poll(events int16, through []*Epoll) int16 {
 	return 0
 }
 
-func (ep *Epoll) subscribe(s *Subscription, events int16) {
+func (ep *Epoll) subscribe(d *Description, s *Subscription, events int16) {
 	ep.mu.Lock()
 	ep.subs.add(&s.in)
 	ep.mu.Unlock()
 }
 
-func (ep *Epoll) unsubscribe(s *Subscription) {
+func (ep *Epoll) unsubscribe(d *Description, s *Subscription) {
 	ep.mu.Lock()
 	ep.subs.remove(&s.in)
 	ep.mu.Unlock()
@@ -165,14 +173,6 @@ func (ep *Epoll) mark(m *EpollMember) {
 	m.queued = true
 	ep.ready.put(m)
 	ep.waiting.wake(Turn{})
-}
-
-func (ep *Epoll) flags(p *Process) (int, error) {
-	return O_RDWR, nil
-}
-
-func (ep *Epoll) setFlags(p *Process, fl int) error {
-	return nil
 }
 
 func (ep *Epoll) epollCtl(op uint32, key EpollKey, events uint32, data uint64) error {
@@ -257,8 +257,9 @@ func (ep *Epoll) collect(buf []byte, max int) int {
 		}
 
 		ep.mu.Unlock()
+		m.again(events)
 
-		revents := m.key.desc.object().poll(int16(events), ep.self)
+		revents := m.key.desc.poll(int16(events), ep.self)
 
 		ep.mu.Lock()
 
@@ -304,18 +305,10 @@ func (ep *Epoll) marked(p *Process, end time.Time) (timedOut bool, err error) {
 	return timedOut, err
 }
 
-func (ep *Epoll) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (ep *Epoll) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, ep.stat(p, r.st)
-	case *FileGetfl:
-		var err error
-
-		r.flags, err = ep.flags(p)
-
-		return false, err
-	case *FileSetfl:
-		return false, ep.setFlags(p, r.flags)
 	case *EpollCtl:
 		return false, ep.epollCtl(r.ctl, r.key, r.events, r.data)
 	case *EpollWait:

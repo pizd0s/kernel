@@ -39,8 +39,7 @@ type Instance struct {
 	tables     [][]uintptr
 
 	mem     []byte
-	memfd   *MemfdFile
-	windows []*MemfdFile
+	windows []*Description
 
 	host any
 	proc *Process
@@ -251,9 +250,6 @@ func newInstance(pool *Pool, by *Process, c *Code, stack uint64) (*Instance, err
 
 		i.memory.owner = i
 		i.setMemory()
-
-		i.memfd = &MemfdFile{ObjectIdent: newObjectIdent(), mem: i.memory, n: -1, mode: O_RDWR, ino: memfdInodes.Add(1)}
-		i.memfd.desc = held(i.memfd)
 	}
 
 	for _, t := range meta.tables {
@@ -344,33 +340,36 @@ func (i *Instance) release() {
 	i.unhold()
 }
 
-func (i *Instance) window(at, n int64, mode int) *MemfdFile {
-	var f *MemfdFile
+func (i *Instance) window(at, n int64, mode int) *Description {
+	var w *Description
 
 	if k := len(i.windows); k > 0 {
-		f, i.windows = i.windows[k-1], i.windows[:k-1]
+		w, i.windows = i.windows[k-1], i.windows[:k-1]
 	} else {
-		f = &MemfdFile{ObjectIdent: newObjectIdent(), ino: memfdInodes.Add(1)}
+		w = opened(&MemfdFile{ObjectIdent: newObjectIdent(), ino: memfdInodes.Add(1)}, mode)
 	}
 
-	f.mem, f.at, f.n, f.mode, f.off, f.held = i.memory, at, n, mode, 0, true
-	f.desc = held(f)
+	f := w.memory()
+
+	f.mem, f.at, f.n, f.held = i.memory, at, n, true
+	w.offset = 0
+	w.flags.Store(int32(mode))
 	i.holds.Add(1)
 
-	return f
+	return w
 }
 
-func (i *Instance) windowDone(f *MemfdFile) {
-	if f.mem != i.memory || f.desc.holders.Load() != 1 || len(i.windows) >= windowsKept {
-		f.desc.release()
+func (i *Instance) windowDone(w *Description) {
+	f := w.memory()
+
+	if f.mem != i.memory || w.holders.Load() != 1 || len(i.windows) >= windowsKept {
+		w.release()
 
 		return
 	}
 
-	f.desc = nil
 	f.mem = nil
-
-	i.windows = append(i.windows, f)
+	i.windows = append(i.windows, w)
 	i.unhold()
 }
 

@@ -12,20 +12,20 @@ func newCond(clock uint32) *Cond {
 	return c
 }
 
-func (c *Cond) closed() {
+func (c *Cond) closed(d *Description) {
 }
 
-func (c *Cond) poll(events int16, through []*Epoll) int16 {
+func (c *Cond) poll(d *Description, events int16, through []*Epoll) int16 {
 	return 0
 }
 
-func (c *Cond) subscribe(s *Subscription, events int16) {
+func (c *Cond) subscribe(d *Description, s *Subscription, events int16) {
 }
 
-func (c *Cond) unsubscribe(s *Subscription) {
+func (c *Cond) unsubscribe(d *Description, s *Subscription) {
 }
 
-func (c *Cond) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (c *Cond) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *SyncWake:
 		return false, nil
@@ -53,13 +53,13 @@ func (c *Cond) wait(p *Process, r *SyncWait) error {
 		return err
 	}
 
-	if err := p.request(r.lock, &SyncUnlock{thread: r.thread}); err != nil {
+	if err := p.requestOn(r.lock, &SyncUnlock{thread: r.thread}); err != nil {
 		return err
 	}
 
 	p.sleepUntil(end)
 
-	if err := p.request(r.lock, &SyncLock{thread: r.thread}); err != nil {
+	if err := p.requestOn(r.lock, &SyncLock{thread: r.thread}); err != nil {
 		return err
 	}
 

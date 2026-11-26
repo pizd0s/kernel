@@ -26,7 +26,7 @@ func newUnixDgram() *UnixDgram {
 	return s
 }
 
-func (s *UnixDgram) closed() {
+func (s *UnixDgram) closed(d *Description) {
 	s.mu.Lock()
 
 	t, b := s.target, s.bound
@@ -35,15 +35,15 @@ func (s *UnixDgram) closed() {
 	s.mu.Unlock()
 
 	if t != nil {
-		t.unsubscribe(&s.inner)
+		t.unsubscribe(nil, &s.inner)
 	}
 
 	if b != nil {
 		b.forget(s.mouth)
 	}
 
-	s.inbox.closed()
-	s.mouth.closed()
+	s.inbox.closed(nil)
+	s.mouth.closed(nil)
 }
 
 func (s *UnixDgram) targetEnd() Object {
@@ -58,22 +58,22 @@ func (s *UnixDgram) stat(p *Process, st *Stat) error {
 	return s.inbox.stat(p, st)
 }
 
-func (s *UnixDgram) poll(events int16, through []*Epoll) int16 {
+func (s *UnixDgram) poll(d *Description, events int16, through []*Epoll) int16 {
 	out := events & (POLLOUT | POLLWRNORM)
-	ready := s.inbox.poll(events, through) &^ (POLLOUT | POLLWRNORM)
+	ready := s.inbox.poll(nil, events, through) &^ (POLLOUT | POLLWRNORM)
 
 	if t := s.targetEnd(); t != nil {
-		return ready | t.poll(out, through)&out
+		return ready | t.poll(nil, out, through)&out
 	}
 
 	return ready | out
 }
 
-func (s *UnixDgram) subscribe(sub *Subscription, events int16) {
+func (s *UnixDgram) subscribe(d *Description, sub *Subscription, events int16) {
 	in, out := ioSides(events)
 
 	if in {
-		s.inbox.subscribe(sub, POLLIN)
+		s.inbox.subscribe(nil, sub, POLLIN)
 	}
 
 	if out {
@@ -83,8 +83,8 @@ func (s *UnixDgram) subscribe(sub *Subscription, events int16) {
 	}
 }
 
-func (s *UnixDgram) unsubscribe(sub *Subscription) {
-	s.inbox.unsubscribe(sub)
+func (s *UnixDgram) unsubscribe(d *Description, sub *Subscription) {
+	s.inbox.unsubscribe(nil, sub)
 	s.mu.Lock()
 	s.writers.remove(&sub.out)
 	s.mu.Unlock()
@@ -145,10 +145,10 @@ func (s *UnixDgram) connect(p *Process, a Address) error {
 	s.mu.Unlock()
 
 	if old != nil {
-		old.unsubscribe(&s.inner)
+		old.unsubscribe(nil, &s.inner)
 	}
 
-	mouth.subscribe(&s.inner, POLLOUT)
+	mouth.subscribe(nil, &s.inner, POLLOUT)
 	s.mu.Lock()
 	s.writers.tell()
 	s.mu.Unlock()
@@ -239,7 +239,10 @@ func (s *UnixDgram) send(p *Process, r *SockSend) error {
 
 	var err error
 
-	r.n, err = p.sockSend(t, r.pk, Address{}, mode)
+	out := SockSend{pk: r.pk, mode: mode}
+
+	err = p.requestOn(t, &out)
+	r.n = out.n
 
 	return err
 }
@@ -273,7 +276,7 @@ func (s *UnixDgram) write(p *Process, from *MemfdFile, n int, mode IoMode) (int,
 	return r.n, err
 }
 
-func (s *UnixDgram) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (s *UnixDgram) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, s.stat(p, r.st)
@@ -321,12 +324,6 @@ func (s *UnixDgram) call(p *Process, r Request, group uint32, waits bool) (bool,
 		s.consume(r.sink)
 
 		return false, nil
-	case *FileGetfl:
-		r.flags = O_RDWR
-
-		return false, nil
-	case *FileSetfl:
-		return false, nil
 	case *FileRead:
 		if r.explicit {
 			return false, errUnserved
@@ -334,7 +331,7 @@ func (s *UnixDgram) call(p *Process, r Request, group uint32, waits bool) (bool,
 
 		var err error
 
-		r.count, err = s.read(p, r.into, r.n, r.mode)
+		r.count, err = s.read(p, r.into.memory(), r.n, r.mode)
 
 		return false, err
 	case *FileWrite:
@@ -344,7 +341,7 @@ func (s *UnixDgram) call(p *Process, r Request, group uint32, waits bool) (bool,
 
 		var err error
 
-		r.count, err = s.write(p, r.from, r.n, r.mode)
+		r.count, err = s.write(p, r.from.memory(), r.n, r.mode)
 
 		return false, err
 	}

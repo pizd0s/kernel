@@ -12,20 +12,20 @@ func newBarrier(count uint32) *Barrier {
 	return b
 }
 
-func (b *Barrier) closed() {
+func (b *Barrier) closed(d *Description) {
 }
 
-func (b *Barrier) poll(events int16, through []*Epoll) int16 {
+func (b *Barrier) poll(d *Description, events int16, through []*Epoll) int16 {
 	return 0
 }
 
-func (b *Barrier) subscribe(s *Subscription, events int16) {
+func (b *Barrier) subscribe(d *Description, s *Subscription, events int16) {
 }
 
-func (b *Barrier) unsubscribe(s *Subscription) {
+func (b *Barrier) unsubscribe(d *Description, s *Subscription) {
 }
 
-func (b *Barrier) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (b *Barrier) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *SyncArrive:
 		if b.count != 1 {

@@ -261,7 +261,7 @@ func (p *Process) traces(class uint32) bool {
 
 func (p *Process) sinkWrite(b []byte) {
 	for p.sink != nil {
-		_, err := p.fileWrite(p.sink.object(), bytesFile(b), len(b), IoMode{quiet: true, nonblock: p.sink.nonblock.Load()})
+		_, err := p.fileWrite(p.sink, bytesFile(b), len(b), IoMode{quiet: true, nonblock: p.sink.nonblock()})
 
 		if err == nil || err == EAGAIN {
 			return
@@ -772,13 +772,13 @@ func oob() {
 	panic(newTrap(trapMemoryOOB, 1))
 }
 
-func (p *Process) memory(at, n uint32, mode int) *MemfdFile {
+func (p *Process) memory(at, n uint32, mode int) *Description {
 	p.span(at, n)
 
-	return p.inst.window(int64(at), int64(n), narrowed(O_RDWR, mode))
+	return p.inst.window(int64(at), int64(n), mode)
 }
 
-func (p *Process) memoryDone(w *MemfdFile) {
+func (p *Process) memoryDone(w *Description) {
 	p.inst.windowDone(w)
 }
 
@@ -962,7 +962,7 @@ func hostLimits() [RLIM_NLIMITS]Rlimit {
 	return out
 }
 
-func (p *Process) execFrom(path, program string, f Object, argv, envp []string) error {
+func (p *Process) execFrom(path, program string, f *Description, argv, envp []string) error {
 	img, err := p.loadFrom(path, program, f, argv)
 
 	for err == EINTR {
@@ -981,14 +981,14 @@ func (p *Process) execFrom(path, program string, f Object, argv, envp []string) 
 	return ELOOP
 }
 
-func (p *Process) loadFrom(path, program string, f Object, argv []string) (*ExecImage, error) {
+func (p *Process) loadFrom(path, program string, f *Description, argv []string) (*ExecImage, error) {
 	var st Stat
 
 	if err := statFile(p, f, &st); err != nil {
 		return nil, err
 	}
 
-	if fl, _ := p.fileFlags(f); fl&O_PATH != 0 || st.Mode&S_IFMT != S_IFREG || !p.permits(&st, 1) {
+	if f.status()&O_PATH != 0 || st.Mode&S_IFMT != S_IFREG || !p.permits(&st, 1) {
 		return nil, EACCES
 	}
 
@@ -1116,7 +1116,7 @@ func (p *Process) libcUmask(mask uint32) uint32 {
 }
 
 func (p *Process) libc__kernel_exec(fd, path, program, argv, envp uint32) uint32 {
-	obj, err := p.fd(fd)
+	obj, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -1186,13 +1186,13 @@ func (p *Process) libcPosix_getdents(fd, buf, n, flags uint32) uint32 {
 		return p.result(0, EINVAL)
 	}
 
-	o, err := p.fd(fd)
+	o, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	if fl, err := p.fileFlags(o); err == nil && (fl&O_PATH != 0 || fl&O_ACCMODE == O_WRONLY) {
+	if fl := o.status(); fl&O_PATH != 0 || fl&O_ACCMODE == O_WRONLY {
 		return p.result(0, EBADF)
 	}
 
@@ -1266,13 +1266,9 @@ func (p *Process) aioSubmit(cb uint32, kind int, list *AioList) error {
 		return err
 	}
 
-	o := d.object()
-	fl, err := p.fileFlags(o)
+	fl := d.status()
 
-	switch {
-	case err != nil:
-		fl = O_RDWR
-	case fl&O_PATH != 0:
+	if fl&O_PATH != 0 {
 		return EBADF
 	}
 
@@ -1574,7 +1570,7 @@ func (p *Process) libcLio_listio(mode, list, n, sig uint32) uint32 {
 }
 
 func (p *Process) libcAio_cancel(fd, cb uint32) uint32 {
-	if _, err := p.fd(fd); err != nil {
+	if _, err := p.description(fd); err != nil {
 		return p.result(0, err)
 	}
 
@@ -2176,7 +2172,7 @@ func (p *Process) fork() (int32, error) {
 	for h, o := range p.syncs {
 		r := SyncCopy{}
 
-		if p.request(o, &r) == nil && r.copy != nil {
+		if p.requestOn(o, &r) == nil && r.copy != nil {
 			c.syncs[h] = r.copy
 		}
 	}
@@ -4143,7 +4139,7 @@ func (p *Process) stderrReport(msg string, stack []uintptr) {
 	}
 
 	if d, err := p.description(2); err == nil {
-		p.fileWrite(d.object(), bytesFile([]byte(b.String())), b.Len(), IoMode{quiet: true, nonblock: d.nonblock.Load()})
+		p.fileWrite(d, bytesFile([]byte(b.String())), b.Len(), IoMode{quiet: true, nonblock: d.nonblock()})
 	}
 }
 
@@ -4288,7 +4284,7 @@ func (p *Process) writeBack(at uint32, m Mapping, from, n uint32) error {
 
 	var st Stat
 
-	if err := statFile(p, m.file.object(), &st); err != nil {
+	if err := statFile(p, m.file, &st); err != nil {
 		return err
 	}
 
@@ -4312,7 +4308,7 @@ func (p *Process) writeBack(at uint32, m Mapping, from, n uint32) error {
 		}
 
 		w := p.memory(at+from+uint32(i), uint32(j-i), O_RDONLY)
-		_, err := p.filePwrite(m.file.object(), w, j-i, m.offset+int64(from)+int64(i))
+		_, err := p.filePwrite(m.file, w, j-i, m.offset+int64(from)+int64(i))
 
 		p.memoryDone(w)
 
@@ -4447,12 +4443,12 @@ func (p *Process) libcMmap(addr, n, prot, flags, fd uint32, off uint64) uint32 {
 		d, err := p.description(fd)
 
 		if err == nil {
-			if _, failed := p.fileSeek(d.object(), 0, 1); failed != nil {
+			if _, failed := p.fileSeek(d, 0, 1); failed != nil {
 				err = ENODEV
 			} else {
 				w := p.memory(at, n, O_WRONLY)
 
-				_, err = p.filePread(d.object(), w, int(n), int64(off))
+				_, err = p.filePread(d, w, int(n), int64(off))
 
 				p.memoryDone(w)
 
@@ -4535,7 +4531,7 @@ func (p *Process) libcMadvise(addr, n, advice uint32) uint32 {
 
 		w := p.memory(addr, uint32(len(in)), O_WRONLY)
 
-		p.filePread(m.file.object(), w, len(in), m.offset+int64(addr-at))
+		p.filePread(m.file, w, len(in), m.offset+int64(addr-at))
 		p.memoryDone(w)
 	}
 
@@ -4821,16 +4817,6 @@ func (p *Process) blockAround(addr uint32) (start, asked, size uint32, ok bool) 
 	return start, p.blockAsked(start, size), size, true
 }
 
-func (p *Process) fd(fd uint32) (Object, error) {
-	d, ok := p.files.at(int(fd))
-
-	if !ok {
-		return nil, EBADF
-	}
-
-	return d.desc.object(), nil
-}
-
 func (p *Process) description(fd uint32) (*Description, error) {
 	d, ok := p.files.at(int(fd))
 
@@ -4941,7 +4927,7 @@ func (p *Process) waitObjects(entries []PollEntry, timeout int, restart bool) (i
 
 		case e.kind != eventChanged || e.id >= uint64(len(entries)) || e != &entries[e.id].sub.event:
 			return false, nil
-		case entries[e.id].desc.object().poll(entries[e.id].events, nil) == 0:
+		case entries[e.id].again() == 0:
 			return false, nil
 		}
 
@@ -4955,11 +4941,19 @@ func (p *Process) waitObjects(entries []PollEntry, timeout int, restart bool) (i
 	return ready, err
 }
 
+func (e *PollEntry) again() int16 {
+	if e.sub.dropped.Load() && e.sub.dropped.Swap(false) {
+		e.desc.subscribe(e.sub, e.events)
+	}
+
+	return e.desc.poll(e.events, nil)
+}
+
 func pollEntries(entries []PollEntry) int {
 	ready := 0
 
 	for i := range entries {
-		entries[i].revents = entries[i].desc.object().poll(entries[i].events, nil)
+		entries[i].revents = entries[i].desc.poll(entries[i].events, nil)
 
 		if entries[i].revents != 0 {
 			ready++
@@ -5054,7 +5048,6 @@ func (p *Process) vectored(fd, iovs, count uint32, events int16, positioned bool
 		return p.result(0, err)
 	}
 
-	t := d.object()
 	spans, err := p.ioSpans(iovs, count)
 
 	if err != nil || len(spans) == 0 {
@@ -5075,19 +5068,19 @@ func (p *Process) vectored(fd, iovs, count uint32, events int16, positioned bool
 		}
 
 		if positioned {
-			return p.result(p.filePwrite(t, bytesFile(buf), len(buf), int64(off)))
+			return p.result(p.filePwrite(d, bytesFile(buf), len(buf), int64(off)))
 		}
 
-		return p.result(p.fileWrite(t, bytesFile(buf), len(buf), d.mode()))
+		return p.result(p.fileWrite(d, bytesFile(buf), len(buf), d.mode()))
 	}
 
 	buf = buf[:total]
 	var n int
 
 	if positioned {
-		n, err = p.filePread(t, bytesFile(buf), total, int64(off))
+		n, err = p.filePread(d, bytesFile(buf), total, int64(off))
 	} else {
-		n, err = p.fileRead(t, bytesFile(buf), total, d.mode())
+		n, err = p.fileRead(d, bytesFile(buf), total, d.mode())
 	}
 
 	spans, _ = p.ioSpans(iovs, count)
@@ -5227,7 +5220,7 @@ func (p *Process) libcRead(fd, buf, n uint32) uint32 {
 	}
 
 	w := p.memory(buf, n, O_WRONLY)
-	count, err := p.fileRead(d.object(), w, int(n), d.mode())
+	count, err := p.fileRead(d, w, int(n), d.mode())
 
 	p.memoryDone(w)
 
@@ -5242,7 +5235,7 @@ func (p *Process) libcWrite(fd, buf, n uint32) uint32 {
 	}
 
 	w := p.memory(buf, n, O_RDONLY)
-	count, err := p.fileWrite(d.object(), w, int(n), d.mode())
+	count, err := p.fileWrite(d, w, int(n), d.mode())
 
 	p.memoryDone(w)
 
@@ -5250,7 +5243,7 @@ func (p *Process) libcWrite(fd, buf, n uint32) uint32 {
 }
 
 func (p *Process) libcPread(fd, buf, n uint32, off uint64) uint32 {
-	t, err := p.fd(fd)
+	t, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5265,7 +5258,7 @@ func (p *Process) libcPread(fd, buf, n uint32, off uint64) uint32 {
 }
 
 func (p *Process) libcPwrite(fd, buf, n uint32, off uint64) uint32 {
-	t, err := p.fd(fd)
+	t, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5280,13 +5273,13 @@ func (p *Process) libcPwrite(fd, buf, n uint32, off uint64) uint32 {
 }
 
 func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) uint32 {
-	src, err := p.fd(in)
+	src, err := p.description(in)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	dst, err := p.fd(out)
+	dst, err := p.description(out)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5328,12 +5321,12 @@ func (p *Process) libcCopy_file_range(in, offIn, out, offOut, n, flags uint32) u
 	return p.result(count, nil)
 }
 
-func (p *Process) copyOffset(f Object, at uint32) (int64, error) {
+func (p *Process) copyOffset(d *Description, at uint32) (int64, error) {
 	off := int64(0)
 
 	if at != 0 {
 		off = int64(p.u64(at))
-	} else if pos, err := p.fileSeek(f, 0, 1); err != nil {
+	} else if pos, err := p.fileSeek(d, 0, 1); err != nil {
 		return 0, EINVAL
 	} else {
 		off = pos
@@ -5346,18 +5339,18 @@ func (p *Process) copyOffset(f Object, at uint32) (int64, error) {
 	return off, nil
 }
 
-func (p *Process) copied(f Object, at uint32, off int64) {
+func (p *Process) copied(d *Description, at uint32, off int64) {
 	if at != 0 {
 		p.put64(at, uint64(off))
 
 		return
 	}
 
-	p.fileSeek(f, off, 0)
+	p.fileSeek(d, off, 0)
 }
 
-func copyThrough(p *Process, in, out Object, from, to int64, n int) (int, error) {
-	for _, t := range []Object{in, out} {
+func copyThrough(p *Process, in, out *Description, from, to int64, n int) (int, error) {
+	for _, t := range []*Description{in, out} {
 		var st Stat
 
 		if err := p.fileStat(t, &st); err == EBADF {
@@ -5408,7 +5401,7 @@ func copyThrough(p *Process, in, out Object, from, to int64, n int) (int, error)
 }
 
 func (p *Process) libcFdatasync(fd uint32) uint32 {
-	n, err := p.fd(fd)
+	n, err := p.description(fd)
 
 	if err == nil {
 		err = p.request(n, &FileSync{data: true})
@@ -5422,7 +5415,7 @@ func (p *Process) libcSync() {
 }
 
 func (p *Process) libcSyncfs(fd uint32) uint32 {
-	_, err := p.fd(fd)
+	_, err := p.description(fd)
 
 	return p.result(0, err)
 }
@@ -5438,7 +5431,7 @@ func (p *Process) libcFlock(fd, op uint32) uint32 {
 }
 
 func (p *Process) libcPosix_fadvise(fd uint32, off, n uint64, advice uint32) uint32 {
-	obj, err := p.fd(fd)
+	obj, err := p.description(fd)
 
 	if err != nil {
 		return uint32(errnoOf(err))
@@ -5461,7 +5454,7 @@ func (p *Process) libcPosix_fadvise(fd uint32, off, n uint64, advice uint32) uin
 }
 
 func (p *Process) libcPosix_fallocate(fd uint32, off, n uint64) uint32 {
-	obj, err := p.fd(fd)
+	obj, err := p.description(fd)
 
 	if err != nil {
 		return uint32(errnoOf(err))
@@ -5470,18 +5463,18 @@ func (p *Process) libcPosix_fallocate(fd uint32, off, n uint64) uint32 {
 	return uint32(errnoOf(p.fallocate(obj, int64(off), int64(n))))
 }
 
-func (p *Process) fallocate(obj Object, off, n int64) error {
+func (p *Process) fallocate(d *Description, off, n int64) error {
 	if off < 0 || n <= 0 {
 		return EINVAL
 	}
 
-	if fl, err := p.fileFlags(obj); err != nil || fl&O_ACCMODE == O_RDONLY {
+	if d.status()&O_ACCMODE == O_RDONLY {
 		return EBADF
 	}
 
 	var st Stat
 
-	if err := p.fileStat(obj, &st); err != nil {
+	if err := p.fileStat(d, &st); err != nil {
 		return err
 	}
 
@@ -5498,7 +5491,7 @@ func (p *Process) fallocate(obj Object, off, n int64) error {
 		return nil
 	}
 
-	if err := p.request(obj, &FileTruncate{size: off + n}); err != EINVAL {
+	if err := p.request(d, &FileTruncate{size: off + n}); err != EINVAL {
 		return err
 	}
 
@@ -5549,7 +5542,7 @@ func (p *Process) libcPselect(n, r, w, e, ts, mask uint32) uint32 {
 }
 
 func (p *Process) libcLseek(fd uint32, off uint64, whence uint32) uint64 {
-	s, err := p.fd(fd)
+	s, err := p.description(fd)
 
 	if err != nil {
 		return p.result64(0, err)
@@ -5579,7 +5572,7 @@ func (p *Process) libcDup(fd uint32) uint32 {
 }
 
 func (p *Process) libcDup2(old, new uint32) uint32 {
-	if _, err := p.fd(old); err == nil && old == new {
+	if _, err := p.description(old); err == nil && old == new {
 		return p.result(int(new), nil)
 	}
 
@@ -5595,7 +5588,7 @@ func (p *Process) libcDup3(old, new, flags uint32) uint32 {
 }
 
 func (p *Process) libcFsync(fd uint32) uint32 {
-	n, err := p.fd(fd)
+	n, err := p.description(fd)
 
 	if err == nil {
 		err = p.request(n, &FileSync{data: false})
@@ -5605,7 +5598,7 @@ func (p *Process) libcFsync(fd uint32) uint32 {
 }
 
 func (p *Process) libcFtruncate(fd uint32, size uint64) uint32 {
-	n, err := p.fd(fd)
+	n, err := p.description(fd)
 
 	if err == nil {
 		err = p.request(n, &FileTruncate{size: int64(size)})
@@ -5614,7 +5607,7 @@ func (p *Process) libcFtruncate(fd uint32, size uint64) uint32 {
 	return p.result(0, err)
 }
 
-func statFile(p *Process, obj Object, st *Stat) error {
+func statFile(p *Process, obj *Description, st *Stat) error {
 	if p.chaosFail("file-stat") {
 		return EIO
 	}
@@ -5623,7 +5616,7 @@ func statFile(p *Process, obj Object, st *Stat) error {
 }
 
 func (p *Process) libcFstat(fd, at uint32) uint32 {
-	obj, err := p.fd(fd)
+	obj, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5641,7 +5634,7 @@ func (p *Process) libcFstat(fd, at uint32) uint32 {
 }
 
 func (p *Process) libcFchmod(fd, mode uint32) uint32 {
-	n, err := p.fd(fd)
+	n, err := p.description(fd)
 
 	if err == nil {
 		err = p.request(n, &FileChmod{mode: mode & 0o7777})
@@ -5651,7 +5644,7 @@ func (p *Process) libcFchmod(fd, mode uint32) uint32 {
 }
 
 func (p *Process) libcFchown(fd, uid, gid uint32) uint32 {
-	n, err := p.fd(fd)
+	n, err := p.description(fd)
 
 	if err == nil {
 		err = p.request(n, &FileChown{uid: int(int32(uid)), gid: int(int32(gid))})
@@ -5661,7 +5654,7 @@ func (p *Process) libcFchown(fd, uid, gid uint32) uint32 {
 }
 
 func (p *Process) libcFutimens(fd, times uint32) uint32 {
-	n, err := p.fd(fd)
+	n, err := p.description(fd)
 
 	if err == nil {
 		err = p.request(n, &FileUtimes{ts: p.timespecs(times)})
@@ -5703,11 +5696,11 @@ func (p *Process) libcFcntl(fd, cmd, va uint32) uint32 {
 
 		return p.result(0, nil)
 	case F_GETFL:
-		return p.result(p.descFlags(d))
+		return p.result(p.fileFlags(d))
 	case F_GETLK, F_SETLK, F_SETLKW:
 		return p.result(0, p.recordLock(d, cmd, p.varArg(va, 0)))
 	case F_SETFL:
-		return p.result(0, p.setDescFlags(d, int(p.varArg(va, 0))))
+		return p.result(0, p.setFileFlags(d, int(p.varArg(va, 0))))
 	}
 
 	return p.result(0, EINVAL)
@@ -5855,7 +5848,7 @@ func (p *Process) libcPipe2(fds, flags uint32) uint32 {
 }
 
 func (p *Process) libc__kernel_fdioctl(fd, req, arg uint32) uint32 {
-	obj, err := p.fd(fd)
+	obj, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -5864,7 +5857,7 @@ func (p *Process) libc__kernel_fdioctl(fd, req, arg uint32) uint32 {
 	switch req {
 	case FIONBIO:
 		d, _ := p.description(fd)
-		fl, err := p.descFlags(d)
+		fl, err := p.fileFlags(d)
 
 		if err != nil {
 			return p.result(0, err)
@@ -5876,7 +5869,7 @@ func (p *Process) libc__kernel_fdioctl(fd, req, arg uint32) uint32 {
 			fl |= O_NONBLOCK
 		}
 
-		return p.result(0, p.setDescFlags(d, fl))
+		return p.result(0, p.setFileFlags(d, fl))
 	case FIOCLEX, FIONCLEX:
 		p.files.slots[fd].cloexec = req == FIOCLEX
 
@@ -5949,7 +5942,7 @@ func (p *Process) putStatfsOf(at uint32, st *Statfs) {
 }
 
 func (p *Process) libcFstatvfs(fd, at uint32) uint32 {
-	n, err := p.fd(fd)
+	n, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6014,7 +6007,6 @@ func (p *Process) libcCtl(fd, at, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	o := d.object()
 	in, size, fds, n := p.u32(at), p.u32(at+4), p.u32(at+8), p.u32(at+12)
 
 	switch {
@@ -6040,17 +6032,17 @@ func (p *Process) libcCtl(fd, at, flags uint32) uint32 {
 		r.files = append(r.files, f)
 	}
 
-	if err := p.ctlCall(o, &r, flags&CTL_RESTART != 0); err != nil {
+	if err := p.ctlCall(d, &r, flags&CTL_RESTART != 0); err != nil {
 		return p.result(0, err)
 	}
 
 	return p.result(0, p.ctlAnswer(at, &r, flags))
 }
 
-func (p *Process) ctlCall(o Object, r *Ctl, restarts bool) error {
+func (p *Process) ctlCall(d *Description, r *Ctl, restarts bool) error {
 	_, err := p.job(func(group uint32) (int, error) {
 		for {
-			cancelled, err := o.call(p, r, group, true)
+			cancelled, err := d.object().call(p, d, r, group, true)
 
 			switch {
 			case restarts && err == EINTR && cancelled && !p.interrupts(true):
@@ -6077,7 +6069,7 @@ func (p *Process) ctlOpened(what []byte, files []*Description, flags uint32) (*D
 			return nil, files, err
 		}
 
-		return opened(obj, flags&O_NONBLOCK != 0), files, nil
+		return opened(obj, access&O_ACCMODE|int(flags&O_NONBLOCK)), files, nil
 	}
 
 	if len(files) == 0 {
@@ -6090,7 +6082,7 @@ func (p *Process) ctlOpened(what []byte, files []*Description, flags uint32) (*D
 		return nil, files[1:], err
 	}
 
-	d.nonblock.Store(flags&O_NONBLOCK != 0)
+	d.setStatus(int(flags & O_NONBLOCK))
 
 	if kind == openedTerminal && flags&O_NOCTTY == 0 {
 		p.acquire(d)
@@ -6154,13 +6146,13 @@ func (p *Process) ctlAnswer(at uint32, r *Ctl, flags uint32) error {
 }
 
 func (p *Process) libcFdid(fd, at uint32) uint32 {
-	o, err := p.fd(fd)
+	o, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
 	}
 
-	p.put64(at, o.objectID())
+	p.put64(at, o.object().objectID())
 
 	return 0
 }
@@ -6174,7 +6166,7 @@ func (p *Process) libcFchroot(fd uint32) uint32 {
 
 	var st Stat
 
-	switch err := statFile(p, d.object(), &st); {
+	switch err := statFile(p, d, &st); {
 	case err != nil:
 		return p.result(0, err)
 	case st.Mode&S_IFMT != S_IFDIR:
@@ -6203,7 +6195,7 @@ func (p *Process) fchdir(fd uint32) error {
 
 	var st Stat
 
-	if err := statFile(p, d.object(), &st); err != nil || st.Mode&S_IFMT != S_IFDIR || !p.permits(&st, 1) {
+	if err := statFile(p, d, &st); err != nil || st.Mode&S_IFMT != S_IFDIR || !p.permits(&st, 1) {
 		d.release()
 
 		switch {
@@ -6223,7 +6215,7 @@ func (p *Process) fchdir(fd uint32) error {
 }
 
 func (p *Process) libcFstatfs(fd, at uint32) uint32 {
-	n, err := p.fd(fd)
+	n, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6284,21 +6276,19 @@ func (p *Process) openFifo(st *Stat, flags int) (Object, error) {
 
 	k.mu.Unlock()
 
-	e := &PipeEnd{pipe: pp, reads: reads, writes: writes}
-
 	if nonblock || reads && writes {
-		return e, nil
+		return pp, nil
 	}
 
 	err := pp.meet(p, reads, readerOpens, writerOpens)
 
 	if err != nil {
-		e.closed()
+		pp.quit(reads, writes)
 
 		return nil, err
 	}
 
-	return e, nil
+	return pp, nil
 }
 
 func (p *Process) pipe(at, flags uint32) uint32 {
@@ -6310,19 +6300,18 @@ func (p *Process) pipe(at, flags uint32) uint32 {
 
 	pp.readers, pp.writers = 1, 1
 
-	ends := [2]*PipeEnd{{pipe: pp, reads: true}, {pipe: pp, writes: true}}
 	cloexec := flags&O_CLOEXEC != 0
 
 	var fds [2]int
 
-	for i, e := range ends {
-		fd, err := p.installDesc(opened(e, flags&O_NONBLOCK != 0), 0, cloexec)
+	for i, access := range [2]int{O_RDONLY, O_WRONLY} {
+		fd, err := p.installDesc(opened(pp, access|int(flags&O_NONBLOCK)), 0, cloexec)
 
 		if err != nil {
 			if i == 1 {
 				p.closeFd(fds[0])
 			} else {
-				ends[1].closed()
+				pp.quit(false, true)
 			}
 
 			return p.result(0, err)
@@ -6350,8 +6339,7 @@ func (p *Process) libcMemfile(at, n, flags uint32) uint32 {
 		return p.result(0, EFAULT)
 	}
 
-	f := newMemfd(i.memory, int64(at), int64(n), mode)
-	fd, err := p.installDesc(f.desc, 0, flags&O_CLOEXEC != 0)
+	fd, err := p.installDesc(opened(newMemfd(i.memory, int64(at), int64(n)), mode), 0, flags&O_CLOEXEC != 0)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6392,9 +6380,9 @@ func (p *Process) socket(domain, kind, protocol uint32) uint32 {
 
 	switch kind & sockTypeMask {
 	case SOCK_STREAM, SOCK_SEQPACKET:
-		return p.result(p.installDesc(opened(newUnixSocket(int(kind&sockTypeMask)), nonblock), 0, cloexec))
+		return p.result(p.installDesc(opened(newUnixSocket(int(kind&sockTypeMask)), rdwr(nonblock)), 0, cloexec))
 	case SOCK_DGRAM, SOCK_RAW:
-		return p.result(p.installDesc(opened(newUnixDgram(), nonblock), 0, cloexec))
+		return p.result(p.installDesc(opened(newUnixDgram(), rdwr(nonblock)), 0, cloexec))
 	}
 
 	return p.result(0, ESOCKTNOSUPPORT)
@@ -6415,13 +6403,13 @@ func (p *Process) libc__kernel_socketon(fd, domain, kind, protocol uint32) uint3
 		return p.result(0, err)
 	}
 
-	if err := p.request(d.object(), &SockCreate{domain: domain, kind: kind &^ SOCK_CLOEXEC, protocol: protocol}); err != nil {
+	if err := p.request(d, &SockCreate{domain: domain, kind: kind &^ SOCK_CLOEXEC, protocol: protocol}); err != nil {
 		return p.result(0, err)
 	}
 
 	d.hold()
 
-	return p.result(p.installDesc(opened(newIndirect(d), kind&SOCK_NONBLOCK != 0), 0, kind&SOCK_CLOEXEC != 0))
+	return p.result(p.installDesc(opened(newIndirect(d), rdwr(kind&SOCK_NONBLOCK != 0)), 0, kind&SOCK_CLOEXEC != 0))
 }
 
 func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
@@ -6449,15 +6437,15 @@ func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 
 	a, b := newPairOf(base)
 	nonblock, cloexec := kind&SOCK_NONBLOCK != 0, kind&SOCK_CLOEXEC != 0
-	x, err := p.installDesc(opened(a, nonblock), 0, cloexec)
+	x, err := p.installDesc(opened(a, rdwr(nonblock)), 0, cloexec)
 
 	if err != nil {
-		b.closed()
+		b.closed(nil)
 
 		return p.result(0, err)
 	}
 
-	y, err := p.installDesc(opened(b, nonblock), 0, cloexec)
+	y, err := p.installDesc(opened(b, rdwr(nonblock)), 0, cloexec)
 
 	if err != nil {
 		p.closeFd(x)
@@ -6477,7 +6465,7 @@ func (p *Process) nodeAddress(node int32, at, n uint32) (Address, error) {
 	if node >= 0 {
 		var err error
 
-		if a.node, err = p.fd(uint32(node)); err != nil {
+		if a.node, err = p.description(uint32(node)); err != nil {
 			return a, err
 		}
 	}
@@ -6486,7 +6474,7 @@ func (p *Process) nodeAddress(node int32, at, n uint32) (Address, error) {
 }
 
 func (p *Process) libc__kernel_bindat(fd, node, addr, n uint32) uint32 {
-	s, err := p.fd(fd)
+	s, err := p.description(fd)
 
 	if err == nil {
 		var a Address
@@ -6506,7 +6494,7 @@ func (p *Process) libc__kernel_connectat(fd, node, addr, n uint32) uint32 {
 		var a Address
 
 		if a, err = p.nodeAddress(int32(node), addr, n); err == nil {
-			err = p.request(d.object(), &SockConnect{addr: a, nonblock: d.nonblock.Load()})
+			err = p.request(d, &SockConnect{addr: a, nonblock: d.nonblock()})
 		}
 	}
 
@@ -6514,7 +6502,7 @@ func (p *Process) libc__kernel_connectat(fd, node, addr, n uint32) uint32 {
 }
 
 func (p *Process) libcListen(fd, backlog uint32) uint32 {
-	s, err := p.fd(fd)
+	s, err := p.description(fd)
 
 	if err == nil {
 		err = p.request(s, &SockListen{backlog: int(int32(backlog))})
@@ -6532,7 +6520,7 @@ func (p *Process) libcAccept4(fd, addr, lenAt, flags uint32) uint32 {
 }
 
 func (p *Process) libcGetsockname(fd, addr, lenAt uint32) uint32 {
-	s, err := p.fd(fd)
+	s, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6550,7 +6538,7 @@ func (p *Process) libcGetsockname(fd, addr, lenAt uint32) uint32 {
 }
 
 func (p *Process) libcGetpeername(fd, addr, lenAt uint32) uint32 {
-	s, err := p.fd(fd)
+	s, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6568,7 +6556,7 @@ func (p *Process) libcGetpeername(fd, addr, lenAt uint32) uint32 {
 }
 
 func (p *Process) libcGetsockopt(fd, level, name, at, lenAt uint32) uint32 {
-	s, err := p.fd(fd)
+	s, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6587,7 +6575,7 @@ func (p *Process) libcGetsockopt(fd, level, name, at, lenAt uint32) uint32 {
 }
 
 func (p *Process) libcSetsockopt(fd, level, name, at, n uint32) uint32 {
-	s, err := p.fd(fd)
+	s, err := p.description(fd)
 
 	if err == nil {
 		err = p.request(s, &SockSetopt{level: level, name: name, value: slices.Clone(p.span(at, min(n, 16)))})
@@ -6619,15 +6607,13 @@ func (p *Process) sendmsg(fd uint32, node int32, msg, flags uint32) (int, error)
 		return 0, err
 	}
 
-	s := d.object()
-
 	flags |= d.dontwait()
 
 	h := p.span(msg, sizeofMsghdr)
 	to := p.destination(binary.LittleEndian.Uint32(h), binary.LittleEndian.Uint32(h[4:]))
 
 	if node >= 0 {
-		if to.node, err = p.fd(uint32(node)); err != nil {
+		if to.node, err = p.description(uint32(node)); err != nil {
 			return 0, err
 		}
 	}
@@ -6642,7 +6628,7 @@ func (p *Process) sendmsg(fd uint32, node int32, msg, flags uint32) (int, error)
 	iov, count := binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:])
 	data, err := p.gatherIn(pk.data[:cap(pk.data)], iov, count, packetMax)
 
-	if err == EMSGSIZE && p.sockKind(s) == SOCK_STREAM {
+	if err == EMSGSIZE && p.sockKind(d) == SOCK_STREAM {
 		data, err = p.gather(iov, count, math.MaxInt)
 	}
 
@@ -6652,7 +6638,7 @@ func (p *Process) sendmsg(fd uint32, node int32, msg, flags uint32) (int, error)
 
 	pk.data, pk.files, pk.cred = data, files, cred
 
-	return p.sockSend(s, pk, to, sendMode(flags))
+	return p.sockSend(d, pk, to, sendMode(flags))
 }
 
 func (p *Process) packet() *Packet {
@@ -6703,8 +6689,6 @@ func (p *Process) recvmsg(fd, msg, flags uint32) (int, error) {
 		return 0, err
 	}
 
-	s := d.object()
-
 	flags |= d.dontwait()
 
 	h := p.span(msg, sizeofMsghdr)
@@ -6723,7 +6707,7 @@ func (p *Process) recvmsg(fd, msg, flags uint32) (int, error) {
 
 	r.into, r.want, r.flags = Into{p: p, at: iov, n: count, vector: true}, totalLength(spans), flags
 
-	if err := p.request(s, r); err != nil {
+	if err := p.request(d, r); err != nil {
 		return 0, err
 	}
 
@@ -6822,7 +6806,7 @@ func (p *Process) recvmsgBy(s *Description, fd, msg, flags uint32, end time.Time
 }
 
 func (p *Process) libcShutdown(fd, how uint32) uint32 {
-	s, err := p.fd(fd)
+	s, err := p.description(fd)
 
 	if err == nil {
 		err = p.request(s, &SockShutdown{how: int(how)})
@@ -6832,7 +6816,7 @@ func (p *Process) libcShutdown(fd, how uint32) uint32 {
 }
 
 func (p *Process) libcSockatmark(fd uint32) uint32 {
-	s, err := p.fd(fd)
+	s, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -6869,7 +6853,7 @@ func (p *Process) socketAccept(fd, addr, lenAt, flags uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	conn.nonblock.Store(flags&SOCK_NONBLOCK != 0)
+	conn.setStatus(int(bit(flags&SOCK_NONBLOCK != 0)) * O_NONBLOCK)
 
 	guest, err := p.installDesc(conn, 0, flags&SOCK_CLOEXEC != 0)
 
@@ -6891,7 +6875,7 @@ func (p *Process) socketSend(fd, buf, n, flags, addr, alen uint32) uint32 {
 
 	to := p.destination(addr, alen)
 
-	return p.result(p.sockSend(d.object(), &Packet{data: slices.Clone(p.span(buf, n))}, to, sendMode(flags|d.dontwait())))
+	return p.result(p.sockSend(d, &Packet{data: slices.Clone(p.span(buf, n))}, to, sendMode(flags|d.dontwait())))
 }
 
 func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
@@ -6906,7 +6890,7 @@ func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 	defer p.recvs.put(r)
 
 	r.into, r.want, r.flags = Into{p: p, at: buf, n: n}, int(n), flags|d.dontwait()
-	err = p.request(d.object(), r)
+	err = p.request(d, r)
 
 	dropFiles(r.files)
 
@@ -7100,7 +7084,7 @@ func (p *Process) bindName(a Address, held Object) (*SocketName, error) {
 	return &SocketName{k: p.k, key: key}, nil
 }
 
-func (p *Process) boundAt(node Object) (Object, error) {
+func (p *Process) boundAt(node *Description) (Object, error) {
 	var st Stat
 
 	if node == nil {
@@ -7132,7 +7116,7 @@ func (p *Process) boundAt(node Object) (Object, error) {
 	return held, nil
 }
 
-func (p *Process) connectUnix(node Object, kind int, nonblock bool, to *atomic.Int64) (*PairEnd, error) {
+func (p *Process) connectUnix(node *Description, kind int, nonblock bool, to *atomic.Int64) (*PairEnd, error) {
 	f, err := p.boundAt(node)
 
 	if err != nil {
@@ -7141,19 +7125,19 @@ func (p *Process) connectUnix(node Object, kind int, nonblock bool, to *atomic.I
 
 	r := SockKnock{kind: kind, nonblock: nonblock, timeout: to}
 
-	err = p.request(f, &r)
+	err = p.requestOn(f, &r)
 
 	return r.conn, err
 }
 
-func (p *Process) mouthOf(node Object) (Object, error) {
+func (p *Process) mouthOf(node *Description) (Object, error) {
 	f, err := p.boundAt(node)
 
 	if err != nil {
 		return nil, err
 	}
 
-	if p.sockKind(f) != SOCK_DGRAM {
+	if kind := (SockType{}); p.requestOn(f, &kind) != nil || kind.kind != SOCK_DGRAM {
 		return nil, EPROTOTYPE
 	}
 
@@ -7196,7 +7180,7 @@ func (p *Process) libcEpoll_create1(flags uint32) uint32 {
 }
 
 func (p *Process) libcEpoll_ctl(epfd, op, fd, at uint32) uint32 {
-	ep, err := p.fd(epfd)
+	ep, err := p.description(epfd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -7233,7 +7217,7 @@ func (p *Process) epollWait(epfd, at, max uint32, timeout int) (int, error) {
 		return 0, EINVAL
 	}
 
-	ep, err := p.fd(epfd)
+	ep, err := p.description(epfd)
 
 	if err != nil {
 		return 0, err
@@ -7325,18 +7309,18 @@ func (p *Process) permits(st *Stat, want uint32) bool {
 	return bits&want == want
 }
 
-func (p *Process) sameTerminal(a, b Object) bool {
+func (p *Process) sameTerminal(a, b *Description) bool {
 	return p.device(a) == p.device(b)
 }
 
-func (p *Process) isCtty(t Object) bool {
+func (p *Process) isCtty(d *Description) bool {
 	p.k.mu.Lock()
 
 	c := p.k.cttys[p.sid.Load()]
 
 	p.k.mu.Unlock()
 
-	return c != nil && p.sameTerminal(c.object(), t)
+	return c != nil && p.sameTerminal(c, d)
 }
 
 func (p *Process) acquire(t *Description) {
@@ -7410,7 +7394,7 @@ func (p *Process) leaveSession(going bool) {
 		how = cttyGone
 	}
 
-	p.ttyControl(t.object(), how)
+	p.ttyControl(t, how)
 	t.release()
 }
 
@@ -7424,13 +7408,13 @@ func (p *Process) controls(t *Description) error {
 	p.k.mu.Unlock()
 
 	switch {
-	case leads && c != nil && p.sameTerminal(c.object(), t.object()):
+	case leads && c != nil && p.sameTerminal(c, t):
 		return nil
 	case !leads || c != nil:
 		return EPERM
 	}
 
-	if err := p.ttyControl(t.object(), cttyTake); err != nil {
+	if err := p.ttyControl(t, cttyTake); err != nil {
 		return err
 	}
 
@@ -7442,8 +7426,8 @@ func (p *Process) controls(t *Description) error {
 	return nil
 }
 
-func (p *Process) notty(t Object) error {
-	if !p.isCtty(t) {
+func (p *Process) notty(d *Description) error {
+	if !p.isCtty(d) {
 		return ENOTTY
 	}
 
@@ -8003,7 +7987,7 @@ func (p *Process) libcGetdtablesize() uint32 {
 }
 
 func (p *Process) libcFpathconf(fd, name uint32) uint32 {
-	if _, err := p.fd(fd); err != nil {
+	if _, err := p.description(fd); err != nil {
 		return p.result(0, err)
 	}
 
@@ -8772,8 +8756,8 @@ func (p *Process) job(fn func(group uint32) (int, error)) (int, error) {
 	}
 }
 
-func (p *Process) request(o Object, r Request) error {
-	_, err := o.call(p, r, p.group(), false)
+func (p *Process) requestOn(o Object, r Request) error {
+	_, err := o.call(p, nil, r, p.group(), false)
 
 	if err == errUnserved {
 		err = r.unserved()
@@ -8782,26 +8766,36 @@ func (p *Process) request(o Object, r Request) error {
 	return err
 }
 
-func (p *Process) ttyControl(t Object, how uint32) error {
-	return p.request(t, &TtyControl{how: how})
+func (p *Process) request(d *Description, r Request) error {
+	_, err := d.object().call(p, d, r, p.group(), false)
+
+	if err == errUnserved {
+		err = r.unserved()
+	}
+
+	return err
 }
 
-func (p *Process) sockKind(s Object) int {
+func (p *Process) ttyControl(d *Description, how uint32) error {
+	return p.request(d, &TtyControl{how: how})
+}
+
+func (p *Process) sockKind(d *Description) int {
 	r := SockType{}
 
-	if p.request(s, &r) != nil {
+	if p.request(d, &r) != nil {
 		return 0
 	}
 
 	return r.kind
 }
 
-func (p *Process) sockSend(s Object, pk *Packet, to Address, mode IoMode) (int, error) {
+func (p *Process) sockSend(d *Description, pk *Packet, to Address, mode IoMode) (int, error) {
 	r := p.sends.get()
 
 	r.pk, r.to, r.mode = pk, to, mode
 
-	err := p.request(s, r)
+	err := p.request(d, r)
 	n := r.n
 
 	p.sends.put(r)
@@ -8810,29 +8804,29 @@ func (p *Process) sockSend(s Object, pk *Packet, to Address, mode IoMode) (int, 
 }
 
 func (p *Process) sockAccept(d *Description, flags uint32) (*Description, []byte, error) {
-	r := SockAccept{flags: flags, nonblock: d.nonblock.Load()}
-	err := p.request(d.object(), &r)
+	r := SockAccept{flags: flags, nonblock: d.nonblock()}
+	err := p.request(d, &r)
 
 	return r.conn, r.peer, err
 }
 
-func (p *Process) sockName(s Object, peer bool) ([]byte, error) {
+func (p *Process) sockName(d *Description, peer bool) ([]byte, error) {
 	r := SockName{peer: peer}
-	err := p.request(s, &r)
+	err := p.request(d, &r)
 
 	return r.addr, err
 }
 
-func (p *Process) sockGetopt(s Object, level, name uint32) ([]byte, error) {
+func (p *Process) sockGetopt(d *Description, level, name uint32) ([]byte, error) {
 	r := SockGetopt{level: level, name: name}
-	err := p.request(s, &r)
+	err := p.request(d, &r)
 
 	return r.value, err
 }
 
-func (p *Process) fileCall(o Object, r Request, group uint32) error {
+func (p *Process) fileCall(d *Description, r Request, group uint32) error {
 	for {
-		cancelled, err := o.call(p, r, group, true)
+		cancelled, err := d.object().call(p, d, r, group, true)
 
 		switch {
 		case err == EINTR && cancelled && !p.interrupts(true) && p.interrupted():
@@ -8845,7 +8839,7 @@ func (p *Process) fileCall(o Object, r Request, group uint32) error {
 	}
 }
 
-func (p *Process) fileJob(o Object, r Request) error {
+func (p *Process) fileJob(d *Description, r Request) error {
 	free := false
 
 	for {
@@ -8855,7 +8849,7 @@ func (p *Process) fileJob(o Object, r Request) error {
 			group = p.group()
 		}
 
-		err := p.fileCall(o, r, group)
+		err := p.fileCall(d, r, group)
 		sig, held := err.(Background)
 
 		if !held {
@@ -8868,12 +8862,12 @@ func (p *Process) fileJob(o Object, r Request) error {
 	}
 }
 
-func (p *Process) fileRead(o Object, into *MemfdFile, n int, mode IoMode) (int, error) {
+func (p *Process) fileRead(d *Description, into *Description, n int, mode IoMode) (int, error) {
 	r := p.reads.get()
 
 	r.into, r.n, r.mode = into, n, mode
 
-	err := p.fileJob(o, r)
+	err := p.fileJob(d, r)
 	count := r.count
 
 	p.reads.put(r)
@@ -8881,12 +8875,12 @@ func (p *Process) fileRead(o Object, into *MemfdFile, n int, mode IoMode) (int, 
 	return count, err
 }
 
-func (p *Process) filePread(o Object, into *MemfdFile, n int, off int64) (int, error) {
+func (p *Process) filePread(d *Description, into *Description, n int, off int64) (int, error) {
 	r := p.reads.get()
 
 	r.into, r.n, r.at, r.explicit = into, n, off, true
 
-	err := p.fileCall(o, r, p.group())
+	err := p.fileCall(d, r, p.group())
 	count := r.count
 
 	p.reads.put(r)
@@ -8894,12 +8888,12 @@ func (p *Process) filePread(o Object, into *MemfdFile, n int, off int64) (int, e
 	return count, err
 }
 
-func (p *Process) fileWrite(o Object, from *MemfdFile, n int, mode IoMode) (int, error) {
+func (p *Process) fileWrite(d *Description, from *Description, n int, mode IoMode) (int, error) {
 	r := p.writes.get()
 
 	r.from, r.n, r.mode = from, n, mode
 
-	err := p.fileJob(o, r)
+	err := p.fileJob(d, r)
 	count := r.count
 
 	p.writes.put(r)
@@ -8907,12 +8901,12 @@ func (p *Process) fileWrite(o Object, from *MemfdFile, n int, mode IoMode) (int,
 	return count, err
 }
 
-func (p *Process) filePwrite(o Object, from *MemfdFile, n int, off int64) (int, error) {
+func (p *Process) filePwrite(d *Description, from *Description, n int, off int64) (int, error) {
 	r := p.writes.get()
 
 	r.from, r.n, r.at, r.explicit = from, n, off, true
 
-	err := p.fileCall(o, r, p.group())
+	err := p.fileCall(d, r, p.group())
 	count := r.count
 
 	p.writes.put(r)
@@ -8920,75 +8914,70 @@ func (p *Process) filePwrite(o Object, from *MemfdFile, n int, off int64) (int, 
 	return count, err
 }
 
-func (p *Process) fileSeek(o Object, off int64, whence int) (int64, error) {
+func (p *Process) fileSeek(d *Description, off int64, whence int) (int64, error) {
 	r := FileSeek{off: off, whence: whence}
-	err := p.request(o, &r)
+	err := p.request(d, &r)
 
 	return r.pos, err
 }
 
-func (p *Process) fileReaddir(o Object, into *MemfdFile, n int) (int, error) {
+func (p *Process) fileReaddir(d *Description, into *Description, n int) (int, error) {
 	r := FileReaddir{into: into, n: n}
-	err := p.request(o, &r)
+	err := p.request(d, &r)
 
 	return r.count, err
 }
 
-func (p *Process) fileFlags(o Object) (int, error) {
+func (p *Process) fileFlags(d *Description) (int, error) {
 	r := FileGetfl{}
-	err := p.request(o, &r)
 
-	return r.flags, err
+	if _, err := d.object().call(p, d, &r, p.group(), false); err != nil && err != errUnserved {
+		return 0, err
+	}
+
+	return d.status() | r.flags&^(O_ACCMODE|O_PATH|O_NONBLOCK), nil
 }
 
-func (p *Process) fileSetFlags(o Object, fl int) error {
-	return p.request(o, &FileSetfl{flags: fl})
-}
+func (p *Process) setFileFlags(d *Description, fl int) error {
+	r := FileSetfl{flags: fl}
 
-func (p *Process) descFlags(d *Description) (int, error) {
-	fl, err := p.fileFlags(d.object())
-
-	return fl&^O_NONBLOCK | int(bit(d.nonblock.Load()))*O_NONBLOCK, err
-}
-
-func (p *Process) setDescFlags(d *Description, fl int) error {
-	if err := p.fileSetFlags(d.object(), fl); err != nil {
+	if _, err := d.object().call(p, d, &r, p.group(), false); err != nil && err != errUnserved {
 		return err
 	}
 
-	d.nonblock.Store(fl&O_NONBLOCK != 0)
+	d.setStatus(fl)
 
 	return nil
 }
 
-func (p *Process) fileCopyTo(o, out Object, from, to int64, n int) (int, error) {
+func (p *Process) fileCopyTo(o, out *Description, from, to int64, n int) (int, error) {
 	r := FileCopyTo{out: out, from: from, to: to, n: n}
 	err := p.request(o, &r)
 
 	return r.count, err
 }
 
-func (p *Process) fileCopyFrom(o, in Object, from, to int64, n int) (int, error) {
+func (p *Process) fileCopyFrom(o, in *Description, from, to int64, n int) (int, error) {
 	r := FileCopyFrom{in: in, from: from, to: to, n: n}
 	err := p.request(o, &r)
 
 	return r.count, err
 }
 
-func (p *Process) fileIoctl(o Object, req uintptr, arg unsafe.Pointer) error {
-	return p.request(o, &FileIoctl{req: req, arg: arg})
+func (p *Process) fileIoctl(d *Description, req uintptr, arg unsafe.Pointer) error {
+	return p.request(d, &FileIoctl{req: req, arg: arg})
 }
 
-func (p *Process) epollCtl(o Object, op uint32, key EpollKey, events uint32, data uint64) error {
-	return p.request(o, &EpollCtl{ctl: op, key: key, events: events, data: data})
+func (p *Process) epollCtl(d *Description, op uint32, key EpollKey, events uint32, data uint64) error {
+	return p.request(d, &EpollCtl{ctl: op, key: key, events: events, data: data})
 }
 
-func (p *Process) epollTake(o Object, buf func() []byte, max int, end time.Time) (int, error) {
+func (p *Process) epollTake(d *Description, buf func() []byte, max int, end time.Time) (int, error) {
 	r := p.epolls.get()
 
 	r.buf, r.max, r.end = buf, max, end
 
-	err := p.request(o, r)
+	err := p.request(d, r)
 	count := r.count
 
 	p.epolls.put(r)
@@ -8996,47 +8985,46 @@ func (p *Process) epollTake(o Object, buf func() []byte, max int, end time.Time)
 	return count, err
 }
 
-func (p *Process) fileStat(o Object, st *Stat) error {
+func (p *Process) fileStat(d *Description, st *Stat) error {
 	r := p.stats.get()
 
 	r.st = st
 
-	err := p.request(o, r)
+	err := p.request(d, r)
 
 	p.stats.put(r)
 
 	return err
 }
 
-func (p *Process) identity(o Object) (FileIdentity, error) {
+func (p *Process) identity(d *Description) (FileIdentity, error) {
 	r := FileIdentity{}
-	err := p.request(o, &r)
+	err := p.request(d, &r)
 
 	return r, err
 }
 
-func (p *Process) device(o Object) FileKey {
-	r, _ := p.identity(o)
+func (p *Process) device(d *Description) FileKey {
+	r, _ := p.identity(d)
 
 	return r.key
 }
 
-func (p *Process) lockable(o Object) (FileKey, int, error) {
-	r, err := p.identity(o)
+func (p *Process) lockable(d *Description) (FileKey, int, error) {
+	r, err := p.identity(d)
 
 	switch {
-	case err != nil || r.access&O_PATH != 0:
+	case err != nil || d.status()&O_PATH != 0:
 		return FileKey{}, 0, EBADF
 	case r.key.ino == 0:
 		return FileKey{}, 0, EINVAL
 	}
 
-	return r.key, r.access, nil
+	return r.key, d.status() & O_ACCMODE, nil
 }
 
 func (p *Process) fileFlock(d *Description, op int) error {
-	o := d.object()
-	key, _, err := p.lockable(o)
+	key, _, err := p.lockable(d)
 
 	if err != nil {
 		return err
@@ -9055,8 +9043,7 @@ func (p *Process) fileFlock(d *Description, op int) error {
 }
 
 func (p *Process) fileLock(d *Description, cmd int, lk *Flock) error {
-	o := d.object()
-	key, fl, err := p.lockable(o)
+	key, fl, err := p.lockable(d)
 
 	if err != nil {
 		return err
@@ -9067,7 +9054,7 @@ func (p *Process) fileLock(d *Description, cmd int, lk *Flock) error {
 	switch lk.Whence {
 	case 0:
 	case 1:
-		pos, err := p.fileSeek(o, 0, 1)
+		pos, err := p.fileSeek(d, 0, 1)
 
 		if err != nil {
 			return err
@@ -9077,7 +9064,7 @@ func (p *Process) fileLock(d *Description, cmd int, lk *Flock) error {
 	case 2:
 		var st Stat
 
-		if err := p.fileStat(o, &st); err != nil {
+		if err := p.fileStat(d, &st); err != nil {
 			return err
 		}
 
@@ -9232,7 +9219,7 @@ func (p *Process) dropSync(at uint32) {
 
 	if o := p.syncs[h]; o != nil {
 		delete(p.syncs, h)
-		o.closed()
+		o.closed(nil)
 	}
 
 	p.put32(at, 0)
@@ -9245,7 +9232,7 @@ func (p *Process) syncCall(at uint32, made func() Object, r Request) error {
 		return err
 	}
 
-	return p.request(o, r)
+	return p.requestOn(o, r)
 }
 
 func (p *Process) timedLock(at uint32, made func() Object, shared bool, deadline uint32, clock uint32) error {
@@ -9997,7 +9984,7 @@ func (p *Process) condWaitForever(call string) {
 	msg := call + ": no other thread to signal\n"
 
 	if d, err := p.description(2); err == nil {
-		p.fileWrite(d.object(), bytesFile([]byte(msg)), len(msg), d.mode())
+		p.fileWrite(d, bytesFile([]byte(msg)), len(msg), d.mode())
 	}
 
 	p.abort()
@@ -10022,7 +10009,7 @@ func (p *Process) condTimedwait(cond, mutex, at uint32, clock *uint32) error {
 		return err
 	}
 
-	return p.request(c, &SyncWait{thread: p.pid, lock: m, at: at, clock: clock})
+	return p.requestOn(c, &SyncWait{thread: p.pid, lock: m, at: at, clock: clock})
 }
 
 func (p *Process) libcPthread_cond_timedwait(cond, mutex, at uint32) uint32 {
@@ -10508,7 +10495,7 @@ func (p *Process) libcEventfd(count, flags uint32) uint32 {
 
 	e := newEventFd(uint64(count), flags&EFD_SEMAPHORE != 0)
 
-	return p.result(p.installDesc(opened(e, flags&O_NONBLOCK != 0), 0, flags&O_CLOEXEC != 0))
+	return p.result(p.installDesc(opened(e, O_RDWR|int(flags&O_NONBLOCK)), 0, flags&O_CLOEXEC != 0))
 }
 
 func (p *Process) libcEventfd_read(fd, value uint32) uint32 {
@@ -10526,7 +10513,7 @@ func (p *Process) libcEventfd_write(fd uint32, value uint64) uint32 {
 		return p.result(0, err)
 	}
 
-	n, err := p.fileWrite(d.object(), bytesFile(binary.LittleEndian.AppendUint64(nil, value)), 8, d.mode())
+	n, err := p.fileWrite(d, bytesFile(binary.LittleEndian.AppendUint64(nil, value)), 8, d.mode())
 
 	if err == nil && n != 8 {
 		err = EIO
@@ -10540,7 +10527,7 @@ func (p *Process) libcTimerfd_create(clock, flags uint32) uint32 {
 		return p.result(0, EINVAL)
 	}
 
-	return p.result(p.installDesc(opened(newTimerFd(clock), flags&O_NONBLOCK != 0), 0, flags&O_CLOEXEC != 0))
+	return p.result(p.installDesc(opened(newTimerFd(clock), O_RDWR|int(flags&O_NONBLOCK)), 0, flags&O_CLOEXEC != 0))
 }
 
 func (p *Process) libcTimerfd_settime(fd, flags, value, old uint32) uint32 {
@@ -10560,7 +10547,7 @@ func (p *Process) libcTimerfd_settime(fd, flags, value, old uint32) uint32 {
 		return p.result(0, err)
 	}
 
-	t, err := p.fd(fd)
+	t, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)
@@ -10581,7 +10568,7 @@ func (p *Process) libcTimerfd_settime(fd, flags, value, old uint32) uint32 {
 }
 
 func (p *Process) libcTimerfd_gettime(fd, at uint32) uint32 {
-	t, err := p.fd(fd)
+	t, err := p.description(fd)
 
 	if err != nil {
 		return p.result(0, err)

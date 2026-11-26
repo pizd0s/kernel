@@ -13,19 +13,14 @@ type MemfdFile struct {
 	mem  *LinearMemory
 	at   int64
 	n    int64
-	mode int
 	held bool
-	desc *Description
 
 	mu  sync.Mutex
-	off int64
 	ino uint64
 }
 
-func newMemfd(mem *LinearMemory, at, n int64, mode int) *MemfdFile {
-	f := &MemfdFile{ObjectIdent: newObjectIdent(), mem: mem, at: at, n: n, mode: mode, ino: memfdInodes.Add(1)}
-
-	f.desc = held(f)
+func newMemfd(mem *LinearMemory, at, n int64) *MemfdFile {
+	f := &MemfdFile{ObjectIdent: newObjectIdent(), mem: mem, at: at, n: n, ino: memfdInodes.Add(1)}
 
 	if mem.owner != nil {
 		mem.owner.holds.Add(1)
@@ -35,30 +30,17 @@ func newMemfd(mem *LinearMemory, at, n int64, mode int) *MemfdFile {
 	return f
 }
 
-func bytesFile(b []byte) *MemfdFile {
-	return newMemfd(&LinearMemory{data: b}, 0, int64(len(b)), O_RDWR)
+func bytesFile(b []byte) *Description {
+	return opened(newMemfd(&LinearMemory{data: b}, 0, int64(len(b))), O_RDWR)
 }
 
-func grants(mode int, writes bool) bool {
-	if writes {
-		return mode != O_RDONLY
-	}
+func (d *Description) memory() *MemfdFile {
+	f, _ := d.object().(*MemfdFile)
 
-	return mode != O_WRONLY
+	return f
 }
 
-func narrowed(mode, to int) int {
-	switch {
-	case to == O_RDWR || mode == to:
-		return mode
-	case mode == O_RDWR:
-		return to
-	}
-
-	return mode
-}
-
-func (f *MemfdFile) closed() {
+func (f *MemfdFile) closed(d *Description) {
 	if f.held {
 		f.mem.owner.unhold()
 	}
@@ -91,44 +73,36 @@ func (f *MemfdFile) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (f *MemfdFile) poll(events int16, through []*Epoll) int16 {
+func (f *MemfdFile) poll(d *Description, events int16, through []*Epoll) int16 {
 	return events & (POLLIN | POLLRDNORM | POLLOUT | POLLWRNORM)
 }
 
-func (f *MemfdFile) subscribe(s *Subscription, events int16) {
+func (f *MemfdFile) subscribe(d *Description, s *Subscription, events int16) {
 }
 
-func (f *MemfdFile) unsubscribe(s *Subscription) {
+func (f *MemfdFile) unsubscribe(d *Description, s *Subscription) {
 }
 
-func (f *MemfdFile) flags(p *Process) (int, error) {
-	return f.mode, nil
-}
-
-func (f *MemfdFile) setFlags(p *Process, fl int) error {
-	return nil
-}
-
-func (f *MemfdFile) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
+func (f *MemfdFile) read(p *Process, d *Description, into *MemfdFile, n int) (int, error) {
 	f.mu.Lock()
 
 	defer f.mu.Unlock()
 
-	count, err := f.pread(p, into, n, f.off)
+	count, err := f.pread(p, into, n, d.offset)
 
-	f.off += int64(count)
+	d.offset += int64(count)
 
 	return count, err
 }
 
-func (f *MemfdFile) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, error) {
+func (f *MemfdFile) write(p *Process, d *Description, from *MemfdFile, n int) (int, error) {
 	f.mu.Lock()
 
 	defer f.mu.Unlock()
 
-	count, err := f.pwrite(p, from, n, f.off)
+	count, err := f.pwrite(p, from, n, d.offset)
 
-	f.off += int64(count)
+	d.offset += int64(count)
 
 	return count, err
 }
@@ -142,8 +116,6 @@ func (f *MemfdFile) pread(p *Process, into *MemfdFile, n int, off int64) (int, e
 	size := int64(len(b))
 
 	switch {
-	case !grants(f.mode, false):
-		return 0, EBADF
 	case off < 0 || n < 0:
 		return 0, EINVAL
 	case n == 0 || off >= size:
@@ -168,8 +140,6 @@ func (f *MemfdFile) pwrite(p *Process, from *MemfdFile, n int, off int64) (int, 
 	size := int64(len(b))
 
 	switch {
-	case !grants(f.mode, true):
-		return 0, EBADF
 	case off < 0 || n < 0:
 		return 0, EINVAL
 	case n == 0:
@@ -187,7 +157,7 @@ func (f *MemfdFile) pwrite(p *Process, from *MemfdFile, n int, off int64) (int, 
 	})
 }
 
-func (f *MemfdFile) seek(p *Process, off int64, whence int) (int64, error) {
+func (f *MemfdFile) seek(d *Description, off int64, whence int) (int64, error) {
 	f.mu.Lock()
 
 	defer f.mu.Unlock()
@@ -195,7 +165,7 @@ func (f *MemfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 	switch whence {
 	case 0:
 	case 1:
-		off += f.off
+		off += d.offset
 	case 2:
 		off += f.size()
 	default:
@@ -206,17 +176,17 @@ func (f *MemfdFile) seek(p *Process, off int64, whence int) (int64, error) {
 		return 0, EINVAL
 	}
 
-	f.off = off
+	d.offset = off
 
 	return off, nil
 }
 
-func (f *MemfdFile) splice(at int64, n int, mode int) *MemfdFile {
+func (f *MemfdFile) splice(at int64, n int, mode int) *Description {
 	size := f.size()
 
 	at = min(max(at, 0), size)
 
-	return newMemfd(f.mem, f.at+at, min(int64(max(n, 0)), size-at), narrowed(f.mode, mode))
+	return opened(newMemfd(f.mem, f.at+at, min(int64(max(n, 0)), size-at)), mode)
 }
 
 func (f *MemfdFile) with(at int64, n int, writes bool, fn func(b []byte) (int, error)) (int, error) {
@@ -231,10 +201,7 @@ func (f *MemfdFile) within(at int64, n int, writes bool, fn func(b []byte) (int,
 	b := f.bytes()
 	size := int64(len(b))
 
-	switch {
-	case !grants(f.mode, writes):
-		return 0, EBADF
-	case at < 0 || n < 0:
+	if at < 0 || n < 0 {
 		return 0, EINVAL
 	}
 
@@ -243,16 +210,14 @@ func (f *MemfdFile) within(at int64, n int, writes bool, fn func(b []byte) (int,
 	return fn(b[at : at+min(int64(n), size-at)])
 }
 
-func (f *MemfdFile) copyTo(p *Process, out Object, from, to int64, n int) (int, error) {
+func (f *MemfdFile) copyTo(p *Process, out *Description, from, to int64, n int) (int, error) {
 	size := f.size()
 
 	switch {
-	case out == Object(f):
+	case out.object() == Object(f):
 		return 0, EINVAL
 	case n == 0 || from >= size:
 		return 0, nil
-	case !grants(f.mode, false):
-		return 0, EBADF
 	}
 
 	n = int(min(int64(n), size-from))
@@ -260,12 +225,12 @@ func (f *MemfdFile) copyTo(p *Process, out Object, from, to int64, n int) (int, 
 	part := f.splice(from, n, O_RDONLY)
 	count, err := p.filePwrite(out, part, n, to)
 
-	part.desc.release()
+	part.release()
 
 	return count, err
 }
 
-func (f *MemfdFile) copyFrom(p *Process, in Object, from, to int64, n int) (int, error) {
+func (f *MemfdFile) copyFrom(p *Process, in *Description, from, to int64, n int) (int, error) {
 	size := f.size()
 
 	switch {
@@ -273,8 +238,6 @@ func (f *MemfdFile) copyFrom(p *Process, in Object, from, to int64, n int) (int,
 		return 0, nil
 	case to >= size:
 		return 0, ENOSPC
-	case !grants(f.mode, true):
-		return 0, EBADF
 	}
 
 	n = int(min(int64(n), size-to))
@@ -282,56 +245,62 @@ func (f *MemfdFile) copyFrom(p *Process, in Object, from, to int64, n int) (int,
 	part := f.splice(to, n, O_WRONLY)
 	count, err := p.filePread(in, part, n, from)
 
-	part.desc.release()
+	part.release()
 
 	return count, err
 }
 
-func (f *MemfdFile) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (f *MemfdFile) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, f.stat(p, r.st)
-	case *FileGetfl:
-		var err error
-
-		r.flags, err = f.flags(p)
-
-		return false, err
-	case *FileSetfl:
-		return false, f.setFlags(p, r.flags)
 	case *FileRead:
 		var err error
 
-		if r.explicit {
-			r.count, err = f.pread(p, r.into, r.n, r.at)
-		} else {
-			r.count, err = f.read(p, r.into, r.n, r.mode)
+		switch {
+		case !d.reads():
+			err = EBADF
+		case r.explicit:
+			r.count, err = f.pread(p, r.into.memory(), r.n, r.at)
+		default:
+			r.count, err = f.read(p, d, r.into.memory(), r.n)
 		}
 
 		return false, err
 	case *FileWrite:
 		var err error
 
-		if r.explicit {
-			r.count, err = f.pwrite(p, r.from, r.n, r.at)
-		} else {
-			r.count, err = f.write(p, r.from, r.n, r.mode)
+		switch {
+		case !d.writes():
+			err = EBADF
+		case r.explicit:
+			r.count, err = f.pwrite(p, r.from.memory(), r.n, r.at)
+		default:
+			r.count, err = f.write(p, d, r.from.memory(), r.n)
 		}
 
 		return false, err
 	case *FileSeek:
 		var err error
 
-		r.pos, err = f.seek(p, r.off, r.whence)
+		r.pos, err = f.seek(d, r.off, r.whence)
 
 		return false, err
 	case *FileCopyTo:
+		if !d.reads() {
+			return false, EBADF
+		}
+
 		var err error
 
 		r.count, err = f.copyTo(p, r.out, r.from, r.to, r.n)
 
 		return false, err
 	case *FileCopyFrom:
+		if !d.writes() {
+			return false, EBADF
+		}
+
 		var err error
 
 		r.count, err = f.copyFrom(p, r.in, r.from, r.to, r.n)

@@ -16,7 +16,7 @@ func newIndirect(target *Description) *Indirect {
 	return &Indirect{ObjectIdent: newObjectIdent(), target: target}
 }
 
-func (i *Indirect) closed() {
+func (i *Indirect) closed(d *Description) {
 	i.target.release()
 }
 
@@ -30,20 +30,20 @@ func (i *Indirect) current() Object {
 	return t
 }
 
-func (i *Indirect) poll(events int16, through []*Epoll) int16 {
+func (i *Indirect) poll(d *Description, events int16, through []*Epoll) int16 {
 	t := i.current()
 
-	return t.poll(events, through)
+	return t.poll(nil, events, through)
 }
 
-func (i *Indirect) subscribe(s *Subscription, events int16) {
+func (i *Indirect) subscribe(d *Description, s *Subscription, events int16) {
 	i.mu.Lock()
 	i.subs = append(i.subs, Subscribed{s, events})
-	i.target.object().subscribe(s, events)
+	i.target.object().subscribe(nil, s, events)
 	i.mu.Unlock()
 }
 
-func (i *Indirect) unsubscribe(s *Subscription) {
+func (i *Indirect) unsubscribe(d *Description, s *Subscription) {
 	i.mu.Lock()
 
 	for k := range i.subs {
@@ -54,13 +54,13 @@ func (i *Indirect) unsubscribe(s *Subscription) {
 		}
 	}
 
-	i.target.object().unsubscribe(s)
+	i.target.object().unsubscribe(nil, s)
 	i.mu.Unlock()
 }
 
-func (i *Indirect) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (i *Indirect) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	t := i.current()
-	cancelled, err := t.call(p, r, group, waits)
+	cancelled, err := t.call(p, nil, r, group, waits)
 
 	if to := movedOf(r); to != nil {
 		i.retarget(to)
@@ -75,8 +75,8 @@ func (i *Indirect) retarget(to *Description) {
 	from := i.target
 
 	for _, s := range i.subs {
-		from.object().unsubscribe(s.s)
-		to.object().subscribe(s.s, s.events)
+		from.object().unsubscribe(nil, s.s)
+		to.object().subscribe(nil, s.s, s.events)
 	}
 
 	i.target = to

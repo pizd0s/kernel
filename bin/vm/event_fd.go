@@ -29,10 +29,10 @@ func newEventFd(count uint64, semaphore bool) *EventFd {
 	return e
 }
 
-func (e *EventFd) closed() {
+func (e *EventFd) closed(d *Description) {
 }
 
-func (e *EventFd) poll(events int16, through []*Epoll) int16 {
+func (e *EventFd) poll(d *Description, events int16, through []*Epoll) int16 {
 	e.mu.Lock()
 
 	count := e.count
@@ -52,7 +52,7 @@ func (e *EventFd) poll(events int16, through []*Epoll) int16 {
 	return mask & events
 }
 
-func (e *EventFd) subscribe(s *Subscription, events int16) {
+func (e *EventFd) subscribe(d *Description, s *Subscription, events int16) {
 	e.mu.Lock()
 
 	if events&(POLLIN|POLLRDNORM) != 0 {
@@ -66,7 +66,7 @@ func (e *EventFd) subscribe(s *Subscription, events int16) {
 	e.mu.Unlock()
 }
 
-func (e *EventFd) unsubscribe(s *Subscription) {
+func (e *EventFd) unsubscribe(d *Description, s *Subscription) {
 	e.mu.Lock()
 	e.watchers.remove(&s.in)
 	e.watchers.remove(&s.out)
@@ -170,16 +170,10 @@ func (e *EventFd) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, e
 	return 8, nil
 }
 
-func (e *EventFd) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (e *EventFd) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, e.stat(p, r.st)
-	case *FileGetfl:
-		r.flags = O_RDWR
-
-		return false, nil
-	case *FileSetfl:
-		return false, nil
 	case *FileRead:
 		if r.explicit {
 			return false, ESPIPE
@@ -187,7 +181,7 @@ func (e *EventFd) call(p *Process, r Request, group uint32, waits bool) (bool, e
 
 		var err error
 
-		r.count, err = e.read(p, r.into, r.n, r.mode)
+		r.count, err = e.read(p, r.into.memory(), r.n, r.mode)
 
 		return false, err
 	case *FileWrite:
@@ -197,7 +191,7 @@ func (e *EventFd) call(p *Process, r Request, group uint32, waits bool) (bool, e
 
 		var err error
 
-		r.count, err = e.write(p, r.from, r.n, r.mode)
+		r.count, err = e.write(p, r.from.memory(), r.n, r.mode)
 
 		return false, err
 	}

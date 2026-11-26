@@ -92,6 +92,6 @@ func (l *NetLink) receive() {
 func (l *NetLink) close() {
 	l.closed.Do(func() {
 		l.conn.Close()
-		l.end.closed()
+		l.end.closed(nil)
 	})
 }

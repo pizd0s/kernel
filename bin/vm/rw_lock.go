@@ -19,20 +19,20 @@ func newRWLock() *RWLock {
 	return l
 }
 
-func (l *RWLock) closed() {
+func (l *RWLock) closed(d *Description) {
 }
 
-func (l *RWLock) poll(events int16, through []*Epoll) int16 {
+func (l *RWLock) poll(d *Description, events int16, through []*Epoll) int16 {
 	return 0
 }
 
-func (l *RWLock) subscribe(s *Subscription, events int16) {
+func (l *RWLock) subscribe(d *Description, s *Subscription, events int16) {
 }
 
-func (l *RWLock) unsubscribe(s *Subscription) {
+func (l *RWLock) unsubscribe(d *Description, s *Subscription) {
 }
 
-func (l *RWLock) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (l *RWLock) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *SyncLock:
 		return false, l.lock(p, r)

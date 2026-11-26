@@ -13,18 +13,28 @@ const (
 type ConsoleEnd struct {
 	ObjectIdent
 
-	in, out *PipeEnd
+	in, out *Pipe
 }
 
-func newConsoleEnd(in, out *PipeEnd) *ConsoleEnd {
-	return &ConsoleEnd{ObjectIdent: newObjectIdent(), in: in.another(), out: out.another()}
+func newConsoleEnd(in, out *Pipe) *ConsoleEnd {
+	if in != nil {
+		in.join(true, false)
+	}
+
+	if out != nil {
+		out.join(false, true)
+	}
+
+	return &ConsoleEnd{ObjectIdent: newObjectIdent(), in: in, out: out}
 }
 
-func (c *ConsoleEnd) closed() {
-	for _, e := range []*PipeEnd{c.in, c.out} {
-		if e != nil {
-			e.closed()
-		}
+func (c *ConsoleEnd) closed(d *Description) {
+	if c.in != nil {
+		c.in.quit(true, false)
+	}
+
+	if c.out != nil {
+		c.out.quit(false, true)
 	}
 }
 
@@ -34,34 +44,34 @@ func (c *ConsoleEnd) stat(p *Process, st *Stat) error {
 	return nil
 }
 
-func (c *ConsoleEnd) poll(events int16, through []*Epoll) int16 {
+func (c *ConsoleEnd) poll(d *Description, events int16, through []*Epoll) int16 {
 	var ready int16
 
 	if c.in != nil {
-		ready |= c.in.poll(events&inEvents, through) & inEvents
+		ready |= c.in.ready(true, false, events&inEvents) & inEvents
 	}
 
 	if c.out != nil {
-		ready |= c.out.poll(events&outEvents, through) & outEvents
+		ready |= c.out.ready(false, true, events&outEvents) & outEvents
 	}
 
 	return ready
 }
 
-func (c *ConsoleEnd) subscribe(s *Subscription, events int16) {
+func (c *ConsoleEnd) subscribe(d *Description, s *Subscription, events int16) {
 	if c.in != nil && (events == 0 || events&inEvents != 0) {
-		c.in.subscribe(s, events&inEvents)
+		c.in.hang(true, false, s, events&inEvents)
 	}
 
 	if c.out != nil && (events == 0 || events&outEvents != 0) {
-		c.out.subscribe(s, events&outEvents)
+		c.out.hang(false, true, s, events&outEvents)
 	}
 }
 
-func (c *ConsoleEnd) unsubscribe(s *Subscription) {
-	for _, e := range []*PipeEnd{c.in, c.out} {
-		if e != nil {
-			e.unsubscribe(s)
+func (c *ConsoleEnd) unsubscribe(d *Description, s *Subscription) {
+	for _, pp := range []*Pipe{c.in, c.out} {
+		if pp != nil {
+			pp.unhang(s)
 		}
 	}
 }
@@ -87,7 +97,7 @@ func (c *ConsoleEnd) ioctl(req uintptr, arg unsafe.Pointer) error {
 		return ENOTTY
 	}
 
-	return c.in.ioctl(req, arg)
+	return c.in.ioctl(true, req, arg)
 }
 
 func (c *ConsoleEnd) ctl(p *Process, r *Ctl) error {
@@ -121,18 +131,12 @@ func (c *ConsoleEnd) ctl(p *Process, r *Ctl) error {
 	return ENOTTY
 }
 
-func (c *ConsoleEnd) call(p *Process, r Request, group uint32, waits bool) (bool, error) {
+func (c *ConsoleEnd) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, c.stat(p, r.st)
 	case *Ctl:
 		return false, c.ctl(p, r)
-	case *FileGetfl:
-		r.flags = O_RDWR
-
-		return false, nil
-	case *FileSetfl:
-		return false, nil
 	case *FileRead:
 		if r.explicit {
 			return false, errUnserved
@@ -140,7 +144,7 @@ func (c *ConsoleEnd) call(p *Process, r Request, group uint32, waits bool) (bool
 
 		var err error
 
-		r.count, err = c.read(p, r.into, r.n, r.mode)
+		r.count, err = c.read(p, r.into.memory(), r.n, r.mode)
 
 		return false, err
 	case *FileWrite:
@@ -150,7 +154,7 @@ func (c *ConsoleEnd) call(p *Process, r Request, group uint32, waits bool) (bool
 
 		var err error
 
-		r.count, err = c.write(p, r.from, r.n, r.mode)
+		r.count, err = c.write(p, r.from.memory(), r.n, r.mode)
 
 		return false, err
 	case *FileIoctl:
