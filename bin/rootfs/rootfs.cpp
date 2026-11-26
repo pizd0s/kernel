@@ -88,6 +88,7 @@
 #include <sys/statvfs.h>
 #include <sys/time.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -4242,60 +4243,6 @@ static Task sendtoCall(Header h, int fd, Place root, Place from, u64 id, Name pa
     ok(fd, &count, sizeof count);
 }
 
-// A call of a socket's with a path, a CTL: ctlBind, the mode its arg;
-// ctlConnect; ctlSendto, the flags its arg, the path, a 0, the bytes,
-// and the rights after the two descriptors every one of them brings, the
-// root of who asks and where its path starts. Whether fd is kept.
-static bool socketCtl(Socket& s, Header h, Body body, int fd) {
-    if (body.size() < 8) {
-        return error(fd, EINVAL);
-    }
-    const u32 call = body.take<u32>();
-    h.arg = body.take<u32>();
-    if (call == ctlInq) {
-        const u32 n = s.first ? s.first->size : 0;
-        ok(fd, &n, sizeof n);
-        return false;
-    }
-    if (call != ctlBind && call != ctlConnect && call != ctlSendto) {
-        return error(fd, ENOTTY);
-    }
-    Place root = rootOf(rootMount);
-    Place from;
-    unsigned long long id = 0;
-    if (packetFdCount < 3 || fdid(packetFds[1], &id) != 0 || !placeOf(id, from)) {
-        return error(fd, EINVAL);
-    }
-    if (fdid(packetFds[0], &id) == 0) {
-        placeOf(id, root);
-    }
-    if (call == ctlBind) {
-        if (s.fs) {
-            return error(fd, EINVAL);
-        }
-        bindCall(h, fd, root, from, s.id, body.rest());
-        return true;
-    }
-    if (call == ctlConnect) {
-        connectCall(h, fd, root, from, s.id, body.rest());
-        return true;
-    }
-    if (s.type != SOCK_DGRAM) {
-        return error(fd, s.listening ? EOPNOTSUPP : ENOTCONN);
-    }
-    const Name path = body.string();
-    const usize size = body.size();
-    auto* d = new (allocate(sizeof(Datagram) + size)) Datagram();
-    d->size = u32(size);
-    memcpy(d->bytes(), body.at, size);
-    for (usize i = 2; i + 1 < packetFdCount; ++i) {
-        d->fds[d->fdCount++] = packetFds[i];
-        packetFds[i] = -1;
-    }
-    sendtoCall(h, fd, root, from, s.id, path, d);
-    return true;
-}
-
 // SO_TYPE, SO_ACCEPTCONN and SO_ERROR of a socket are rootfs's; the
 // other options of a stream's are its end's of the pair, the kernel's,
 // and a datagram socket's the sizes and times it keeps, for the kernel
@@ -4375,35 +4322,65 @@ static void sendCall(Socket& s, const void* data, usize size, int* fds, usize fd
     ok(fd, &count, sizeof count);
 }
 
-// A request on a socket, answered on fd: a CTL of a path's (socketCtl);
-// LISTEN, of a bound stream's; ACCEPT, a connection of the queue, kept
-// until there is one but of O_NONBLOCK; SEND, RECV, READ and WRITE of
-// a datagram socket, a RECV and a READ kept until a datagram comes, for
-// SO_RCVTIMEO at most, but of O_NONBLOCK and MSG_DONTWAIT, and of a
-// stream's ENOTCONN, as it is connected to nothing while it is here;
-// the options; SOCKNAME, EOPNOTSUPP, as AF_UNIX's names are nobody's to
-// ask; FSTAT, GETFL and SETFL. Whether fd is kept.
-static bool onSocket(Endpoint* ep, const Header& h, Body body, int fd) {
-    Socket& s = *ep->socket;
+// The path of a call's sockaddr, len u32 and then the sockaddr, which it
+// takes from the body: 0 and the path of AF_UNIX's; EAFNOSUPPORT of
+// another family's, which family says; EINVAL of a length that is none
+// of a sockaddr_un with a path; ENOENT of no path and of one that starts
+// with a 0: a socket's name is one of the VFS's and nothing else.
+static int pathIn(Body& body, Name& path, sa_family_t& family) {
+    family = AF_UNSPEC;
+    if (body.size() < 4) {
+        return EINVAL;
+    }
+    const u32 length = body.take<u32>();
+    if (length > body.size() || length < sizeof family) {
+        return EINVAL;
+    }
+    const char* at = reinterpret_cast<const char*>(body.at);
+    memcpy(&family, at, sizeof family);
+    body.at += length;
+    if (family != AF_UNIX) {
+        return EAFNOSUPPORT;
+    }
+    const usize before = offsetof(sockaddr_un, sun_path);
+    if (length <= before || length > sizeof(sockaddr_un)) {
+        return EINVAL;
+    }
+    path = {at + before, strnlen(at + before, length - before)};
+    return path.empty() ? ENOENT : 0;
+}
+
+// A CTL of a socket's, a call of calls.h, answered on fd: its number,
+// its arg, then what it takes. ctlBind, the mode its arg, ctlConnect and
+// ctlSendto, the flags its arg, take a sockaddr, len u32 before it, of a
+// path, and bring the root of who asks and where its path starts, their
+// first descriptors; a send's bytes follow the sockaddr, its rights the
+// two descriptors. A connect of a datagram socket to AF_UNSPEC is to
+// nothing. ctlListen, the backlog its arg, is of a bound stream's;
+// ctlAccept gives a connection of the queue, kept until there is one but
+// of O_NONBLOCK; ctlShutdown, how its arg, is ENOTCONN of a stream's, as
+// it is connected to nothing while it is here; ctlSockname is
+// EOPNOTSUPP, as AF_UNIX's names are nobody's to ask; ctlGetsockopt and
+// ctlSetsockopt are the options'; ctlInq, the bytes of the first
+// datagram. Whether fd is kept.
+static bool socketCtl(Socket& s, Header h, Body body, int fd) {
+    if (body.size() < 8) {
+        return error(fd, EINVAL);
+    }
+    const u32 call = body.take<u32>();
+    h.arg = body.take<u32>();
     const bool stream = s.type != SOCK_DGRAM;
-    switch (h.op) {
-        case opCtl:
-            return socketCtl(s, h, body, fd);
-        case opBind:
-            return error(fd, s.fs ? EINVAL : EAFNOSUPPORT);
-        case opConnect: {
-            sa_family_t family = AF_UNIX;
-            if (body.size() >= 4 + sizeof family) {
-                memcpy(&family, body.at + 4, sizeof family);
-            }
-            if (family != AF_UNSPEC || stream) {
-                return error(fd, EAFNOSUPPORT);
-            }
-            s.peer = nullptr;
-            s.lost = false;
-            return answer(fd, 0);
+    switch (call) {
+        case ctlInq: {
+            const u32 n = s.first ? s.first->size : 0;
+            ok(fd, &n, sizeof n);
+            return false;
         }
-        case opListen:
+        case ctlBind:
+        case ctlConnect:
+        case ctlSendto:
+            break;
+        case ctlListen:
             if (!stream) {
                 return error(fd, EOPNOTSUPP);
             }
@@ -4415,7 +4392,7 @@ static bool onSocket(Endpoint* ep, const Header& h, Body body, int fd) {
             ok(fd);
             listened(s);
             return false;
-        case opAccept:
+        case ctlAccept:
             if (!s.listening) {
                 return error(fd, stream ? EINVAL : EOPNOTSUPP);
             }
@@ -4424,11 +4401,90 @@ static bool onSocket(Endpoint* ep, const Header& h, Body body, int fd) {
                 socketReady(s);
                 return false;
             }
-            if (ep->nonblock) {
+            if (s.end->nonblock) {
                 return error(fd, EAGAIN);
             }
-            keep(s, opAccept, fd, {});
+            keep(s, opCtl, fd, {});
             return true;
+        case ctlSockname:
+            return error(fd, EOPNOTSUPP);
+        case ctlGetsockopt:
+        case ctlSetsockopt:
+            optionCall(s, call == ctlSetsockopt, body, fd);
+            return false;
+        case ctlShutdown:
+            if (stream) {
+                return error(fd, ENOTCONN);
+            }
+            if (h.arg > SHUT_RDWR) {
+                return error(fd, EINVAL);
+            }
+            s.noRead = s.noRead || h.arg != SHUT_WR;
+            s.noWrite = s.noWrite || h.arg != SHUT_RD;
+            ok(fd);
+            received(s);
+            return false;
+        default:
+            return error(fd, ENOTTY);
+    }
+    Name path;
+    sa_family_t family;
+    const int e = pathIn(body, path, family);
+    if (e == EAFNOSUPPORT && family == AF_UNSPEC && call == ctlConnect && !stream) {
+        s.peer = nullptr;
+        s.lost = false;
+        return answer(fd, 0);
+    }
+    if (e != 0) {
+        return error(fd, e);
+    }
+    if (call == ctlBind && s.fs) {
+        return error(fd, EINVAL);
+    }
+    if (call == ctlSendto && stream) {
+        return error(fd, s.listening ? EOPNOTSUPP : ENOTCONN);
+    }
+    Place root = rootOf(rootMount);
+    Place from;
+    unsigned long long id = 0;
+    if (packetFdCount < 3 || fdid(packetFds[1], &id) != 0 || !placeOf(id, from)) {
+        return error(fd, EINVAL);
+    }
+    if (fdid(packetFds[0], &id) == 0) {
+        placeOf(id, root);
+    }
+    if (call == ctlBind) {
+        bindCall(h, fd, root, from, s.id, path);
+        return true;
+    }
+    if (call == ctlConnect) {
+        connectCall(h, fd, root, from, s.id, path);
+        return true;
+    }
+    const usize size = body.size();
+    auto* d = new (allocate(sizeof(Datagram) + size)) Datagram();
+    d->size = u32(size);
+    memcpy(d->bytes(), body.at, size);
+    for (usize i = 2; i + 1 < packetFdCount; ++i) {
+        d->fds[d->fdCount++] = packetFds[i];
+        packetFds[i] = -1;
+    }
+    sendtoCall(h, fd, root, from, s.id, path, d);
+    return true;
+}
+
+// A request on a socket, answered on fd: a CTL, a socket's call
+// (socketCtl); SEND, RECV, READ and WRITE of a datagram socket, a RECV
+// and a READ kept until a datagram comes, for SO_RCVTIMEO at most, but
+// of O_NONBLOCK and MSG_DONTWAIT, and of a stream's ENOTCONN, as it is
+// connected to nothing while it is here; FSTAT, GETFL and SETFL. Whether
+// fd is kept.
+static bool onSocket(Endpoint* ep, const Header& h, Body body, int fd) {
+    Socket& s = *ep->socket;
+    const bool stream = s.type != SOCK_DGRAM;
+    switch (h.op) {
+        case opCtl:
+            return socketCtl(s, h, body, fd);
         case opSend: {
             if (stream) {
                 return error(fd, s.listening ? EOPNOTSUPP : ENOTCONN);
@@ -4496,24 +4552,6 @@ static bool onSocket(Endpoint* ep, const Header& h, Body body, int fd) {
             }
             return true;
         }
-        case opSockname:
-            return error(fd, EOPNOTSUPP);
-        case opGetsockopt:
-        case opSetsockopt:
-            optionCall(s, h.op == opSetsockopt, body, fd);
-            return false;
-        case opShutdown:
-            if (stream) {
-                return error(fd, ENOTCONN);
-            }
-            if (h.arg > SHUT_RDWR) {
-                return error(fd, EINVAL);
-            }
-            s.noRead = s.noRead || h.arg != SHUT_WR;
-            s.noWrite = s.noWrite || h.arg != SHUT_RD;
-            ok(fd);
-            received(s);
-            return false;
         case opSocktype:
             ok(fd, &s.type, sizeof s.type);
             return false;

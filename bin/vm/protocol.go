@@ -15,6 +15,14 @@ const (
 	ctlGetWinsize         = 9
 	ctlGetPgrp            = 12
 	ctlSetPgrp            = 13
+	ctlBind               = 49
+	ctlConnect            = 50
+	ctlListen             = 52
+	ctlAccept             = 53
+	ctlSockname           = 54
+	ctlGetsockopt         = 55
+	ctlSetsockopt         = 56
+	ctlShutdown           = 57
 	rOk            uint32 = 128
 	rErr           uint32 = 129
 	rBackground    uint32 = 130
@@ -54,16 +62,8 @@ const (
 )
 
 const (
-	sBind uint32 = iota + 144
-	sConnect
-	sListen
-	sAccept
-	sSend
+	sSend uint32 = iota + 144
 	sRecv
-	sName
-	sGetopt
-	sSetopt
-	sShutdown
 	sType
 )
 

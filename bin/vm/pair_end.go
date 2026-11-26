@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -559,22 +560,6 @@ func takeFrom(from *MemfdFile) func(at int, b []byte) int {
 	}
 }
 
-func (e *PairEnd) bind(p *Process, a Address) error {
-	return EINVAL
-}
-
-func (e *PairEnd) connect(p *Process, a Address) error {
-	return EISCONN
-}
-
-func (e *PairEnd) listen(backlog int) error {
-	return EINVAL
-}
-
-func (e *PairEnd) accept(p *Process, flags uint32) (*Description, []byte, error) {
-	return nil, nil, EINVAL
-}
-
 func (e *PairEnd) socketKind() int {
 	return e.shared.kind
 }
@@ -599,46 +584,53 @@ func (e *PairEnd) shutdown(how int) error {
 	return nil
 }
 
-func (e *PairEnd) getsockopt(p *Process, level, name uint32) ([]byte, error) {
-	return e.options.get(p, e.shared.kind, level, name)
-}
+func (e *PairEnd) ctl(p *Process, r *Ctl) error {
+	if len(r.data) < 8 {
+		return ENOTTY
+	}
 
-func (e *PairEnd) setsockopt(level, name uint32, value []byte) error {
-	return e.options.set(level, name, value)
+	call, arg, body := binary.LittleEndian.Uint32(r.data), binary.LittleEndian.Uint32(r.data[4:]), r.data[8:]
+
+	switch call {
+	case ctlBind, ctlListen, ctlAccept:
+		return EINVAL
+	case ctlConnect:
+		return EISCONN
+	case ctlSockname:
+		return EOPNOTSUPP
+	case ctlShutdown:
+		return e.shutdown(int(arg))
+	case ctlGetsockopt, ctlSetsockopt:
+		if len(body) < 8 {
+			return EINVAL
+		}
+
+		level, name := binary.LittleEndian.Uint32(body), binary.LittleEndian.Uint32(body[4:])
+
+		if call == ctlSetsockopt {
+			return e.options.set(level, name, body[8:])
+		}
+
+		var err error
+
+		r.answer, err = e.options.get(p, e.shared.kind, level, name)
+
+		return err
+	}
+
+	return ENOTTY
 }
 
 func (e *PairEnd) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
 		return false, e.stat(p, r.st)
-	case *SockBind:
-		return false, e.bind(p, r.addr)
-	case *SockConnect:
-		return false, e.connect(p, r.addr)
-	case *SockListen:
-		return false, e.listen(r.backlog)
-	case *SockAccept:
-		var err error
-
-		r.conn, r.peer, err = e.accept(p, r.flags)
-
-		return false, err
+	case *Ctl:
+		return false, e.ctl(p, r)
 	case *SockSend:
 		return false, e.send(p, r)
 	case *SockRecv:
 		return false, e.recv(p, r)
-	case *SockName:
-		return false, EOPNOTSUPP
-	case *SockGetopt:
-		var err error
-
-		r.value, err = e.getsockopt(p, r.level, r.name)
-
-		return false, err
-	case *SockSetopt:
-		return false, e.setsockopt(r.level, r.name, r.value)
-	case *SockShutdown:
-		return false, e.shutdown(r.how)
 	case *SockType:
 		r.kind = e.socketKind()
 

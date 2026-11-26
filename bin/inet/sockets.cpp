@@ -237,12 +237,12 @@ namespace {
             return err == EAGAIN && !nonblock ? wait : done(err);
         };
         switch (h.op) {
-            case opBind:
+            case ctlBind:
                 if (!address(at, stop, addr, length)) {
                     return done(EINVAL);
                 }
                 return done(ff_bind(s.ff, addr, length) == 0 ? 0 : errno);
-            case opConnect: {
+            case ctlConnect: {
                 if (!address(at, stop, addr, length)) {
                     return done(EINVAL);
                 }
@@ -255,9 +255,9 @@ namespace {
                 }
                 return done(err);
             }
-            case opListen:
+            case ctlListen:
                 return done(ff_listen(s.ff, int(h.arg)) == 0 ? 0 : errno);
-            case opAccept: {
+            case ctlAccept: {
                 alignas(8) unsigned char peer[128];
                 socklen_t peerLength = sizeof peer;
                 const int conn = ff_accept(s.ff, reinterpret_cast<linux_sockaddr*>(peer), &peerLength);
@@ -361,14 +361,14 @@ namespace {
                 const uint32_t count = uint32_t(n);
                 return done(0, &count, sizeof count);
             }
-            case opSockname: {
+            case ctlSockname: {
                 alignas(8) unsigned char name[128];
                 socklen_t nameLength = sizeof name;
                 const int r = h.arg ? ff_getpeername(s.ff, reinterpret_cast<linux_sockaddr*>(name), &nameLength)
                                     : ff_getsockname(s.ff, reinterpret_cast<linux_sockaddr*>(name), &nameLength);
                 return r == 0 ? done(0, name, nameLength) : done(errno);
             }
-            case opGetsockopt: {
+            case ctlGetsockopt: {
                 uint32_t level, name;
                 if (!take(at, stop, level) || !take(at, stop, name)) {
                     return done(EINVAL);
@@ -390,14 +390,14 @@ namespace {
                 }
                 return done(0, value, valueLength);
             }
-            case opSetsockopt: {
+            case ctlSetsockopt: {
                 uint32_t level, name;
                 if (!take(at, stop, level) || !take(at, stop, name)) {
                     return done(EINVAL);
                 }
                 return done(setOption(s.ff, s.type, level, name, at, socklen_t(stop - at)));
             }
-            case opShutdown:
+            case ctlShutdown:
                 return done(ff_shutdown(s.ff, int(h.arg)) == 0 ? 0 : errno);
             case opSocktype: {
                 const uint32_t type = uint32_t(s.type);
@@ -508,8 +508,8 @@ void socketsHand(Request& r) {
     Header h = r.h;
     h.op = r.h.arg;
     h.arg = arg;
-    const bool listens = h.op == opListen;
-    if (!listens && ((h.op != opBind && h.op != opConnect && h.op != opSend) || r.count < 2)) {
+    const bool listens = h.op == ctlListen;
+    if (!listens && ((h.op != ctlBind && h.op != ctlConnect && h.op != opSend) || r.count < 2)) {
         ff_close(ff);
         return fail(r.reply(), EINVAL);
     }
@@ -570,6 +570,7 @@ bool socketsHandle(Endpoint& e, Request& r) {
     if (!s) {
         return false;
     }
+    asSocketCall(r);
     const Outcome outcome = run(*s, r.h, r.body, r.size, r.memfd(), r.reply(), e.nonblock);
     if (outcome != Outcome::Done) {
         wait(*s, outcome, r);

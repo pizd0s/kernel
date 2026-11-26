@@ -165,6 +165,18 @@ void unwatch(int epoll, Endpoint* e) {
     drop(epoll, e);
 }
 
+bool asSocketCall(Request& r) {
+    uint32_t call, arg;
+    if (r.h.op != opCtl || !r.at(0, call) || !r.at(4, arg) || call < ctlBind || call > ctlShutdown) {
+        return false;
+    }
+    r.h.op = call;
+    r.h.arg = arg;
+    r.body += 8;
+    r.size -= 8;
+    return true;
+}
+
 Endpoint* keep(int epoll, Request& r, void* of) {
     Endpoint* e = watch(epoll, {r.reply(), false, false, false, of});
     r.fds[r.count - 1] = -1;

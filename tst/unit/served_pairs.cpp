@@ -207,8 +207,8 @@ struct [[gnu::packed]] Io {
 constexpr uint32_t opFstat = 67;
 constexpr uint32_t opCtl = 79;
 constexpr uint32_t ctlStat = 129;
-constexpr uint32_t opSend = 148;
-constexpr uint32_t opRecv = 149;
+constexpr uint32_t opSend = 144;
+constexpr uint32_t opRecv = 145;
 constexpr uint32_t opRead = 64;
 constexpr uint32_t opReady = 75;
 constexpr uint32_t opErr = 129;

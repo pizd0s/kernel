@@ -254,7 +254,7 @@ static int listenOn(Socket& h, Stack& s) {
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         return errno;
     }
-    Header call{opListen, h.backlog, 0, 0, 0, 0};
+    Header call{ctlListen, h.backlog, 0, 0, 0, 0};
     const int sent = hand(s, h, call, nullptr, 0, &pair[1], 1);
     close(pair[1]);
     if (sent != 0) {
@@ -294,7 +294,7 @@ static void portOf(Socket& h) {
     if (h.bound.sin_port != 0 || !h.listeners) {
         return;
     }
-    const Header ask{opSockname, 0, 0, 0, 0, 0};
+    const Header ask{ctlSockname, 0, 0, 0, 0, 0};
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         return;
@@ -328,7 +328,7 @@ static bool anyReady(const Socket& h) {
 static bool accepted(Socket& h, int reply, uint32_t flags) {
     for (Listener* l = h.listeners; l; l = l->next) {
         if (l->ready) {
-            const Header call{opAccept, flags, 0, 0, 0, 0};
+            const Header call{ctlAccept, flags, 0, 0, 0, 0};
             const iovec part{const_cast<Header*>(&call), sizeof call};
             sendPacket(l->end->fd, &part, 1, &reply, 1);
             return true;
@@ -578,7 +578,7 @@ static void nameCall(const Socket& h, const Request& r) {
 }
 
 static void socketCall(Socket& h, Request& r) {
-    if (r.h.op == opCtl) {
+    if (r.h.op == opCtl && !asSocketCall(r)) {
         uint32_t call, kind, domain, protocol;
         if (!r.at(0, call) || call != ctlSocket) {
             return fail(r.reply(), ENOTTY);
@@ -602,9 +602,9 @@ static void socketCall(Socket& h, Request& r) {
     sockaddr_in to;
     size_t end;
     switch (r.h.op) {
-        case opBind:
+        case ctlBind:
             return bindCall(h, r);
-        case opConnect:
+        case ctlConnect:
             if (h.listening) {
                 return fail(r.reply(), EINVAL);
             }
@@ -617,15 +617,15 @@ static void socketCall(Socket& h, Request& r) {
                 return fail(r.reply(), h.type == SOCK_DGRAM ? EDESTADDRREQ : ENOTCONN);
             }
             return handOn(h, r, to.sin_addr.s_addr);
-        case opListen:
+        case ctlListen:
             return listenCall(h, r);
-        case opAccept:
+        case ctlAccept:
             return acceptCall(h, r);
-        case opSetsockopt:
+        case ctlSetsockopt:
             return setOption(h, r);
-        case opGetsockopt:
+        case ctlGetsockopt:
             return getOption(h, r);
-        case opSockname:
+        case ctlSockname:
             return nameCall(h, r);
         case opSocktype:
             return answer(r.reply(), opOk, 0, &h.type, sizeof h.type);
@@ -638,7 +638,7 @@ static void socketCall(Socket& h, Request& r) {
         case opRead:
         case opWrite:
         case opRecv:
-        case opShutdown:
+        case ctlShutdown:
             return fail(r.reply(), ENOTCONN);
         default:
             return fail(r.reply(), unserved(r.h.op));

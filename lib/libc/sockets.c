@@ -1,16 +1,14 @@
 /*
- * The calls of sockets that take what the kernel does not know: a family
- * and a path. A socket of AF_UNIX is the VFS's, rootfs's (lib/protocol),
- * a ctlSocket of the root, and an address of a path is a ctl of the
- * socket's, the root and where the path starts, the working directory or
- * the root, with it, which rootfs walks: bind makes the node, of the
- * umask's mode, connect and a send find the socket bound to it. A socket
- * that serves no such ctl, an end of a pair or the network's, takes the
- * kernel's call, as an address of no path does. A socket of the
- * network's is an open of sockmgr's /dev/sockmgr/socket, told what it
- * is by a ctlSocket too. An address of AF_UNIX with no path, or one that starts
- * with a 0, names nothing, ENOENT, and one of a length that is none of
- * sockaddr_un's is EINVAL. sendto is sendmsg's, and sendmmsg sendmsg's
+ * The sockets of the C library, but what an end of a pair does, the
+ * kernel's (lib/protocol). socket is a ctlSocket, of the root for
+ * AF_UNIX, rootfs's, of an open of sockmgr's /dev/sockmgr/socket for the
+ * network's families. bind, connect, listen, accept, the names, the
+ * options and shutdown are CTLs of the socket (calls.h): its server
+ * answers them, the kernel those of an end of a pair, and what is no
+ * socket serves none, ENOTSOCK. An address of AF_UNIX is a path of the
+ * VFS's, which rootfs walks: the root and the working directory go with
+ * it, and a send to one is a CTL too, ctlSendto, the kernel's send of a
+ * socket that serves none. sendto is sendmsg's, and sendmmsg sendmsg's
  * of each message.
  */
 #include "sized.h"
@@ -30,72 +28,39 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#define PATH_ROOM sizeof(((struct sockaddr_un*)0)->sun_path)
-
-// The most rights a send with a path brings: a ctl's descriptors but the
+// The most rights a send to a path brings: a ctl's descriptors but the
 // two of the path.
 enum { rightsMax = 29 };
 
-// The path of an AF_UNIX address, into out of PATH_ROOM + 1 bytes: 1; 0
-// of an address of another family or of none, the kernel's to judge; -1
-// and errno of one that is no path.
-static int unixPath(const struct sockaddr* a, socklen_t n, char* out) {
-    size_t before = offsetof(struct sockaddr_un, sun_path);
+// A socket's call (calls.h): its number, its arg, then the parts, with
+// the nfds descriptors; the answer's bytes into out of *room, *room
+// then their count, and its descriptor into got, each but for null;
+// flags are ctl's. 0, or -1 and errno, ENOTTY of what serves no such
+// call.
+static int call(int fd, uint32_t what, uint32_t arg, const struct iovec* parts, int count, const int* fds, size_t nfds, void* out, size_t* room, int* got, int flags) {
+    unsigned char small[8 + 280];
+    size_t size = 8;
 
-    if (!a || n < sizeof(sa_family_t) || a->sa_family != AF_UNIX) {
-        return 0;
+    for (int i = 0; i < count; i++) {
+        size += parts[i].iov_len;
     }
 
-    if (n <= before || n > sizeof(struct sockaddr_un)) {
-        errno = EINVAL;
-
-        return -1;
-    }
-
-    const char* path = ((const struct sockaddr_un*)a)->sun_path;
-    size_t k = strnlen(path, n - before);
-
-    if (k == 0) {
-        errno = ENOENT;
-
-        return -1;
-    }
-
-    memcpy(out, path, k);
-    out[k] = 0;
-
-    return 1;
-}
-
-// A socket's call with a path (calls.h), arg with it, then the path, and
-// for a send a 0 and the n bytes at data, the rights its descriptors
-// after the root and where the path starts; the answer's u32 into out
-// but for null. 0, or -1 and errno, ENOTTY of a socket that is not
-// rootfs's.
-static int pathCall(int fd, uint32_t call, uint32_t arg, const char* path, const void* data, size_t n, const int* rights, size_t nrights, uint32_t* out) {
-    unsigned char small[8 + PATH_ROOM + 1];
-    size_t k = strlen(path);
-    size_t size = 8 + k + (data ? 1 + n : 0);
     unsigned char* in = size <= sizeof small ? small : malloc(size);
-    int fds[2 + rightsMax] = {AT_FDROOT, path[0] == '/' ? AT_FDROOT : AT_FDCWD};
 
     if (!in) {
         return -1;
     }
 
-    memcpy(in, &call, 4);
+    memcpy(in, &what, 4);
     memcpy(in + 4, &arg, 4);
-    memcpy(in + 8, path, k);
 
-    if (data) {
-        in[8 + k] = 0;
-        memcpy(in + 8 + k + 1, data, n);
+    for (size_t i = 0, at = 8; i < (size_t)count; i++) {
+        memcpy(in + at, parts[i].iov_base, parts[i].iov_len);
+        at += parts[i].iov_len;
     }
 
-    memcpy(fds + 2, rights, nrights * sizeof(int));
-
-    struct ctl c = {in, size, fds, 2 + nrights, out, out ? sizeof *out : 0, NULL, 0};
-    int r = ctl(fd, &c, 0);
+    struct ctl c = {in, size, fds, nfds, out, room ? *room : 0, got, got != NULL};
+    int r = ctl(fd, &c, flags);
 
     if (in != small) {
         int saved = errno;
@@ -104,7 +69,60 @@ static int pathCall(int fd, uint32_t call, uint32_t arg, const char* path, const
         errno = saved;
     }
 
+    if (r != 0) {
+        return -1;
+    }
+
+    if (room) {
+        *room = c.room;
+    }
+
+    if (got && c.ngot != 1) {
+        errno = EIO;
+
+        return -1;
+    }
+
+    return 0;
+}
+
+// What a call of a socket's said, of what is no socket: ENOTSOCK.
+static int ofSocket(int r) {
+    if (r != 0 && errno == ENOTTY) {
+        errno = ENOTSOCK;
+    }
+
     return r;
+}
+
+// A call that takes an address: len u32 and the address, then the n
+// bytes at data. The root and the working directory are the first
+// descriptors of an AF_UNIX's, a path's, and the rights follow them.
+static int addressCall(int fd, uint32_t what, uint32_t arg, const struct sockaddr* a, socklen_t alen, const void* data, size_t n, const int* rights, size_t nrights, uint32_t* out) {
+    int fds[2 + rightsMax] = {AT_FDROOT, AT_FDCWD};
+    int named = a && alen >= sizeof(sa_family_t) && a->sa_family == AF_UNIX;
+    uint32_t length = alen;
+    struct iovec parts[3] = {{&length, 4}, {(void*)a, alen}, {(void*)data, n}};
+    size_t room = sizeof *out;
+
+    if (!a || alen > sizeof(struct sockaddr_storage)) {
+        errno = EINVAL;
+
+        return -1;
+    }
+
+    memcpy(fds + 2, rights, nrights * sizeof(int));
+
+    return call(fd, what, arg, parts, 3, named ? fds : fds + 2, (named ? 2 : 0) + nrights, out, out ? &room : NULL, NULL, 0);
+}
+
+// An address a call answered, size bytes of it, to who asked: as much
+// as *alen holds, *alen then its size.
+static void putAddress(const void* from, size_t size, struct sockaddr* a, socklen_t* alen) {
+    if (a && alen) {
+        memcpy(a, from, *alen < size ? *alen : size);
+        *alen = (socklen_t)size;
+    }
 }
 
 static void closeKeeping(int fd) {
@@ -167,41 +185,113 @@ int __kernel_socket(int domain, int type, int protocol) {
 }
 
 int __kernel_bind(int fd, const struct sockaddr* a, socklen_t n) {
-    char path[PATH_ROOM + 1];
-    int named = unixPath(a, n, path);
-
-    if (named < 0) {
-        return -1;
-    }
-
-    if (named) {
-        int r = pathCall(fd, ctlBind, 0777 & ~getumask(), path, NULL, 0, NULL, 0, NULL);
-
-        if (r == 0 || errno != ENOTTY) {
-            return r;
-        }
-    }
-
-    return __kernel_sockbind(fd, a, n);
+    return ofSocket(addressCall(fd, ctlBind, 0777 & ~getumask(), a, n, NULL, 0, NULL, 0, NULL));
 }
 
 int __kernel_connect(int fd, const struct sockaddr* a, socklen_t n) {
-    char path[PATH_ROOM + 1];
-    int named = unixPath(a, n, path);
+    return ofSocket(addressCall(fd, ctlConnect, 0, a, n, NULL, 0, NULL, 0, NULL));
+}
 
-    if (named < 0) {
+int __kernel_listen(int fd, int backlog) {
+    return ofSocket(call(fd, ctlListen, (uint32_t)backlog, NULL, 0, NULL, 0, NULL, NULL, NULL, 0));
+}
+
+int __kernel_accept4(int fd, struct sockaddr* a, socklen_t* alen, int flags) {
+    unsigned char peer[sizeof(struct sockaddr_storage)];
+    size_t room = sizeof peer;
+    int got = -1;
+
+    if (flags & ~(SOCK_NONBLOCK | SOCK_CLOEXEC)) {
+        errno = EINVAL;
+
         return -1;
     }
 
-    if (named) {
-        int r = pathCall(fd, ctlConnect, 0, path, NULL, 0, NULL, 0, NULL);
+    int how = CTL_RESTART | (flags & SOCK_CLOEXEC ? O_CLOEXEC : 0) | (flags & SOCK_NONBLOCK ? O_NONBLOCK : 0);
 
-        if (r == 0 || errno != ENOTTY) {
-            return r;
-        }
+    if (ofSocket(call(fd, ctlAccept, (uint32_t)flags, NULL, 0, NULL, 0, peer, &room, &got, how)) != 0) {
+        return -1;
     }
 
-    return __kernel_sockconnect(fd, a, n);
+    putAddress(peer, room < sizeof peer ? room : sizeof peer, a, alen);
+
+    return got;
+}
+
+int __kernel_accept(int fd, struct sockaddr* a, socklen_t* alen) {
+    return __kernel_accept4(fd, a, alen, 0);
+}
+
+static int nameOf(int fd, uint32_t peer, struct sockaddr* a, socklen_t* alen) {
+    unsigned char name[sizeof(struct sockaddr_storage)];
+    size_t room = sizeof name;
+
+    if (ofSocket(call(fd, ctlSockname, peer, NULL, 0, NULL, 0, name, &room, NULL, 0)) != 0) {
+        return -1;
+    }
+
+    putAddress(name, room < sizeof name ? room : sizeof name, a, alen);
+
+    return 0;
+}
+
+int __kernel_getsockname(int fd, struct sockaddr* a, socklen_t* alen) {
+    return nameOf(fd, 0, a, alen);
+}
+
+int __kernel_getpeername(int fd, struct sockaddr* a, socklen_t* alen) {
+    return nameOf(fd, 1, a, alen);
+}
+
+int __kernel_getsockopt(int fd, int level, int name, void* value, socklen_t* length) {
+    const uint32_t which[2] = {(uint32_t)level, (uint32_t)name};
+    const struct iovec part = {(void*)which, sizeof which};
+    unsigned char out[256];
+    size_t room = sizeof out;
+
+    if (ofSocket(call(fd, ctlGetsockopt, 0, &part, 1, NULL, 0, out, &room, NULL, 0)) != 0) {
+        return -1;
+    }
+
+    room = room < sizeof out ? room : sizeof out;
+    *length = *length < room ? *length : (socklen_t)room;
+    memcpy(value, out, *length);
+
+    return 0;
+}
+
+int __kernel_setsockopt(int fd, int level, int name, const void* value, socklen_t length) {
+    const uint32_t which[2] = {(uint32_t)level, (uint32_t)name};
+    const struct iovec parts[2] = {{(void*)which, sizeof which}, {(void*)value, length}};
+
+    return ofSocket(call(fd, ctlSetsockopt, 0, parts, 2, NULL, 0, NULL, NULL, NULL, 0));
+}
+
+int __kernel_shutdown(int fd, int how) {
+    return ofSocket(call(fd, ctlShutdown, (uint32_t)how, NULL, 0, NULL, 0, NULL, NULL, NULL, 0));
+}
+
+// A stream has no mark, as nothing is sent out of band; what is no
+// socket is ENOTTY, as POSIX has it of this one.
+int __kernel_sockatmark(int fd) {
+    int type = 0;
+    socklen_t length = sizeof type;
+
+    if (__kernel_getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &length) != 0) {
+        if (errno == ENOTSOCK) {
+            errno = ENOTTY;
+        }
+
+        return -1;
+    }
+
+    if (type != SOCK_STREAM) {
+        errno = EOPNOTSUPP;
+
+        return -1;
+    }
+
+    return 0;
 }
 
 // The rights of a message's control, SCM_RIGHTS's, into rights of
@@ -226,10 +316,10 @@ static int rightsOf(const struct msghdr* m, int* rights) {
     return count;
 }
 
-// A message to a path, a ctlSendto of the socket's, its bytes in one
-// piece: the count sent, -1 and errno, ENOTTY of a socket that is not
-// rootfs's.
-static ssize_t sendTo(int fd, const char* path, const struct msghdr* m, int flags) {
+// A message to an AF_UNIX address, a ctlSendto of the socket's, its
+// bytes in one piece: the count sent, -1 and errno, ENOTTY of a socket
+// that serves none.
+static ssize_t sendTo(int fd, const struct msghdr* m, int flags) {
     int rights[rightsMax];
     int nrights = rightsOf(m, rights);
     size_t n = 0;
@@ -254,7 +344,7 @@ static ssize_t sendTo(int fd, const char* path, const struct msghdr* m, int flag
         at += m->msg_iov[i].iov_len;
     }
 
-    int r = pathCall(fd, ctlSendto, (uint32_t)flags, path, data, n, rights, (size_t)nrights, &count);
+    int r = addressCall(fd, ctlSendto, (uint32_t)flags, m->msg_name, m->msg_namelen, data, n, rights, (size_t)nrights, &count);
     int saved = errno;
 
     free(data);
@@ -264,15 +354,10 @@ static ssize_t sendTo(int fd, const char* path, const struct msghdr* m, int flag
 }
 
 static ssize_t sendOf(int fd, const struct msghdr* m, int flags) {
-    char path[PATH_ROOM + 1];
-    int named = unixPath(m->msg_name, m->msg_namelen, path);
+    const struct sockaddr* to = m->msg_name;
 
-    if (named < 0) {
-        return -1;
-    }
-
-    if (named) {
-        ssize_t r = sendTo(fd, path, m, flags);
+    if (to && m->msg_namelen >= sizeof(sa_family_t) && to->sa_family == AF_UNIX) {
+        ssize_t r = sendTo(fd, m, flags);
 
         if (r >= 0 || errno != ENOTTY) {
             return r;

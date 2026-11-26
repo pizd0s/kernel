@@ -176,36 +176,8 @@ func (a *Answer) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, er
 	return a.put(data[:got], nil)
 }
 
-func (a *Answer) bind(p *Process, addr Address) error {
-	return EINVAL
-}
-
-func (a *Answer) connect(p *Process, addr Address) error {
-	return EISCONN
-}
-
-func (a *Answer) listen(backlog int) error {
-	return EOPNOTSUPP
-}
-
-func (a *Answer) accept(p *Process, flags uint32) (*Description, []byte, error) {
-	return nil, nil, EOPNOTSUPP
-}
-
 func (a *Answer) socketKind() int {
 	return SOCK_SEQPACKET
-}
-
-func (a *Answer) shutdown(how int) error {
-	return nil
-}
-
-func (a *Answer) getsockopt(p *Process, level, name uint32) ([]byte, error) {
-	return nil, ENOPROTOOPT
-}
-
-func (a *Answer) setsockopt(level, name uint32, value []byte) error {
-	return ENOPROTOOPT
 }
 
 func (a *Answer) send(p *Process, r *SockSend) error {
@@ -239,34 +211,10 @@ func (a *Answer) consume(sink func(pk *Packet)) {
 
 func (a *Answer) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
-	case *SockBind:
-		return false, a.bind(p, r.addr)
-	case *SockConnect:
-		return false, a.connect(p, r.addr)
-	case *SockListen:
-		return false, a.listen(r.backlog)
-	case *SockAccept:
-		var err error
-
-		r.conn, r.peer, err = a.accept(p, r.flags)
-
-		return false, err
 	case *SockSend:
 		return false, a.send(p, r)
 	case *SockRecv:
 		return false, a.recv(p, r)
-	case *SockName:
-		return false, EOPNOTSUPP
-	case *SockGetopt:
-		var err error
-
-		r.value, err = a.getsockopt(p, r.level, r.name)
-
-		return false, err
-	case *SockSetopt:
-		return false, a.setsockopt(r.level, r.name, r.value)
-	case *SockShutdown:
-		return false, a.shutdown(r.how)
 	case *SockType:
 		r.kind = a.socketKind()
 

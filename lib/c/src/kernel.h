@@ -52,14 +52,11 @@ int __kernel_fdioctl(int fd, unsigned long request, void* arg) __KERNEL(__kernel
 // them (vfs.c, sockets.c, exec.c): the kernel knows no path. __kernel_exec
 // runs the program of a descriptor, path the name it was asked by and
 // program its path from the root, __kernel_program's, "" for none; a
-// file of "#!" is ENOEXEC. __kernel_sockbind, __kernel_sockconnect and
-// __kernel_socksendmsg are bind, connect and sendmsg as the socket's
-// server, or an end of a pair, takes them, with no path walked.
+// file of "#!" is ENOEXEC. __kernel_socksendmsg is sendmsg as the
+// socket's server, or an end of a pair, takes it, with no path walked.
 struct sockaddr;
 struct msghdr;
 int __kernel_exec(int fd, const char* path, const char* program, char* const argv[], char* const envp[]) __KERNEL(__kernel_exec);
-int __kernel_sockbind(int fd, const struct sockaddr* addr, unsigned size) __KERNEL(__kernel_sockbind);
-int __kernel_sockconnect(int fd, const struct sockaddr* addr, unsigned size) __KERNEL(__kernel_sockconnect);
 long __kernel_socksendmsg(int fd, const struct msghdr* msg, int flags) __KERNEL(__kernel_socksendmsg);
 
 // __kernel_name is the name the program was started by, the last component

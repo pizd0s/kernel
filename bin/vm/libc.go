@@ -924,34 +924,6 @@ func libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 	return proc().libcSocketpair(domain, kind, protocol, at)
 }
 
-func libcListen(fd, backlog uint32) uint32 {
-	return proc().libcListen(fd, backlog)
-}
-
-func libcAccept(fd, addr, lenAt uint32) uint32 {
-	return proc().libcAccept(fd, addr, lenAt)
-}
-
-func libcAccept4(fd, addr, lenAt, flags uint32) uint32 {
-	return proc().libcAccept4(fd, addr, lenAt, flags)
-}
-
-func libcGetsockname(fd, addr, lenAt uint32) uint32 {
-	return proc().libcGetsockname(fd, addr, lenAt)
-}
-
-func libcGetpeername(fd, addr, lenAt uint32) uint32 {
-	return proc().libcGetpeername(fd, addr, lenAt)
-}
-
-func libcGetsockopt(fd, level, name, at, lenAt uint32) uint32 {
-	return proc().libcGetsockopt(fd, level, name, at, lenAt)
-}
-
-func libcSetsockopt(fd, level, name, at, n uint32) uint32 {
-	return proc().libcSetsockopt(fd, level, name, at, n)
-}
-
 func libcSend(fd, buf, n, flags uint32) uint32 {
 	return proc().libcSend(fd, buf, n, flags)
 }
@@ -978,14 +950,6 @@ func libcRecvmmsg(fd, vec, vecSize, iovSize, vlen, flags, timeout, timeoutSize u
 	p.sized("recvmmsg", vecSize, sizeofMmsghdr, iovSize, sizeofIovec, timeoutSize, sizeofTimespec)
 
 	return p.libcRecvmmsg(fd, vec, vlen, flags, timeout)
-}
-
-func libcShutdown(fd, how uint32) uint32 {
-	return proc().libcShutdown(fd, how)
-}
-
-func libcSockatmark(fd uint32) uint32 {
-	return proc().libcSockatmark(fd)
 }
 
 func libcEpoll_create(size uint32) uint32 {
@@ -2280,14 +2244,6 @@ func libcGetrandom(buf, n, flags uint32) uint32 {
 
 func libcPosix_madvise(addr, n, advice uint32) uint32 {
 	return proc().libcPosix_madvise(addr, n, advice)
-}
-
-func libc__kernel_sockbind(fd, addr, n uint32) uint32 {
-	return proc().libc__kernel_sockbind(fd, addr, n)
-}
-
-func libc__kernel_sockconnect(fd, addr, n uint32) uint32 {
-	return proc().libc__kernel_sockconnect(fd, addr, n)
 }
 
 func libc__kernel_exec(fd, path, program, argv, envp uint32) uint32 {

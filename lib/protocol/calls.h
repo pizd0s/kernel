@@ -26,14 +26,19 @@ enum {
     ctlWatchDirectory,
     ctlWatchAdd,
     ctlWatchRemove,
-    // A socket's: ctlSocket of a handle, rootfs's, or of an open of
-    // sockmgr's socket; of a socket of rootfs's, AF_UNIX's, the others,
-    // whose address is a path: the root and where the path starts are
-    // their first descriptors (protocol.h).
+    // A socket's (protocol.h): ctlSocket of a handle, rootfs's, or of an
+    // open of sockmgr's socket; the others of a socket, which its server
+    // answers, and of an end of a pair, which the kernel does.
     ctlSocket = 48,
     ctlBind,
     ctlConnect,
     ctlSendto,
+    ctlListen,
+    ctlAccept,
+    ctlSockname,
+    ctlGetsockopt,
+    ctlSetsockopt,
+    ctlShutdown,
     // mqueue's: of an open of ipc/mq, ctlMqOpen and ctlMqUnlink; of a
     // queue, the others.
     ctlMqOpen = 64,

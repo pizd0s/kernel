@@ -277,77 +277,79 @@
 //                                         (TIOCNOTTY), SIGHUP and SIGCONT. It
 //                                         controls no session then
 //
-//   A socket's, on a socket's open file, as a service of sockets serves
-//   it; a sockaddr is lib/c's struct sockaddr, len bytes of it, and a
-//   socket's call on what is no socket is ENOTSOCK. socket(2) of a family
-//   of the network's opens sockmgr's socket (bin/tools/sockmgr), a socket
-//   on no stack yet, and tells it what it is, a CTL, ctlSocket, type u32,
-//   domain u32, protocol u32; its BIND, CONNECT, or SEND to an address,
-//   sockmgr hands on to the stack it chooses for it, the socket with it:
-//   sockmgr's end of the socket's channel, which the stack serves from
-//   then on, the call first. The open file is the same to the kernel. A
-//   packet is at most 65536 bytes: of a stream's send of more, the kernel
-//   sends what fits, the send's count, and a datagram that does not fit
-//   is EMSGSIZE.
-//     BIND                  len u32, sockaddr
-//     CONNECT               len u32, sockaddr   EINPROGRESS of a socket that
-//                                         does not wait
-//     LISTEN    arg backlog
-//     ACCEPT    arg flags                 OK, its arg 1, opened, the
+//   A socket's. A socket is an open file of its server's, rootfs's of
+//   AF_UNIX, sockmgr's and then a stack's of the network's families, and
+//   an end of a pair is a socket with no server, the kernel's. What a
+//   socket is asked but its bytes are CTLs (calls.h), a call's number,
+//   its arg, then what it takes, which lib/c makes (lib/libc/sockets.c):
+//   the socket's server answers them, the kernel those of an end of a
+//   pair, and what is no socket serves none, ENOTTY, which lib/c says as
+//   ENOTSOCK. A sockaddr is lib/c's struct sockaddr, len u32 before it.
+//     ctlSocket    type    domain u32, protocol u32   of a handle of
+//                                         rootfs's, a socket of AF_UNIX,
+//                                         OK opened; of an open of
+//                                         sockmgr's socket, what it is.
+//                                         SOCK_NONBLOCK of type is the
+//                                         socket's O_NONBLOCK
+//     ctlBind      mode    len u32, sockaddr
+//     ctlConnect           len u32, sockaddr EINPROGRESS of a socket of
+//                                         the network's that does not wait
+//     ctlListen    backlog
+//     ctlAccept    flags                     OK, its arg 1, opened, the
 //                                         peer's sockaddr, fds[0] the
 //                                         connection's open file; or, its
 //                                         arg 0, the peer's sockaddr,
 //                                         fds[0] the connection as it is,
 //                                         a file of the kernel's
+//     ctlSockname  peer                      OK sockaddr: the socket's, with
+//                                         peer its peer's
+//     ctlGetsockopt        level u32, name u32   OK value
+//     ctlSetsockopt        level u32, name u32, value
+//     ctlShutdown  how
+//     ctlSendto    flags   len u32, sockaddr, data   a datagram to an
+//                                         address of AF_UNIX. OK count u32
+//   An end of a pair is bound and connected: its ctlBind, ctlListen and
+//   ctlAccept are EINVAL, its ctlConnect EISCONN, and its options and
+//   its shutdown the kernel does.
+//
+//   A socket's bytes are the kernel's calls on its open file. A packet
+//   is at most 65536 bytes: of a stream's send of more, the kernel sends
+//   what fits, the send's count, and a datagram that does not fit is
+//   EMSGSIZE. They are ENOTSOCK of what is no socket.
 //     SEND      arg flags   len u32, sockaddr, data   to the sockaddr, none
 //                                         for a connected socket; fds the
 //                                         rights. OK count u32
 //     RECV      arg flags   want u32      OK flags u32, len u32, sockaddr,
 //                                         data: the sender's and at most
 //                                         want bytes; fds the rights
-//     SOCKNAME  arg peer                  OK sockaddr: the socket's, with
-//                                         peer its peer's
-//     GETSOCKOPT            level u32, name u32   OK value
-//     SETSOCKOPT            level u32, name u32, value
-//     SHUTDOWN  arg how
 //     SOCKTYPE                            OK type u32
 //
-//   A socket of AF_UNIX is rootfs's, an open file of its own: socket(2)
-//   is a CTL of the root, and an address is a path, so bind, connect and
-//   a send to an address are CTLs of the socket, the root of who asks
-//   and where the path starts their first descriptors, a send's rights
-//   after them:
-//     ctlSocket    type    domain u32, protocol u32   OK opened: the
-//                                         socket, SOCK_NONBLOCK of type
-//                                         its O_NONBLOCK
-//     ctlBind      mode    path              the path's node made, a
-//                                         socket's of the mode; a socket's
-//                                         node nobody is bound to is taken
-//                                         as it is, and another is
-//                                         EADDRINUSE
-//     ctlConnect           path              the socket bound to the path's
-//                                         node is a datagram socket's
-//                                         peer from then on. A stream's
-//                                         or a seqpacket's answer is MOVE:
-//                                         fds[0], an end of a pair, is the
-//                                         socket from then on, and the
-//                                         other end waits for the
-//                                         listener's ACCEPT. With nobody
-//                                         listening, or a queue of more
-//                                         than the backlog and a half,
-//                                         ECONNREFUSED: a connect waits
-//                                         for nothing
-//     ctlSendto    flags   path 0 data       a datagram to the socket bound
-//                                         to the path's node. OK count
-//                                         u32; ENOBUFS of a socket with
-//                                         no room for it
-//   A connection is a pair of the kernel's, which no server serves: a
-//   connected socket and an accepted one are its ends. A socket that
-//   listens and a datagram socket are rootfs's for good: a datagram
-//   waits there for its RECV, which gives its sender's sockaddr, none of
-//   a sender bound to nothing. The names of AF_UNIX are nobody's to ask:
-//   SOCKNAME is EOPNOTSUPP, of a pair's end too. A stream that is
-//   connected to nothing reads, writes and shuts down ENOTCONN.
+//   A socket of AF_UNIX is rootfs's. Its address is a path of the VFS's:
+//   a call with one brings the root of who asks and where the path
+//   starts, its first descriptors, a send's rights after them. ctlBind
+//   makes the path's node, a socket's of the mode; a socket's node
+//   nobody is bound to is taken as it is, and another is EADDRINUSE. A
+//   path of no name, or one that starts with a 0, is ENOENT. ctlConnect
+//   finds the socket bound to the path's node: a datagram socket's peer
+//   from then on, and of a stream's or a seqpacket's the answer is MOVE,
+//   fds[0], an end of a pair, the socket from then on, the other end
+//   waiting for the listener's ctlAccept. With nobody listening, or a
+//   queue of more than the backlog and a half, ECONNREFUSED: a connect
+//   waits for nothing. A connection is a pair of the kernel's, which no
+//   server serves: a connected socket and an accepted one are its ends. A
+//   socket that listens and a datagram socket are rootfs's for good: a
+//   datagram waits there for its RECV, which gives its sender's sockaddr,
+//   none of a sender bound to nothing, and a send to a socket with no
+//   room is ENOBUFS. The names of AF_UNIX are nobody's to ask:
+//   ctlSockname is EOPNOTSUPP, of a pair's end too. A stream connected to
+//   nothing reads, writes and shuts down ENOTCONN.
+//
+//   socket(2) of a family of the network's opens sockmgr's socket
+//   (bin/tools/sockmgr), a socket on no stack yet; its ctlBind,
+//   ctlConnect, or SEND to an address, sockmgr hands on to the stack it
+//   chooses for it, the socket with it: sockmgr's end of the socket's
+//   channel, which the stack serves from then on, the call first. The
+//   open file is the same to the kernel.
 //
 //   A card's stack's and sockmgr's, on sockmgr's connection to the
 //   stack's socket, net/<card>/iface/stack, a request on it answered
@@ -363,14 +365,15 @@
 //                           value)*, the call's body   sockmgr's: a socket
 //                           on no stack, of what sockmgr kept of it, its
 //                           local address bound first when there is one,
-//                           then op: BIND, CONNECT or SEND, answered where
+//                           then op: ctlBind, ctlConnect or SEND, answered where
 //                           the call is, the last of the descriptors, and
 //                           before it the socket's open file, sockmgr's
 //                           end of its channel, the stack's to serve from
-//                           then on, a send's rights before that; LISTEN,
+//                           then on, a send's rights before that; ctlListen,
 //                           its arg the backlog, answered OK opened, fds[0]
 //                           the listener's open file, sockmgr's, on which
-//                           READY tells of connections and ACCEPT takes one
+//                           READY tells of connections and ctlAccept takes
+//                           one
 //
 //   A device's service's, on the channel devfs has of it, and on
 //   /dev/init/ctl:
@@ -589,16 +592,8 @@ enum : uint32_t {
     opBackground,
     opMove,
     // A socket's.
-    opBind = 144,
-    opConnect,
-    opListen,
-    opAccept,
-    opSend,
+    opSend = 144,
     opRecv,
-    opSockname,
-    opGetsockopt,
-    opSetsockopt,
-    opShutdown,
     opSocktype,
     // A stack's and sockmgr's.
     opStack = 160,

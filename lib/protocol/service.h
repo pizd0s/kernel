@@ -1,5 +1,6 @@
 #pragma once
 
+#include <lib/protocol/calls.h>
 #include <lib/protocol/protocol.h>
 
 // What the servers of the system share, the services of bin/tools and
@@ -128,6 +129,10 @@ Endpoint* answerOpen(int epoll, const Request& r, Opened what, void* of);
 Endpoint* keep(int epoll, Request& r, void* of);
 void unkeep(int epoll, Endpoint* e);
 
+// A CTL that is a socket's call (calls.h, ctlBind to ctlShutdown) made
+// the call itself: its op the call's number, its arg the call's, its
+// body what follows the two. False of another request, which it leaves.
+bool asSocketCall(Request& r);
 // handle answers a request; gone hears of an endpoint whose other end
 // closed.
 using Handle = void (*)(Endpoint& e, Request& r);

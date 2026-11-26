@@ -99,6 +99,16 @@ func (d *Description) setStatus(fl int) {
 	}
 }
 
+func (d *Description) addStatus(fl int) {
+	for {
+		was := d.flags.Load()
+
+		if d.flags.CompareAndSwap(was, was|int32(fl&statusFlags)) {
+			return
+		}
+	}
+}
+
 func (d *Description) mode() IoMode {
 	return IoMode{nonblock: d.nonblock()}
 }
