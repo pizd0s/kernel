@@ -6359,40 +6359,7 @@ func (p *Process) putAddress(addr []byte, at, lenAt uint32) {
 	p.put32(lenAt, uint32(len(addr)))
 }
 
-func (p *Process) socket(domain, kind, protocol uint32) uint32 {
-	if domain == AF_INET || domain == AF_INET6 {
-		return p.result(0, EAFNOSUPPORT)
-	}
-
-	if domain != AF_UNIX {
-		return p.result(0, EAFNOSUPPORT)
-	}
-
-	if kind&^(sockTypeMask|SOCK_NONBLOCK|SOCK_CLOEXEC) != 0 {
-		return p.result(0, EINVAL)
-	}
-
-	if protocol != 0 {
-		return p.result(0, EPROTONOSUPPORT)
-	}
-
-	nonblock, cloexec := kind&SOCK_NONBLOCK != 0, kind&SOCK_CLOEXEC != 0
-
-	switch kind & sockTypeMask {
-	case SOCK_STREAM, SOCK_SEQPACKET:
-		return p.result(p.installDesc(opened(newUnixSocket(int(kind&sockTypeMask)), rdwr(nonblock)), 0, cloexec))
-	case SOCK_DGRAM, SOCK_RAW:
-		return p.result(p.installDesc(opened(newUnixDgram(), rdwr(nonblock)), 0, cloexec))
-	}
-
-	return p.result(0, ESOCKTNOSUPPORT)
-}
-
 func (p *Process) libc__kernel_socketon(fd, domain, kind, protocol uint32) uint32 {
-	if int32(fd) < 0 {
-		return p.socket(domain, kind, protocol)
-	}
-
 	if kind&^(sockTypeMask|SOCK_NONBLOCK|SOCK_CLOEXEC) != 0 {
 		return p.result(0, EINVAL)
 	}
@@ -6459,43 +6426,21 @@ func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) nodeAddress(node int32, at, n uint32) (Address, error) {
-	a := p.socketAddress(at, n)
-
-	if node >= 0 {
-		var err error
-
-		if a.node, err = p.description(uint32(node)); err != nil {
-			return a, err
-		}
-	}
-
-	return a, nil
-}
-
-func (p *Process) libc__kernel_bindat(fd, node, addr, n uint32) uint32 {
-	s, err := p.description(fd)
+func (p *Process) libc__kernel_sockbind(fd, addr, n uint32) uint32 {
+	d, err := p.description(fd)
 
 	if err == nil {
-		var a Address
-
-		if a, err = p.nodeAddress(int32(node), addr, n); err == nil {
-			err = p.request(s, &SockBind{addr: a})
-		}
+		err = p.request(d, &SockBind{addr: p.socketAddress(addr, n)})
 	}
 
 	return p.result(0, err)
 }
 
-func (p *Process) libc__kernel_connectat(fd, node, addr, n uint32) uint32 {
+func (p *Process) libc__kernel_sockconnect(fd, addr, n uint32) uint32 {
 	d, err := p.description(fd)
 
 	if err == nil {
-		var a Address
-
-		if a, err = p.nodeAddress(int32(node), addr, n); err == nil {
-			err = p.request(d, &SockConnect{addr: a, nonblock: d.nonblock()})
-		}
+		err = p.fileCall(d, &SockConnect{addr: p.socketAddress(addr, n), nonblock: d.nonblock()}, p.group())
 	}
 
 	return p.result(0, err)
@@ -6596,11 +6541,11 @@ func (p *Process) libcRecvfrom(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 	return p.socketRecv(fd, buf, n, flags, addr, lenAt)
 }
 
-func (p *Process) libc__kernel_sendmsgat(fd, node, msg, flags uint32) uint32 {
-	return p.result(p.sendmsg(fd, int32(node), msg, flags))
+func (p *Process) libc__kernel_socksendmsg(fd, msg, flags uint32) uint32 {
+	return p.result(p.sendmsg(fd, msg, flags))
 }
 
-func (p *Process) sendmsg(fd uint32, node int32, msg, flags uint32) (int, error) {
+func (p *Process) sendmsg(fd, msg, flags uint32) (int, error) {
 	d, err := p.description(fd)
 
 	if err != nil {
@@ -6611,15 +6556,8 @@ func (p *Process) sendmsg(fd uint32, node int32, msg, flags uint32) (int, error)
 
 	h := p.span(msg, sizeofMsghdr)
 	to := p.destination(binary.LittleEndian.Uint32(h), binary.LittleEndian.Uint32(h[4:]))
-
-	if node >= 0 {
-		if to.node, err = p.description(uint32(node)); err != nil {
-			return 0, err
-		}
-	}
-
 	pk := p.packet()
-	files, cred, err := p.rights(pk.files[:0], binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
+	files, err := p.rights(pk.files[:0], binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
 
 	if err != nil {
 		return 0, err
@@ -6636,7 +6574,7 @@ func (p *Process) sendmsg(fd uint32, node int32, msg, flags uint32) (int, error)
 		return 0, err
 	}
 
-	pk.data, pk.files, pk.cred = data, files, cred
+	pk.data, pk.files = data, files
 
 	return p.sockSend(d, pk, to, sendMode(flags))
 }
@@ -6707,11 +6645,11 @@ func (p *Process) recvmsg(fd, msg, flags uint32) (int, error) {
 
 	r.into, r.want, r.flags = Into{p: p, at: iov, n: count, vector: true}, totalLength(spans), flags
 
-	if err := p.request(d, r); err != nil {
+	if err := p.fileCall(d, r, p.group()); err != nil {
 		return 0, err
 	}
 
-	written, cut := p.putControl(r.files, r.cred, control, room, flags&MSG_CMSG_CLOEXEC != 0)
+	written, cut := p.putRights(r.files, control, room, flags&MSG_CMSG_CLOEXEC != 0)
 
 	if name != 0 {
 		copy(p.span(name, min(nameRoom, uint32(len(r.addr)))), r.addr)
@@ -6890,7 +6828,7 @@ func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 	defer p.recvs.put(r)
 
 	r.into, r.want, r.flags = Into{p: p, at: buf, n: n}, int(n), flags|d.dontwait()
-	err = p.request(d, r)
+	err = p.fileCall(d, r, p.group())
 
 	dropFiles(r.files)
 
@@ -6903,40 +6841,9 @@ func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
 	return p.result(r.n, err)
 }
 
-func (p *Process) putControl(files []*Description, cred *Ucred, control, room uint32, cloexec bool) (uint32, uint32) {
-	written, cut := p.putRights(files, control, room, cloexec)
-
-	if cred == nil {
-		return written, cut
-	}
-
-	size := sizeofCmsghdr + uint32(sizeofUcred)
-
-	if room-written < size {
-		return written, cut | MSG_CTRUNC
-	}
-
-	out := p.span(control+written, size)
-
-	binary.LittleEndian.PutUint32(out, size)
-	binary.LittleEndian.PutUint32(out[4:], SOL_SOCKET)
-	binary.LittleEndian.PutUint32(out[8:], SCM_CREDENTIALS)
-	binary.LittleEndian.PutUint32(out[12:], cred.pid)
-	binary.LittleEndian.PutUint32(out[16:], cred.uid)
-	binary.LittleEndian.PutUint32(out[20:], cred.gid)
-
-	return written + min(guestAlign(size), room-written), cut
-}
-
-func (p *Process) ucred() *Ucred {
-	return &Ucred{uint32(p.pid), p.cred.uid(), p.cred.gid()}
-}
-
-func (p *Process) rights(files []*Description, at, n uint32) ([]*Description, *Ucred, error) {
-	var cred *Ucred
-
+func (p *Process) rights(files []*Description, at, n uint32) ([]*Description, error) {
 	if n < sizeofCmsghdr {
-		return files, nil, nil
+		return files, nil
 	}
 
 	control := p.span(at, n)
@@ -6945,7 +6852,7 @@ func (p *Process) rights(files []*Description, at, n uint32) ([]*Description, *U
 		length := binary.LittleEndian.Uint32(control[off:])
 
 		if length < sizeofCmsghdr || off+length > n {
-			return nil, nil, EINVAL
+			return nil, EINVAL
 		}
 
 		level, kind := binary.LittleEndian.Uint32(control[off+4:]), binary.LittleEndian.Uint32(control[off+8:])
@@ -6957,27 +6864,19 @@ func (p *Process) rights(files []*Description, at, n uint32) ([]*Description, *U
 				f, err := p.description(binary.LittleEndian.Uint32(data[i:]))
 
 				if err != nil {
-					return nil, nil, err
+					return nil, err
 				}
 
 				files = append(files, f)
 			}
-		case level == SOL_SOCKET && kind == SCM_CREDENTIALS && len(data) == sizeofUcred:
-			c := Ucred{binary.LittleEndian.Uint32(data), binary.LittleEndian.Uint32(data[4:]), binary.LittleEndian.Uint32(data[8:])}
-
-			if !p.cred.privileged() && (c.pid != uint32(p.pid) || !slices.Contains(p.cred.uids[:], c.uid) || !slices.Contains(p.cred.gids[:], c.gid)) {
-				return nil, nil, EPERM
-			}
-
-			cred = &c
 		default:
-			return nil, nil, EINVAL
+			return nil, EINVAL
 		}
 
 		off += guestAlign(length)
 	}
 
-	return files, cred, nil
+	return files, nil
 }
 
 func (p *Process) putRights(files []*Description, at, room uint32, cloexec bool) (uint32, uint32) {
@@ -7032,118 +6931,6 @@ func (p *Process) putRights(files []*Description, at, room uint32, cloexec bool)
 	return min(guestAlign(size), room), flags
 }
 
-func (p *Process) unixSocketPath(at, n uint32) (string, error) {
-	if n <= 2 || n > sizeofSockaddrStorage || p.u16(at) != AF_UNIX {
-		return "", EINVAL
-	}
-
-	path := p.span(at+2, n-2)
-
-	if path[0] == 0 {
-		return "", EOPNOTSUPP
-	}
-
-	if i := bytes.IndexByte(path, 0); i >= 0 {
-		path = path[:i]
-	}
-
-	if len(path) == 0 || len(path) >= sunPathMax {
-		return "", EINVAL
-	}
-
-	return string(path), nil
-}
-
-func (p *Process) bindName(a Address, held Object) (*SocketName, error) {
-	if a.node == nil {
-		return nil, EINVAL
-	}
-
-	var st Stat
-
-	if err := statFile(p, a.node, &st); err != nil {
-		return nil, err
-	}
-
-	if st.Mode&S_IFMT != S_IFSOCK {
-		return nil, EADDRINUSE
-	}
-
-	key := FileKey{st.Dev, st.Ino}
-
-	p.k.mu.Lock()
-
-	defer p.k.mu.Unlock()
-
-	if p.k.sockets[key] != nil {
-		return nil, EADDRINUSE
-	}
-
-	p.k.sockets[key] = held
-
-	return &SocketName{k: p.k, key: key}, nil
-}
-
-func (p *Process) boundAt(node *Description) (Object, error) {
-	var st Stat
-
-	if node == nil {
-		return nil, EINVAL
-	}
-
-	if err := statFile(p, node, &st); err != nil {
-		return nil, err
-	}
-
-	if st.Mode&S_IFMT != S_IFSOCK {
-		return nil, ECONNREFUSED
-	}
-
-	if !p.permits(&st, 2) {
-		return nil, EACCES
-	}
-
-	p.k.mu.Lock()
-
-	held := p.k.sockets[FileKey{st.Dev, st.Ino}]
-
-	p.k.mu.Unlock()
-
-	if held == nil {
-		return nil, ECONNREFUSED
-	}
-
-	return held, nil
-}
-
-func (p *Process) connectUnix(node *Description, kind int, nonblock bool, to *atomic.Int64) (*PairEnd, error) {
-	f, err := p.boundAt(node)
-
-	if err != nil {
-		return nil, err
-	}
-
-	r := SockKnock{kind: kind, nonblock: nonblock, timeout: to}
-
-	err = p.requestOn(f, &r)
-
-	return r.conn, err
-}
-
-func (p *Process) mouthOf(node *Description) (Object, error) {
-	f, err := p.boundAt(node)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if kind := (SockType{}); p.requestOn(f, &kind) != nil || kind.kind != SOCK_DGRAM {
-		return nil, EPROTOTYPE
-	}
-
-	return f, nil
-}
-
 func (p *Process) destination(addr, alen uint32) Address {
 	if addr == 0 {
 		return Address{}
@@ -7153,8 +6940,7 @@ func (p *Process) destination(addr, alen uint32) Address {
 }
 
 func (p *Process) socketAddress(at, n uint32) Address {
-	path, err := p.unixSocketPath(at, n)
-	a := Address{given: true, path: path, err: err}
+	a := Address{given: true}
 
 	if n <= sizeofSockaddrStorage {
 		a.raw = slices.Clone(p.span(at, n))
@@ -8795,7 +8581,7 @@ func (p *Process) sockSend(d *Description, pk *Packet, to Address, mode IoMode) 
 
 	r.pk, r.to, r.mode = pk, to, mode
 
-	err := p.request(d, r)
+	err := p.fileCall(d, r, p.group())
 	n := r.n
 
 	p.sends.put(r)
@@ -8805,7 +8591,7 @@ func (p *Process) sockSend(d *Description, pk *Packet, to Address, mode IoMode) 
 
 func (p *Process) sockAccept(d *Description, flags uint32) (*Description, []byte, error) {
 	r := SockAccept{flags: flags, nonblock: d.nonblock()}
-	err := p.request(d, &r)
+	err := p.fileCall(d, &r, p.group())
 
 	return r.conn, r.peer, err
 }

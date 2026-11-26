@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""AF_UNIX's SOCK_SEQPACKET sockets of the system are the kernel's, bound to
-paths of the VFS's (bin/vm/unix_socket.go): bind makes a socket node of
-the path in its file system, MKNOD's, and the kernel keeps the listener
-by the node's dev and ino; connect walks the path to the node, and the
-kernel queues a connection, which accept takes. A name bound to is
-EADDRINUSE, a socket that does not listen or is closed refuses, a name
+"""AF_UNIX's SOCK_SEQPACKET sockets of the system are the VFS's, rootfs's,
+bound to paths (bin/rootfs, the sockets): bind makes a socket node of
+the path in its file system, MKNOD's, and rootfs keeps the listener by
+the node; connect walks the path to the node, and rootfs queues a
+connection, a pair of the kernel's, which accept takes. A name bound to
+is EADDRINUSE, a socket that does not listen or is closed refuses, a name
 unlinked is gone, what is no socket refuses, and the read-only image
 holds none. The sockets are a program the test brings
 (tst/unix_sockets.cpp), which runs in /run and in /dev: there, as every
@@ -40,7 +40,6 @@ connect before listen Connection refused
 listen ok
 accept ok, 10 bytes: a message
 child: connect ok, back back
-name {path}
 connect after close Connection refused
 unlink ok
 connect after unlink No such file or directory
@@ -48,10 +47,10 @@ connect to a file Connection refused
 bind in the image Read-only file system
 """
 
-DEV = RUN.replace("{path}", "/dev/s").replace("unlink ok", "unlink Read-only file system").replace(
+DEV = RUN.replace("unlink ok", "unlink Read-only file system").replace(
     "connect after unlink No such file or directory", "connect after unlink Connection refused")
 
-WANT = (RUN.replace("{path}", "/run/s") + "0\n" + DEV + "bind of no name in /dev Read-only file system\n" +
+WANT = (RUN + "0\n" + DEV + "bind of no name in /dev Read-only file system\n" +
         "ls: /dev/s: No such file or directory\n")
 
 
@@ -62,7 +61,7 @@ def main():
         env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
         result = system.shell(vm, rootfs, script + "exit 3\n", cwd=empty, env=env, timeout=180)
         assert (result.returncode, result.stdout.decode(), result.stderr.decode()) == (3, WANT, ""), result
-    print("unix sockets: the system's are the kernel's, bound to socket nodes of the VFS's, in /run and registered ones of /dev, "
+    print("unix sockets: the system's are rootfs's, bound to socket nodes of the VFS's, in /run and registered ones of /dev, "
           "connected to and accepted through them")
 
 

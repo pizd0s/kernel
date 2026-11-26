@@ -184,7 +184,7 @@ func (e *PairEnd) poll(d *Description, events int16, through []*Epoll) int16 {
 }
 
 func (e *PairEnd) send(p *Process, r *SockSend) error {
-	if r.to.given {
+	if r.to.given && e.shared.kind == SOCK_DGRAM {
 		return EISCONN
 	}
 
@@ -206,10 +206,6 @@ func (e *PairEnd) send(p *Process, r *SockSend) error {
 }
 
 func (e *PairEnd) deliver(p *Process, pk *Packet, mode IoMode) error {
-	if pk.cred == nil && !mode.kernel && p != nil && e.peer.options.passcred.Load() {
-		pk.cred = p.ucred()
-	}
-
 	holdFiles(pk.files)
 
 	end, how := time.Time{}, waitsOn
@@ -234,12 +230,12 @@ func (e *PairEnd) deliver(p *Process, pk *Packet, mode IoMode) error {
 }
 
 func (e *PairEnd) sendStream(p *Process, r *SockSend) error {
-	data, files, cred := r.pk.data, r.pk.files, r.pk.cred
+	data, files := r.pk.data, r.pk.files
 
 	for r.n < len(data) {
 		c := min(len(data)-r.n, packetMax)
 
-		if err := e.deliver(p, &Packet{data: data[r.n : r.n+c : r.n+c], files: files, cred: cred}, r.mode); err != nil {
+		if err := e.deliver(p, &Packet{data: data[r.n : r.n+c : r.n+c], files: files}, r.mode); err != nil {
 			if err == EPIPE && !r.mode.quiet {
 				p.sendSelf(SIGPIPE)
 			}
@@ -252,7 +248,7 @@ func (e *PairEnd) sendStream(p *Process, r *SockSend) error {
 		}
 
 		r.n += c
-		files, cred = nil, nil
+		files = nil
 	}
 
 	return nil
@@ -374,14 +370,6 @@ func (e *PairEnd) awaitInput(p *Process) (timedOut bool, err error) {
 	return timedOut, err
 }
 
-func (e *PairEnd) received(r *SockRecv, files []*Description, cred *Ucred) {
-	r.files = files
-
-	if e.options.passcred.Load() {
-		r.cred = cred
-	}
-}
-
 func (e *PairEnd) recv(p *Process, r *SockRecv) error {
 	if e.shared.kind == SOCK_STREAM {
 		return e.receiveStream(p, r)
@@ -394,7 +382,6 @@ func (e *PairEnd) recv(p *Process, r *SockRecv) error {
 	}
 
 	r.n = r.into.put(0, pk.data[:min(len(pk.data), r.want)])
-	r.addr = senderAddress(pk.addr)
 
 	if r.n < len(pk.data) {
 		r.out |= MSG_TRUNC
@@ -405,8 +392,7 @@ func (e *PairEnd) recv(p *Process, r *SockRecv) error {
 	}
 
 	if r.flags&MSG_PEEK == 0 {
-		e.received(r, pk.files, pk.cred)
-		r.pk = pk
+		r.files, r.pk = pk.files, pk
 	}
 
 	return nil
@@ -421,10 +407,10 @@ func (e *PairEnd) receiveStream(p *Process, r *SockRecv) error {
 	}
 
 	for {
-		n, files, cred, eof, ended := e.streamTake(r.into, r.n, want-r.n, r.flags&MSG_PEEK != 0)
+		n, files, eof, ended := e.streamTake(r.into, r.n, want-r.n, r.flags&MSG_PEEK != 0)
 
 		if r.n == 0 && n > 0 && r.flags&MSG_PEEK == 0 {
-			e.received(r, files, cred)
+			r.files = files
 		} else {
 			dropFiles(files)
 		}
@@ -459,7 +445,7 @@ func (e *PairEnd) receiveStream(p *Process, r *SockRecv) error {
 	}
 }
 
-func (e *PairEnd) streamTake(into Into, at, room int, peek bool) (n int, files []*Description, cred *Ucred, eof, ended bool) {
+func (e *PairEnd) streamTake(into Into, at, room int, peek bool) (n int, files []*Description, eof, ended bool) {
 	e.mu.Lock()
 
 	defer e.mu.Unlock()
@@ -469,23 +455,23 @@ func (e *PairEnd) streamTake(into Into, at, room int, peek bool) (n int, files [
 
 		switch {
 		case e.noRead.Load() || ok && pk.kind == packetEnd:
-			return n, files, cred, n == 0, false
+			return n, files, n == 0, false
 		case !ok:
-			return n, files, cred, false, false
+			return n, files, false, false
 		case n > 0 && len(pk.files) > 0:
-			return n, files, cred, false, true
+			return n, files, false, true
 		}
 
 		c := into.put(at+n, pk.data[:min(len(pk.data), room-n)])
 
 		if peek {
-			return n + c, nil, nil, false, true
+			return n + c, nil, false, true
 		}
 
 		carried := len(pk.files) > 0
 
 		if n == 0 {
-			files, cred = pk.files, pk.cred
+			files = pk.files
 		}
 
 		n += c
@@ -497,11 +483,11 @@ func (e *PairEnd) streamTake(into Into, at, room int, peek bool) (n int, files [
 		}
 
 		if carried {
-			return n, files, cred, false, true
+			return n, files, false, true
 		}
 	}
 
-	return n, files, cred, false, false
+	return n, files, false, false
 }
 
 func advance(bufs [][]byte, n int) [][]byte {
@@ -589,14 +575,6 @@ func (e *PairEnd) accept(p *Process, flags uint32) (*Description, []byte, error)
 	return nil, nil, EINVAL
 }
 
-func (e *PairEnd) sockname(p *Process) ([]byte, error) {
-	return unixAddress(nil), nil
-}
-
-func (e *PairEnd) peername(p *Process) ([]byte, error) {
-	return unixAddress(nil), nil
-}
-
 func (e *PairEnd) socketKind() int {
 	return e.shared.kind
 }
@@ -629,14 +607,6 @@ func (e *PairEnd) setsockopt(level, name uint32, value []byte) error {
 	return e.options.set(level, name, value)
 }
 
-func senderAddress(path []byte) []byte {
-	if len(path) == 0 {
-		return nil
-	}
-
-	return unixAddress(path)
-}
-
 func (e *PairEnd) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
 	case *FileStat:
@@ -658,15 +628,7 @@ func (e *PairEnd) call(p *Process, d *Description, r Request, group uint32, wait
 	case *SockRecv:
 		return false, e.recv(p, r)
 	case *SockName:
-		var err error
-
-		if r.peer {
-			r.addr, err = e.peername(p)
-		} else {
-			r.addr, err = e.sockname(p)
-		}
-
-		return false, err
+		return false, EOPNOTSUPP
 	case *SockGetopt:
 		var err error
 
@@ -685,8 +647,6 @@ func (e *PairEnd) call(p *Process, d *Description, r Request, group uint32, wait
 		e.consume(r.sink)
 
 		return false, nil
-	case *SockKnock:
-		return false, EPROTOTYPE
 	case *FileRead:
 		if r.explicit {
 			return false, errUnserved

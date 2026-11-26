@@ -37,7 +37,6 @@ type Kernel struct {
 	codes map[CodeKey]*CodeEntry
 
 	fifos      map[FileKey]*Pipe
-	sockets    map[FileKey]Object
 	semaphores map[string]*Semaphore
 	locks      LockTable
 
@@ -51,7 +50,7 @@ type Kernel struct {
 }
 
 func newKernel(user Cred, memory uint64) *Kernel {
-	k := &Kernel{procs: map[int32]*Process{}, codes: map[CodeKey]*CodeEntry{}, fifos: map[FileKey]*Pipe{}, sockets: map[FileKey]Object{},
+	k := &Kernel{procs: map[int32]*Process{}, codes: map[CodeKey]*CodeEntry{}, fifos: map[FileKey]*Pipe{},
 		semaphores: map[string]*Semaphore{},
 		exit:       make(chan int, 1), root: opened(newNoRoot(), O_RDONLY), user: user, cttys: map[int32]*Description{}, pool: newPool(memory)}
 
@@ -561,11 +560,11 @@ func (k *Kernel) functionTable() map[string]any {
 		"fstatvfs":                         libcFstatvfs,
 		"fchdir":                           libcFchdir,
 		"attach":                           libcAttach,
-		"__kernel_bindat":                  libc__kernel_bindat,
-		"__kernel_connectat":               libc__kernel_connectat,
+		"__kernel_sockbind":                libc__kernel_sockbind,
+		"__kernel_sockconnect":             libc__kernel_sockconnect,
 		"__kernel_exec":                    libc__kernel_exec,
 		"__kernel_socketon":                libc__kernel_socketon,
-		"__kernel_sendmsgat":               libc__kernel_sendmsgat,
+		"__kernel_socksendmsg":             libc__kernel_socksendmsg,
 		"fchroot":                          libcFchroot,
 		"__kernel_fdioctl":                 libc__kernel_fdioctl,
 		"ctl":                              libcCtl,

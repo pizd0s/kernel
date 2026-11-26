@@ -1,6 +1,6 @@
 //@ host: false
 //@ compile-flags: -D_GNU_SOURCE
-//@ stdout: "of no server's: ENOTTY; no descriptor: EBADF; a flag: EINVAL; 4 descriptors: EINVAL; too big: EMSGSIZE\nserved: CTL 'ask' of uid ok, with 'x'\nanswer: 'answ' of 7, 2 descriptors, close-on-exec: 1 1; an open file of the server's ready: POLLIN; a pipe's: 'y'\nserved: CTL 'no'\nthe server's error: EPERM\nserved: CTL 'all'\nno room: 0 bytes of 7, 2 descriptors\n"
+//@ stdout: "of no server's: ENOTTY; no descriptor: EBADF; a flag: EINVAL; 32 descriptors: EINVAL; too big: EMSGSIZE\nserved: CTL 'ask' of uid ok, with 'x'\nanswer: 'answ' of 7, 2 descriptors, close-on-exec: 1 1; an open file of the server's ready: POLLIN; a pipe's: 'y'\nserved: CTL 'no'\nthe server's error: EPERM\nserved: CTL 'all'\nno room: 0 bytes of 7, 2 descriptors\n"
 
 // ctl, a call of a file's server (unistd.h, lib/protocol's CTL): the
 // request's bytes and descriptors go to the server with the header the
@@ -318,7 +318,7 @@ int main() {
     int pipes[2];
     assert(pipe(pipes) == 0);
     char room[16];
-    const int four[4] = {0, 1, 2, 0};
+    int many[32] = {};
     static char big[70000];
     struct ctl c{"ask", 3, nullptr, 0, room, sizeof room, nullptr, 0};
     errno = 0;
@@ -330,11 +330,11 @@ int main() {
     errno = 0;
     assert(ctl(pipes[0], &c, 4) == -1);
     printf("; a flag: %s", errorName(errno));
-    c.fds = four;
-    c.nfds = 4;
+    c.fds = many;
+    c.nfds = 32;
     errno = 0;
     assert(ctl(pipes[0], &c, 0) == -1);
-    printf("; 4 descriptors: %s", errorName(errno));
+    printf("; 32 descriptors: %s", errorName(errno));
     c = {big, sizeof big, nullptr, 0, room, sizeof room, nullptr, 0};
     errno = 0;
     assert(ctl(pipes[0], &c, 0) == -1);

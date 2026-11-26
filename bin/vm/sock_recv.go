@@ -12,7 +12,6 @@ type SockRecv struct {
 	n     int
 	out   uint32
 	files []*Description
-	cred  *Ucred
 	addr  []byte
 	pk    *Packet
 }

@@ -68,7 +68,6 @@ TYPES = {
     "sizeofTms": "struct tms",
     "sizeofUtsname": "struct utsname",
     "sizeofWinsize": "struct winsize",
-    "sizeofUcred": "struct ucred",
     "sizeofSockaddrStorage": "struct sockaddr_storage",
     "sizeofCmsghdr": "struct cmsghdr",
 }

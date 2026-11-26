@@ -46,7 +46,7 @@ int main() {
     // A name is one of the VFS's: there is no abstract one.
     memset(name.sun_path, 0, sizeof(name.sun_path));
     memset(name.sun_path + 1, 'x', sizeof(name.sun_path) - 1);
-    assert(bind(local, reinterpret_cast<sockaddr*>(&name), sizeof(name)) == -1 && errno == EOPNOTSUPP);
+    assert(bind(local, reinterpret_cast<sockaddr*>(&name), sizeof(name)) == -1 && errno == ENOENT);
 #endif
     assert(close(local) == 0);
 

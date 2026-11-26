@@ -440,8 +440,7 @@ static void network(void) {
     struct sockaddr_un name;
     socklen_t length = sizeof name;
     int conn = accept(server, 0, 0);
-    getsockname(server, (struct sockaddr*)&name, &length);
-    printf(" accept %d getsockname %s", conn >= 0, name.sun_path);
+    printf(" accept %d getsockname %d", conn >= 0, getsockname(server, (struct sockaddr*)&name, &length) == -1 && errno == EOPNOTSUPP);
     char data = 'x';
     struct iovec iov = {&data, 1};
     union {

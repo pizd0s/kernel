@@ -95,7 +95,7 @@ namespace {
         if (!attach) {
             return answer(fd, opOk, 0, data, size);
         }
-        const Header h{opOk, 0, 0, 0, 0, 0};
+        const Header h{opOk, 1, 0, 0, 0, 0}; // one open file, what
         const Opened what{openedFile, O_RDWR, 0, 0, POLLOUT};
         const iovec parts[] = {{const_cast<Header*>(&h), sizeof h}, {const_cast<Opened*>(&what), sizeof what},
                                {const_cast<void*>(data), size}};

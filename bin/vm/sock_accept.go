@@ -24,6 +24,18 @@ func (r *SockAccept) ser(p *Process, b []byte) (uint32, []byte, []*Description) 
 }
 
 func (r *SockAccept) des(p *Process, pk *Packet) error {
+	if pk.arg == 0 {
+		if len(pk.files) != 1 {
+			dropFiles(pk.files)
+
+			return EIO
+		}
+
+		r.conn, r.peer = pk.files[0], bytes.Clone(pk.data)
+
+		return nil
+	}
+
 	conn, peer, err := p.attached(pk)
 
 	if err != nil {

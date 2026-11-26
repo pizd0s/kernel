@@ -52,17 +52,17 @@ int __kernel_fdioctl(int fd, unsigned long request, void* arg) __KERNEL(__kernel
 // them (vfs.c, sockets.c, exec.c): the kernel knows no path. __kernel_exec
 // runs the program of a descriptor, path the name it was asked by and
 // program its path from the root, __kernel_program's, "" for none; a
-// file of "#!" is ENOEXEC. __kernel_bindat, __kernel_connectat and
-// __kernel_sendmsgat take, of an AF_UNIX address of a path, node, a
-// handle of the path's node, -1 of another address. __kernel_socketon
-// makes a socket of the network's of file, an open of sockmgr's socket,
-// or with -1 a socket of the kernel's.
+// file of "#!" is ENOEXEC. __kernel_sockbind, __kernel_sockconnect and
+// __kernel_socksendmsg are bind, connect and sendmsg as the socket's
+// server, or an end of a pair, takes them, with no path walked.
+// __kernel_socketon makes a socket of the network's of file, an open of
+// sockmgr's socket.
 struct sockaddr;
 struct msghdr;
 int __kernel_exec(int fd, const char* path, const char* program, char* const argv[], char* const envp[]) __KERNEL(__kernel_exec);
-int __kernel_bindat(int fd, int node, const struct sockaddr* addr, unsigned size) __KERNEL(__kernel_bindat);
-int __kernel_connectat(int fd, int node, const struct sockaddr* addr, unsigned size) __KERNEL(__kernel_connectat);
-long __kernel_sendmsgat(int fd, int node, const struct msghdr* msg, int flags) __KERNEL(__kernel_sendmsgat);
+int __kernel_sockbind(int fd, const struct sockaddr* addr, unsigned size) __KERNEL(__kernel_sockbind);
+int __kernel_sockconnect(int fd, const struct sockaddr* addr, unsigned size) __KERNEL(__kernel_sockconnect);
+long __kernel_socksendmsg(int fd, const struct msghdr* msg, int flags) __KERNEL(__kernel_socksendmsg);
 int __kernel_socketon(int file, int domain, int type, int protocol) __KERNEL(__kernel_socketon);
 
 // __kernel_name is the name the program was started by, the last component

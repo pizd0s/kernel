@@ -12,7 +12,6 @@ var soInts = map[uint32]bool{1: true, 2: true, 5: true, 6: true, 9: true, 10: tr
 
 type SockOptions struct {
 	rcvTimeout, sndTimeout atomic.Int64
-	passcred               atomic.Bool
 	intsMu                 sync.Mutex
 	ints                   map[uint32]uint32
 }
@@ -20,7 +19,6 @@ type SockOptions struct {
 func (o *SockOptions) copyOptions(from *SockOptions) {
 	o.rcvTimeout.Store(from.rcvTimeout.Load())
 	o.sndTimeout.Store(from.sndTimeout.Load())
-	o.passcred.Store(from.passcred.Load())
 	from.intsMu.Lock()
 
 	ints := maps.Clone(from.ints)
@@ -55,8 +53,6 @@ func (o *SockOptions) get(p *Process, kind int, level, name uint32) ([]byte, err
 		value = uint32(kind)
 	case SO_ERROR, SO_ACCEPTCONN:
 		value = 0
-	case SO_PASSCRED:
-		value = bit(o.passcred.Load())
 	case SO_RCVTIMEO, SO_SNDTIMEO:
 		to := &o.rcvTimeout
 
@@ -75,14 +71,6 @@ func (o *SockOptions) get(p *Process, kind int, level, name uint32) ([]byte, err
 		value = queueMax * packetMax
 	case 1, 2, 5, 6, 9, 10, 12, 15, SO_RCVLOWAT:
 		value = o.intOption(name)
-	case SO_PEERCRED:
-		b := make([]byte, 12)
-
-		binary.LittleEndian.PutUint32(b, uint32(p.pid))
-		binary.LittleEndian.PutUint32(b[4:], p.cred.uid())
-		binary.LittleEndian.PutUint32(b[8:], p.cred.gid())
-
-		return b, nil
 	default:
 		return nil, ENOPROTOOPT
 	}
@@ -118,12 +106,6 @@ func (o *SockOptions) set(level, name uint32, value []byte) error {
 		} else {
 			o.sndTimeout.Store(int64(d))
 		}
-	case SO_PASSCRED:
-		if len(value) < 4 {
-			return EINVAL
-		}
-
-		o.passcred.Store(binary.LittleEndian.Uint32(value) != 0)
 	case 1, 2, 5, 6, 9, 10, 12, 15, SO_RCVLOWAT:
 		if len(value) < 4 {
 			return EINVAL

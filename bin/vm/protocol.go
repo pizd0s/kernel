@@ -11,7 +11,7 @@ const (
 	openedPath            = 4
 	openedFifo            = 5
 	sizeofOpened          = 32
-	ctlFdsMax             = 3
+	ctlFdsMax             = 31
 	ctlGetWinsize         = 9
 	ctlGetPgrp            = 12
 	ctlSetPgrp            = 13

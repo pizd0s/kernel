@@ -51,7 +51,7 @@ waitid 0 1 5 wait4 1 5
 inet 1 0200010a 0100007f 10.1.0.2 1 2001:db8::ff00:42:8329 0 1
 getaddrinfo 0 2/6 10.0.0.7:80 box -2 Name does not resolve
 getnameinfo 0 box ssh servent domain 53 udp protoent udp 17 hostent box 10.0.0.7 1
-socketpair ping bind 0 listen 0 1 connect 0 accept 1 getsockname /run/socket sendmsg 1 recvmsg 1 x pass timeout -1 1
+socketpair ping bind 0 listen 0 1 connect 0 accept 1 getsockname 1 sendmsg 1 recvmsg 1 x pass timeout -1 1
 if_nameindex 1 crypt $6$salt$egUxKNxDs8kPfh8iPMNcosMhb2eWah6d3R44JDm5Rj/j/XWR5E33QPd0YmHXoDHOIDR6kL5D3JcQcz0O8FHE00 xy/gRonXQz8UE
 dlopen 1 1 1 dlsym 1 dladdr 1 /bin/check
 fenv 0 0 0 0 0 gethostname 1 confstr 14 sysconf 1 pathconf 255

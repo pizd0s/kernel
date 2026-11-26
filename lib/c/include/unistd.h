@@ -199,7 +199,7 @@ int fdid(int, unsigned long long*);
  * O_NONBLOCK of flags as they open. It fails with the server's
  * errno, ENOTTY of a file no server serves. A signal ends a call that
  * waits, EINTR, or restarts it with CTL_RESTART where its handler has
- * SA_RESTART. At most 3 descriptors go.
+ * SA_RESTART. At most 31 descriptors go.
  */
 struct ctl {
     const void* in;

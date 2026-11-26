@@ -16,17 +16,6 @@ const (
 type Address struct {
 	given bool
 	raw   []byte
-	path  string
-	err   error
-	node  *Description
-}
-
-func unixAddress(path []byte) []byte {
-	if len(path) == 0 {
-		return []byte{AF_UNIX, 0}
-	}
-
-	return append(append([]byte{AF_UNIX, 0}, path...), 0)
 }
 
 func guestAlign(n uint32) uint32 {
@@ -45,7 +34,7 @@ func ioSides(events int16) (in, out bool) {
 
 func until(to *atomic.Int64) (time.Time, Signalled) {
 	if ns := to.Load(); ns > 0 {
-		return deadline(waitMs(time.Duration(ns))), interrupts
+		return deadline(waitMs(time.Duration(ns))), restarts
 	}
 
 	return time.Time{}, restarts

@@ -192,14 +192,6 @@ func (a *Answer) accept(p *Process, flags uint32) (*Description, []byte, error) 
 	return nil, nil, EOPNOTSUPP
 }
 
-func (a *Answer) sockname(p *Process) ([]byte, error) {
-	return unixAddress(nil), nil
-}
-
-func (a *Answer) peername(p *Process) ([]byte, error) {
-	return unixAddress(nil), nil
-}
-
 func (a *Answer) socketKind() int {
 	return SOCK_SEQPACKET
 }
@@ -264,15 +256,7 @@ func (a *Answer) call(p *Process, d *Description, r Request, group uint32, waits
 	case *SockRecv:
 		return false, a.recv(p, r)
 	case *SockName:
-		var err error
-
-		if r.peer {
-			r.addr, err = a.peername(p)
-		} else {
-			r.addr, err = a.sockname(p)
-		}
-
-		return false, err
+		return false, EOPNOTSUPP
 	case *SockGetopt:
 		var err error
 

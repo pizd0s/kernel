@@ -2282,20 +2282,20 @@ func libcPosix_madvise(addr, n, advice uint32) uint32 {
 	return proc().libcPosix_madvise(addr, n, advice)
 }
 
-func libc__kernel_bindat(fd, node, addr, n uint32) uint32 {
-	return proc().libc__kernel_bindat(fd, node, addr, n)
+func libc__kernel_sockbind(fd, addr, n uint32) uint32 {
+	return proc().libc__kernel_sockbind(fd, addr, n)
 }
 
-func libc__kernel_connectat(fd, node, addr, n uint32) uint32 {
-	return proc().libc__kernel_connectat(fd, node, addr, n)
+func libc__kernel_sockconnect(fd, addr, n uint32) uint32 {
+	return proc().libc__kernel_sockconnect(fd, addr, n)
 }
 
 func libc__kernel_exec(fd, path, program, argv, envp uint32) uint32 {
 	return proc().libc__kernel_exec(fd, path, program, argv, envp)
 }
 
-func libc__kernel_sendmsgat(fd, node, msg, flags uint32) uint32 {
-	return proc().libc__kernel_sendmsgat(fd, node, msg, flags)
+func libc__kernel_socksendmsg(fd, msg, flags uint32) uint32 {
+	return proc().libc__kernel_socksendmsg(fd, msg, flags)
 }
 
 func libcFchroot(fd uint32) uint32 {

@@ -45,12 +45,6 @@ struct cmsghdr {
     int cmsg_type;
 };
 
-struct ucred {
-    pid_t pid;
-    uid_t uid;
-    gid_t gid;
-};
-
 #define CMSG_ALIGN(len) (((len) + sizeof(size_t) - 1) & (size_t) ~(sizeof(size_t) - 1))
 #define CMSG_DATA(c) ((unsigned char*)(((struct cmsghdr*)(c)) + 1))
 #define CMSG_SPACE(len) (CMSG_ALIGN(len) + CMSG_ALIGN(sizeof(struct cmsghdr)))
@@ -61,7 +55,6 @@ struct ucred {
 #define CMSG_NXTHDR(m, c) ((c)->cmsg_len < sizeof(struct cmsghdr) || __CMSG_NEXT(c) + sizeof(struct cmsghdr) > __MHDR_END(m) ? (struct cmsghdr*)0 : (struct cmsghdr*)__CMSG_NEXT(c))
 
 #define SCM_RIGHTS 1
-#define SCM_CREDENTIALS 2
 
 #define SOCK_STREAM 1
 #define SOCK_DGRAM 2
@@ -97,8 +90,6 @@ struct ucred {
 #define SO_OOBINLINE 10
 #define SO_LINGER 13
 #define SO_REUSEPORT 15
-#define SO_PASSCRED 16
-#define SO_PEERCRED 17
 #define SO_RCVLOWAT 18
 #define SO_SNDLOWAT 19
 #define SO_RCVTIMEO 20

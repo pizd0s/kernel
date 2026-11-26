@@ -174,12 +174,8 @@ const (
 	SO_ERROR                          = 4
 	SO_SNDBUF                         = 7
 	SO_RCVBUF                         = 8
-	SO_PASSCRED                       = 16
-	SO_PEERCRED                       = 17
 	SO_RCVTIMEO                       = 20
 	SO_SNDTIMEO                       = 21
-	SCM_CREDENTIALS                   = 2
-	sizeofUcred                       = 12
 	SHUT_RD                           = 0
 	SHUT_WR                           = 1
 	SHUT_RDWR                         = 2

@@ -151,8 +151,10 @@ int main() {
     const int client = socket(AF_UNIX, SOCK_STREAM, 0);
     const unsigned long long unconnected = distinct(client);
     assert(connect(client, reinterpret_cast<sockaddr*>(&where), sizeof where) == 0);
-    assert(id(client) == unconnected);
-    distinct(accept(listener, nullptr, nullptr));
+    // A connection is a pair: the socket that connected is an end of it
+    // from then on, and what accept gives is the other.
+    assert(distinct(client) != unconnected);
+    same(client, accept(listener, nullptr, nullptr));
     distinct(socket(AF_UNIX, SOCK_DGRAM, 0));
     const int inet = socket(AF_INET, SOCK_STREAM, 0);
     assert(inet >= 0 || errno == EAFNOSUPPORT);

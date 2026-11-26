@@ -80,10 +80,6 @@ int main(int argc, char** argv) {
     fflush(stdout);
     send(accepted, "back", 5, 0);
     waitpid(child, nullptr, 0);
-    sockaddr_un name{};
-    socklen_t length = sizeof name;
-    getsockname(listening, reinterpret_cast<sockaddr*>(&name), &length);
-    printf("name %s\n", name.sun_path);
     close(listening);
     says("connect after close", connected(socketOf(), path));
     says("unlink", unlink(path));

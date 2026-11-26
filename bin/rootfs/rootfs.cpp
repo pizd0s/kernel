@@ -42,6 +42,10 @@
 // file system gave says; a file system checks the rest of what it does
 // itself.
 //
+// The sockets of AF_UNIX are rootfs's too: a socket is an open file of
+// its own, bound to a socket's node of a file system, and a connection is
+// a pair of the kernel's rootfs gives its two ends away of.
+//
 // A file system of another process's is a socket it binds and listens on:
 // mount(2) connects to it, and the connection is the file system's channel
 // rootfs asks it on. The file systems and services rootfs starts get an
@@ -82,6 +86,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -488,14 +493,17 @@ namespace {
     struct Watcher;
     struct Events;
     struct Mark;
+    struct Socket;
+    struct Waiting;
 
     // What an endpoint is to the loop.
     enum class Role : u8 {
         Handle,  // a handle of the VFS's, at a place: its calls come on it, and walk from the place
         Fs,      // ours of the channel of a file system: the answers to its questions come on it
         Watcher, // a watcher's open file: its READs come on it
-        Kept,    // where a READ a watcher or an events file keeps is answered: its CANCEL comes on it
+        Kept,    // where a call a watcher, an events file or a socket keeps is answered: its CANCEL comes on it
         Events,  // an events file's, inotify's: its READs and CTLs come on it
+        Socket,  // a socket's, AF_UNIX's: its calls come on it
     };
 
     // A file system of the VFS's, another process's behind the channel
@@ -558,6 +566,8 @@ namespace {
         Fs* fs;           // a Fs's
         Watcher* watcher; // a Watcher's and a Kept's
         Events* events;   // an Events's and a Kept's
+        Socket* socket;   // a Socket's
+        Waiting* waiting; // a Kept's of a socket's call
         Endpoint* next;   // among the free ones
         Endpoint* after;  // among the live ones
         Endpoint* before;
@@ -810,11 +820,13 @@ static void bury() {
 static void gone(Fs* fs);
 static void forgetWatcher(Watcher* w);
 static void forgetEvents(Events* in);
+static void forgetSocket(Socket* s);
+static void dropWaiting(Waiting* w);
 
 // An endpoint that closes: a handle lets go of its place, a file
 // system's channel of the file system, a watcher's open file of the
-// watcher, an events file's of the events file, and where a watcher's or
-// an events file's READ is kept of the READ.
+// watcher, an events file's of the events file, a socket's of the
+// socket, and where a call is kept of the call.
 static void forget(Endpoint* ep) {
     ep->dead = true;
     switch (ep->role) {
@@ -842,10 +854,16 @@ static void forget(Endpoint* ep) {
                 close(in->memfd);
                 in->memfd = -1;
             }
+            if (ep->waiting) {
+                dropWaiting(ep->waiting);
+            }
             break;
         case Role::Events:
             ep->events->end = nullptr;
             forgetEvents(ep->events);
+            break;
+        case Role::Socket:
+            forgetSocket(ep->socket);
             break;
     }
     if (ep->before) {
@@ -3573,15 +3591,964 @@ static void eventsCtl(Events& in, Body body, int fd) {
     ok(fd, &wd, call == ctlWatchAdd ? sizeof wd : 0);
 }
 
+// ---- sockets -------------------------------------------------------------------
+//
+// AF_UNIX's sockets are the VFS's: a socket is an open file of rootfs's
+// (a ctlSocket of a handle), bound to a socket node of a file system,
+// which rootfs finds the socket by when a path names the node. A
+// connection of a stream's or a seqpacket's is a pair of the kernel's:
+// the connecting socket's end takes the socket's place (MOVE), the
+// other waits in the listener's queue for an ACCEPT, and what the two
+// say goes between them with no rootfs. A connect waits for nothing:
+// with nobody listening, or the queue full, it is ECONNREFUSED. A
+// datagram socket is rootfs's for good: what is sent to it waits here
+// for its RECV, and a send to one with no room is ENOBUFS.
+
+namespace {
+    // A datagram a socket has yet to receive: its sender's sockaddr, none
+    // of a sender bound to nothing, and its bytes, which follow it, and
+    // the rights that came with it.
+    struct Datagram {
+        u8* name();
+        u8* bytes();
+
+        Datagram* next = nullptr;
+        u32 nameSize = 0;
+        u32 size = 0;
+        u32 fdCount = 0;
+        int fds[maxFds];
+    };
+
+    // A call a socket keeps, answered where end says: an ACCEPT until a
+    // connection comes, a RECV or a READ until a datagram does, or until
+    // its time.
+    struct Waiting {
+        Socket* of = nullptr;
+        Endpoint* end = nullptr;
+        u32 op = 0;
+        u32 flags = 0;  // a RECV's
+        u32 want = 0;   // a RECV's, and a READ's length
+        int memfd = -1; // a READ's
+        u64 until = 0;  // when it is EAGAIN, none of 0
+        Waiting* next = nullptr;
+    };
+
+    struct Socket {
+        Endpoint* end = nullptr;
+        u64 id = 0; // its pair's
+        u32 type = 0;
+        u32 uid = 0;
+        u32 gid = 0;
+        u64 made = 0;
+        Fs* fs = nullptr; // the node it is bound to, none of an unbound one
+        u64 node = 0;
+        Buffer name;            // the sockaddr it is bound by
+        int x = -1;             // a stream's pair, once asked for: its own end, and its peer's
+        int y = -1;
+        bool listening = false;
+        u32 backlog = 0;
+        Buffer queue;           // a listener's: the peers' ends of its connections
+        Socket* peer = nullptr; // a datagram socket's, once connected
+        bool lost = false;      // its peer is gone
+        Datagram* first = nullptr;
+        Datagram* last = nullptr;
+        u32 queued = 0;       // the bytes of its datagrams
+        u32 room = 212992;    // SO_RCVBUF
+        u32 sends = 212992;   // SO_SNDBUF
+        timeval receiveFor{}; // SO_RCVTIMEO
+        timeval sendFor{};    // SO_SNDTIMEO
+        bool noRead = false;  // shut down
+        bool noWrite = false;
+        u32 told = 0;               // the events READY said last
+        Waiting* waiting = nullptr; // the calls it keeps, the first first
+        Socket* next = nullptr;     // among the sockets
+    };
+}
+
+u8* Datagram::name() {
+    return reinterpret_cast<u8*>(this + 1);
+}
+
+u8* Datagram::bytes() {
+    return name() + nameSize;
+}
+
+static Socket* sockets;
+static usize timed; // the kept calls that have a time
+
+static u64 monotonic() {
+    timespec now{};
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return u64(now.tv_sec) * 1000000000 + u64(now.tv_nsec);
+}
+
+// The socket of an id that is still open: a call that waited finds it
+// again.
+static Socket* socketOf(u64 id) {
+    for (Socket* s = sockets; s; s = s->next) {
+        if (s->id == id && s->end) {
+            return s;
+        }
+    }
+    return nullptr;
+}
+
+// The socket bound to a node.
+static Socket* boundTo(const Fs* fs, u64 node) {
+    for (Socket* s = sockets; s; s = s->next) {
+        if (s->fs == fs && s->node == node) {
+            return s;
+        }
+    }
+    return nullptr;
+}
+
+// What a socket is ready for: a listener to accept, a datagram socket to
+// send, and to receive with a datagram or after SHUT_RD.
+static u32 readyFor(const Socket& s) {
+    if (s.listening) {
+        return s.queue.size() > 0 ? POLLIN : 0;
+    }
+    if (s.type != SOCK_DGRAM) {
+        return 0;
+    }
+    return POLLOUT | (s.first || s.noRead ? POLLIN : 0);
+}
+
+// Tells the kernel what a socket is ready for (READY), once it changed.
+static void socketReady(Socket& s) {
+    const u32 events = readyFor(s);
+    if (s.end && events != s.told) {
+        s.told = events;
+        reply(s.end->fd, opReady, events, nullptr, 0);
+    }
+}
+
+// A call a socket keeps from now on, answered on fd, EAGAIN after wait
+// when that is some time.
+static Waiting* keep(Socket& s, u32 op, int fd, const timeval& wait) {
+    auto* w = new (allocate(sizeof(Waiting))) Waiting();
+    w->of = &s;
+    w->op = op;
+    if (wait.tv_sec != 0 || wait.tv_usec != 0) {
+        w->until = monotonic() + u64(wait.tv_sec) * 1000000000 + u64(wait.tv_usec) * 1000;
+        ++timed;
+    }
+    w->end = listen(fd, Role::Kept);
+    w->end->waiting = w;
+    Waiting** at = &s.waiting;
+    while (*at) {
+        at = &(*at)->next;
+    }
+    *at = w;
+    return w;
+}
+
+// A kept call whose endpoint closed: it is its socket's no more.
+static void dropWaiting(Waiting* w) {
+    for (Waiting** at = &w->of->waiting; *at; at = &(*at)->next) {
+        if (*at == w) {
+            *at = w->next;
+            break;
+        }
+    }
+    if (w->until != 0) {
+        --timed;
+    }
+    if (w->memfd >= 0) {
+        close(w->memfd);
+    }
+    free(w);
+}
+
+// How long the loop may wait, in milliseconds: until the first of the
+// kept calls' times, for good with none.
+static int socketsWait() {
+    if (timed == 0) {
+        return -1;
+    }
+    u64 first = UINT64_MAX;
+    for (const Socket* s = sockets; s; s = s->next) {
+        for (const Waiting* w = s->waiting; w; w = w->next) {
+            if (w->until != 0 && w->until < first) {
+                first = w->until;
+            }
+        }
+    }
+    const u64 now = monotonic();
+    return first <= now ? 0 : int(MIN((first - now + 999999) / 1000000, u64(INT_MAX)));
+}
+
+// The kept calls whose time came are EAGAIN.
+static void socketsExpire() {
+    if (timed == 0) {
+        return;
+    }
+    const u64 now = monotonic();
+    for (Socket* s = sockets; s; s = s->next) {
+        for (Waiting* w = s->waiting; w;) {
+            Waiting* next = w->next;
+            if (w->until != 0 && w->until <= now) {
+                error(w->end->fd, EAGAIN);
+                closed(w->end);
+            }
+            w = next;
+        }
+    }
+}
+
+// A ctlSocket of a handle's, answered on fd: type u32, SOCK_NONBLOCK of
+// it the file's O_NONBLOCK, then domain u32 and protocol u32. A socket
+// of AF_UNIX's, bound to nothing and connected to nothing.
+static void socketNew(const Header& h, u32 type, Body body, int fd) {
+    if (body.size() < 8) {
+        error(fd, EINVAL);
+        return;
+    }
+    const u32 domain = body.take<u32>();
+    const u32 protocol = body.take<u32>();
+    const u32 kind = type & 0xf;
+    if (domain != AF_UNIX) {
+        error(fd, EAFNOSUPPORT);
+        return;
+    }
+    if ((type & ~u32(0xf | SOCK_NONBLOCK | SOCK_CLOEXEC)) != 0) {
+        error(fd, EINVAL);
+        return;
+    }
+    if (kind != SOCK_STREAM && kind != SOCK_DGRAM && kind != SOCK_SEQPACKET) {
+        error(fd, EPROTOTYPE);
+        return;
+    }
+    if (protocol != 0) {
+        error(fd, EPROTONOSUPPORT);
+        return;
+    }
+    int pair[2];
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
+        error(fd, errno);
+        return;
+    }
+    auto* s = new (allocate(sizeof(Socket))) Socket();
+    s->id = pairId(pair[0]);
+    s->type = kind;
+    s->uid = h.uid;
+    s->gid = h.gid;
+    timespec now{};
+    clock_gettime(CLOCK_REALTIME, &now);
+    s->made = u64(now.tv_sec) * 1000000000 + u64(now.tv_nsec);
+    s->end = listen(pair[0], Role::Socket);
+    s->end->socket = s;
+    s->end->reads = true;
+    s->end->writes = true;
+    s->end->nonblock = (type & SOCK_NONBLOCK) != 0;
+    s->told = readyFor(*s);
+    s->next = sockets;
+    sockets = s;
+    const Opened what{openedFile, O_RDWR, 0, s->id, s->told, 0};
+    const iovec said = part(&what, sizeof what);
+    reply(fd, opOk, 1, &said, 1, &pair[1], 1);
+    close(pair[1]);
+}
+
+static void dropDatagram(Datagram* d) {
+    for (u32 i = 0; i < d->fdCount; ++i) {
+        close(d->fds[i]);
+    }
+    free(d);
+}
+
+// A socket whose endpoint closed goes: its name is nobody's, the
+// connections nobody accepted end, its datagrams and the calls it keeps
+// are dropped, and who was connected to it has lost its peer.
+static void forgetSocket(Socket* s) {
+    s->end = nullptr;
+    while (s->waiting) {
+        error(s->waiting->end->fd, EBADF);
+        closed(s->waiting->end);
+    }
+    if (s->x >= 0) {
+        close(s->x);
+        close(s->y);
+    }
+    const int* conns = static_cast<const int*>(s->queue.data());
+    for (usize i = 0; i < s->queue.size() / sizeof(int); ++i) {
+        close(conns[i]);
+    }
+    while (Datagram* d = s->first) {
+        s->first = d->next;
+        dropDatagram(d);
+    }
+    for (Socket** at = &sockets; *at; at = &(*at)->next) {
+        if (*at == s) {
+            *at = s->next;
+            break;
+        }
+    }
+    for (Socket* o = sockets; o; o = o->next) {
+        if (o->peer == s) {
+            o->peer = nullptr;
+            o->lost = true;
+        }
+    }
+    s->~Socket();
+    free(s);
+}
+
+// The pair a stream socket connects by, made when it is first asked for:
+// the options of the socket are its own end's.
+static bool paired(Socket& s) {
+    if (s.x >= 0) {
+        return true;
+    }
+    int pair[2];
+    if (socketpair(AF_UNIX, int(s.type) | SOCK_CLOEXEC, 0, pair) != 0) {
+        return false;
+    }
+    s.x = pair[0];
+    s.y = pair[1];
+    return true;
+}
+
+// The first connection of a listener's queue to an ACCEPT, answered on
+// fd: OK, the peer's sockaddr, which has no name, and fds[0] the
+// connection, a file of the kernel's.
+static void accepted(Socket& l, int fd) {
+    int* conns = static_cast<int*>(l.queue.data());
+    const int conn = conns[0];
+    memmove(conns, conns + 1, l.queue.size() - sizeof(int));
+    l.queue.resize(l.queue.size() - sizeof(int));
+    const sa_family_t family = AF_UNIX;
+    const iovec body = part(&family, sizeof family);
+    reply(fd, opOk, 0, &body, 1, &conn, 1);
+    close(conn);
+}
+
+// What a listener's queue got or gave: the ACCEPTs it keeps take the
+// connections, the first first, and READY says what is left.
+static void listened(Socket& l) {
+    while (l.queue.size() > 0 && l.waiting) {
+        Waiting* w = l.waiting;
+        accepted(l, w->end->fd);
+        closed(w->end);
+    }
+    socketReady(l);
+}
+
+// The first datagram of a socket to a RECV, answered on fd: flags u32,
+// MSG_TRUNC of one longer than want, len u32 and the sender's sockaddr,
+// at most want of its bytes, and its rights. MSG_PEEK leaves it where it
+// is, and gives no rights.
+static void answerRecv(Socket& s, u32 flags, u32 want, int fd) {
+    Datagram* d = s.first;
+    const bool peek = (flags & MSG_PEEK) != 0;
+    const u32 said[2] = {d->size > want ? u32(MSG_TRUNC) : 0, d->nameSize};
+    Header head{opOk, 0, 0, 0, 0, 0};
+    const iovec parts[4] = {{&head, sizeof head}, part(said, sizeof said), part(d->name(), d->nameSize), part(d->bytes(), MIN(d->size, want))};
+    sendPacket(fd, parts, 4, peek ? nullptr : d->fds, peek ? 0 : d->fdCount);
+    if (peek) {
+        return;
+    }
+    s.first = d->next;
+    if (!s.first) {
+        s.last = nullptr;
+    }
+    s.queued -= d->size;
+    dropDatagram(d);
+}
+
+// The first datagram of a socket to a READ, into its memfd, at most
+// length of its bytes, their count answered on fd; its rights are
+// nobody's.
+static void answerRead(Socket& s, int memfd, u32 length, int fd) {
+    Datagram* d = s.first;
+    const u32 n = MIN(d->size, length);
+    if (n > 0 && pwrite(memfd, d->bytes(), n, 0) != ssize_t(n)) {
+        error(fd, EIO);
+        return;
+    }
+    s.first = d->next;
+    if (!s.first) {
+        s.last = nullptr;
+    }
+    s.queued -= d->size;
+    dropDatagram(d);
+    ok(fd, &n, sizeof n);
+}
+
+// The end of what a socket receives, after SHUT_RD: nothing, to a RECV
+// or a READ.
+static void answerEnd(u32 op, int fd) {
+    const u32 none[2] = {0, 0};
+    ok(fd, none, op == opRecv ? sizeof none : sizeof none[0]);
+}
+
+// What a datagram socket got: the calls it keeps take its datagrams,
+// the first first, or its end, and READY says what is left.
+static void received(Socket& s) {
+    while ((s.first || s.noRead) && s.waiting) {
+        Waiting* w = s.waiting;
+        if (!s.first) {
+            answerEnd(w->op, w->end->fd);
+        } else if (w->op == opRecv) {
+            answerRecv(s, w->flags, w->want, w->end->fd);
+        } else {
+            answerRead(s, w->memfd, w->want, w->end->fd);
+        }
+        closed(w->end);
+    }
+    socketReady(s);
+}
+
+// A datagram of size bytes at data, with the rights fds, from a socket
+// to another: 0, or the errno, the rights the caller's still.
+static int deliver(Socket& from, Socket& to, const void* data, usize size, int* fds, usize fdCount) {
+    if (to.type != SOCK_DGRAM) {
+        return EPROTOTYPE;
+    }
+    if (from.noWrite || to.noRead) {
+        return EPIPE;
+    }
+    if (to.first && to.queued + size > to.room) {
+        return ENOBUFS;
+    }
+    const usize nameSize = from.name.size();
+    auto* d = new (allocate(sizeof(Datagram) + nameSize + size)) Datagram();
+    d->nameSize = u32(nameSize);
+    d->size = u32(size);
+    memcpy(d->name(), from.name.data(), nameSize);
+    memcpy(d->bytes(), data, size);
+    for (usize i = 0; i < fdCount; ++i) {
+        d->fds[d->fdCount++] = fds[i];
+        fds[i] = -1;
+    }
+    if (to.last) {
+        to.last->next = d;
+    } else {
+        to.first = d;
+    }
+    to.last = d;
+    to.queued += u32(size);
+    received(to);
+    return 0;
+}
+
+// The socket a path names, walked to as who asks may, into to: 0, or
+// the errno. Nobody's node, or one of no socket, is ECONNREFUSED.
+static int namedSocket(const Place& t, const Stat& st, const Header& h, Socket*& to) {
+    if (!S_ISSOCK(st.mode)) {
+        return ECONNREFUSED;
+    }
+    if (!mayStat(st, h, 2)) {
+        return EACCES;
+    }
+    to = boundTo(t.m->fs, t.node);
+    return to ? 0 : ECONNREFUSED;
+}
+
+// ctlBind of a socket's: the socket bound to the node the path names,
+// which it makes, a socket's node of the mode; a socket's node there
+// already, bound by nobody, is taken as it is, as devfs's registered
+// ones are, and anything else there is EADDRINUSE.
+static Task bindCall(Header h, int fd, Place root, Place from, u64 id, Name path) {
+    Reply r{fd};
+    Buffer name;
+    const sa_family_t family = AF_UNIX;
+    name.append(&family, sizeof family);
+    name.append(path.at, path.length);
+    name.append("", 1);
+    Walk w;
+    w.start(h, from, root, path, false, false, false);
+    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, w.error);
+            co_return;
+        }
+    }
+    if (w.kind != lastName || w.slash) {
+        error(fd, EADDRINUSE);
+        co_return;
+    }
+    Stat st;
+    bool there = false;
+    if (!keptStat(w.here, w.last, st, there)) {
+        const Answer a = co_await asking(w.here, h, fsLookup, w.last);
+        there = a.error == 0 && statIn(a.body, st);
+    }
+    if (there && (!S_ISSOCK(st.mode) || boundTo(w.here.m->fs, st.ino))) {
+        error(fd, EADDRINUSE);
+        co_return;
+    }
+    if (there && !mayStat(st, h, 2)) {
+        error(fd, EACCES);
+        co_return;
+    }
+    if (!there) {
+        changing(w.here);
+        forgetName(w.here, w.last);
+        forgetStat(knownAt(w.here), false);
+        const Answer made = co_await changeAsk(w.here, h, fsMknod, S_IFSOCK | (h.arg & 0777), nullptr, 0, w.last);
+        if (made.error != 0) {
+            error(fd, made.error == EEXIST ? EADDRINUSE : made.error);
+            co_return;
+        }
+        heard(w.here.m->fs, w.here.node, watchAdded, w.last, false);
+        const Answer a = co_await asking(w.here, h, fsLookup, w.last);
+        if (a.error != 0 || !statIn(a.body, st)) {
+            error(fd, a.error != 0 ? a.error : EIO);
+            co_return;
+        }
+    }
+    Socket* s = socketOf(id);
+    if (!s) {
+        co_return;
+    }
+    if (s->fs) {
+        error(fd, EINVAL);
+        co_return;
+    }
+    if (boundTo(w.here.m->fs, st.ino)) {
+        error(fd, EADDRINUSE);
+        co_return;
+    }
+    s->fs = w.here.m->fs;
+    s->node = st.ino;
+    s->name.swap(name);
+    ok(fd);
+}
+
+// The stat of what a walk came to, into st: as the walk or rootfs has
+// it whole, else as its file system says. Whether there is one.
+static bool wholeStat(const Place& t, Stat& st) {
+    if (t.fresh) {
+        st = t.st;
+        return true;
+    }
+    if (const Known* k = knownAt(t); k && k->whole) {
+        st = k->st;
+        return true;
+    }
+    return false;
+}
+
+// ctlConnect of a socket's: connected to the socket bound to the node
+// the path names, of the socket's type, EPROTOTYPE of another. A
+// datagram socket sends there from then on. A stream's or a seqpacket's
+// connection is a pair: the answer is MOVE with the socket's end of it,
+// which the socket is from then on, the other goes to the listener's
+// queue, and the socket is no more rootfs's. With nobody listening, or
+// the queue full, ECONNREFUSED; an answer nobody took connects nothing.
+static Task connectCall(Header h, int fd, Place root, Place from, u64 id, Name path) {
+    Reply r{fd};
+    Walk w;
+    w.start(h, from, root, path, true, true, false);
+    for (Walk::Step s = w.run(); s != Walk::Step::Done; s = w.answered(co_await w.question())) {
+        if (s == Walk::Step::Failed) {
+            error(fd, w.error);
+            co_return;
+        }
+    }
+    Stat st;
+    if (!wholeStat(w.target, st)) {
+        const Answer a = co_await asking(w.target, h, fsGetattr, {});
+        if (a.error != 0 || !statIn(a.body, st)) {
+            error(fd, a.error != 0 ? a.error : EIO);
+            co_return;
+        }
+    }
+    Socket* s = socketOf(id);
+    if (!s) {
+        co_return;
+    }
+    Socket* to = nullptr;
+    if (const int e = namedSocket(w.target, st, h, to)) {
+        error(fd, e);
+        co_return;
+    }
+    if (to->type != s->type) {
+        error(fd, EPROTOTYPE);
+        co_return;
+    }
+    if (s->type == SOCK_DGRAM) {
+        s->peer = to;
+        s->lost = false;
+        ok(fd);
+        co_return;
+    }
+    if (s->listening) {
+        error(fd, EOPNOTSUPP);
+        co_return;
+    }
+    if (!to->listening || to->queue.size() / sizeof(int) > 3 * usize(to->backlog) / 2) {
+        error(fd, ECONNREFUSED);
+        co_return;
+    }
+    if (!paired(*s)) {
+        error(fd, errno);
+        co_return;
+    }
+    Header head{opMove, 0, 0, 0, 0, 0};
+    const iovec moved{&head, sizeof head};
+    if (sendPacket(fd, &moved, 1, &s->x, 1) < 0) {
+        co_return;
+    }
+    close(s->x);
+    to->queue.append(&s->y, sizeof s->y);
+    s->x = -1;
+    s->y = -1;
+    listened(*to);
+    closed(s->end);
+}
+
+// ctlSendto of a datagram socket's: a datagram to the socket bound to
+// the node the path names, its count answered.
+static Task sendtoCall(Header h, int fd, Place root, Place from, u64 id, Name path, Datagram* d) {
+    Reply r{fd};
+    Walk w;
+    w.start(h, from, root, path, true, true, false);
+    Stat st;
+    int e = 0;
+    for (Walk::Step s = w.run(); s != Walk::Step::Done && e == 0; s = w.answered(co_await w.question())) {
+        if (s == Walk::Step::Failed) {
+            e = w.error;
+        }
+    }
+    if (e == 0 && !wholeStat(w.target, st)) {
+        const Answer a = co_await asking(w.target, h, fsGetattr, {});
+        e = a.error != 0 ? a.error : statIn(a.body, st) ? 0 : EIO;
+    }
+    Socket* s = socketOf(id);
+    Socket* to = nullptr;
+    if (e == 0 && s) {
+        e = namedSocket(w.target, st, h, to);
+    }
+    if (e == 0 && s) {
+        e = deliver(*s, *to, d->bytes(), d->size, d->fds, d->fdCount);
+    }
+    const u32 count = d->size;
+    for (u32 i = 0; i < d->fdCount; ++i) {
+        if (d->fds[i] >= 0) {
+            close(d->fds[i]);
+        }
+    }
+    free(d);
+    if (!s) {
+        co_return;
+    }
+    if (e != 0) {
+        error(fd, e);
+        co_return;
+    }
+    ok(fd, &count, sizeof count);
+}
+
+// A call of a socket's with a path, a CTL: ctlBind, the mode its arg;
+// ctlConnect; ctlSendto, the flags its arg, the path, a 0, the bytes,
+// and the rights after the two descriptors every one of them brings, the
+// root of who asks and where its path starts. Whether fd is kept.
+static bool socketCtl(Socket& s, Header h, Body body, int fd) {
+    if (body.size() < 8) {
+        return error(fd, EINVAL);
+    }
+    const u32 call = body.take<u32>();
+    h.arg = body.take<u32>();
+    if (call == ctlInq) {
+        const u32 n = s.first ? s.first->size : 0;
+        ok(fd, &n, sizeof n);
+        return false;
+    }
+    if (call != ctlBind && call != ctlConnect && call != ctlSendto) {
+        return error(fd, ENOTTY);
+    }
+    Place root = rootOf(rootMount);
+    Place from;
+    unsigned long long id = 0;
+    if (packetFdCount < 3 || fdid(packetFds[1], &id) != 0 || !placeOf(id, from)) {
+        return error(fd, EINVAL);
+    }
+    if (fdid(packetFds[0], &id) == 0) {
+        placeOf(id, root);
+    }
+    if (call == ctlBind) {
+        if (s.fs) {
+            return error(fd, EINVAL);
+        }
+        bindCall(h, fd, root, from, s.id, body.rest());
+        return true;
+    }
+    if (call == ctlConnect) {
+        connectCall(h, fd, root, from, s.id, body.rest());
+        return true;
+    }
+    if (s.type != SOCK_DGRAM) {
+        return error(fd, s.listening ? EOPNOTSUPP : ENOTCONN);
+    }
+    const Name path = body.string();
+    const usize size = body.size();
+    auto* d = new (allocate(sizeof(Datagram) + size)) Datagram();
+    d->size = u32(size);
+    memcpy(d->bytes(), body.at, size);
+    for (usize i = 2; i + 1 < packetFdCount; ++i) {
+        d->fds[d->fdCount++] = packetFds[i];
+        packetFds[i] = -1;
+    }
+    sendtoCall(h, fd, root, from, s.id, path, d);
+    return true;
+}
+
+// SO_TYPE, SO_ACCEPTCONN and SO_ERROR of a socket are rootfs's; the
+// other options of a stream's are its end's of the pair, the kernel's,
+// and a datagram socket's the sizes and times it keeps, for the kernel
+// to ask.
+static void optionCall(Socket& s, bool sets, Body body, int fd) {
+    if (body.size() < 8) {
+        error(fd, EINVAL);
+        return;
+    }
+    const u32 level = body.take<u32>();
+    const u32 name = body.take<u32>();
+    int value = 0;
+    if (!sets && level == SOL_SOCKET && (name == SO_TYPE || name == SO_ACCEPTCONN || name == SO_ERROR)) {
+        value = name == SO_TYPE ? int(s.type) : name == SO_ACCEPTCONN ? s.listening : 0;
+        ok(fd, &value, sizeof value);
+        return;
+    }
+    if (s.type != SOCK_DGRAM) {
+        u8 out[64];
+        socklen_t size = sizeof out;
+        if (!paired(s)) {
+            error(fd, errno);
+        } else if (sets) {
+            answer(fd, setsockopt(s.x, int(level), int(name), body.at, socklen_t(body.size())) == 0 ? 0 : errno);
+        } else if (getsockopt(s.x, int(level), int(name), out, &size) != 0) {
+            error(fd, errno);
+        } else {
+            ok(fd, out, size);
+        }
+        return;
+    }
+    const bool times = name == SO_RCVTIMEO || name == SO_SNDTIMEO;
+    if (level != SOL_SOCKET || (!times && name != SO_RCVBUF && name != SO_SNDBUF)) {
+        error(fd, ENOPROTOOPT);
+        return;
+    }
+    timeval& time = name == SO_RCVTIMEO ? s.receiveFor : s.sendFor;
+    u32& size = name == SO_RCVBUF ? s.room : s.sends;
+    if (!sets) {
+        if (times) {
+            ok(fd, &time, sizeof time);
+        } else {
+            ok(fd, &size, sizeof size);
+        }
+        return;
+    }
+    if (body.size() < (times ? sizeof time : sizeof size)) {
+        error(fd, EINVAL);
+        return;
+    }
+    if (times) {
+        timeval t;
+        memcpy(&t, body.at, sizeof t);
+        if (t.tv_sec < 0 || t.tv_usec < 0 || t.tv_usec >= 1000000) {
+            error(fd, EDOM);
+            return;
+        }
+        time = t;
+    } else {
+        memcpy(&size, body.at, sizeof size);
+    }
+    ok(fd);
+}
+
+// A datagram of a connected socket's, to its peer: its count answered
+// on fd, EDESTADDRREQ with no peer, ECONNREFUSED of one that is gone.
+static void sendCall(Socket& s, const void* data, usize size, int* fds, usize fdCount, int fd) {
+    if (!s.peer) {
+        error(fd, s.lost ? ECONNREFUSED : EDESTADDRREQ);
+        return;
+    }
+    if (const int e = deliver(s, *s.peer, data, size, fds, fdCount)) {
+        error(fd, e);
+        return;
+    }
+    const u32 count = u32(size);
+    ok(fd, &count, sizeof count);
+}
+
+// A request on a socket, answered on fd: a CTL of a path's (socketCtl);
+// LISTEN, of a bound stream's; ACCEPT, a connection of the queue, kept
+// until there is one but of O_NONBLOCK; SEND, RECV, READ and WRITE of
+// a datagram socket, a RECV and a READ kept until a datagram comes, for
+// SO_RCVTIMEO at most, but of O_NONBLOCK and MSG_DONTWAIT, and of a
+// stream's ENOTCONN, as it is connected to nothing while it is here;
+// the options; SOCKNAME, EOPNOTSUPP, as AF_UNIX's names are nobody's to
+// ask; FSTAT, GETFL and SETFL. Whether fd is kept.
+static bool onSocket(Endpoint* ep, const Header& h, Body body, int fd) {
+    Socket& s = *ep->socket;
+    const bool stream = s.type != SOCK_DGRAM;
+    switch (h.op) {
+        case opCtl:
+            return socketCtl(s, h, body, fd);
+        case opBind:
+            return error(fd, s.fs ? EINVAL : EAFNOSUPPORT);
+        case opConnect: {
+            sa_family_t family = AF_UNIX;
+            if (body.size() >= 4 + sizeof family) {
+                memcpy(&family, body.at + 4, sizeof family);
+            }
+            if (family != AF_UNSPEC || stream) {
+                return error(fd, EAFNOSUPPORT);
+            }
+            s.peer = nullptr;
+            s.lost = false;
+            return answer(fd, 0);
+        }
+        case opListen:
+            if (!stream) {
+                return error(fd, EOPNOTSUPP);
+            }
+            if (!s.fs) {
+                return error(fd, EDESTADDRREQ);
+            }
+            s.listening = true;
+            s.backlog = i32(h.arg) < 0 ? 0 : MIN(h.arg, u32(SOMAXCONN));
+            ok(fd);
+            listened(s);
+            return false;
+        case opAccept:
+            if (!s.listening) {
+                return error(fd, stream ? EINVAL : EOPNOTSUPP);
+            }
+            if (s.queue.size() > 0) {
+                accepted(s, fd);
+                socketReady(s);
+                return false;
+            }
+            if (ep->nonblock) {
+                return error(fd, EAGAIN);
+            }
+            keep(s, opAccept, fd, {});
+            return true;
+        case opSend: {
+            if (stream) {
+                return error(fd, s.listening ? EOPNOTSUPP : ENOTCONN);
+            }
+            if (body.size() < 4) {
+                return error(fd, EINVAL);
+            }
+            const u32 length = body.take<u32>();
+            if (length != 0) {
+                return error(fd, length > body.size() ? EINVAL : EAFNOSUPPORT);
+            }
+            sendCall(s, body.at, body.size(), packetFds, packetFdCount - 1, fd);
+            return false;
+        }
+        case opWrite: {
+            if (stream) {
+                return error(fd, ENOTCONN);
+            }
+            Buffer data;
+            data.resize(h.arg);
+            if (packetFdCount < 2 || pread(packetFds[0], data.data(), h.arg, 0) != ssize_t(h.arg)) {
+                return error(fd, EINVAL);
+            }
+            sendCall(s, data.data(), h.arg, nullptr, 0, fd);
+            return false;
+        }
+        case opRecv:
+        case opRead: {
+            if (stream) {
+                return error(fd, ENOTCONN);
+            }
+            const bool recv = h.op == opRecv;
+            u32 want = h.arg;
+            if (recv) {
+                if (body.size() < 4) {
+                    return error(fd, EINVAL);
+                }
+                want = body.take<u32>();
+            } else if (packetFdCount < 2) {
+                return error(fd, EINVAL);
+            }
+            if (s.first) {
+                if (recv) {
+                    answerRecv(s, h.arg, want, fd);
+                } else {
+                    answerRead(s, packetFds[0], want, fd);
+                }
+                socketReady(s);
+                return false;
+            }
+            if (s.noRead) {
+                answerEnd(h.op, fd);
+                return false;
+            }
+            if (ep->nonblock || (recv && (h.arg & MSG_DONTWAIT) != 0)) {
+                return error(fd, EAGAIN);
+            }
+            Waiting* w = keep(s, h.op, fd, s.receiveFor);
+            w->want = want;
+            if (recv) {
+                w->flags = h.arg;
+            } else {
+                w->memfd = packetFds[0];
+                packetFds[0] = -1;
+            }
+            return true;
+        }
+        case opSockname:
+            return error(fd, EOPNOTSUPP);
+        case opGetsockopt:
+        case opSetsockopt:
+            optionCall(s, h.op == opSetsockopt, body, fd);
+            return false;
+        case opShutdown:
+            if (stream) {
+                return error(fd, ENOTCONN);
+            }
+            if (h.arg > SHUT_RDWR) {
+                return error(fd, EINVAL);
+            }
+            s.noRead = s.noRead || h.arg != SHUT_WR;
+            s.noWrite = s.noWrite || h.arg != SHUT_RD;
+            ok(fd);
+            received(s);
+            return false;
+        case opSocktype:
+            ok(fd, &s.type, sizeof s.type);
+            return false;
+        case opFstat: {
+            const Stat st{s.id, 0, s.made, S_IFSOCK | 0777, 1, s.uid, s.gid, s.made, 0, s.made};
+            ok(fd, &st, sizeof st);
+            return false;
+        }
+        case opGetfl: {
+            const u32 flags = O_RDWR | (ep->nonblock ? O_NONBLOCK : 0);
+            ok(fd, &flags, sizeof flags);
+            return false;
+        }
+        case opSetfl:
+            ep->nonblock = (h.arg & O_NONBLOCK) != 0;
+            ok(fd);
+            return false;
+        default:
+            return error(fd, unserved(h.op));
+    }
+}
+
 // A CTL of a handle's, answered on fd: ctlWatchEvents, flags u32, an
 // events file; ctlWatchDirectory, flags u32, the watcher of its directory,
-// EBADF of O_PATH's handle; O_NONBLOCK of the flags the file's. Whether fd
-// is kept.
+// EBADF of O_PATH's handle; O_NONBLOCK of the flags the file's; ctlSocket,
+// a socket (socketNew). Whether fd is kept.
 static bool handleCtl(Endpoint* ep, Header h, Body body, int fd) {
     const u32 call = body.size() >= 4 ? body.take<u32>() : 0;
     const u32 flags = body.size() >= 4 ? body.take<u32>() : 0;
     if (call == ctlWatchEvents) {
         eventsNew(h, flags, fd);
+        return false;
+    }
+    if (call == ctlSocket) {
+        socketNew(h, flags, body, fd);
         return false;
     }
     if (call != ctlWatchDirectory) {
@@ -3986,6 +4953,7 @@ static void handle(Endpoint* ep, ssize_t n) {
         const usize last = packetFdCount - 1;
         const bool kept = ep->role == Role::Watcher  ? onWatcher(ep, h, body, packetFds[last])
                           : ep->role == Role::Events ? onEvents(ep, h, body, packetFds[last])
+                          : ep->role == Role::Socket ? onSocket(ep, h, body, packetFds[last])
                                                      : onHandle(ep, h, body, packetFds[last]);
         if (kept) {
             packetFds[last] = -1;
@@ -4068,7 +5036,8 @@ static ssize_t turn(epoll_event& event, int timeout) {
 static void serve() {
     while (endpointCount > 0) {
         epoll_event event{};
-        const ssize_t n = turn(event, -1);
+        const ssize_t n = turn(event, socketsWait());
+        socketsExpire();
         if (!reap()) {
             kill(-1, SIGKILL);
             break;

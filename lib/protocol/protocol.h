@@ -110,9 +110,8 @@
 //                                         root
 //   and an open file's calls but READ and WRITE. A FIFO and a socket are
 //   names of the file systems' and nothing more: the kernel makes the pipe
-//   a FIFO's openers share, and keeps what a socket bound to a socket node
-//   is, by the node's dev and ino, which lib/c's bind(2), connect(2) and
-//   sendto(2) give it as a handle of the node.
+//   a FIFO's openers share, and rootfs keeps what socket is bound to a
+//   socket's node (a socket's calls, AF_UNIX's).
 //
 //   A file system's, on its channel, by node: a node is its inode number,
 //   the root's in the stat its connection answered, 1 for a file system
@@ -296,8 +295,12 @@
 //                                         EINPROGRESS of a socket that does
 //                                         not wait
 //     LISTEN    arg backlog
-//     ACCEPT    arg flags                 OK opened, the peer's sockaddr,
-//                                         fds[0] the connection's open file
+//     ACCEPT    arg flags                 OK, its arg 1, opened, the
+//                                         peer's sockaddr, fds[0] the
+//                                         connection's open file; or, its
+//                                         arg 0, the peer's sockaddr,
+//                                         fds[0] the connection as it is,
+//                                         a file of the kernel's
 //     SEND      arg flags   len u32, sockaddr, data   to the sockaddr, none
 //                                         for a connected socket; fds the
 //                                         rights. OK count u32; attached:
@@ -311,6 +314,43 @@
 //     SETSOCKOPT            level u32, name u32, value
 //     SHUTDOWN  arg how
 //     SOCKTYPE                            OK type u32
+//
+//   A socket of AF_UNIX is rootfs's, an open file of its own: socket(2)
+//   is a CTL of the root, and an address is a path, so bind, connect and
+//   a send to an address are CTLs of the socket, the root of who asks
+//   and where the path starts their first descriptors, a send's rights
+//   after them:
+//     ctlSocket    type    domain u32, protocol u32   OK opened: the
+//                                         socket, SOCK_NONBLOCK of type
+//                                         its O_NONBLOCK
+//     ctlBind      mode    path              the path's node made, a
+//                                         socket's of the mode; a socket's
+//                                         node nobody is bound to is taken
+//                                         as it is, and another is
+//                                         EADDRINUSE
+//     ctlConnect           path              the socket bound to the path's
+//                                         node is a datagram socket's
+//                                         peer from then on. A stream's
+//                                         or a seqpacket's answer is MOVE:
+//                                         fds[0], an end of a pair, is the
+//                                         socket from then on, and the
+//                                         other end waits for the
+//                                         listener's ACCEPT. With nobody
+//                                         listening, or a queue of more
+//                                         than the backlog and a half,
+//                                         ECONNREFUSED: a connect waits
+//                                         for nothing
+//     ctlSendto    flags   path 0 data       a datagram to the socket bound
+//                                         to the path's node. OK count
+//                                         u32; ENOBUFS of a socket with
+//                                         no room for it
+//   A connection is a pair of the kernel's, which no server serves: a
+//   connected socket and an accepted one are its ends. A socket that
+//   listens and a datagram socket are rootfs's for good: a datagram
+//   waits there for its RECV, which gives its sender's sockaddr, none of
+//   a sender bound to nothing. The names of AF_UNIX are nobody's to ask:
+//   SOCKNAME is EOPNOTSUPP, of a pair's end too. A stream that is
+//   connected to nothing reads, writes and shuts down ENOTCONN.
 //
 //   A card's stack's and sockmgr's, on sockmgr's connection to the
 //   stack's socket, net/<card>/iface/stack, a request on it answered
@@ -567,9 +607,10 @@ enum : uint32_t {
     opHand,
 };
 
-// The most descriptors a packet brings: a READ's or WRITE's memfd and,
-// handed on, its connection.
-constexpr size_t maxFds = 4;
+// The most descriptors a packet brings: where it is answered, the last
+// of them, and before it a READ's or WRITE's memfd, a ctl's descriptors
+// or a send's rights.
+constexpr size_t maxFds = 32;
 constexpr uint32_t noId = 0xffffffff; // a uid or gid CHOWN keeps
 constexpr uint32_t fsNocache = 1;     // ROOT's flags: the file system changes by itself
 // SETCTTY's how.

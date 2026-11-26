@@ -9,12 +9,6 @@ type Packet struct {
 	kind  uint8
 	data  []byte
 	files []*Description
-	cred  *Ucred
-	addr  []byte
 
 	arg uint32
-}
-
-type Ucred struct {
-	pid, uid, gid uint32
 }
