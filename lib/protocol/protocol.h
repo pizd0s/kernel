@@ -312,17 +312,22 @@
 //   ctlAccept are EINVAL, its ctlConnect EISCONN, and its options and
 //   its shutdown the kernel does.
 //
-//   A socket's bytes are the kernel's calls on its open file. A packet
-//   is at most 65536 bytes: of a stream's send of more, the kernel sends
-//   what fits, the send's count, and a datagram that does not fit is
-//   EMSGSIZE. They are ENOTSOCK of what is no socket.
-//     SEND      arg flags   len u32, sockaddr, data   to the sockaddr, none
-//                                         for a connected socket; fds the
-//                                         rights. OK count u32
-//     RECV      arg flags   want u32      OK flags u32, len u32, sockaddr,
-//                                         data: the sender's and at most
-//                                         want bytes; fds the rights
-//     SOCKTYPE                            OK type u32
+//   A socket's bytes are the kernel's calls on its open file, READ and
+//   WRITE, and two more that are those with what a socket's take: flags,
+//   an address and rights. Their bytes are in the caller's memory, a
+//   memfd, fds[0], as a READ's and a WRITE's are, the rights after it;
+//   their arg is how many bytes. What is no socket answers them
+//   ENOTSOCK. recv(2), send(2) and their kind are these two, of any
+//   flags and with none.
+//     RECV      arg n       flags u32     OK count u32, flags u32, len u32,
+//                                         sockaddr: the bytes put into the
+//                                         memory, what the receive says of
+//                                         them, MSG_TRUNC, and whose they
+//                                         were, none of a connection's;
+//                                         fds the rights
+//     SEND      arg n       flags u32, len u32, sockaddr   to the sockaddr,
+//                                         none for a connected socket; fds
+//                                         the rights. OK count u32
 //
 //   A socket of AF_UNIX is rootfs's. Its address is a path of the VFS's:
 //   a call with one brings the root of who asks and where the path
@@ -594,7 +599,6 @@ enum : uint32_t {
     // A socket's.
     opSend = 144,
     opRecv,
-    opSocktype,
     // A stack's and sockmgr's.
     opStack = 160,
     opHand,

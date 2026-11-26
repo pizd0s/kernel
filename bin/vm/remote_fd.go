@@ -100,7 +100,9 @@ func (f *RemoteFD) exchange(p *Process, d *Description, data []byte, files []*De
 
 	defer a.leave()
 
-	if _, err := p.sockSend(f.end, &Packet{data: data, files: append(files, newDescription(a, O_RDWR))}, Address{}, IoMode{quiet: true, kernel: true}); err != nil {
+	end, _ := f.end.object().(*PairEnd)
+
+	if end == nil || end.deliver(p, &Packet{data: data, files: append(files, newDescription(a, O_RDWR))}, IoMode{quiet: true, kernel: true}) != nil {
 		return Packet{}, false, EIO
 	}
 
@@ -125,7 +127,7 @@ func (f *RemoteFD) call(p *Process, d *Description, r Request, group uint32, wai
 			return false, EIO
 		case r.n < 0 || r.explicit && r.at < 0:
 			return false, EINVAL
-		case r.n == 0:
+		case r.n == 0 && !r.sock:
 			return false, nil
 		}
 	case *FileWrite:
@@ -134,22 +136,8 @@ func (f *RemoteFD) call(p *Process, d *Description, r Request, group uint32, wai
 			return false, EIO
 		case r.n < 0 || r.explicit && r.at < 0:
 			return false, EINVAL
-		case r.n == 0:
+		case r.n == 0 && !r.sock:
 			return false, nil
-		}
-	case *SockSend:
-		if room := packetMax - remoteHeader - 4 - len(r.to.raw); len(r.pk.data) > room {
-			kind := SockType{}
-
-			if _, err := f.call(p, d, &kind, group, false); err != nil {
-				return false, err
-			}
-
-			if kind.kind != SOCK_STREAM {
-				return false, EMSGSIZE
-			}
-
-			r.pk.data = r.pk.data[:room]
 		}
 	case *FileCopyTo:
 		var err error

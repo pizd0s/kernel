@@ -16,8 +16,8 @@
 // its processes theirs. An
 // open file is ready as the OPEN's OK says, and then as each READY of its
 // server says. A socket's call on an open file is the server's too: a
-// SEND brings the bytes, a RECV asks for them, as a service of sockets
-// would serve them.
+// SEND and a RECV, a write and a read with flags, as a service of
+// sockets would serve them.
 
 #include <assert.h>
 #include <errno.h>
@@ -296,9 +296,10 @@ static pid_t server(int end, const char* bytes) {
 }
 
 // A child that serves one SEND and one RECV of the open file whose
-// endpoint end is: SEND's len u32 of no address and its bytes, whose
-// count is the answer, then RECV's want u32, answered flags 0, len 0 and
-// "pong".
+// endpoint end is, each with the memory of who asks, a memfd, as a READ
+// and a WRITE have it: SEND's flags u32 and len u32 of no address, its
+// bytes in the memory, whose count is the answer, then RECV's flags u32,
+// "pong" put into the memory and answered count u32, flags 0, len 0.
 static pid_t socketServer(int end) {
     fflush(stdout);
     const pid_t child = fork();
@@ -307,39 +308,41 @@ static pid_t socketServer(int end) {
         return child;
     }
     unsigned char packet[256];
+    int memfd;
     int reply;
     Header h;
     uint32_t len;
-    const ssize_t n = receiveWith(end, packet, sizeof packet, reply);
-    assert(n >= ssize_t(sizeof h + 4) && reply >= 0);
+    char sent[16] = {};
+    assert(receiveTwo(end, packet, sizeof packet, memfd, reply) == ssize_t(sizeof h + 8) && memfd >= 0 && reply >= 0);
     memcpy(&h, packet, sizeof h);
-    memcpy(&len, packet + sizeof h, sizeof len);
-    const int sent = int(n - ssize_t(sizeof h + 4 + len));
-    printf("served: %s of '%.*s'\n", h.op == opSend && len == 0 ? "SEND" : "another call", sent, reinterpret_cast<const char*>(packet) + sizeof h + 4 + len);
+    memcpy(&len, packet + sizeof h + 4, sizeof len);
+    assert(h.arg <= sizeof sent && pread(memfd, sent, h.arg, 0) == ssize_t(h.arg));
+    printf("served: %s of '%.*s'\n", h.op == opSend && len == 0 ? "SEND" : "another call", int(h.arg), sent);
     fflush(stdout);
 
     struct {
         Header h;
         uint32_t count;
-    } counted{{opOk, 0, 0, 0, 0, 0}, uint32_t(sent)};
+    } counted{{opOk, 0, 0, 0, 0, 0}, h.arg};
 
     assert(send(reply, &counted, sizeof counted, 0) == ssize_t(sizeof counted));
+    close(memfd);
     close(reply);
-    uint32_t want;
-    assert(receiveWith(end, packet, sizeof packet, reply) == ssize_t(sizeof h + 4) && reply >= 0);
+    assert(receiveTwo(end, packet, sizeof packet, memfd, reply) == ssize_t(sizeof h + 4) && memfd >= 0 && reply >= 0);
     memcpy(&h, packet, sizeof h);
-    memcpy(&want, packet + sizeof h, sizeof want);
-    printf("served: %s of %u\n", h.op == opRecv ? "RECV" : "another call", want);
+    printf("served: %s of %u\n", h.op == opRecv ? "RECV" : "another call", h.arg);
     fflush(stdout);
+    assert(pwrite(memfd, "pong", 4, 0) == 4);
 
-    struct [[gnu::packed]] {
+    struct {
         Header h;
+        uint32_t count;
         uint32_t flags;
         uint32_t len;
-        char data[4];
-    } given{{opOk, 0, 0, 0, 0, 0}, 0, 0, {'p', 'o', 'n', 'g'}};
+    } given{{opOk, 0, 0, 0, 0, 0}, 4, 0, 0};
 
     assert(send(reply, &given, sizeof given, 0) == ssize_t(sizeof given));
+    close(memfd);
     close(reply);
     _exit(0);
 }

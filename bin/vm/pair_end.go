@@ -184,24 +184,46 @@ func (e *PairEnd) poll(d *Description, events int16, through []*Epoll) int16 {
 	return mask & (events | POLLERR | POLLHUP)
 }
 
-func (e *PairEnd) send(p *Process, r *SockSend) error {
-	if r.to.given && e.shared.kind == SOCK_DGRAM {
+func (e *PairEnd) send(p *Process, r *FileWrite) error {
+	if len(r.to) > 0 && e.shared.kind == SOCK_DGRAM {
 		return EISCONN
 	}
 
-	if e.shared.kind == SOCK_STREAM {
-		return e.sendStream(p, r)
-	}
-
-	if len(r.pk.data) > packetMax {
+	if e.shared.kind != SOCK_STREAM && r.n > packetMax {
 		return EMSGSIZE
 	}
 
-	if err := e.deliver(p, r.pk, r.mode); err != nil {
+	pk := r.pk
+
+	if pk == nil {
+		pk = p.packet()
+
+		buf := pk.data[:cap(pk.data)]
+
+		if r.n > len(buf) {
+			buf = make([]byte, r.n)
+		}
+
+		pk.data = buf[:r.from.memory().take(0, buf[:r.n])]
+	}
+
+	r.pk = nil
+	pk.files = append(pk.files[:0], r.files...)
+
+	mode := r.mode
+
+	mode.nonblock = mode.nonblock || r.flags&MSG_DONTWAIT != 0
+	mode.quiet = mode.quiet || r.flags&MSG_NOSIGNAL != 0
+
+	if e.shared.kind == SOCK_STREAM {
+		return e.sendStream(p, r, pk, mode)
+	}
+
+	if err := e.deliver(p, pk, mode); err != nil {
 		return err
 	}
 
-	r.n = len(r.pk.data)
+	r.count = len(pk.data)
 
 	return nil
 }
@@ -230,25 +252,25 @@ func (e *PairEnd) deliver(p *Process, pk *Packet, mode IoMode) error {
 	return err
 }
 
-func (e *PairEnd) sendStream(p *Process, r *SockSend) error {
-	data, files := r.pk.data, r.pk.files
+func (e *PairEnd) sendStream(p *Process, r *FileWrite, pk *Packet, mode IoMode) error {
+	data, files := pk.data, pk.files
 
-	for r.n < len(data) {
-		c := min(len(data)-r.n, packetMax)
+	for r.count < len(data) {
+		c := min(len(data)-r.count, packetMax)
 
-		if err := e.deliver(p, &Packet{data: data[r.n : r.n+c : r.n+c], files: files}, r.mode); err != nil {
-			if err == EPIPE && !r.mode.quiet {
+		if err := e.deliver(p, &Packet{data: data[r.count : r.count+c : r.count+c], files: files}, mode); err != nil {
+			if err == EPIPE && !mode.quiet {
 				p.sendSelf(SIGPIPE)
 			}
 
-			if r.n > 0 {
+			if r.count > 0 {
 				return nil
 			}
 
 			return err
 		}
 
-		r.n += c
+		r.count += c
 		files = nil
 	}
 
@@ -371,59 +393,58 @@ func (e *PairEnd) awaitInput(p *Process) (timedOut bool, err error) {
 	return timedOut, err
 }
 
-func (e *PairEnd) recv(p *Process, r *SockRecv) error {
+func (e *PairEnd) recv(p *Process, r *FileRead) error {
+	into, flags := r.into.memory(), r.flags|bit(r.mode.nonblock)*MSG_DONTWAIT
+
 	if e.shared.kind == SOCK_STREAM {
-		return e.receiveStream(p, r)
+		return e.receiveStream(p, r, into, flags)
 	}
 
-	pk, err := e.take(p, r.flags&MSG_DONTWAIT != 0, r.flags&MSG_PEEK != 0)
+	pk, err := e.take(p, flags&MSG_DONTWAIT != 0, flags&MSG_PEEK != 0)
 
 	if err != nil || pk == nil {
 		return err
 	}
 
-	r.n = r.into.put(0, pk.data[:min(len(pk.data), r.want)])
+	r.count = into.put(0, pk.data[:min(len(pk.data), r.n)])
 
-	if r.n < len(pk.data) {
+	if r.count < len(pk.data) {
 		r.out |= MSG_TRUNC
 	}
 
-	if r.flags&MSG_TRUNC != 0 {
-		r.n = len(pk.data)
+	if flags&MSG_TRUNC != 0 {
+		r.count = len(pk.data)
 	}
 
-	if r.flags&MSG_PEEK == 0 {
+	if flags&MSG_PEEK == 0 {
 		r.files, r.pk = pk.files, pk
 	}
 
 	return nil
 }
 
-func (e *PairEnd) receiveStream(p *Process, r *SockRecv) error {
-	nonblock := r.flags&MSG_DONTWAIT != 0
-	want := r.want
-
-	if want == 0 {
+func (e *PairEnd) receiveStream(p *Process, r *FileRead, into *MemfdFile, flags uint32) error {
+	if r.n == 0 {
 		return nil
 	}
 
 	for {
-		n, files, eof, ended := e.streamTake(r.into, r.n, want-r.n, r.flags&MSG_PEEK != 0)
+		n, files, eof, ended := e.streamTake(into, r.count, r.n-r.count, flags&MSG_PEEK != 0)
 
-		if r.n == 0 && n > 0 && r.flags&MSG_PEEK == 0 {
+		if r.count == 0 && n > 0 && flags&MSG_PEEK == 0 {
 			r.files = files
 		} else {
 			dropFiles(files)
 		}
 
-		r.n += n
+		r.count += n
 
-		if eof || ended || r.n >= want || r.n > 0 && r.flags&MSG_WAITALL == 0 || r.flags&MSG_PEEK != 0 && r.n > 0 {
+		if eof || ended || r.count >= r.n || r.count > 0 && flags&MSG_WAITALL == 0 || flags&MSG_PEEK != 0 && r.count > 0 {
 			return nil
 		}
 
-		if nonblock {
-			if r.n > 0 {
+		if flags&MSG_DONTWAIT != 0 {
+			if r.count > 0 {
 				return nil
 			}
 
@@ -433,7 +454,7 @@ func (e *PairEnd) receiveStream(p *Process, r *SockRecv) error {
 		timedOut, err := e.awaitInput(p)
 
 		if err != nil || timedOut {
-			if r.n > 0 {
+			if r.count > 0 {
 				return nil
 			}
 
@@ -446,7 +467,7 @@ func (e *PairEnd) receiveStream(p *Process, r *SockRecv) error {
 	}
 }
 
-func (e *PairEnd) streamTake(into Into, at, room int, peek bool) (n int, files []*Description, eof, ended bool) {
+func (e *PairEnd) streamTake(into *MemfdFile, at, room int, peek bool) (n int, files []*Description, eof, ended bool) {
 	e.mu.Lock()
 
 	defer e.mu.Unlock()
@@ -491,19 +512,6 @@ func (e *PairEnd) streamTake(into Into, at, room int, peek bool) (n int, files [
 	return n, files, false, false
 }
 
-func advance(bufs [][]byte, n int) [][]byte {
-	for len(bufs) > 0 && n >= len(bufs[0]) {
-		n -= len(bufs[0])
-		bufs = bufs[1:]
-	}
-
-	if n == 0 {
-		return bufs
-	}
-
-	return append([][]byte{bufs[0][n:]}, bufs[1:]...)
-}
-
 func scatterInto(bufs [][]byte, data []byte) int {
 	n := 0
 
@@ -519,49 +527,6 @@ func scatterInto(bufs [][]byte, data []byte) int {
 	}
 
 	return n
-}
-
-func (e *PairEnd) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
-	if p.chaosFail("read") {
-		return 0, EIO
-	}
-
-	r := SockRecv{into: Into{p: p, to: into}, want: n, flags: bit(mode.nonblock) * MSG_DONTWAIT}
-	err := e.recv(p, &r)
-
-	dropFiles(r.files)
-
-	return r.n, err
-}
-
-func (e *PairEnd) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, error) {
-	if p.chaosFail("write") {
-		return 0, EIO
-	}
-
-	if e.shared.kind != SOCK_STREAM && n > packetMax {
-		return 0, EMSGSIZE
-	}
-
-	data := make([]byte, n)
-	r := SockSend{pk: &Packet{data: data[:takeFrom(from)(0, data)]}, mode: mode}
-	err := e.send(p, &r)
-
-	return r.n, err
-}
-
-func takeFrom(from *MemfdFile) func(at int, b []byte) int {
-	return func(at int, b []byte) int {
-		n, _ := from.with(int64(at), len(b), false, func(src []byte) (int, error) {
-			return copy(b, src), nil
-		})
-
-		return n
-	}
-}
-
-func (e *PairEnd) socketKind() int {
-	return e.shared.kind
 }
 
 func (e *PairEnd) shutdown(how int) error {
@@ -627,38 +592,32 @@ func (e *PairEnd) call(p *Process, d *Description, r Request, group uint32, wait
 		return false, e.stat(p, r.st)
 	case *Ctl:
 		return false, e.ctl(p, r)
-	case *SockSend:
-		return false, e.send(p, r)
-	case *SockRecv:
-		return false, e.recv(p, r)
-	case *SockType:
-		r.kind = e.socketKind()
-
-		return false, nil
-	case *SockConsume:
-		e.consume(r.sink)
-
-		return false, nil
 	case *FileRead:
-		if r.explicit {
+		switch {
+		case r.explicit:
 			return false, errUnserved
+		case !r.sock && p.chaosFail("read"):
+			return false, EIO
 		}
 
-		var err error
+		err := e.recv(p, r)
 
-		r.count, err = e.read(p, r.into.memory(), r.n, r.mode)
+		if !r.sock {
+			dropFiles(r.files)
+
+			r.files = nil
+		}
 
 		return false, err
 	case *FileWrite:
-		if r.explicit {
+		switch {
+		case r.explicit:
 			return false, errUnserved
+		case !r.sock && p.chaosFail("write"):
+			return false, EIO
 		}
 
-		var err error
-
-		r.count, err = e.write(p, r.from.memory(), r.n, r.mode)
-
-		return false, err
+		return false, e.send(p, r)
 	}
 
 	return false, errUnserved

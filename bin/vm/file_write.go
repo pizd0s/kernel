@@ -11,14 +11,26 @@ type FileWrite struct {
 	at       int64
 	explicit bool
 	count    int
+	sock     bool
+	flags    uint32
+	to       []byte
+	files    []*Description
+	pk       *Packet
 }
 
 func (r *FileWrite) op() uint32 {
+	if r.sock {
+		return sSend
+	}
+
 	return rWrite
 }
 
 func (r *FileWrite) unserved() error {
-	if r.explicit {
+	switch {
+	case r.sock:
+		return ENOTSOCK
+	case r.explicit:
 		return ESPIPE
 	}
 
@@ -26,6 +38,12 @@ func (r *FileWrite) unserved() error {
 }
 
 func (r *FileWrite) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
+	if r.sock {
+		b = binary.LittleEndian.AppendUint32(binary.LittleEndian.AppendUint32(b, r.flags), uint32(len(r.to)))
+
+		return uint32(r.n), append(b, r.to...), append([]*Description{r.from}, r.files...)
+	}
+
 	return uint32(r.n), ioBody(b, r.at, r.explicit), []*Description{r.from}
 }
 

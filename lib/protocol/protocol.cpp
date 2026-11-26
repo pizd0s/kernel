@@ -55,7 +55,7 @@ int unserved(uint32_t op) {
     if (op == opSetCtty || op == opCtl) {
         return ENOTTY;
     }
-    if (op >= opSend && op <= opSocktype) {
+    if (op == opSend || op == opRecv) {
         return ENOTSOCK;
     }
     switch (op) {

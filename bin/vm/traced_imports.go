@@ -75,22 +75,21 @@ var callFormats = func() map[string]string {
 		pthread_setaffinity_np:dddp pthread_setcancelstate:ddp pthread_setcanceltype:ddp pthread_setname_np:dds
 		pthread_setschedparam:dddpd pthread_setschedprio:ddd pthread_setspecific:ddp pthread_sigmask:ddpdpd pthread_spin_destroy:dp
 		pthread_spin_init:dpd pthread_spin_lock:dp pthread_spin_trylock:dp pthread_spin_unlock:dp pthread_timedjoin_np:ddppd
-		pthread_tryjoin_np:ddp pwrite:ddpdd pwritev:ddpddd read:ddpd readv:ddpdd realloc:ppd reallocarray:ppdd recv:ddpdd recvfrom:ddpddpp
-		recvmmsg:ddpddddpd recvmsg:ddpddd rindex:ssd sched_get_priority_max:dd sched_get_priority_min:dd sched_getaffinity:dddp
-		sched_getcpu:d sched_getparam:ddpd sched_getscheduler:dd sched_rr_get_interval:ddpd sched_setaffinity:dddp sched_setparam:ddpd
-		sched_setscheduler:dddpd sched_yield:d select:ddpdpdpdpd sem_clockwait:dpddpd sem_close:dpd sem_destroy:dpd sem_getvalue:dpdp
-		sem_init:dpddd sem_open:psdpd sem_post:dpd sem_timedwait:dpdpd sem_trywait:dpd sem_unlink:ds sem_wait:dpd send:ddpdd
-		setdomainname:dsd setegid:dd seteuid:dd setgid:dd setgroups:ddp sethostname:dsd setitimer:ddpdpd setjmp:dpd setpgid:ddd
-		setpriority:dddd setregid:ddd setresgid:dddd setresuid:dddd setreuid:ddd setrlimit:ddpd setsid:d settimeofday:dpdpd setuid:dd
-		sigaction:ddpdpdd sigaltstack:dpdpd siglongjmp:vpdd sigpending:dpd sigprocmask:ddpdpd sigqueue:dddd sigqueueinfo:dddpd
-		sigsetjmp:dpdd sigsuspend:dpd sigtimedwait:dpdpdpd sigwait:dpdp sigwaitinfo:dpdpd socketpair:ddddp stpcpy:sps stpncpy:spsd
-		strcasecmp:dss strcasestr:sss strcat:sps strchr:ssd strchrnul:ssd strcmp:dss strcpy:sps strcspn:dss strdup:ss strlcat:dpsd
-		strlcpy:dpsd strlen:ds strncasecmp:dssd strncat:spsd strncmp:dssd strncpy:spsd strndup:ssd strnlen:dsd strpbrk:sss strrchr:ssd
-		strsep:sps strspn:dss strstr:sss strtok:sps strtok_r:spsp swab:vppd sync:v syncfs:dd sysconf:dd sysinfo:dpd thrd_create:dpdp
-		thrd_current:d thrd_detach:dd thrd_equal:ddd thrd_join:ddp thrd_sleep:dpdpd thrd_yield:v timer_create:ddpdp timer_delete:dd
-		timer_getoverrun:dd timer_gettime:ddpd timer_settime:dddpdpd timerfd_create:ddd timerfd_gettime:ddpd timerfd_settime:dddpdpd
-		times:dpd timespec_get:dpdd tss_create:dpd tss_delete:vd tss_get:pd tss_set:ddp umask:oo uname:dpd vfork:d wait4:ddpdpd
-		waitid:dddpdd write:ddpd writev:ddpdd
+		pthread_tryjoin_np:ddp pwrite:ddpdd pwritev:ddpddd read:ddpd readv:ddpdd realloc:ppd reallocarray:ppdd rindex:ssd
+		sched_get_priority_max:dd sched_get_priority_min:dd sched_getaffinity:dddp sched_getcpu:d sched_getparam:ddpd
+		sched_getscheduler:dd sched_rr_get_interval:ddpd sched_setaffinity:dddp sched_setparam:ddpd sched_setscheduler:dddpd sched_yield:d
+		select:ddpdpdpdpd sem_clockwait:dpddpd sem_close:dpd sem_destroy:dpd sem_getvalue:dpdp sem_init:dpddd sem_open:psdpd sem_post:dpd
+		sem_timedwait:dpdpd sem_trywait:dpd sem_unlink:ds sem_wait:dpd setdomainname:dsd setegid:dd seteuid:dd setgid:dd setgroups:ddp
+		sethostname:dsd setitimer:ddpdpd setjmp:dpd setpgid:ddd setpriority:dddd setregid:ddd setresgid:dddd setresuid:dddd setreuid:ddd
+		setrlimit:ddpd setsid:d settimeofday:dpdpd setuid:dd sigaction:ddpdpdd sigaltstack:dpdpd siglongjmp:vpdd sigpending:dpd
+		sigprocmask:ddpdpd sigqueue:dddd sigqueueinfo:dddpd sigsetjmp:dpdd sigsuspend:dpd sigtimedwait:dpdpdpd sigwait:dpdp
+		sigwaitinfo:dpdpd socketpair:ddddp stpcpy:sps stpncpy:spsd strcasecmp:dss strcasestr:sss strcat:sps strchr:ssd strchrnul:ssd
+		strcmp:dss strcpy:sps strcspn:dss strdup:ss strlcat:dpsd strlcpy:dpsd strlen:ds strncasecmp:dssd strncat:spsd strncmp:dssd
+		strncpy:spsd strndup:ssd strnlen:dsd strpbrk:sss strrchr:ssd strsep:sps strspn:dss strstr:sss strtok:sps strtok_r:spsp swab:vppd
+		sync:v syncfs:dd sysconf:dd sysinfo:dpd thrd_create:dpdp thrd_current:d thrd_detach:dd thrd_equal:ddd thrd_join:ddp
+		thrd_sleep:dpdpd thrd_yield:v timer_create:ddpdp timer_delete:dd timer_getoverrun:dd timer_gettime:ddpd timer_settime:dddpdpd
+		timerfd_create:ddd timerfd_gettime:ddpd timerfd_settime:dddpdpd times:dpd timespec_get:dpdd tss_create:dpd tss_delete:vd
+		tss_get:pd tss_set:ddp umask:oo uname:dpd vfork:d wait4:ddpdpd waitid:dddpdd write:ddpd writev:ddpdd
 `) {
 		name, format, _ := strings.Cut(word, ":")
 

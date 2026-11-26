@@ -64,7 +64,6 @@ const (
 const (
 	sSend uint32 = iota + 144
 	sRecv
-	sType
 )
 
 func served(p *Process, kind uint32, access int, dev, ino uint64, events uint32, end *Description) (*Description, error) {
@@ -78,7 +77,9 @@ func served(p *Process, kind uint32, access int, dev, ino uint64, events uint32,
 
 	f := &RemoteFD{end: end, key: FileKey{dev, ino}, ready: readiness(events)}
 
-	p.request(end, &SockConsume{sink: f.deliver})
+	if e, ok := end.object().(*PairEnd); ok {
+		e.consume(f.deliver)
+	}
 
 	return opened(f, access&(O_ACCMODE|O_PATH)), nil
 }

@@ -924,34 +924,6 @@ func libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 	return proc().libcSocketpair(domain, kind, protocol, at)
 }
 
-func libcSend(fd, buf, n, flags uint32) uint32 {
-	return proc().libcSend(fd, buf, n, flags)
-}
-
-func libcRecv(fd, buf, n, flags uint32) uint32 {
-	return proc().libcRecv(fd, buf, n, flags)
-}
-
-func libcRecvfrom(fd, buf, n, flags, addr, lenAt uint32) uint32 {
-	return proc().libcRecvfrom(fd, buf, n, flags, addr, lenAt)
-}
-
-func libcRecvmsg(fd, msg, msgSize, iovSize, flags uint32) uint32 {
-	p := proc()
-
-	p.sized("recvmsg", msgSize, sizeofMsghdr, iovSize, sizeofIovec)
-
-	return p.libcRecvmsg(fd, msg, flags)
-}
-
-func libcRecvmmsg(fd, vec, vecSize, iovSize, vlen, flags, timeout, timeoutSize uint32) uint32 {
-	p := proc()
-
-	p.sized("recvmmsg", vecSize, sizeofMmsghdr, iovSize, sizeofIovec, timeoutSize, sizeofTimespec)
-
-	return p.libcRecvmmsg(fd, vec, vlen, flags, timeout)
-}
-
 func libcEpoll_create(size uint32) uint32 {
 	return proc().libcEpoll_create(size)
 }
@@ -2250,10 +2222,14 @@ func libc__kernel_exec(fd, path, program, argv, envp uint32) uint32 {
 	return proc().libc__kernel_exec(fd, path, program, argv, envp)
 }
 
-func libc__kernel_socksendmsg(fd, msg, flags uint32) uint32 {
-	return proc().libc__kernel_socksendmsg(fd, msg, flags)
-}
-
 func libcFchroot(fd uint32) uint32 {
 	return proc().libcFchroot(fd)
+}
+
+func libc__kernel_sockrecv(fd, iov, count, flags, x uint32) uint32 {
+	return proc().libc__kernel_sockrecv(fd, iov, count, flags, x)
+}
+
+func libc__kernel_socksend(fd, iov, count, flags, x uint32) uint32 {
+	return proc().libc__kernel_socksend(fd, iov, count, flags, x)
 }

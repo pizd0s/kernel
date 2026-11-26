@@ -3628,8 +3628,8 @@ namespace {
         Endpoint* end = nullptr;
         u32 op = 0;
         u32 flags = 0;  // a RECV's
-        u32 want = 0;   // a RECV's, and a READ's length
-        int memfd = -1; // a READ's
+        u32 want = 0;   // a RECV's and a READ's length
+        int memfd = -1; // where its bytes go
         u64 until = 0;  // when it is EAGAIN, none of 0
         Waiting* next = nullptr;
     };
@@ -3936,17 +3936,28 @@ static void listened(Socket& l) {
     socketReady(l);
 }
 
-// The first datagram of a socket to a RECV, answered on fd: flags u32,
-// MSG_TRUNC of one longer than want, len u32 and the sender's sockaddr,
-// at most want of its bytes, and its rights. MSG_PEEK leaves it where it
-// is, and gives no rights.
-static void answerRecv(Socket& s, u32 flags, u32 want, int fd) {
+// The first datagram of a socket to a READ or a RECV, into the call's
+// memfd, at most length of its bytes, their count answered on fd, and to
+// a RECV what the receive says, MSG_TRUNC of a longer one, then len u32
+// and the sender's sockaddr, with the datagram's rights; a READ's rights
+// are nobody's. MSG_PEEK leaves the datagram where it is, and gives no
+// rights.
+static void answerData(Socket& s, bool recv, u32 flags, int memfd, u32 length, int fd) {
     Datagram* d = s.first;
-    const bool peek = (flags & MSG_PEEK) != 0;
-    const u32 said[2] = {d->size > want ? u32(MSG_TRUNC) : 0, d->nameSize};
-    Header head{opOk, 0, 0, 0, 0, 0};
-    const iovec parts[4] = {{&head, sizeof head}, part(said, sizeof said), part(d->name(), d->nameSize), part(d->bytes(), MIN(d->size, want))};
-    sendPacket(fd, parts, 4, peek ? nullptr : d->fds, peek ? 0 : d->fdCount);
+    const u32 n = MIN(d->size, length);
+    if (n > 0 && pwrite(memfd, d->bytes(), n, 0) != ssize_t(n)) {
+        error(fd, EIO);
+        return;
+    }
+    const bool peek = recv && (flags & MSG_PEEK) != 0;
+    if (recv) {
+        const u32 said[3] = {n, d->size > length ? u32(MSG_TRUNC) : 0, d->nameSize};
+        Header head{opOk, 0, 0, 0, 0, 0};
+        const iovec parts[3] = {{&head, sizeof head}, part(said, sizeof said), part(d->name(), d->nameSize)};
+        sendPacket(fd, parts, 3, peek ? nullptr : d->fds, peek ? 0 : d->fdCount);
+    } else {
+        ok(fd, &n, sizeof n);
+    }
     if (peek) {
         return;
     }
@@ -3958,29 +3969,10 @@ static void answerRecv(Socket& s, u32 flags, u32 want, int fd) {
     dropDatagram(d);
 }
 
-// The first datagram of a socket to a READ, into its memfd, at most
-// length of its bytes, their count answered on fd; its rights are
-// nobody's.
-static void answerRead(Socket& s, int memfd, u32 length, int fd) {
-    Datagram* d = s.first;
-    const u32 n = MIN(d->size, length);
-    if (n > 0 && pwrite(memfd, d->bytes(), n, 0) != ssize_t(n)) {
-        error(fd, EIO);
-        return;
-    }
-    s.first = d->next;
-    if (!s.first) {
-        s.last = nullptr;
-    }
-    s.queued -= d->size;
-    dropDatagram(d);
-    ok(fd, &n, sizeof n);
-}
-
 // The end of what a socket receives, after SHUT_RD: nothing, to a RECV
 // or a READ.
 static void answerEnd(u32 op, int fd) {
-    const u32 none[2] = {0, 0};
+    const u32 none[3] = {0, 0, 0};
     ok(fd, none, op == opRecv ? sizeof none : sizeof none[0]);
 }
 
@@ -3991,10 +3983,8 @@ static void received(Socket& s) {
         Waiting* w = s.waiting;
         if (!s.first) {
             answerEnd(w->op, w->end->fd);
-        } else if (w->op == opRecv) {
-            answerRecv(s, w->flags, w->want, w->end->fd);
         } else {
-            answerRead(s, w->memfd, w->want, w->end->fd);
+            answerData(s, w->op == opRecv, w->flags, w->memfd, w->want, w->end->fd);
         }
         closed(w->end);
     }
@@ -4474,41 +4464,45 @@ static bool socketCtl(Socket& s, Header h, Body body, int fd) {
 }
 
 // A request on a socket, answered on fd: a CTL, a socket's call
-// (socketCtl); SEND, RECV, READ and WRITE of a datagram socket, a RECV
-// and a READ kept until a datagram comes, for SO_RCVTIMEO at most, but
-// of O_NONBLOCK and MSG_DONTWAIT, and of a stream's ENOTCONN, as it is
-// connected to nothing while it is here; FSTAT, GETFL and SETFL. Whether
-// fd is kept.
+// (socketCtl); READ and WRITE, and RECV and SEND, the two with flags and
+// rights, of a datagram socket, whose bytes are in the call's memfd, a
+// RECV and a READ kept until a datagram comes, for SO_RCVTIMEO at most,
+// but of O_NONBLOCK and MSG_DONTWAIT, and of a stream's ENOTCONN, as it
+// is connected to nothing while it is here; FSTAT, GETFL and SETFL.
+// Whether fd is kept.
 static bool onSocket(Endpoint* ep, const Header& h, Body body, int fd) {
     Socket& s = *ep->socket;
     const bool stream = s.type != SOCK_DGRAM;
     switch (h.op) {
         case opCtl:
             return socketCtl(s, h, body, fd);
-        case opSend: {
-            if (stream) {
-                return error(fd, s.listening ? EOPNOTSUPP : ENOTCONN);
-            }
-            if (body.size() < 4) {
-                return error(fd, EINVAL);
-            }
-            const u32 length = body.take<u32>();
-            if (length != 0) {
-                return error(fd, length > body.size() ? EINVAL : EAFNOSUPPORT);
-            }
-            sendCall(s, body.at, body.size(), packetFds, packetFdCount - 1, fd);
-            return false;
-        }
+        case opSend:
         case opWrite: {
             if (stream) {
-                return error(fd, ENOTCONN);
+                return error(fd, h.op == opSend && s.listening ? EOPNOTSUPP : ENOTCONN);
+            }
+            if (packetFdCount < 2) {
+                return error(fd, EINVAL);
+            }
+            if (h.op == opSend) {
+                if (body.size() < 8) {
+                    return error(fd, EINVAL);
+                }
+                body.take<u32>();
+                const u32 length = body.take<u32>();
+                if (length != 0) {
+                    return error(fd, length > body.size() ? EINVAL : EAFNOSUPPORT);
+                }
+            }
+            if (h.arg > 65536) {
+                return error(fd, EMSGSIZE);
             }
             Buffer data;
             data.resize(h.arg);
-            if (packetFdCount < 2 || pread(packetFds[0], data.data(), h.arg, 0) != ssize_t(h.arg)) {
+            if (pread(packetFds[0], data.data(), h.arg, 0) != ssize_t(h.arg)) {
                 return error(fd, EINVAL);
             }
-            sendCall(s, data.data(), h.arg, nullptr, 0, fd);
+            sendCall(s, data.data(), h.arg, packetFds + 1, packetFdCount - 2, fd);
             return false;
         }
         case opRecv:
@@ -4516,22 +4510,15 @@ static bool onSocket(Endpoint* ep, const Header& h, Body body, int fd) {
             if (stream) {
                 return error(fd, ENOTCONN);
             }
-            const bool recv = h.op == opRecv;
-            u32 want = h.arg;
-            if (recv) {
-                if (body.size() < 4) {
-                    return error(fd, EINVAL);
-                }
-                want = body.take<u32>();
-            } else if (packetFdCount < 2) {
+            u32 flags = 0;
+            if (packetFdCount < 2 || (h.op == opRecv && body.size() < 4)) {
                 return error(fd, EINVAL);
             }
+            if (h.op == opRecv) {
+                flags = body.take<u32>();
+            }
             if (s.first) {
-                if (recv) {
-                    answerRecv(s, h.arg, want, fd);
-                } else {
-                    answerRead(s, packetFds[0], want, fd);
-                }
+                answerData(s, h.op == opRecv, flags, packetFds[0], h.arg, fd);
                 socketReady(s);
                 return false;
             }
@@ -4539,22 +4526,16 @@ static bool onSocket(Endpoint* ep, const Header& h, Body body, int fd) {
                 answerEnd(h.op, fd);
                 return false;
             }
-            if (ep->nonblock || (recv && (h.arg & MSG_DONTWAIT) != 0)) {
+            if (ep->nonblock || (flags & MSG_DONTWAIT) != 0) {
                 return error(fd, EAGAIN);
             }
             Waiting* w = keep(s, h.op, fd, s.receiveFor);
-            w->want = want;
-            if (recv) {
-                w->flags = h.arg;
-            } else {
-                w->memfd = packetFds[0];
-                packetFds[0] = -1;
-            }
+            w->want = h.arg;
+            w->flags = flags;
+            w->memfd = packetFds[0];
+            packetFds[0] = -1;
             return true;
         }
-        case opSocktype:
-            ok(fd, &s.type, sizeof s.type);
-            return false;
         case opFstat: {
             const Stat st{s.id, 0, s.made, S_IFSOCK | 0777, 1, s.uid, s.gid, s.made, 0, s.made};
             ok(fd, &st, sizeof st);

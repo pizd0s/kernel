@@ -92,8 +92,6 @@ type Process struct {
 	packets []*Packet
 
 	stats  Slots[FileStat]
-	sends  Slots[SockSend]
-	recvs  Slots[SockRecv]
 	reads  Slots[FileRead]
 	writes Slots[FileWrite]
 	epolls Slots[EpollWait]
@@ -4990,10 +4988,6 @@ func (p *Process) ioSpansIn(out [][]byte, iovs uint32, count uint32) ([][]byte, 
 	return out, nil
 }
 
-func (p *Process) gather(iovs, count uint32, max int) ([]byte, error) {
-	return p.gatherIn(nil, iovs, count, max)
-}
-
 func (p *Process) gatherIn(small []byte, iovs, count uint32, max int) ([]byte, error) {
 	if count > 1024 {
 		return nil, EINVAL
@@ -6356,17 +6350,6 @@ func (p *Process) libcMemfile(at, n, flags uint32) uint32 {
 	return p.result(fd, nil)
 }
 
-func (p *Process) putAddress(addr []byte, at, lenAt uint32) {
-	if at == 0 || lenAt == 0 {
-		return
-	}
-
-	room := p.u32(lenAt)
-
-	copy(p.span(at, min(room, uint32(len(addr)))), addr)
-	p.put32(lenAt, uint32(len(addr)))
-}
-
 func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 	if domain != AF_UNIX {
 		return p.result(0, EOPNOTSUPP)
@@ -6414,54 +6397,160 @@ func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 	return p.result(0, nil)
 }
 
-func (p *Process) libcSend(fd, buf, n, flags uint32) uint32 {
-	return p.socketSend(fd, buf, n, flags, 0, 0)
-}
-
-func (p *Process) libcRecv(fd, buf, n, flags uint32) uint32 {
-	return p.socketRecv(fd, buf, n, flags, 0, 0)
-}
-
-func (p *Process) libcRecvfrom(fd, buf, n, flags, addr, lenAt uint32) uint32 {
-	return p.socketRecv(fd, buf, n, flags, addr, lenAt)
-}
-
-func (p *Process) libc__kernel_socksendmsg(fd, msg, flags uint32) uint32 {
-	return p.result(p.sendmsg(fd, msg, flags))
-}
-
-func (p *Process) sendmsg(fd, msg, flags uint32) (int, error) {
+func (p *Process) socket(fd uint32) (*Description, error) {
 	d, err := p.description(fd)
 
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
-	flags |= d.dontwait()
+	switch d.object().(type) {
+	case *PairEnd, *Answer, *RemoteFD:
+		return d, nil
+	}
 
-	h := p.span(msg, sizeofMsghdr)
-	to := p.destination(binary.LittleEndian.Uint32(h), binary.LittleEndian.Uint32(h[4:]))
-	pk := p.packet()
-	files, err := p.rights(pk.files[:0], binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:]))
+	return nil, ENOTSOCK
+}
+
+func (p *Process) libc__kernel_sockrecv(fd, iov, count, flags, x uint32) uint32 {
+	d, err := p.socket(fd)
 
 	if err != nil {
-		return 0, err
+		return p.result(0, err)
 	}
 
-	iov, count := binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:])
-	data, err := p.gatherIn(pk.data[:cap(pk.data)], iov, count, packetMax)
+	spans, err := p.ioSpans(iov, count)
 
-	if err == EMSGSIZE && p.sockKind(d) == SOCK_STREAM {
-		data, err = p.gather(iov, count, math.MaxInt)
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	r := p.reads.get()
+
+	defer p.reads.put(r)
+
+	var buf []byte
+
+	r.n, r.mode, r.sock, r.flags = totalLength(spans), d.mode(), true, flags
+
+	if count == 1 {
+		r.into = p.memory(p.u32(iov), uint32(r.n), O_WRONLY)
+	} else {
+		buf = make([]byte, r.n)
+		r.into = bytesFile(buf)
+	}
+
+	err = p.fileCall(d, r, p.group())
+
+	if count == 1 {
+		p.memoryDone(r.into)
+	} else if err == nil {
+		scatterInto(spans, buf[:min(r.count, r.n)])
 	}
 
 	if err != nil {
-		return 0, err
+		return p.result(0, err)
 	}
 
-	pk.data, pk.files = data, files
+	out, put := r.out, uint32(0)
 
-	return p.sockSend(d, pk, to, sendMode(flags))
+	if x == 0 {
+		dropFiles(r.files)
+	} else {
+		addr, room, fds, slots := p.u32(x), p.u32(x+4), p.u32(x+8), p.u32(x+12)
+
+		if addr != 0 {
+			copy(p.span(addr, min(room, uint32(len(r.addr)))), r.addr)
+		}
+
+		for _, f := range r.files {
+			if put >= slots {
+				f.release()
+
+				out |= MSG_CTRUNC
+
+				continue
+			}
+
+			got, err := p.installDesc(f, 0, flags&MSG_CMSG_CLOEXEC != 0)
+
+			if err != nil {
+				out |= MSG_CTRUNC
+
+				continue
+			}
+
+			p.put32(fds+4*put, uint32(got))
+			put++
+		}
+
+		p.put32(x+4, uint32(len(r.addr)))
+		p.put32(x+12, put)
+		p.put32(x+16, out)
+	}
+
+	p.packetDone(r.pk)
+
+	return p.result(r.count, nil)
+}
+
+func (p *Process) libc__kernel_socksend(fd, iov, count, flags, x uint32) uint32 {
+	d, err := p.socket(fd)
+
+	if err != nil {
+		return p.result(0, err)
+	}
+
+	r := p.writes.get()
+
+	defer p.writes.put(r)
+
+	if x != 0 {
+		addr, n, fds, slots := p.u32(x), p.u32(x+4), p.u32(x+8), p.u32(x+12)
+
+		if slots > rightsMax {
+			return p.result(0, EINVAL)
+		}
+
+		if addr != 0 && n <= sizeofSockaddrStorage {
+			r.to = slices.Clone(p.span(addr, n))
+		}
+
+		for i := range slots {
+			f, err := p.description(p.u32(fds + 4*i))
+
+			if err != nil {
+				return p.result(0, err)
+			}
+
+			r.files = append(r.files, f)
+		}
+	}
+
+	if count == 1 {
+		n := p.u32(iov + 4)
+
+		r.from, r.n = p.memory(p.u32(iov), n, O_RDONLY), int(n)
+	} else {
+		pk := p.packet()
+		data, err := p.gatherIn(pk.data[:cap(pk.data)], iov, count, math.MaxInt)
+
+		if err != nil {
+			return p.result(0, err)
+		}
+
+		pk.data = data
+		r.from, r.n, r.pk = bytesFile(data), len(data), pk
+	}
+
+	r.mode, r.sock, r.flags = d.mode(), true, flags
+	err = p.fileCall(d, r, p.group())
+
+	if count == 1 {
+		p.memoryDone(r.from)
+	}
+
+	return p.result(r.count, err)
 }
 
 func (p *Process) packet() *Packet {
@@ -6493,284 +6582,6 @@ func (p *Process) packetDone(pk *Packet) {
 
 	*pk = Packet{data: data, files: files}
 	p.packets = append(p.packets, pk)
-}
-
-func sendMode(flags uint32) IoMode {
-	return IoMode{nonblock: flags&MSG_DONTWAIT != 0, quiet: flags&MSG_NOSIGNAL != 0}
-}
-
-func (p *Process) libcRecvmsg(fd, msg, flags uint32) uint32 {
-	return p.result(p.recvmsg(fd, msg, flags))
-}
-
-func (p *Process) recvmsg(fd, msg, flags uint32) (int, error) {
-	var few [4][]byte
-
-	d, err := p.description(fd)
-
-	if err != nil {
-		return 0, err
-	}
-
-	flags |= d.dontwait()
-
-	h := p.span(msg, sizeofMsghdr)
-	name, nameRoom := binary.LittleEndian.Uint32(h), binary.LittleEndian.Uint32(h[4:])
-	iov, count := binary.LittleEndian.Uint32(h[8:]), binary.LittleEndian.Uint32(h[12:])
-	control, room := binary.LittleEndian.Uint32(h[16:]), binary.LittleEndian.Uint32(h[20:])
-	spans, err := p.ioSpansIn(few[:0], iov, count)
-
-	if err != nil {
-		return 0, err
-	}
-
-	r := p.recvs.get()
-
-	defer p.recvs.put(r)
-
-	r.into, r.want, r.flags = Into{p: p, at: iov, n: count, vector: true}, totalLength(spans), flags
-
-	if err := p.fileCall(d, r, p.group()); err != nil {
-		return 0, err
-	}
-
-	written, cut := p.putRights(r.files, control, room, flags&MSG_CMSG_CLOEXEC != 0)
-
-	if name != 0 {
-		copy(p.span(name, min(nameRoom, uint32(len(r.addr)))), r.addr)
-	}
-
-	h = p.span(msg, sizeofMsghdr)
-
-	if name != 0 {
-		binary.LittleEndian.PutUint32(h[4:], uint32(len(r.addr)))
-	}
-
-	binary.LittleEndian.PutUint32(h[20:], written)
-	binary.LittleEndian.PutUint32(h[24:], r.out|cut|flags&MSG_CMSG_CLOEXEC)
-	p.packetDone(r.pk)
-
-	return r.n, nil
-}
-
-func (p *Process) libcRecvmmsg(fd, vec, vlen, flags, timeout uint32) uint32 {
-	s, err := p.description(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	var end time.Time
-
-	if timeout != 0 {
-		d, err := p.timespec(timeout)
-
-		if err != nil {
-			return p.result(0, err)
-		}
-
-		end = time.Now().Add(d)
-	}
-
-	vlen = min(vlen, UIO_MAXIOV)
-
-	for i := range vlen {
-		at := vec + i*sizeofMmsghdr
-		mode := flags &^ MSG_WAITFORONE
-
-		if i > 0 && flags&MSG_WAITFORONE != 0 {
-			mode |= MSG_DONTWAIT
-		}
-
-		n, received, err := p.recvmsgBy(s, fd, at, mode, end)
-
-		if !received {
-			return i
-		}
-
-		if err != nil {
-			if i == 0 {
-				return p.result(0, err)
-			}
-
-			return i
-		}
-
-		p.put32(at+sizeofMsghdr, uint32(n))
-	}
-
-	return vlen
-}
-
-func (p *Process) recvmsgBy(s *Description, fd, msg, flags uint32, end time.Time) (int, bool, error) {
-	if end.IsZero() || flags&MSG_DONTWAIT != 0 {
-		n, err := p.recvmsg(fd, msg, flags)
-
-		return n, true, err
-	}
-
-	for {
-		wait := 0
-
-		if left := time.Until(end); left > 0 {
-			wait = waitMs(left)
-		}
-
-		ready, err := p.waitObjects([]PollEntry{{desc: s, events: POLLIN}}, wait, false)
-
-		if err != nil || ready == 0 {
-			return 0, err != nil, err
-		}
-
-		if n, err := p.recvmsg(fd, msg, flags|MSG_DONTWAIT); err != EAGAIN {
-			return n, true, err
-		}
-	}
-}
-
-func (p *Process) socketSend(fd, buf, n, flags, addr, alen uint32) uint32 {
-	d, err := p.description(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	to := p.destination(addr, alen)
-
-	return p.result(p.sockSend(d, &Packet{data: slices.Clone(p.span(buf, n))}, to, sendMode(flags|d.dontwait())))
-}
-
-func (p *Process) socketRecv(fd, buf, n, flags, addr, lenAt uint32) uint32 {
-	d, err := p.description(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	r := p.recvs.get()
-
-	defer p.recvs.put(r)
-
-	r.into, r.want, r.flags = Into{p: p, at: buf, n: n}, int(n), flags|d.dontwait()
-	err = p.fileCall(d, r, p.group())
-
-	dropFiles(r.files)
-
-	if err == nil && addr != 0 {
-		p.putAddress(r.addr, addr, lenAt)
-	}
-
-	p.packetDone(r.pk)
-
-	return p.result(r.n, err)
-}
-
-func (p *Process) rights(files []*Description, at, n uint32) ([]*Description, error) {
-	if n < sizeofCmsghdr {
-		return files, nil
-	}
-
-	control := p.span(at, n)
-
-	for off := uint32(0); off+sizeofCmsghdr <= n; {
-		length := binary.LittleEndian.Uint32(control[off:])
-
-		if length < sizeofCmsghdr || off+length > n {
-			return nil, EINVAL
-		}
-
-		level, kind := binary.LittleEndian.Uint32(control[off+4:]), binary.LittleEndian.Uint32(control[off+8:])
-		data := control[off+sizeofCmsghdr : off+length]
-
-		switch {
-		case level == SOL_SOCKET && kind == SCM_RIGHTS:
-			for i := 0; i+4 <= len(data); i += 4 {
-				f, err := p.description(binary.LittleEndian.Uint32(data[i:]))
-
-				if err != nil {
-					return nil, err
-				}
-
-				files = append(files, f)
-			}
-		default:
-			return nil, EINVAL
-		}
-
-		off += guestAlign(length)
-	}
-
-	return files, nil
-}
-
-func (p *Process) putRights(files []*Description, at, room uint32, cloexec bool) (uint32, uint32) {
-	if len(files) == 0 {
-		return 0, 0
-	}
-
-	fits := 0
-
-	if room >= sizeofCmsghdr {
-		fits = min(len(files), int((room-sizeofCmsghdr)/4))
-	}
-
-	var out []byte
-
-	if fits > 0 {
-		out = p.span(at, sizeofCmsghdr+uint32(4*fits))
-	}
-
-	flags, put := uint32(0), uint32(0)
-
-	for i, f := range files {
-		if i >= fits {
-			f.release()
-			flags |= MSG_CTRUNC
-
-			continue
-		}
-
-		fd, err := p.installDesc(f, 0, cloexec)
-
-		if err != nil {
-			flags |= MSG_CTRUNC
-
-			continue
-		}
-
-		binary.LittleEndian.PutUint32(out[sizeofCmsghdr+4*put:], uint32(fd))
-		put++
-	}
-
-	if put == 0 {
-		return 0, flags
-	}
-
-	size := sizeofCmsghdr + 4*put
-
-	binary.LittleEndian.PutUint32(out, size)
-	binary.LittleEndian.PutUint32(out[4:], SOL_SOCKET)
-	binary.LittleEndian.PutUint32(out[8:], SCM_RIGHTS)
-
-	return min(guestAlign(size), room), flags
-}
-
-func (p *Process) destination(addr, alen uint32) Address {
-	if addr == 0 {
-		return Address{}
-	}
-
-	return p.socketAddress(addr, alen)
-}
-
-func (p *Process) socketAddress(at, n uint32) Address {
-	a := Address{given: true}
-
-	if n <= sizeofSockaddrStorage {
-		a.raw = slices.Clone(p.span(at, n))
-	}
-
-	return a
 }
 
 func (p *Process) libcEpoll_create(size uint32) uint32 {
@@ -8374,29 +8185,6 @@ func (p *Process) request(d *Description, r Request) error {
 
 func (p *Process) ttyControl(d *Description, how uint32) error {
 	return p.request(d, &TtyControl{how: how})
-}
-
-func (p *Process) sockKind(d *Description) int {
-	r := SockType{}
-
-	if p.request(d, &r) != nil {
-		return 0
-	}
-
-	return r.kind
-}
-
-func (p *Process) sockSend(d *Description, pk *Packet, to Address, mode IoMode) (int, error) {
-	r := p.sends.get()
-
-	r.pk, r.to, r.mode = pk, to, mode
-
-	err := p.fileCall(d, r, p.group())
-	n := r.n
-
-	p.sends.put(r)
-
-	return n, err
 }
 
 func (p *Process) fileCall(d *Description, r Request, group uint32) error {

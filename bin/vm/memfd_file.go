@@ -210,6 +210,22 @@ func (f *MemfdFile) within(at int64, n int, writes bool, fn func(b []byte) (int,
 	return fn(b[at : at+min(int64(n), size-at)])
 }
 
+func (f *MemfdFile) put(at int, data []byte) int {
+	n, _ := f.with(int64(at), len(data), true, func(b []byte) (int, error) {
+		return copy(b, data), nil
+	})
+
+	return n
+}
+
+func (f *MemfdFile) take(at int, b []byte) int {
+	n, _ := f.with(int64(at), len(b), false, func(src []byte) (int, error) {
+		return copy(b, src), nil
+	})
+
+	return n
+}
+
 func (f *MemfdFile) copyTo(p *Process, out *Description, from, to int64, n int) (int, error) {
 	size := f.size()
 

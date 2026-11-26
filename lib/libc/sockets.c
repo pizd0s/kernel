@@ -8,8 +8,11 @@
  * socket serves none, ENOTSOCK. An address of AF_UNIX is a path of the
  * VFS's, which rootfs walks: the root and the working directory go with
  * it, and a send to one is a CTL too, ctlSendto, the kernel's send of a
- * socket that serves none. sendto is sendmsg's, and sendmmsg sendmsg's
- * of each message.
+ * socket that serves none. A socket's bytes are the kernel's two calls,
+ * a read and a write with flags, an address and rights
+ * (__kernel_sockrecv, __kernel_socksend): the messages' headers and
+ * their control are made of them here, the rights SCM_RIGHTS's and
+ * nothing else. recvmmsg's timeout is looked at between its messages.
  */
 #include "sized.h"
 #include "kernel.h"
@@ -18,6 +21,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -26,11 +30,12 @@
 #include <sys/stat.h>
 #include <sys/uio.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
-// The most rights a send to a path brings: a ctl's descriptors but the
-// two of the path.
-enum { rightsMax = 29 };
+// The most rights a message brings, and a send to a path: a ctl's
+// descriptors but the two of the path.
+enum { rightsMax = 253, pathRightsMax = 29 };
 
 // A socket's call (calls.h): its number, its arg, then the parts, with
 // the nfds descriptors; the answer's bytes into out of *room, *room
@@ -99,13 +104,13 @@ static int ofSocket(int r) {
 // bytes at data. The root and the working directory are the first
 // descriptors of an AF_UNIX's, a path's, and the rights follow them.
 static int addressCall(int fd, uint32_t what, uint32_t arg, const struct sockaddr* a, socklen_t alen, const void* data, size_t n, const int* rights, size_t nrights, uint32_t* out) {
-    int fds[2 + rightsMax] = {AT_FDROOT, AT_FDCWD};
+    int fds[2 + pathRightsMax] = {AT_FDROOT, AT_FDCWD};
     int named = a && alen >= sizeof(sa_family_t) && a->sa_family == AF_UNIX;
     uint32_t length = alen;
     struct iovec parts[3] = {{&length, 4}, {(void*)a, alen}, {(void*)data, n}};
     size_t room = sizeof *out;
 
-    if (!a || alen > sizeof(struct sockaddr_storage)) {
+    if (!a || alen > sizeof(struct sockaddr_storage) || nrights > pathRightsMax) {
         errno = EINVAL;
 
         return -1;
@@ -295,25 +300,32 @@ int __kernel_sockatmark(int fd) {
 }
 
 // The rights of a message's control, SCM_RIGHTS's, into rights of
-// rightsMax: their count, or -1 and errno, EINVAL of other control or of
-// more.
+// rightsMax: their count, or -1 and errno, EINVAL of other control, of a
+// header that says no size of its own, or of more.
 static int rightsOf(const struct msghdr* m, int* rights) {
-    int count = 0;
+    const unsigned char* control = m->msg_control;
+    size_t n = control ? m->msg_controllen : 0;
+    size_t count = 0;
 
-    for (struct cmsghdr* c = CMSG_FIRSTHDR(m); c; c = CMSG_NXTHDR((struct msghdr*)m, c)) {
-        size_t k = c->cmsg_len < CMSG_LEN(0) ? 0 : (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+    for (size_t off = 0; off + sizeof(struct cmsghdr) <= n;) {
+        struct cmsghdr c;
 
-        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS || count + k > rightsMax) {
+        memcpy(&c, control + off, sizeof c);
+
+        size_t k = c.cmsg_len < sizeof c ? 0 : (c.cmsg_len - sizeof c) / sizeof(int);
+
+        if (c.cmsg_len < sizeof c || off + c.cmsg_len > n || c.cmsg_level != SOL_SOCKET || c.cmsg_type != SCM_RIGHTS || count + k > rightsMax) {
             errno = EINVAL;
 
             return -1;
         }
 
-        memcpy(rights + count, CMSG_DATA(c), k * sizeof(int));
-        count += (int)k;
+        memcpy(rights + count, control + off + sizeof c, k * sizeof(int));
+        count += k;
+        off += CMSG_ALIGN(c.cmsg_len);
     }
 
-    return count;
+    return (int)count;
 }
 
 // A message to an AF_UNIX address, a ctlSendto of the socket's, its
@@ -355,6 +367,7 @@ static ssize_t sendTo(int fd, const struct msghdr* m, int flags) {
 
 static ssize_t sendOf(int fd, const struct msghdr* m, int flags) {
     const struct sockaddr* to = m->msg_name;
+    int rights[rightsMax];
 
     if (to && m->msg_namelen >= sizeof(sa_family_t) && to->sa_family == AF_UNIX) {
         ssize_t r = sendTo(fd, m, flags);
@@ -364,7 +377,21 @@ static ssize_t sendOf(int fd, const struct msghdr* m, int flags) {
         }
     }
 
-    return __kernel_socksendmsg(fd, m, flags);
+    int nrights = rightsOf(m, rights);
+
+    if (nrights < 0) {
+        return -1;
+    }
+
+    const struct __kernel_sockio x = {m->msg_name, m->msg_name ? m->msg_namelen : 0, rights, (unsigned)nrights, 0};
+
+    return __kernel_socksend(fd, m->msg_iov, (unsigned)m->msg_iovlen, flags, &x);
+}
+
+ssize_t __kernel_send(int fd, const void* buf, size_t n, int flags) {
+    const struct iovec io = {(void*)buf, n};
+
+    return __kernel_socksend(fd, &io, 1, flags, NULL);
 }
 
 ssize_t __kernel_sendmsg(int fd, const struct msghdr* m, size_t size, size_t iovSize, int flags) {
@@ -399,6 +426,144 @@ int __kernel_sendmmsg(int fd, struct mmsghdr* v, size_t size, size_t iovSize, un
         }
 
         v[i].msg_len = (unsigned)r;
+    }
+
+    return (int)n;
+}
+
+ssize_t __kernel_recv(int fd, void* buf, size_t n, int flags) {
+    const struct iovec io = {buf, n};
+
+    return __kernel_sockrecv(fd, &io, 1, flags, NULL);
+}
+
+ssize_t __kernel_recvfrom(int fd, void* buf, size_t n, int flags, struct sockaddr* a, socklen_t* alen) {
+    const struct iovec io = {buf, n};
+    struct __kernel_sockio x = {a, a && alen ? *alen : 0, NULL, 0, 0};
+    ssize_t r = __kernel_sockrecv(fd, &io, 1, flags, &x);
+
+    if (r >= 0 && a && alen) {
+        *alen = x.alen;
+    }
+
+    return r;
+}
+
+// A message received: its sender into the header's name, the rights that
+// came into its control, one SCM_RIGHTS of as many as it has room for,
+// and what the receive says into its flags, MSG_CTRUNC of rights with no
+// room.
+static ssize_t recvOf(int fd, struct msghdr* m, int flags) {
+    int rights[rightsMax];
+    size_t room = m->msg_control && m->msg_controllen >= CMSG_LEN(0) ? (m->msg_controllen - CMSG_LEN(0)) / sizeof(int) : 0;
+    struct __kernel_sockio x = {m->msg_name, m->msg_name ? m->msg_namelen : 0, rights, (unsigned)(room < rightsMax ? room : rightsMax), 0};
+    ssize_t r = __kernel_sockrecv(fd, m->msg_iov, (unsigned)m->msg_iovlen, flags, &x);
+
+    if (r < 0) {
+        return -1;
+    }
+
+    if (m->msg_name) {
+        m->msg_namelen = x.alen;
+    }
+
+    if (x.nfds > 0) {
+        struct cmsghdr* c = m->msg_control;
+        size_t size = CMSG_SPACE(x.nfds * sizeof(int));
+
+        c->cmsg_len = CMSG_LEN(x.nfds * sizeof(int));
+        c->cmsg_level = SOL_SOCKET;
+        c->cmsg_type = SCM_RIGHTS;
+        memcpy(CMSG_DATA(c), rights, x.nfds * sizeof(int));
+        m->msg_controllen = size < m->msg_controllen ? size : m->msg_controllen;
+    } else {
+        m->msg_controllen = 0;
+    }
+
+    m->msg_flags = (int)x.flags | (flags & MSG_CMSG_CLOEXEC);
+
+    return r;
+}
+
+ssize_t __kernel_recvmsg(int fd, struct msghdr* m, size_t size, size_t iovSize, int flags) {
+    sized("recvmsg", size, sizeof(struct msghdr));
+    sized("recvmsg", iovSize, sizeof(struct iovec));
+
+    return recvOf(fd, m, flags);
+}
+
+// A message of recvmmsg's with a time to be there by: the socket is
+// waited for until then, and the message taken without waiting. 1 with
+// its count in got, 0 when the time came, -1 and errno.
+static int recvBy(int fd, struct msghdr* m, int flags, const struct timespec* end, ssize_t* got) {
+    for (;;) {
+        struct timespec now;
+        struct pollfd ready = {fd, POLLIN, 0};
+
+        clock_gettime(CLOCK_MONOTONIC, &now);
+
+        long long left = (end->tv_sec - now.tv_sec) * 1000LL + (end->tv_nsec - now.tv_nsec + 999999) / 1000000;
+        int r = poll(&ready, 1, left > 0 ? (left < 0x40000000 ? (int)left : 0x40000000) : 0);
+
+        if (r <= 0) {
+            return r;
+        }
+
+        *got = recvOf(fd, m, flags | MSG_DONTWAIT);
+
+        if (*got >= 0 || errno != EAGAIN) {
+            return *got >= 0 ? 1 : -1;
+        }
+    }
+}
+
+int __kernel_recvmmsg(int fd, struct mmsghdr* v, size_t size, size_t iovSize, unsigned n, int flags, struct timespec* timeout, size_t timeoutSize) {
+    struct timespec end = {0, 0};
+
+    sized("recvmmsg", size, sizeof(struct mmsghdr));
+    sized("recvmmsg", iovSize, sizeof(struct iovec));
+
+    if (fcntl(fd, F_GETFD) < 0) {
+        return -1;
+    }
+
+    if (timeout) {
+        sized("recvmmsg", timeoutSize, sizeof(struct timespec));
+
+        if (timeout->tv_sec < 0 || timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000) {
+            errno = EINVAL;
+
+            return -1;
+        }
+
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        end.tv_sec += timeout->tv_sec + (end.tv_nsec + timeout->tv_nsec) / 1000000000;
+        end.tv_nsec = (end.tv_nsec + timeout->tv_nsec) % 1000000000;
+    }
+
+    n = n < UIO_MAXIOV ? n : UIO_MAXIOV;
+
+    for (unsigned i = 0; i < n; i++) {
+        int mode = (flags & ~MSG_WAITFORONE) | (i > 0 && (flags & MSG_WAITFORONE) ? MSG_DONTWAIT : 0);
+        ssize_t got = 0;
+        int came = 1;
+
+        if (timeout && !(mode & MSG_DONTWAIT)) {
+            came = recvBy(fd, &v[i].msg_hdr, mode, &end, &got);
+        } else {
+            got = recvOf(fd, &v[i].msg_hdr, mode);
+            came = got < 0 ? -1 : 1;
+        }
+
+        if (came == 0) {
+            return (int)i;
+        }
+
+        if (came < 0) {
+            return i == 0 ? -1 : (int)i;
+        }
+
+        v[i].msg_len = (unsigned)got;
     }
 
     return (int)n;

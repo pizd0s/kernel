@@ -145,10 +145,6 @@ const (
 	UTIME_OMIT                        = 0x3ffffffe
 	SO_RCVLOWAT                       = 18
 	AF_UNIX                           = 1
-	AF_INET                           = 2
-	AF_INET6                          = 10
-	MSG_WAITFORONE                    = 0x10000
-	UIO_MAXIOV                        = 1024
 	DBM_INSERT                        = 0
 	DBM_REPLACE                       = 1
 	SOCK_NONBLOCK                     = 0o4000
@@ -159,10 +155,7 @@ const (
 	MSG_CMSG_CLOEXEC                  = 0x40000000
 	SOL_SOCKET                        = 1
 	SO_ACCEPTCONN                     = 30
-	SCM_RIGHTS                        = 1
-	sunPathMax                        = 108
 	sizeofSockaddrStorage             = 128
-	sizeofCmsghdr                     = 12
 	SOCK_RAW                          = 3
 	SOCK_STREAM                       = 1
 	SOCK_DGRAM                        = 2
@@ -185,7 +178,6 @@ const (
 	CLOCK_THREAD_CPUTIME_ID           = 3
 	CLOCK_BOOTTIME                    = 7
 	TIMER_ABSTIME                     = 1
-	SOMAXCONN                         = 4096
 	sizeofFdSet                       = 128
 	sizeofFlock                       = 32
 	sizeofCtl                         = 32
@@ -193,8 +185,6 @@ const (
 	sizeofIovec                       = 8
 	sizeofItimerval                   = 32
 	sizeofJmpBuf                      = 4
-	sizeofMsghdr                      = 28
-	sizeofMmsghdr                     = 32
 	sizeofPollfd                      = 8
 	sizeofRlimit                      = 16
 	sizeofRusage                      = 88

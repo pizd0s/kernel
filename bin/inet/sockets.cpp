@@ -233,8 +233,10 @@ namespace {
             reply(fd, false, -1, err, data, n);
             return Outcome::Done;
         };
+        // A RECV's or a SEND's MSG_DONTWAIT is that call's not waiting.
+        bool now = false;
         auto again = [&](Outcome wait, int err) {
-            return err == EAGAIN && !nonblock ? wait : done(err);
+            return err == EAGAIN && !nonblock && !now ? wait : done(err);
         };
         switch (h.op) {
             case ctlBind:
@@ -274,18 +276,42 @@ namespace {
                 reply(fd, true, connEnd, 0, peer, peerLength);
                 return Outcome::Done;
             }
-            case opSend: {
-                if (!address(at, stop, addr, length)) {
-                    return done(EINVAL);
+            case opSend:
+            case opWrite: {
+                // The bytes are in the call's memfd; a SEND brings flags
+                // and where it goes too, a WRITE where in the file, which
+                // a socket has none of.
+                int flags = 0;
+                addr = nullptr;
+                length = 0;
+                if (h.op == opSend) {
+                    uint32_t given;
+                    if (!take(at, stop, given) || !address(at, stop, addr, length)) {
+                        return done(EINVAL);
+                    }
+                    now = (given & MSG_DONTWAIT) != 0;
+                    flags = int(given) & ~(MSG_DONTWAIT | MSG_NOSIGNAL);
+                } else {
+                    Io io;
+                    if (size != sizeof io || (memcpy(&io, body, sizeof io), (io.flags & ioAt) != 0)) {
+                        return done(memfd < 0 ? EINVAL : ESPIPE);
+                    }
                 }
-                const int flags = int(h.arg) & ~(MSG_DONTWAIT | MSG_NOSIGNAL);
-                ssize_t n = ff_sendto(s.ff, at, size_t(stop - at), flags, addr, length);
+                static unsigned char buffer[65536];
+                if (memfd < 0 || (s.type == SOCK_DGRAM && h.arg > sizeof buffer)) {
+                    return done(memfd < 0 ? EINVAL : EMSGSIZE);
+                }
+                const size_t want = h.arg < sizeof buffer ? h.arg : sizeof buffer;
+                if (pread(memfd, buffer, want, 0) != ssize_t(want)) {
+                    return done(EIO);
+                }
+                ssize_t n = ff_sendto(s.ff, buffer, want, flags, addr, length);
                 // A datagram to a connected socket's peer, by the peer's
                 // address, goes: FreeBSD's sendto refuses the address,
                 // EISCONN, POSIX's "may", which a datagram server's programs
                 // do not expect of it (tftpd's).
                 if (n < 0 && errno == EISCONN && s.type == SOCK_DGRAM && isPeer(s.ff, addr, length)) {
-                    n = ff_sendto(s.ff, at, size_t(stop - at), flags, nullptr, 0);
+                    n = ff_sendto(s.ff, buffer, want, flags, nullptr, 0);
                 }
                 if (n < 0) {
                     return again(Outcome::Write, errno);
@@ -293,73 +319,55 @@ namespace {
                 const uint32_t count = uint32_t(n);
                 return done(0, &count, sizeof count);
             }
-            case opRecv: {
-                uint32_t want;
-                if (!take(at, stop, want)) {
+            case opRecv:
+            case opRead: {
+                // The bytes go into the call's memfd; a RECV brings flags,
+                // and its answer says what it took and whose it was.
+                int flags = 0;
+                if (h.op == opRecv) {
+                    uint32_t given;
+                    if (!take(at, stop, given)) {
+                        return done(EINVAL);
+                    }
+                    now = (given & MSG_DONTWAIT) != 0;
+                    flags = int(given) & ~(MSG_DONTWAIT | MSG_NOSIGNAL);
+                } else {
+                    Io io;
+                    if (size != sizeof io || (memcpy(&io, body, sizeof io), (io.flags & ioAt) != 0)) {
+                        return done(memfd < 0 ? EINVAL : ESPIPE);
+                    }
+                }
+                if (memfd < 0) {
                     return done(EINVAL);
                 }
-                static unsigned char out[65536];
-                constexpr size_t head = 8 + 128;
+                static unsigned char buffer[65536];
                 alignas(8) unsigned char from[128];
                 socklen_t fromLength = sizeof from;
-                const size_t room = want < sizeof out - head - sizeof(Header) ? want : sizeof out - head - sizeof(Header);
-                const int flags = int(h.arg) & ~(MSG_DONTWAIT | MSG_NOSIGNAL);
-                const ssize_t n = ff_recvfrom(s.ff, out + head, room, flags, reinterpret_cast<linux_sockaddr*>(from), &fromLength);
+                const size_t room = h.arg < sizeof buffer ? h.arg : sizeof buffer;
+                const ssize_t n = ff_recvfrom(s.ff, buffer, room, flags, reinterpret_cast<linux_sockaddr*>(from), &fromLength);
                 if (n < 0) {
                     return again(Outcome::Read, errno);
                 }
                 // A receive of no bytes on a datagram socket waits for a
                 // datagram, its sender's address the answer, as POSIX has
                 // it: FreeBSD's returns at once while none has come.
-                if (s.type == SOCK_DGRAM && n == 0 && fromLength == 0) {
+                if (s.type == SOCK_DGRAM && n == 0 && fromLength == 0 && (h.op == opRecv || h.arg != 0)) {
                     return again(Outcome::Read, EAGAIN);
-                }
-                if (s.type == SOCK_STREAM) {
-                    fromLength = 0;
-                }
-                if ((flags & MSG_PEEK) == 0) {
-                    drained(s);
-                }
-                const uint32_t outFlags = 0, addrLength = fromLength;
-                unsigned char* p = out + head - 8 - fromLength;
-                memcpy(p, &outFlags, 4);
-                memcpy(p + 4, &addrLength, 4);
-                memcpy(p + 8, from, fromLength);
-                return done(0, p, 8 + fromLength + size_t(n));
-            }
-            case opRead: {
-                Io io;
-                if (memfd < 0 || size != sizeof io || (memcpy(&io, body, sizeof io), (io.flags & ioAt) != 0)) {
-                    return done(memfd < 0 ? EINVAL : ESPIPE);
-                }
-                static unsigned char buffer[65536];
-                const ssize_t n = ff_read(s.ff, buffer, h.arg < sizeof buffer ? h.arg : sizeof buffer);
-                if (n < 0) {
-                    return again(Outcome::Read, errno);
                 }
                 if (n > 0 && pwrite(memfd, buffer, size_t(n), 0) != n) {
                     return done(EIO);
                 }
-                drained(s);
-                const uint32_t count = uint32_t(n);
-                return done(0, &count, sizeof count);
-            }
-            case opWrite: {
-                Io io;
-                if (memfd < 0 || size != sizeof io || (memcpy(&io, body, sizeof io), (io.flags & ioAt) != 0)) {
-                    return done(memfd < 0 ? EINVAL : ESPIPE);
+                if ((flags & MSG_PEEK) == 0) {
+                    drained(s);
                 }
-                static unsigned char buffer[65536];
-                const size_t want = h.arg < sizeof buffer ? h.arg : sizeof buffer;
-                if (pread(memfd, buffer, want, 0) != ssize_t(want)) {
-                    return done(EIO);
+                if (s.type == SOCK_STREAM) {
+                    fromLength = 0;
                 }
-                const ssize_t n = ff_write(s.ff, buffer, want);
-                if (n < 0) {
-                    return again(Outcome::Write, errno);
-                }
-                const uint32_t count = uint32_t(n);
-                return done(0, &count, sizeof count);
+                unsigned char said[12 + sizeof from];
+                const uint32_t head[3] = {uint32_t(n), 0, uint32_t(fromLength)};
+                memcpy(said, head, sizeof head);
+                memcpy(said + sizeof head, from, fromLength);
+                return done(0, said, h.op == opRecv ? sizeof head + fromLength : 4);
             }
             case ctlSockname: {
                 alignas(8) unsigned char name[128];
@@ -399,10 +407,6 @@ namespace {
             }
             case ctlShutdown:
                 return done(ff_shutdown(s.ff, int(h.arg)) == 0 ? 0 : errno);
-            case opSocktype: {
-                const uint32_t type = uint32_t(s.type);
-                return done(0, &type, sizeof type);
-            }
             case opFstat: {
                 Stat st{};
                 st.mode = S_IFSOCK | 0777;
@@ -509,7 +513,7 @@ void socketsHand(Request& r) {
     h.op = r.h.arg;
     h.arg = arg;
     const bool listens = h.op == ctlListen;
-    if (!listens && ((h.op != ctlBind && h.op != ctlConnect && h.op != opSend) || r.count < 2)) {
+    if (!listens && ((h.op != ctlBind && h.op != ctlConnect && h.op != opSend) || r.count < (h.op == opSend ? 3u : 2u))) {
         ff_close(ff);
         return fail(r.reply(), EINVAL);
     }
@@ -542,7 +546,7 @@ void socketsHand(Request& r) {
         return reply(r.reply(), true, end, 0, nullptr, 0);
     }
     const size_t offset = size_t(at - r.body);
-    const Outcome outcome = run(*s, h, at, size_t(stop - at), -1, r.reply(), nonblock != 0);
+    const Outcome outcome = run(*s, h, at, size_t(stop - at), h.op == opSend ? r.fds[0] : -1, r.reply(), nonblock != 0);
     if (outcome == Outcome::Done) {
         return;
     }
@@ -552,6 +556,7 @@ void socketsHand(Request& r) {
     call.body = r.body + offset;
     call.size = size_t(stop - at);
     wait(*s, outcome, call);
+    r.fds[0] = call.fds[0];
     r.fds[r.count - 1] = call.fds[call.count - 1];
 }
 

@@ -613,7 +613,7 @@ static void socketCall(Socket& h, Request& r) {
             }
             return handOn(h, r, to.sin_addr.s_addr);
         case opSend:
-            if (!sockaddrOf(r, 0, to, end)) {
+            if (!sockaddrOf(r, 4, to, end)) {
                 return fail(r.reply(), h.type == SOCK_DGRAM ? EDESTADDRREQ : ENOTCONN);
             }
             return handOn(h, r, to.sin_addr.s_addr);
@@ -627,8 +627,6 @@ static void socketCall(Socket& h, Request& r) {
             return getOption(h, r);
         case ctlSockname:
             return nameCall(h, r);
-        case opSocktype:
-            return answer(r.reply(), opOk, 0, &h.type, sizeof h.type);
         case opFstat: {
             Stat st{};
             st.mode = S_IFSOCK | 0777;

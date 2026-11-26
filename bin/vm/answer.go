@@ -158,71 +158,29 @@ func (a *Answer) unsubscribe(d *Description, s *Subscription) {
 	a.mu.Unlock()
 }
 
-func (a *Answer) read(p *Process, into *MemfdFile, n int, mode IoMode) (int, error) {
-	return into.with(0, n, true, a.heard)
-}
-
-func (a *Answer) write(p *Process, from *MemfdFile, n int, mode IoMode) (int, error) {
-	data := make([]byte, n)
-
-	got, err := from.with(0, n, false, func(b []byte) (int, error) {
-		return copy(data, b), nil
-	})
-
-	if err != nil {
-		return 0, err
+func (a *Answer) write(p *Process, r *FileWrite) error {
+	if len(r.to) > 0 {
+		return EISCONN
 	}
 
-	return a.put(data[:got], nil)
-}
+	var data []byte
 
-func (a *Answer) socketKind() int {
-	return SOCK_SEQPACKET
-}
-
-func (a *Answer) send(p *Process, r *SockSend) error {
-	if r.to.given {
-		return EISCONN
+	if pk := r.pk; pk != nil {
+		data, r.pk = pk.data, nil
+	} else {
+		data = make([]byte, r.n)
+		data = data[:r.from.memory().take(0, data)]
 	}
 
 	var err error
 
-	r.n, err = a.put(r.pk.data, r.pk.files)
+	r.count, err = a.put(data, r.files)
 
 	return err
 }
 
-func (a *Answer) recv(p *Process, r *SockRecv) error {
-	var h [remoteHeader]byte
-
-	n, err := a.heard(h[:])
-
-	if err != nil {
-		return err
-	}
-
-	r.n = r.into.put(0, h[:min(n, r.want)])
-
-	return nil
-}
-
-func (a *Answer) consume(sink func(pk *Packet)) {
-}
-
 func (a *Answer) call(p *Process, d *Description, r Request, group uint32, waits bool) (bool, error) {
 	switch r := r.(type) {
-	case *SockSend:
-		return false, a.send(p, r)
-	case *SockRecv:
-		return false, a.recv(p, r)
-	case *SockType:
-		r.kind = a.socketKind()
-
-		return false, nil
-	case *SockConsume:
-		a.consume(r.sink)
-
-		return false, nil
 	case *FileRead:
 		if r.explicit {
 			return false, errUnserved
@@ -230,7 +188,7 @@ func (a *Answer) call(p *Process, d *Description, r Request, group uint32, waits
 
 		var err error
 
-		r.count, err = a.read(p, r.into.memory(), r.n, r.mode)
+		r.count, err = r.into.memory().with(0, r.n, true, a.heard)
 
 		return false, err
 	case *FileWrite:
@@ -238,11 +196,7 @@ func (a *Answer) call(p *Process, d *Description, r Request, group uint32, waits
 			return false, errUnserved
 		}
 
-		var err error
-
-		r.count, err = a.write(p, r.from.memory(), r.n, r.mode)
-
-		return false, err
+		return false, a.write(p, r)
 	}
 
 	return false, errUnserved

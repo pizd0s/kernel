@@ -52,12 +52,23 @@ int __kernel_fdioctl(int fd, unsigned long request, void* arg) __KERNEL(__kernel
 // them (vfs.c, sockets.c, exec.c): the kernel knows no path. __kernel_exec
 // runs the program of a descriptor, path the name it was asked by and
 // program its path from the root, __kernel_program's, "" for none; a
-// file of "#!" is ENOEXEC. __kernel_socksendmsg is sendmsg as the
-// socket's server, or an end of a pair, takes it, with no path walked.
+// file of "#!" is ENOEXEC. __kernel_sockrecv and __kernel_socksend are
+// a socket's read and write: the bytes of the vector, flags as recv's
+// and send's, and with x an address, descriptors, the rights, and what
+// a receive says of what it took.
 struct sockaddr;
 struct msghdr;
 int __kernel_exec(int fd, const char* path, const char* program, char* const argv[], char* const envp[]) __KERNEL(__kernel_exec);
-long __kernel_socksendmsg(int fd, const struct msghdr* msg, int flags) __KERNEL(__kernel_socksendmsg);
+struct iovec;
+struct __kernel_sockio {
+    void* addr;     // where a send goes; where a receive puts its sender
+    unsigned alen;  // its size; of a receive the room, then the sender's size
+    int* fds;       // the rights
+    unsigned nfds;  // how many; of a receive the room, then how many came
+    unsigned flags; // what a receive says: MSG_TRUNC, MSG_CTRUNC
+};
+long __kernel_sockrecv(int fd, const struct iovec* iov, unsigned count, int flags, struct __kernel_sockio* x) __KERNEL(__kernel_sockrecv);
+long __kernel_socksend(int fd, const struct iovec* iov, unsigned count, int flags, const struct __kernel_sockio* x) __KERNEL(__kernel_socksend);
 
 // __kernel_name is the name the program was started by, the last component
 // of its argv[0], or null where it has no arguments: what a message of
