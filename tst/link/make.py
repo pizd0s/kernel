@@ -54,7 +54,7 @@ def build(cc, ld, source, include, libc, output, work, extra):
     lines.append(f"const int count = {extra};")
     table.write_text("\n".join(lines) + "\n")
     flags = ["-O2", "-g", "-std=c11", "-isystem", str(Path(include).resolve())]
-    wasm.compile_all(cc, [(Path(source), work / "check.o", flags), (table, work / "functions.o", flags)])
+    wasm.compile_all(cc, [(Path(source), work / "check.o", flags), (table, work / "functions.o", flags)], places=[work])
     subprocess.run([ld, *LINK, "-o", output, str(work / "check.o"), str(work / "functions.o"), libc], check=True)
 
     return functions(Path(output).read_bytes())

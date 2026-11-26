@@ -155,7 +155,7 @@ def build(source, prefix, tools):
         with tarfile.open(tools["cxx_headers"]) as archive:
             archive.extractall(work / "cxx", filter="data")
         obj = work / "case.o"
-        successful([tools["cc"], *wasm.CFLAGS, *cflags, "-nostdinc++",
+        successful([tools["cc"], *wasm.CFLAGS, *wasm.placeless(work), *cflags, "-nostdinc++",
                     "-isystem", work / "cxx/include/c++/v1", "-isystem", tools["c_headers"],
                     "-c", source, "-o", obj], env=env, timeout=timeout)
         successful([tools["ld"], *link, "-o", module, obj, tools["libcxx"], tools["libc"]], env=env, timeout=timeout)

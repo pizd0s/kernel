@@ -134,7 +134,7 @@ def main():
         cxx = [*CXXFLAGS, "-I", str(ROOT), *system]
         ours = sorted((ROOT / "lib/fuse").glob("*.cpp")) + sorted((ROOT / "lib/protocol").glob("*.cpp"))
         units += [(s, work / "o" / f"x{i}-{s.stem}.o", cxx) for i, s in enumerate(ours)]
-        wasm.compile_all(cc, units)
+        wasm.compile_all(cc, units, places=[work])
         subprocess.run([ld, *LINK, "-o", str(output), *(str(o) for _, o, _ in units), libc], check=True)
 
 
