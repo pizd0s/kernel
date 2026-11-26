@@ -122,8 +122,11 @@ static usize checkedAdd(usize a, usize b) {
     return a + b;
 }
 
+// The second factor is the constant of every caller, the size of an item
+// or the items of a page: the division by it is the compiler's, not the
+// program's.
 static usize checkedMultiply(usize a, usize b) {
-    require(a == 0 || b <= ~usize(0) / a, "size overflow");
+    require(b == 0 || a <= ~usize(0) / b, "size overflow");
     return a * b;
 }
 
@@ -131,18 +134,44 @@ static usize alignUp(usize size, usize alignment) {
     return checkedAdd(size, alignment - 1) & ~(alignment - 1);
 }
 
+// The size of the block a request of a size gets: a power of two, the
+// alignment of an object at least.
+static usize allocationBytes(usize size) {
+    require(size != 0 && size <= pageBytes, "allocation exceeds 64 KiB");
+    if (size <= objectAlignment) {
+        return objectAlignment;
+    }
+    return usize(1) << (64 - __builtin_clzll(size - 1));
+}
+
+// The blocks the compiler gave back, a list of each size, which a block's
+// first word links: a function's memory is the next function's, and malloc
+// is asked only while the compiler's memory grows. Nothing goes back to
+// malloc before the compiler ends.
+static void* freeBlocks[17]{};
+
 // Every block the compiler takes from malloc fits in a page: what grows
 // past one is paged (PageVec, paged slices), so a request for more is the
 // compiler's own error.
 static void* allocateBlock(usize size) {
-    require(size != 0 && size <= pageBytes, "allocation exceeds 64 KiB");
-    void* block = chaosFail(ChaosFault::Malloc) ? nullptr : ::malloc(size);
+    const usize bytes = allocationBytes(size);
+    require(!chaosFail(ChaosFault::Malloc), "out of memory");
+    void*& kept = freeBlocks[__builtin_ctzll(bytes)];
+    void* block = kept;
+    if (block != nullptr) {
+        kept = *static_cast<void**>(block);
+        return block;
+    }
+    block = ::malloc(bytes);
     require(block != nullptr, "out of memory");
     return block;
 }
 
-static void releaseBlock(void* block) {
-    ::free(block);
+// Gives back a block of a request of a size.
+static void releaseBlock(void* block, usize size) {
+    void*& kept = freeBlocks[__builtin_ctzll(allocationBytes(size))];
+    *static_cast<void**>(block) = kept;
+    kept = block;
 }
 
 static void* allocPage() {
@@ -150,16 +179,7 @@ static void* allocPage() {
 }
 
 static void freePage(void* page) {
-    releaseBlock(page);
-}
-
-static usize allocationBytes(usize size) {
-    require(size != 0 && size <= pageBytes, "allocation exceeds 64 KiB");
-    usize bytes = objectAlignment;
-    while (bytes < size) {
-        bytes *= 2;
-    }
-    return bytes;
+    releaseBlock(page, pageBytes);
 }
 
 template <typename T>
@@ -204,7 +224,7 @@ Buffer::Buffer()
 
 Buffer::~Buffer() {
     if (header() != &emptyBuffer) {
-        releaseBlock(header());
+        releaseBlock(header(), header()->allocation);
     }
 }
 
@@ -259,7 +279,7 @@ __attribute__((noinline)) void Buffer::grow(usize size) {
         memcpy(next + 1, storage, used);
     }
     if (before != &emptyBuffer) {
-        releaseBlock(before);
+        releaseBlock(before, before->allocation);
     }
     storage = next + 1;
 }
@@ -387,6 +407,7 @@ namespace {
         ObjPool(const ObjPool&) = delete;
         ObjPool& operator=(const ObjPool&) = delete;
         void* allocate(usize size, usize alignment = objectAlignment);
+        void grow(usize size);
         void clear();
 
         template <typename T, typename... A>
@@ -471,7 +492,9 @@ template <typename T>
 inline void SmallVec<T>::pushBack(T value) {
     const usize before = buffer.size();
     buffer.resize(checkedAdd(before, sizeof(T)));
-    memcpy(static_cast<u8*>(buffer.data()) + before, &value, sizeof(T));
+    // An assignment, not memcpy: the compiler is built with no builtins,
+    // and a call for every value pushed is the most of a push.
+    data()[before / sizeof(T)] = value;
 }
 
 template <typename T>
@@ -666,26 +689,32 @@ ObjPool::~ObjPool() {
     clear();
 }
 
-void* ObjPool::allocate(usize size, usize alignment) {
+// An allocation moves a pointer in the chunk the pool fills, inline; a
+// chunk for one that does not fit is taken out of line.
+inline void* ObjPool::allocate(usize size, usize alignment) {
     require(size <= pageBytes - sizeof(Chunk) && alignment <= objectAlignment, "object exceeds pool chunk");
     size = alignUp(size == 0 ? 1 : size, objectAlignment);
-    if (size > left) {
-        usize bytes = nextChunk;
-        while (bytes < checkedAdd(size, sizeof(Chunk))) {
-            bytes *= 2;
-        }
-        require(bytes <= pageBytes, "object exceeds pool chunk");
-        auto* chunk = static_cast<Chunk*>(allocateBlock(bytes));
-        *chunk = {chunks, bytes};
-        chunks = chunk;
-        current = reinterpret_cast<u8*>(chunk + 1);
-        left = bytes - sizeof(Chunk);
-        nextChunk = bytes < pageBytes ? bytes * 2 : pageBytes;
+    if (__builtin_expect(size > left, false)) {
+        grow(size);
     }
     auto* result = current;
     current += size;
     left -= size;
     return result;
+}
+
+__attribute__((noinline)) void ObjPool::grow(usize size) {
+    usize bytes = nextChunk;
+    while (bytes < checkedAdd(size, sizeof(Chunk))) {
+        bytes *= 2;
+    }
+    require(bytes <= pageBytes, "object exceeds pool chunk");
+    auto* chunk = static_cast<Chunk*>(allocateBlock(bytes));
+    *chunk = {chunks, bytes};
+    chunks = chunk;
+    current = reinterpret_cast<u8*>(chunk + 1);
+    left = bytes - sizeof(Chunk);
+    nextChunk = bytes < pageBytes ? bytes * 2 : pageBytes;
 }
 
 void ObjPool::clear() {
@@ -697,7 +726,7 @@ void ObjPool::clear() {
     while (chunks != nullptr) {
         auto* chunk = chunks;
         chunks = chunk->next;
-        releaseBlock(chunk);
+        releaseBlock(chunk, chunk->size);
     }
     current = nullptr;
     left = 0;
@@ -1557,7 +1586,7 @@ inline InlineVec<T, inlineCount>& InlineVec<T, inlineCount>::operator=(InlineVec
 template <typename T, usize inlineCount>
 inline void InlineVec<T, inlineCount>::releaseBuffer() {
     if (contiguous && contiguous != storage.values) {
-        releaseBlock(contiguous);
+        releaseBlock(contiguous, usize(space) * sizeof(T));
     }
 }
 
@@ -3265,6 +3294,9 @@ namespace {
         // in the order of their headers; plan is those the second uses.
         Vec<i32> spans;
         Slice<i32> plan{};
+        // checkBlocks are the blocks that check the stack in place of the
+        // prologue (objCodeStackCheckBlocks).
+        Slice<i32> checkBlocks{};
     };
 }
 
@@ -6037,7 +6069,7 @@ static Meta* objCodeDescription(ObjCode* oc);
 
 static void objCodeEmitFunction(ObjCode* oc, Int index, MFunc* mf, Allocator* al);
 
-static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al, Slice<u8> shorts, Slice<u8> trapShorts, Slice<i32> plan);
+static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al, Slice<u8> shorts, Slice<u8> trapShorts, Slice<i32> plan, FuncEmitter* first);
 
 static void objCodeEndRegion(ObjCode* oc, i32 start);
 
@@ -6467,7 +6499,11 @@ static void asmBytes(Asm* a, const u8 (&bytes)[size]) {
     const usize offset = at % pageBytes;
     if (__builtin_expect(size <= pageBytes && offset <= pageBytes - size, true)) {
         a->buf.reserve(checkedAdd(at, size));
-        memcpy(a->buf.pages.data()[at / pageBytes] + offset, bytes, size);
+        // A loop of a few bytes, not memcpy, which is a call here.
+        u8* to = a->buf.pages.data()[at / pageBytes] + offset;
+        for (usize i = 0; i < size; ++i) {
+            to[i] = bytes[i];
+        }
         a->buf.count = at + size;
     } else {
         a->buf.append(bytes, size);
@@ -10435,10 +10471,24 @@ static void allocatorDeadMoves(Allocator* a) {
         });
         return {uses, defs};
     };
-    auto transfer = [&](MInst* in, u32 live) -> u32 {
-        const auto m = masks(in);
-        return (live & ~m.v1) | m.v0;
-    };
+    auto order = a->order.view();
+    // uses and defs are the masks of every instruction, a block's from
+    // first on: an instruction's are found once, and again where the pass
+    // changes it, for every round reads them twice.
+    Vec<u32> first;
+    first.resize(n);
+    Vec<u32> uses;
+    Vec<u32> defs;
+    for (Int j = 0; j < length(order); ++j) {
+        const i32 b = order[j];
+        first[usize(b)] = u32(uses.size());
+        auto instructions = mf->blocks[b].insts.view();
+        for (Int i = 0; i < length(instructions); ++i) {
+            const auto m = masks(&instructions[i]);
+            uses.pushBack(m.v0);
+            defs.pushBack(m.v1);
+        }
+    }
     Vec<u32> liveIn;
     liveIn.resize(n);
     // gen are the registers a block reads before it writes them, kill
@@ -10455,7 +10505,6 @@ static void allocatorDeadMoves(Allocator* a) {
         }
         return out;
     };
-    auto order = a->order.view();
     // A dropped move can leave the one that fed it dead in turn.
     for (Int round = 0, dropped = 1; round < 4 && dropped; ++round) {
         dropped = 0;
@@ -10463,13 +10512,14 @@ static void allocatorDeadMoves(Allocator* a) {
             const i32 b = order[j];
             u32 g = 0;
             u32 k = 0;
-            auto instructions = mf->blocks[b].insts.view();
-            for (Int i = length(instructions) - 1; i >= 0; --i) {
+            const usize from = first[usize(b)];
+            for (usize i = mf->blocks[b].insts.size(); i-- > 0;) {
                 // Through an instruction a register written and not read
                 // is killed, one read is generated.
-                const auto m = masks(&instructions[i]);
-                g = (g & ~m.v1) | m.v0;
-                k = (k | m.v1) & ~m.v0;
+                const u32 read = uses[from + i];
+                const u32 written = defs[from + i];
+                g = (g & ~written) | read;
+                k = (k | written) & ~read;
             }
             gen[usize(b)] = g;
             kill[usize(b)] = k;
@@ -10489,9 +10539,11 @@ static void allocatorDeadMoves(Allocator* a) {
         for (Int j = 0; j < length(order); ++j) {
             const i32 b = order[j];
             u32 live = liveOut(b);
+            const usize from = first[usize(b)];
             auto instructions = mf->blocks[b].insts.view();
             for (Int i = length(instructions) - 1; i >= 0; --i) {
                 MInst* in = &instructions[i];
+                const Int before = dropped;
                 if (in->op == mParMove) {
                     auto& moves = mInstExtra(in)->moves;
                     usize kept = 0;
@@ -10506,7 +10558,12 @@ static void allocatorDeadMoves(Allocator* a) {
                     *in = inst(mNop);
                     dropped++;
                 }
-                live = transfer(in, live);
+                if (dropped != before) {
+                    const auto m = masks(in);
+                    uses[from + usize(i)] = m.v0;
+                    defs[from + usize(i)] = m.v1;
+                }
+                live = (live & ~defs[from + usize(i)]) | uses[from + usize(i)];
             }
         }
     }
@@ -19614,7 +19671,7 @@ static void objCodeEmitFunction(ObjCode* oc, Int index, MFunc* mf, Allocator* al
     const Int jumpCalls = length(oc->jumpCalls);
     const Int trampolineCalls = length(oc->trampolineCalls);
     const Int addresses = length(oc->addresses);
-    FuncEmitter* e = objCodeEmitBody(oc, mf, al, {}, {}, {});
+    FuncEmitter* e = objCodeEmitBody(oc, mf, al, {}, {}, {}, nullptr);
     Slice<u8> shorts = makeSlice<u8>(length(e->jumps));
     Slice<u8> trapShorts = makeSlice<u8>(length(e->traps));
     Slice<i32> plan = makeSlice<i32>(i64(e->spans.size()));
@@ -19637,12 +19694,14 @@ static void objCodeEmitFunction(ObjCode* oc, Int index, MFunc* mf, Allocator* al
         oc->jumpCalls = subslice(oc->jumpCalls, 0, jumpCalls);
         oc->trampolineCalls = subslice(oc->trampolineCalls, 0, trampolineCalls);
         oc->addresses = subslice(oc->addresses, 0, addresses);
-        objCodeEmitBody(oc, mf, al, shorts, trapShorts, plan);
+        objCodeEmitBody(oc, mf, al, shorts, trapShorts, plan, e);
     }
     objCodeEndRegion(oc, start);
 }
 
-static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al, Slice<u8> shorts, Slice<u8> trapShorts, Slice<i32> plan) {
+// first is the emission before this one, of every jump long, or null in
+// that one: what follows from the function alone is found in it only.
+static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al, Slice<u8> shorts, Slice<u8> trapShorts, Slice<i32> plan, FuncEmitter* first) {
     Asm* a = &oc->a;
     FuncEmitter* e = activePool->make<FuncEmitter>(FuncEmitter{oc, a, mf, al, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}});
     e->shorts = shorts;
@@ -19657,8 +19716,9 @@ static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al, Slice
     // instead, against the stack pointer the body has.
     Slice<i32> checkBlocks = {};
     if (mf->hasCalls && e->frame <= leafFrame && !mf->returnsTwice) {
-        checkBlocks = objCodeStackCheckBlocks(mf);
+        checkBlocks = first ? first->checkBlocks : objCodeStackCheckBlocks(mf);
     }
+    e->checkBlocks = checkBlocks;
     Slice<bool> checksAt = makeSlice<bool>(length(mf->blocks));
     for (Int i = 0; i < length(checkBlocks); ++i) {
         checksAt[checkBlocks[i]] = true;
