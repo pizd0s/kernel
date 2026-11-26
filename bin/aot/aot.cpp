@@ -5514,7 +5514,6 @@ static void allocatorSpillAtJoins(Allocator* a);
 
 static void allocatorSplitAtJoins(Allocator* a);
 
-static void allocatorDefinitions(Allocator* a, bool depths);
 
 static void allocatorConstantDefinitions(Allocator* a);
 
@@ -9684,7 +9683,7 @@ static bool allocatorCoalesce(Allocator* a) {
     // A constant joins only a register its copy alone defines, so that
     // what they become is still a constant: joined into a register
     // defined otherwise too it would be saved and reloaded as a value.
-    allocatorDefinitions(a, false);
+    // The liveness of the copies counted the definitions.
     Vec<bool> constant(move(a->constant));
     Vec<bool> lone;
     lone.resize(usize(mf->nregs));
@@ -9785,12 +9784,18 @@ static bool allocatorCoalesce(Allocator* a) {
             mf->classValue[count++] = mf->classValue[x];
         }
     }
+    // The register each becomes, its representative's, found once.
+    Vec<VReg> renamed;
+    renamed.resize(usize(mf->nregs));
+    for (i32 x = 0; x < mf->nregs; ++x) {
+        renamed[usize(x)] = firstVirtual + canonical[usize(find(x))];
+    }
     for (Int b = 0, end = length(mf->blocks); b < end; ++b) {
         for (Int i = 0, end = length(mf->blocks[b].insts.view()); i < end; ++i) {
             MInst* in = &mf->blocks[b].insts[i];
             mInstForEachOperand(in, [&](VReg* r, Int role) mutable -> void {
                 if (*r != noReg && !vRegIsPhys(*r)) {
-                    *r = firstVirtual + canonical[usize(find(i32(allocatorVindex(a, *r))))];
+                    *r = renamed[usize(allocatorVindex(a, *r))];
                 }
             });
             if (in->op == mParMove) {
@@ -9985,11 +9990,28 @@ static void allocatorLinearize(Allocator* a) {
     }
 }
 
+// liveness finds the registers live into and out of each block, of the
+// copies' registers alone with copiesOnly, and in the same walk counts the
+// definitions of every virtual register and finds the constants, those
+// defined only by a load of a float constant; without copiesOnly it fills
+// invariantDepth, the loop depth of a register's one definition, as well.
 static void allocatorLiveness(Allocator* a, bool copiesOnly) {
     MFunc* mf = a->mf;
     const Int n = length(mf->blocks);
     const Int nv = copiesOnly ? Int(a->copyRegs.size()) : mf->nregs;
     const auto copyIndex = a->copyIndex.view();
+    const bool depths = !copiesOnly;
+    Vec<i32>& defs = a->definitions;
+    defs.resize(usize(mf->nregs));
+    defs.fill(0);
+    a->constant.resize(usize(mf->nregs));
+    a->constant.fill(false);
+    a->constantBits.resize(usize(mf->nregs));
+    a->constantBits.fill(0);
+    if (depths) {
+        a->invariantDepth.resize(usize(mf->nregs));
+        a->invariantDepth.fill(-1);
+    }
     // Gen/kill sets and operand callbacks have no users after dataflow.
     ObjPool temporary;
     Vec<Bitset> kill;
@@ -10001,17 +10023,30 @@ static void allocatorLiveness(Allocator* a, bool copiesOnly) {
     a->liveOut.fill(Bitset{});
     for (Int index = 0; index < length(a->order); ++index) {
         const i32 b = a->order[index];
+        const i32 depth = i32(mf->blocks[b].depth);
         a->liveIn[b] = newBitset(nv);
         {
             PoolScope scope(temporary);
             Bitset g = a->liveIn[b];
             Bitset k = newBitset(nv);
             for (Int i = 0; i < length(mf->blocks[b].insts); ++i) {
-                mInstForEachOperand(&mf->blocks[b].insts[i], [&](VReg* r, Int role) {
+                MInst* in = &mf->blocks[b].insts[i];
+                mInstForEachOperand(in, [&](VReg* r, Int role) {
                     if (vRegIsPhys(*r) || *r == noReg) {
                         return;
                     }
                     Int x = allocatorVindex(a, *r);
+                    if ((role & roleDef) != 0 && role != roleTemp) {
+                        defs[usize(x)]++;
+                        if (in->op == mFConst) {
+                            a->constant[usize(x)] = true;
+                            a->constantBits[usize(x)] = in->size == 4 ? u64(u32(in->imm)) : u64(in->imm);
+                        }
+                        if (depths) {
+                            i32& d = a->invariantDepth[usize(x)];
+                            d = d == -1 ? depth : 1 << 30;
+                        }
+                    }
                     if (copiesOnly) {
                         x = copyIndex[x];
                         if (x < 0) {
@@ -10034,6 +10069,11 @@ static void allocatorLiveness(Allocator* a, bool copiesOnly) {
             kill[b] = k;
         }
         a->liveOut[b] = newBitset(nv);
+    }
+    for (usize x = 0; x < defs.size(); ++x) {
+        if (defs[x] != 1) {
+            a->constant[x] = false;
+        }
     }
     // A block only needs another visit after a successor's live-in set
     // changes. States 0/1/2 mean unreachable / idle / queued.
@@ -10439,53 +10479,6 @@ static Interval* allocatorPartAt(Interval* root, i32 p) {
         return intervalStart(root->children[i]) > p;
     });
     return root->children[k - 1];
-}
-
-// definitions counts the definitions of each virtual register and finds
-// the constants, those defined only by a load of a float constant; with
-// depths it fills invariantDepth as well.
-static void allocatorDefinitions(Allocator* a, bool depths) {
-    MFunc* mf = a->mf;
-    Vec<i32>& defs = a->definitions;
-    defs.resize(usize(mf->nregs));
-    defs.fill(0);
-    a->constant.resize(usize(mf->nregs));
-    a->constant.fill(false);
-    a->constantBits.resize(usize(mf->nregs));
-    a->constantBits.fill(0);
-    if (depths) {
-        a->invariantDepth.resize(usize(mf->nregs));
-        a->invariantDepth.fill(-1);
-    }
-    auto order = a->order.view();
-    for (Int j = 0; j < length(order); ++j) {
-        const i32 b = order[j];
-        const i32 depth = i32(mf->blocks[b].depth);
-        auto instructions = mf->blocks[b].insts.view();
-        for (Int i = 0; i < length(instructions); ++i) {
-            MInst* in = &instructions[i];
-            mInstForEachOperand(in, [&](VReg* r, Int role) {
-                if (*r == noReg || vRegIsPhys(*r) || (role & roleDef) == 0 || role == roleTemp) {
-                    return;
-                }
-                const usize x = usize(allocatorVindex(a, *r));
-                defs[x]++;
-                if (in->op == mFConst) {
-                    a->constant[x] = true;
-                    a->constantBits[x] = in->size == 4 ? u64(u32(in->imm)) : u64(in->imm);
-                }
-                if (depths) {
-                    i32& d = a->invariantDepth[x];
-                    d = d == -1 ? depth : 1 << 30;
-                }
-            });
-        }
-    }
-    for (usize x = 0; x < defs.size(); ++x) {
-        if (defs[x] != 1) {
-            a->constant[x] = false;
-        }
-    }
 }
 
 // deadMoves drops the moves into registers that nothing reads before
@@ -23280,7 +23273,6 @@ static Allocator* allocate(MFunc* mf) {
         a->posBlock = move(posBlock);
     }
     allocatorLiveness(a);
-    allocatorDefinitions(a, true);
     allocatorBuildIntervals(a);
     allocatorScan(a);
     allocatorSpillAtJoins(a);
