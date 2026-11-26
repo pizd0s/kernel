@@ -2301,7 +2301,3 @@ func libc__kernel_socksendmsg(fd, msg, flags uint32) uint32 {
 func libcFchroot(fd uint32) uint32 {
 	return proc().libcFchroot(fd)
 }
-
-func libc__kernel_socketon(fd, domain, kind, protocol uint32) uint32 {
-	return proc().libc__kernel_socketon(fd, domain, kind, protocol)
-}

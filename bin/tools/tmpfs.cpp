@@ -183,7 +183,7 @@ namespace {
         File,
         Link,
         Fifo,   // a named pipe: the kernel makes the pipe
-        Socket, // a socket's name: the kernel keeps what is bound to it
+        Socket, // a socket's name: rootfs keeps what is bound to it
     };
 
     // A name of a directory: its bytes are the image's or follow the entry.

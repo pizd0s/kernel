@@ -35,6 +35,7 @@
 //     sockmgr [-r fd]
 
 #include <bin/tools/tools.h>
+#include <lib/protocol/calls.h>
 #include <lib/protocol/service.h>
 
 #include <arpa/inet.h>
@@ -445,14 +446,33 @@ static void getOption(const Socket& h, const Request& r) {
     answer(r.reply(), opOk, 0, &value, sizeof value);
 }
 
+static void forgetHandle(Socket* h);
+
+// A call handed to a stack takes the socket with it: sockmgr's end of
+// the socket's channel goes to the stack, before where the call is
+// answered, and the socket is the stack's from then on, nothing of
+// sockmgr's.
+static void handTo(Socket& h, Request& r, const Stack& s) {
+    int fds[maxFds];
+    size_t count = 0;
+    for (size_t i = 0; i + 1 < r.count && count + 2 < maxFds; ++i) {
+        fds[count++] = r.fds[i];
+    }
+    fds[count++] = h.end->fd;
+    fds[count++] = r.reply();
+    if (const int e = hand(s, h, r.h, r.body, r.size, fds, count)) {
+        return fail(r.reply(), e);
+    }
+    unwatch(epoll, h.end);
+    forgetHandle(&h);
+}
+
 static void handOn(Socket& h, Request& r, uint32_t to) {
     Stack* s = route(h, to);
     if (!s) {
         return fail(r.reply(), ENETUNREACH);
     }
-    if (const int e = hand(*s, h, r.h, r.body, r.size, r.fds, r.count)) {
-        fail(r.reply(), e);
-    }
+    handTo(h, r, *s);
 }
 
 // A port of TCP's for a bind to port 0, which the socket's name says before
@@ -493,10 +513,7 @@ static void bindCall(Socket& h, Request& r) {
         if (!s) {
             return fail(r.reply(), EADDRNOTAVAIL);
         }
-        if (const int e = hand(*s, h, r.h, r.body, r.size, r.fds, r.count)) {
-            fail(r.reply(), e);
-        }
-        return;
+        return handTo(h, r, *s);
     }
     if (a.sin_port == 0) {
         a.sin_port = ephemeral();
@@ -561,17 +578,20 @@ static void nameCall(const Socket& h, const Request& r) {
 }
 
 static void socketCall(Socket& h, Request& r) {
-    if (r.h.op == opSocket) {
-        uint32_t domain, protocol;
-        const uint32_t type = r.h.arg & 0xf;
-        if (h.made || !r.at(0, domain) || !r.at(4, protocol)) {
+    if (r.h.op == opCtl) {
+        uint32_t call, kind, domain, protocol;
+        if (!r.at(0, call) || call != ctlSocket) {
+            return fail(r.reply(), ENOTTY);
+        }
+        if (h.made || !r.at(4, kind) || !r.at(8, domain) || !r.at(12, protocol)) {
             return fail(r.reply(), EINVAL);
         }
+        const uint32_t type = kind & 0xf;
         if (domain != AF_INET) {
             return fail(r.reply(), EAFNOSUPPORT);
         }
         if (type != SOCK_STREAM && type != SOCK_DGRAM) {
-            return fail(r.reply(), ESOCKTNOSUPPORT);
+            return fail(r.reply(), EPROTOTYPE);
         }
         h = {h.end, domain, type, protocol, true, {}, 0, {}, {}, false, false, 0, nullptr, nullptr, 0, 0, h.next};
         return answer(r.reply(), opOk, 0);

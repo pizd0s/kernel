@@ -26,17 +26,14 @@ namespace {
     };
 
     // A call that waits for its socket: its endpoint, kept; the call; a
-    // READ's or WRITE's memfd; of a HAND's, the kernel's end of the
-    // socket's pair, which goes with the answer, attached; and when it has
-    // waited its socket's timeout, -1 for none.
+    // READ's or WRITE's memfd; and when it has waited its socket's
+    // timeout, -1 for none.
     struct Waiting {
         Endpoint* at;
         Header h;
         unsigned char* body;
         size_t size;
         int memfd;
-        bool attach;
-        int end;
         long long due;
         int tag; // what at is of
     };
@@ -81,10 +78,10 @@ namespace {
         return true;
     }
 
-    // An answer, plain or attached: OK opened, then the call's own, the
-    // kernel's end of the socket's pair with it. A call that fails does
-    // not attach the socket, whose end closes, but CONNECT, whose errno
-    // is its answer's own.
+    // An answer, plain or attached: OK opened, then the call's own, with
+    // the other end of a new socket's pair, an ACCEPT's connection's or a
+    // listener's of sockmgr's. A call that fails attaches nothing, and the
+    // end closes.
     void reply(int fd, bool attach, int end, int err, const void* data, size_t size) {
         if (err) {
             if (attach) {
@@ -166,6 +163,23 @@ namespace {
                peerLength >= 8 && memcmp(peer, addr, 8) == 0;
     }
 
+    // A socket of F-Stack's descriptor whose open file is channel, an end
+    // of a pair whose other end is the kernel's.
+    Socket* adopted(int ff, int type, bool nonblock, int channel) {
+        auto* s = static_cast<Socket*>(calloc(1, sizeof(Socket)));
+        if (!s) {
+            fatal("inet: out of memory");
+        }
+        s->ff = ff;
+        s->type = type;
+        s->end = watch(epoll, {channel, false, true, true, s});
+        s->end->nonblock = nonblock;
+        s->next = sockets;
+        sockets = s;
+        watched(*s);
+        return s;
+    }
+
     // A socket of F-Stack's descriptor, its open file the first end of a
     // new pair, the other end the kernel's, into end.
     Socket* made(int ff, int type, bool nonblock, int& end) {
@@ -173,19 +187,8 @@ namespace {
         if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
             return nullptr;
         }
-        auto* s = static_cast<Socket*>(calloc(1, sizeof(Socket)));
-        if (!s) {
-            fatal("inet: out of memory");
-        }
-        s->ff = ff;
-        s->type = type;
-        s->end = watch(epoll, {pair[0], false, true, true, s});
-        s->end->nonblock = nonblock;
-        s->next = sockets;
-        sockets = s;
-        watched(*s);
         end = pair[1];
-        return s;
+        return adopted(ff, type, nonblock, pair[0]);
     }
 
     // A read that took what the socket had: POLLIN is told no more, before
@@ -212,9 +215,6 @@ namespace {
         if (w->memfd >= 0) {
             close(w->memfd);
         }
-        if (w->attach && w->end >= 0) {
-            close(w->end);
-        }
         if (w->at) {
             unkeep(epoll, w->at);
         }
@@ -224,14 +224,13 @@ namespace {
     }
 
     // A call of a socket's, the socket never waiting: answered, or to wait.
-    Outcome run(Socket& s, const Header& h, const unsigned char* body, size_t size, int memfd, int fd, bool nonblock, bool attach,
-                int end) {
+    Outcome run(Socket& s, const Header& h, const unsigned char* body, size_t size, int memfd, int fd, bool nonblock) {
         const unsigned char* at = body;
         const unsigned char* stop = body + size;
         const linux_sockaddr* addr;
         socklen_t length;
         auto done = [&](int err, const void* data = nullptr, size_t n = 0) {
-            reply(fd, attach, end, err, data, n);
+            reply(fd, false, -1, err, data, n);
             return Outcome::Done;
         };
         auto again = [&](Outcome wait, int err) {
@@ -253,10 +252,6 @@ namespace {
                 }
                 if ((err == EINPROGRESS || err == EALREADY) && !nonblock) {
                     return Outcome::Write;
-                }
-                if (attach) {
-                    const uint32_t result = uint32_t(err == EALREADY ? EINPROGRESS : err);
-                    return done(0, &result, sizeof result);
                 }
                 return done(err);
             }
@@ -420,10 +415,10 @@ namespace {
     }
 
     // A call that waits, kept: where it is answered becomes the loop's.
-    void wait(Socket& s, Outcome outcome, Request& r, bool attach, int end) {
+    void wait(Socket& s, Outcome outcome, Request& r) {
         const int side = outcome == Outcome::Read ? 0 : 1;
         if (s.waiting[side]) {
-            return reply(r.reply(), attach, end, EBUSY, nullptr, 0);
+            return fail(r.reply(), EBUSY);
         }
         auto* w = static_cast<Waiting*>(calloc(1, sizeof(Waiting)));
         if (!w) {
@@ -437,8 +432,6 @@ namespace {
         if (w->memfd >= 0) {
             r.fds[0] = -1; // the waiting call's
         }
-        w->attach = attach;
-        w->end = end;
         w->due = dueOf(s, w->h.op);
         w->at = keep(epoll, r, &w->tag);
         s.waiting[side] = w;
@@ -512,37 +505,44 @@ void socketsHand(Request& r) {
         setOption(ff, int(type), level, name, at, socklen_t(length));
         at += length;
     }
-    if (bound && ff_bind(ff, bound, boundLength) != 0) {
-        const int e = errno;
+    Header h = r.h;
+    h.op = r.h.arg;
+    h.arg = arg;
+    const bool listens = h.op == opListen;
+    if (!listens && ((h.op != opBind && h.op != opConnect && h.op != opSend) || r.count < 2)) {
         ff_close(ff);
-        return fail(r.reply(), e);
+        return fail(r.reply(), EINVAL);
     }
-    int end;
-    Socket* s = made(ff, int(type), nonblock != 0, end);
+    // A listener is sockmgr's, its open file a new pair's end, answered
+    // attached. Another socket comes with its call: sockmgr's end of its
+    // channel, the descriptor before where the call is answered, is the
+    // socket's open file from now on, whatever the call's answer, and
+    // the call the socket's own.
+    int end = -1;
+    Socket* s = listens ? made(ff, int(type), nonblock != 0, end) : adopted(ff, int(type), nonblock != 0, r.fds[r.count - 2]);
     if (!s) {
         ff_close(ff);
         return fail(r.reply(), ENOMEM);
     }
-    // The call it brings, as the socket's own, answered attached.
-    Header h = r.h;
-    h.op = r.h.arg;
-    h.arg = arg;
-    if (h.op == opListen) {
-        if (ff_listen(ff, int(arg)) != 0) {
-            const int e = errno;
+    if (!listens) {
+        r.fds[r.count - 2] = -1;
+    }
+    int e = bound && ff_bind(ff, bound, boundLength) != 0 ? errno : 0;
+    if (e == 0 && listens && ff_listen(ff, int(arg)) != 0) {
+        e = errno;
+    }
+    if (e != 0) {
+        if (listens) {
             close(end);
             forget(s);
-            return fail(r.reply(), e);
         }
+        return fail(r.reply(), e);
+    }
+    if (listens) {
         return reply(r.reply(), true, end, 0, nullptr, 0);
     }
-    if (h.op != opBind && h.op != opConnect && h.op != opSend) {
-        close(end);
-        forget(s);
-        return fail(r.reply(), EINVAL);
-    }
     const size_t offset = size_t(at - r.body);
-    const Outcome outcome = run(*s, h, at, size_t(stop - at), -1, r.reply(), nonblock != 0, true, end);
+    const Outcome outcome = run(*s, h, at, size_t(stop - at), -1, r.reply(), nonblock != 0);
     if (outcome == Outcome::Done) {
         return;
     }
@@ -551,7 +551,7 @@ void socketsHand(Request& r) {
     call.h = h;
     call.body = r.body + offset;
     call.size = size_t(stop - at);
-    wait(*s, outcome, call, true, end);
+    wait(*s, outcome, call);
     r.fds[r.count - 1] = call.fds[call.count - 1];
 }
 
@@ -560,16 +560,8 @@ bool socketsHandle(Endpoint& e, Request& r) {
     int side;
     if (Socket* s = keeperOf(e.of, side)) {
         if (r.h.op == opCancel) {
-            // A CONNECT that a HAND brought attaches the socket even so: its
-            // connection goes on, as an interrupted connect's does.
-            Waiting* w = s->waiting[side];
-            const uint32_t interrupted = EINTR;
-            if (w->attach && w->h.op == opConnect) {
-                reply(w->at->fd, true, w->end, 0, &interrupted, sizeof interrupted);
-            } else {
-                reply(w->at->fd, w->attach, w->end, EINTR, nullptr, 0);
-            }
-            w->end = -1;
+            // A CONNECT's connection goes on, as an interrupted connect's does.
+            fail(s->waiting[side]->at->fd, EINTR);
             release(*s, side);
         }
         return true;
@@ -578,9 +570,9 @@ bool socketsHandle(Endpoint& e, Request& r) {
     if (!s) {
         return false;
     }
-    const Outcome outcome = run(*s, r.h, r.body, r.size, r.memfd(), r.reply(), e.nonblock, false, -1);
+    const Outcome outcome = run(*s, r.h, r.body, r.size, r.memfd(), r.reply(), e.nonblock);
     if (outcome != Outcome::Done) {
-        wait(*s, outcome, r, false, -1);
+        wait(*s, outcome, r);
     }
     return true;
 }
@@ -641,12 +633,10 @@ int socketsTurn() {
                 continue;
             }
             const bool ready = (s->ready & (side == 0 ? POLLIN | POLLHUP : POLLOUT | POLLHUP)) != 0;
-            if (ready && run(*s, w->h, w->body, w->size, w->memfd, w->at->fd, false, w->attach, w->end) == Outcome::Done) {
-                w->end = -1; // gone with the answer
+            if (ready && run(*s, w->h, w->body, w->size, w->memfd, w->at->fd, false) == Outcome::Done) {
                 release(*s, side);
             } else if (w->due >= 0 && w->due <= now) {
-                reply(w->at->fd, w->attach, w->end, EAGAIN, nullptr, 0);
-                w->end = -1;
+                fail(w->at->fd, EAGAIN);
                 release(*s, side);
             } else if (w->due >= 0 && (due < 0 || w->due < due)) {
                 due = w->due;

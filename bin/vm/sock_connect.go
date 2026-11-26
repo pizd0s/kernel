@@ -5,9 +5,7 @@ import (
 )
 
 type SockConnect struct {
-	addr     Address
-	nonblock bool
-	moved    *Description
+	addr Address
 }
 
 func (r *SockConnect) op() uint32 {
@@ -23,25 +21,7 @@ func (r *SockConnect) ser(p *Process, b []byte) (uint32, []byte, []*Description)
 }
 
 func (r *SockConnect) des(p *Process, pk *Packet) error {
-	if len(pk.files) == 0 {
-		return nil
-	}
-
-	moved, rest, err := p.attached(pk)
-
-	if err != nil {
-		return err
-	}
-
-	r.moved = moved
-
-	if len(rest) < 4 {
-		return EIO
-	}
-
-	if e := Errno(binary.LittleEndian.Uint32(rest)); e != 0 {
-		return e
-	}
+	dropFiles(pk.files)
 
 	return nil
 }

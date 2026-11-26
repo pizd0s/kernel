@@ -563,7 +563,6 @@ func (k *Kernel) functionTable() map[string]any {
 		"__kernel_sockbind":                libc__kernel_sockbind,
 		"__kernel_sockconnect":             libc__kernel_sockconnect,
 		"__kernel_exec":                    libc__kernel_exec,
-		"__kernel_socketon":                libc__kernel_socketon,
 		"__kernel_socksendmsg":             libc__kernel_socksendmsg,
 		"fchroot":                          libcFchroot,
 		"__kernel_fdioctl":                 libc__kernel_fdioctl,

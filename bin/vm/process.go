@@ -6359,26 +6359,6 @@ func (p *Process) putAddress(addr []byte, at, lenAt uint32) {
 	p.put32(lenAt, uint32(len(addr)))
 }
 
-func (p *Process) libc__kernel_socketon(fd, domain, kind, protocol uint32) uint32 {
-	if kind&^(sockTypeMask|SOCK_NONBLOCK|SOCK_CLOEXEC) != 0 {
-		return p.result(0, EINVAL)
-	}
-
-	d, err := p.description(fd)
-
-	if err != nil {
-		return p.result(0, err)
-	}
-
-	if err := p.request(d, &SockCreate{domain: domain, kind: kind &^ SOCK_CLOEXEC, protocol: protocol}); err != nil {
-		return p.result(0, err)
-	}
-
-	d.hold()
-
-	return p.result(p.installDesc(opened(newIndirect(d), rdwr(kind&SOCK_NONBLOCK != 0)), 0, kind&SOCK_CLOEXEC != 0))
-}
-
 func (p *Process) libcSocketpair(domain, kind, protocol, at uint32) uint32 {
 	if domain != AF_UNIX {
 		return p.result(0, EOPNOTSUPP)
@@ -6440,7 +6420,7 @@ func (p *Process) libc__kernel_sockconnect(fd, addr, n uint32) uint32 {
 	d, err := p.description(fd)
 
 	if err == nil {
-		err = p.fileCall(d, &SockConnect{addr: p.socketAddress(addr, n), nonblock: d.nonblock()}, p.group())
+		err = p.fileCall(d, &SockConnect{addr: p.socketAddress(addr, n)}, p.group())
 	}
 
 	return p.result(0, err)
@@ -8590,7 +8570,7 @@ func (p *Process) sockSend(d *Description, pk *Packet, to Address, mode IoMode) 
 }
 
 func (p *Process) sockAccept(d *Description, flags uint32) (*Description, []byte, error) {
-	r := SockAccept{flags: flags, nonblock: d.nonblock()}
+	r := SockAccept{flags: flags}
 	err := p.fileCall(d, &r, p.group())
 
 	return r.conn, r.peer, err

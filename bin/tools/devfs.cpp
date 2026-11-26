@@ -6,7 +6,7 @@
 // on to its service, where it is answered with it, and the service serving
 // the open file from then on; the files of text the services serve so;
 // and sockets, which a service binds its socket to as it registered them,
-// the kernel keeping what is bound (bind(2), connect(2)). Only REGISTER
+// rootfs keeping what is bound (bind(2), connect(2)). Only REGISTER
 // makes a name in /dev. devfs keeps a file's name, its mode and its
 // owner, and lets the name go when the service's end of the pair closes,
 // whatever the file is. A name may be in a directory of /dev, pts/0: the
@@ -426,7 +426,7 @@ static void fsCall(Request& r) {
 
 // A service's file: a name in /dev of the mode asked for, S_IFCHR,
 // S_IFBLK, S_IFSOCK or S_IFREG, whose opens go on to the end of a pair the
-// request brings, the service's the other, a socket's none (the kernel
+// request brings, the service's the other, a socket's none (rootfs
 // connects to what is bound to it); its stat is the reply. A service registers
 // files alone: a name with "/" is one in directories of /dev, which come
 // with the first name in them and go with the last. Only on an endpoint

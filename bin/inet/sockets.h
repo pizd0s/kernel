@@ -5,8 +5,9 @@
 // The stack's sockets (lib/protocol/protocol.h, a socket's calls): each
 // the open file of a pair whose other end is the kernel's, or sockmgr's
 // of a listener. A HAND of sockmgr's makes one, of what sockmgr kept of
-// a socket on no stack, and answers the call it brings attached; its
-// calls come on its endpoint after. The sockets are F-Stack's, which never
+// a socket on no stack and of the socket's open file, which comes with
+// it, and answers the call it brings; its calls come on its endpoint
+// after. The sockets are F-Stack's, which never
 // wait: a call that would waits kept, but of a socket that does not wait
 // (O_NONBLOCK of its open file), until the stack's kqueue finds it ready,
 // a CANCEL comes, or a receive or a send has waited its socket's timeout,

@@ -7,8 +7,8 @@
  * umask's mode, connect and a send find the socket bound to it. A socket
  * that serves no such ctl, an end of a pair or the network's, takes the
  * kernel's call, as an address of no path does. A socket of the
- * network's is an open of sockmgr's /dev/sockmgr/socket, made a socket
- * by the kernel. An address of AF_UNIX with no path, or one that starts
+ * network's is an open of sockmgr's /dev/sockmgr/socket, told what it
+ * is by a ctlSocket too. An address of AF_UNIX with no path, or one that starts
  * with a 0, names nothing, ENOENT, and one of a length that is none of
  * sockaddr_un's is EINVAL. sendto is sendmsg's, and sendmmsg sendmsg's
  * of each message.
@@ -115,13 +115,12 @@ static void closeKeeping(int fd) {
 }
 
 int __kernel_socket(int domain, int type, int protocol) {
+    const uint32_t in[4] = {ctlSocket, (uint32_t)type & ~(uint32_t)SOCK_CLOEXEC, (uint32_t)domain, (uint32_t)protocol};
     int flags = (type & SOCK_CLOEXEC ? O_CLOEXEC : 0) | (type & SOCK_NONBLOCK ? O_NONBLOCK : 0);
+    int got = -1;
+    struct ctl c = {in, sizeof in, NULL, 0, NULL, 0, &got, 1};
 
     if (domain == AF_UNIX) {
-        const uint32_t in[4] = {ctlSocket, (uint32_t)type & ~(uint32_t)SOCK_CLOEXEC, (uint32_t)domain, (uint32_t)protocol};
-        int got = -1;
-        struct ctl c = {in, sizeof in, NULL, 0, NULL, 0, &got, 1};
-
         if (ctl(AT_FDROOT, &c, flags) != 0) {
             if (errno == ENOTTY) {
                 errno = EAFNOSUPPORT;
@@ -145,7 +144,7 @@ int __kernel_socket(int domain, int type, int protocol) {
         return -1;
     }
 
-    int f = open("/dev/sockmgr/socket", O_RDWR | O_CLOEXEC | (flags & O_NONBLOCK));
+    int f = open("/dev/sockmgr/socket", O_RDWR | flags);
 
     if (f < 0) {
         if (errno == ENOENT) {
@@ -155,11 +154,16 @@ int __kernel_socket(int domain, int type, int protocol) {
         return -1;
     }
 
-    int s = __kernel_socketon(f, domain, type, protocol);
+    c.got = NULL;
+    c.ngot = 0;
 
-    closeKeeping(f);
+    if (ctl(f, &c, 0) != 0) {
+        closeKeeping(f);
 
-    return s;
+        return -1;
+    }
+
+    return f;
 }
 
 int __kernel_bind(int fd, const struct sockaddr* a, socklen_t n) {

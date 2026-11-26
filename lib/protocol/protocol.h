@@ -281,19 +281,17 @@
 //   it; a sockaddr is lib/c's struct sockaddr, len bytes of it, and a
 //   socket's call on what is no socket is ENOTSOCK. socket(2) of a family
 //   of the network's opens sockmgr's socket (bin/tools/sockmgr), a socket
-//   on no stack yet, and asks SOCKET of it; its BIND, CONNECT, or SEND to
-//   an address, sockmgr hands on to the stack it chooses for it, with
-//   where it is answered, and the stack answers it attached: OK opened,
-//   then the call's own answer, fds[0] the socket's open file of the
-//   stack's, which the socket is from then on. A packet is at most 65536
-//   bytes: of a stream's send of more, the kernel sends what fits, the
-//   send's count, and a datagram that does not fit is EMSGSIZE.
-//     SOCKET    arg type    domain u32, protocol u32
-//     BIND                  len u32, sockaddr   attached: OK opened
-//     CONNECT               len u32, sockaddr   attached: OK opened,
-//                                         errno u32, the connect's: 0, or
-//                                         EINPROGRESS of a socket that does
-//                                         not wait
+//   on no stack yet, and tells it what it is, a CTL, ctlSocket, type u32,
+//   domain u32, protocol u32; its BIND, CONNECT, or SEND to an address,
+//   sockmgr hands on to the stack it chooses for it, the socket with it:
+//   sockmgr's end of the socket's channel, which the stack serves from
+//   then on, the call first. The open file is the same to the kernel. A
+//   packet is at most 65536 bytes: of a stream's send of more, the kernel
+//   sends what fits, the send's count, and a datagram that does not fit
+//   is EMSGSIZE.
+//     BIND                  len u32, sockaddr
+//     CONNECT               len u32, sockaddr   EINPROGRESS of a socket that
+//                                         does not wait
 //     LISTEN    arg backlog
 //     ACCEPT    arg flags                 OK, its arg 1, opened, the
 //                                         peer's sockaddr, fds[0] the
@@ -303,8 +301,7 @@
 //                                         a file of the kernel's
 //     SEND      arg flags   len u32, sockaddr, data   to the sockaddr, none
 //                                         for a connected socket; fds the
-//                                         rights. OK count u32; attached:
-//                                         OK opened, count u32
+//                                         rights. OK count u32
 //     RECV      arg flags   want u32      OK flags u32, len u32, sockaddr,
 //                                         data: the sender's and at most
 //                                         want bytes; fds the rights
@@ -366,12 +363,14 @@
 //                           value)*, the call's body   sockmgr's: a socket
 //                           on no stack, of what sockmgr kept of it, its
 //                           local address bound first when there is one,
-//                           then op: BIND, CONNECT or SEND, answered
-//                           attached where the call is, the last of the
-//                           descriptors, its rights before it; LISTEN, its
-//                           arg the backlog, answered OK opened, fds[0] the
-//                           listener's open file, sockmgr's, on which READY
-//                           tells of connections and ACCEPT takes one
+//                           then op: BIND, CONNECT or SEND, answered where
+//                           the call is, the last of the descriptors, and
+//                           before it the socket's open file, sockmgr's
+//                           end of its channel, the stack's to serve from
+//                           then on, a send's rights before that; LISTEN,
+//                           its arg the backlog, answered OK opened, fds[0]
+//                           the listener's open file, sockmgr's, on which
+//                           READY tells of connections and ACCEPT takes one
 //
 //   A device's service's, on the channel devfs has of it, and on
 //   /dev/init/ctl:
@@ -601,7 +600,6 @@ enum : uint32_t {
     opSetsockopt,
     opShutdown,
     opSocktype,
-    opSocket,
     // A stack's and sockmgr's.
     opStack = 160,
     opHand,

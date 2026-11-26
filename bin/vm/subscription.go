@@ -104,19 +104,3 @@ func (s *Subscribers) tellOut() {
 		}
 	}
 }
-
-func (s *Subscribers) takeOver(from *Subscribers) {
-	for l := from.first; l != nil; {
-		next := l.next
-
-		l.list, l.prev, l.next = s, nil, s.first
-
-		if s.first != nil {
-			s.first.prev = l
-		}
-
-		s.first, l = l, next
-	}
-
-	from.first = nil
-}

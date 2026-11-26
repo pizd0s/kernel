@@ -5,11 +5,10 @@ import (
 )
 
 type SockSend struct {
-	pk    *Packet
-	to    Address
-	mode  IoMode
-	n     int
-	moved *Description
+	pk   *Packet
+	to   Address
+	mode IoMode
+	n    int
 }
 
 func (r *SockSend) op() uint32 {
@@ -27,23 +26,13 @@ func (r *SockSend) ser(p *Process, b []byte) (uint32, []byte, []*Description) {
 }
 
 func (r *SockSend) des(p *Process, pk *Packet) error {
-	data := pk.data
+	dropFiles(pk.files)
 
-	if len(pk.files) > 0 {
-		moved, rest, err := p.attached(pk)
-
-		if err != nil {
-			return err
-		}
-
-		r.moved, data = moved, rest
-	}
-
-	if len(data) < 4 {
+	if len(pk.data) < 4 {
 		return EIO
 	}
 
-	r.n = int(binary.LittleEndian.Uint32(data))
+	r.n = int(binary.LittleEndian.Uint32(pk.data))
 
 	return nil
 }

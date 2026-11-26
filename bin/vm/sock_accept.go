@@ -5,10 +5,9 @@ import (
 )
 
 type SockAccept struct {
-	flags    uint32
-	nonblock bool
-	conn     *Description
-	peer     []byte
+	flags uint32
+	conn  *Description
+	peer  []byte
 }
 
 func (r *SockAccept) op() uint32 {

@@ -65,7 +65,6 @@ const (
 	sSetopt
 	sShutdown
 	sType
-	sCreate
 )
 
 func served(p *Process, kind uint32, access int, dev, ino uint64, events uint32, end *Description) (*Description, error) {

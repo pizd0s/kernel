@@ -55,15 +55,12 @@ int __kernel_fdioctl(int fd, unsigned long request, void* arg) __KERNEL(__kernel
 // file of "#!" is ENOEXEC. __kernel_sockbind, __kernel_sockconnect and
 // __kernel_socksendmsg are bind, connect and sendmsg as the socket's
 // server, or an end of a pair, takes them, with no path walked.
-// __kernel_socketon makes a socket of the network's of file, an open of
-// sockmgr's socket.
 struct sockaddr;
 struct msghdr;
 int __kernel_exec(int fd, const char* path, const char* program, char* const argv[], char* const envp[]) __KERNEL(__kernel_exec);
 int __kernel_sockbind(int fd, const struct sockaddr* addr, unsigned size) __KERNEL(__kernel_sockbind);
 int __kernel_sockconnect(int fd, const struct sockaddr* addr, unsigned size) __KERNEL(__kernel_sockconnect);
 long __kernel_socksendmsg(int fd, const struct msghdr* msg, int flags) __KERNEL(__kernel_socksendmsg);
-int __kernel_socketon(int file, int domain, int type, int protocol) __KERNEL(__kernel_socketon);
 
 // __kernel_name is the name the program was started by, the last component
 // of its argv[0], or null where it has no arguments: what a message of
