@@ -3977,6 +3977,11 @@ namespace {
         // beside the memory, a byte for each byte of it (lowererAsanAddress);
         // it excludes the tail.
         bool asan{};
+        // libc links libc.wasm, descriptor 3's, into the module before it is
+        // compiled (linkLibc); link does and writes the linked module
+        // instead of compiling it.
+        bool libc{};
+        bool link{};
     };
 
     struct FloatIntegerNarrow {
@@ -26927,7 +26932,10 @@ static void moduleCustom(Module* module, Reader* reader) {
     reader->pos = length(reader->data);
 }
 
-static Slice<u8> readInput(ObjPool& owner) {
+// What a descriptor has to its end: the module of descriptor 0, the
+// standard input, or libc.wasm of descriptor 3.
+static Slice<u8> readInput(ObjPool& owner, int fd) {
+    const char* failure = fd == 0 ? "stdin read failed" : "libc.wasm read failed";
     auto* input = &owner.make<ArrayStorage<u8, PageVec<u8>>>(&owner, ArrayData<u8>::Kind::Paged)->array;
     auto* pages = input->pages();
     for (;;) {
@@ -26935,12 +26943,12 @@ static Slice<u8> readInput(ObjPool& owner) {
         pages->reserve(before + 1);
         const usize offset = before % pageBytes;
         const usize available = pageBytes - offset;
-        require(!chaosFail(ChaosFault::Read), "stdin read failed");
+        require(!chaosFail(ChaosFault::Read), failure);
         ssize_t count;
         do {
-            count = ::read(0, pages->pages.data()[before / pageBytes] + offset, available);
+            count = ::read(fd, pages->pages.data()[before / pageBytes] + offset, available);
         } while (count < 0 && errno == EINTR);
-        require(count >= 0, "stdin read failed");
+        require(count >= 0, failure);
         require(usize(count) <= available, "stdin read overflow");
         if (!count) {
             break;
@@ -26955,13 +26963,1543 @@ static Slice<u8> readInput(ObjPool& owner) {
     return Slice<u8>::of(input, 0, u32(input->count), u32(input->count));
 }
 
+// The link of libc.wasm into a program before the program is compiled
+// (--libc), or instead of that (--link, which writes what it made).
+//
+// libc.wasm is the kernel's functions written in C (lib/libc/make.py), a
+// relocatable object of wasm-ld's: functions and data segments, the
+// relocations of each and a table of symbols, where a function __kernel_X
+// is the kernel function X, and an exported one is what the kernel calls in
+// every program. A program imports the kernel function X as ("kernel", X).
+//
+// The linked module is the program with libc.wasm's functions it imports,
+// those the kernel calls and what they reach, after its own. The numbers of
+// the functions in its code, constants, elements, exports, start and names
+// are the new ones; an import libc.wasm's functions need and the program
+// has not is added, and so is a type. libc.wasm's data is where the
+// program's heap began, __heap_base after it, and a function libc.wasm
+// takes the address of has a slot at the table's end. A code section whose
+// count of functions grew a byte longer says so in a custom section,
+// w2o.code_shift, for the debug lines, counted from the section's start;
+// where a function's body changed its length they would be wrong, and the
+// debug sections are left out.
+//
+// A program that imports nothing of libc.wasm is left as it is.
+static constexpr u8 relocFunctionIndexLeb = 0;
+static constexpr u8 relocTableIndexSleb = 1;
+static constexpr u8 relocTableIndexI32 = 2;
+static constexpr u8 relocMemoryAddrLeb = 3;
+static constexpr u8 relocMemoryAddrSleb = 4;
+static constexpr u8 relocMemoryAddrI32 = 5;
+static constexpr u8 relocTypeIndexLeb = 6;
+static constexpr u8 relocGlobalIndexLeb = 7;
+static constexpr u8 relocGlobalIndexI32 = 13;
+static constexpr u8 relocTableNumberLeb = 20;
+static constexpr u8 relocFunctionIndexI32 = 26;
+static constexpr u8 linkedFunction = 0;
+static constexpr u8 linkedData = 1;
+static constexpr u8 linkedGlobal = 2;
+static constexpr u8 linkedSection = 3;
+static constexpr u8 linkedTable = 5;
+static constexpr u32 linkedLocal = 0x2;
+static constexpr u32 linkedUndefined = 0x10;
+static constexpr u32 linkedExported = 0x20;
+static constexpr u32 linkedExplicitName = 0x40;
+static constexpr u32 unlinked = 0xffffffff;
+
+namespace {
+    struct LinkSection {
+        u8 id{};
+        String name{};
+        Slice<u8> body{};
+    };
+
+    struct LinkImport {
+        String module{};
+        String name{};
+        u8 kind{};
+        u32 typ{};
+    };
+
+    struct LinkReloc {
+        u8 kind{};
+        u32 offset{};
+        u32 index{};
+        i32 addend{};
+    };
+
+    struct LinkSymbol {
+        u8 kind{};
+        u32 flags{};
+        u32 index{};
+        u32 offset{};
+        String name{};
+    };
+
+    // A function's name: the program's is the bytes of its name section,
+    // libc.wasm's a string.
+    struct LinkName {
+        Slice<u8> bytes{};
+        String text{};
+    };
+
+    // A function's body or a data segment of libc.wasm, where it begins in
+    // its section, and its relocations, their offsets from its start.
+    struct LinkPiece {
+        Slice<u8> data{};
+        Slice<LinkReloc> relocs{};
+        Int start{};
+        u32 align{};
+    };
+
+    // libc.wasm: kernel is its kernel functions, exported those the kernel
+    // calls, each the function's number, imports first.
+    struct LinkObject {
+        Slice<String> types{};
+        Slice<LinkImport> funcImports{};
+        Slice<LinkImport> globalImports{};
+        Slice<LinkImport> tableImports{};
+        Slice<u32> funcs{};
+        Slice<LinkPiece> bodies{};
+        Slice<LinkPiece> segments{};
+        Slice<LinkSymbol> symbols{};
+        Map<u32, String> names{};
+        Map<String, u32> kernel{};
+        Map<String, u32> exported{};
+    };
+
+    // bound is, of each import of the program, libc.wasm's function that it
+    // is, or unlinked; funcMap the new number of each function of the
+    // program, objMap of each of libc.wasm, unlinked of one left out.
+    struct Linker {
+        LinkObject* o{};
+        Slice<LinkSection> sections{};
+        Slice<String> types{};
+        Map<String, u32> typeAt{};
+        Slice<LinkImport> imports{};
+        Slice<u32> funcs{};
+        Slice<u32> bound{};
+        Int stack{};
+        Int heapGlobal{};
+        u32 heap{};
+        u32 newHeap{};
+        Slice<LinkImport> merged{};
+        Slice<u32> funcMap{};
+        Slice<u32> objMap{};
+        Slice<bool> live{};
+        Slice<bool> used{};
+        Slice<bool> segLive{};
+        Slice<u32> segAt{};
+        bool hasTable{};
+        bool needTable{};
+        u32 tableBase{};
+        Map<u32, u32> slots{};
+        Slice<u32> slotFuncs{};
+    };
+}
+
+static bool linkPrefixed(String s, String prefix) {
+    return s.count >= prefix.count && String(s.data, prefix.count) == prefix;
+}
+
+static bool linkBefore(String a, String b) {
+    for (usize i = 0; i < a.count && i < b.count; ++i) {
+        if (a.data[i] != b.data[i]) {
+            return a.data[i] < b.data[i];
+        }
+    }
+    return a.count < b.count;
+}
+
+// What goes wrong with a function of a name says the name.
+static void linkRequire(bool condition, String before, String name, String after) {
+    if (!condition) {
+        compilerError(before + name + after);
+    }
+}
+
+static PageVec<u8>* linkSink() {
+    return activePool->make<PageVec<u8>>();
+}
+
+static Int lebWidth(u64 v) {
+    Int n = 1;
+    for (; v >= 0x80; v >>= 7) {
+        ++n;
+    }
+    return n;
+}
+
+static void sinkLebWide(PageVec<u8>* out, u64 v, Int width) {
+    for (; width > 1; --width) {
+        out->pushBack(u8(u8(v & 0x7f) | 0x80));
+        v >>= 7;
+    }
+    out->pushBack(u8(v & 0x7f));
+}
+
+static void sinkLeb(PageVec<u8>* out, u64 v) {
+    sinkLebWide(out, v, lebWidth(v));
+}
+
+static void sinkSleb(PageVec<u8>* out, i64 v) {
+    for (;;) {
+        const u8 c = u8(v & 0x7f);
+        v >>= 7;
+        if ((v == 0 && (c & 0x40) == 0) || (v == -1 && (c & 0x40) != 0)) {
+            out->pushBack(c);
+            return;
+        }
+        out->pushBack(u8(c | 0x80));
+    }
+}
+
+// A relocated number keeps its place: an LEB of five bytes, or four bytes.
+static void sinkLeb5(PageVec<u8>* out, u32 v) {
+    sinkLebWide(out, v, 5);
+}
+
+static void sinkSleb5(PageVec<u8>* out, i32 v) {
+    for (Int i = 0; i < 4; ++i) {
+        out->pushBack(u8(u8(u8(v >> (7 * i)) & 0x7f) | 0x80));
+    }
+    out->pushBack(u8(u8(v >> 28) & 0x7f));
+}
+
+static void sinkLe32(PageVec<u8>* out, u32 v) {
+    u8 bytes[4];
+    storeLittle(bytes, v);
+    out->append(bytes, sizeof(bytes));
+}
+
+static void sinkBytes(PageVec<u8>* out, Span<const u8> bytes) {
+    if (bytes.contiguous) {
+        out->append(bytes.contiguous + bytes.offset, bytes.count);
+        return;
+    }
+    usize at = bytes.offset;
+    usize remaining = bytes.count;
+    while (remaining) {
+        const usize offset = at % pageBytes;
+        const usize available = pageBytes - offset;
+        const usize take = remaining < available ? remaining : available;
+        out->append(bytes.pages->pages.data()[at / pageBytes] + offset, take);
+        at += take;
+        remaining -= take;
+    }
+}
+
+static void sinkBytes(PageVec<u8>* out, PageVec<u8>* bytes) {
+    sinkBytes(out, Span<const u8>(Span<u8>(*bytes)));
+}
+
+static void sinkText(PageVec<u8>* out, String text) {
+    out->append(text.data, text.count);
+}
+
+static void sinkName(PageVec<u8>* out, String name) {
+    sinkLeb(out, name.count);
+    sinkText(out, name);
+}
+
+static void sinkSection(PageVec<u8>* out, u8 id, Span<const u8> body) {
+    out->pushBack(id);
+    sinkLeb(out, body.count);
+    sinkBytes(out, body);
+}
+
+static void sinkSection(PageVec<u8>* out, u8 id, PageVec<u8>* body) {
+    sinkSection(out, id, Span<const u8>(Span<u8>(*body)));
+}
+
+// An LEB of at most 32 bits, and how many bytes it is.
+static u32 linkLeb(Reader* r, Int* width) {
+    const Int at = r->pos;
+    const u32 v = convert<u32>(readerLeb(r, 32));
+    *width = r->pos - at;
+    return v;
+}
+
+static Slice<u8> linkBytes(Reader* r) {
+    const u32 n = readerU32(r);
+    return readerBytes(r, convert<i64>(n));
+}
+
+// A number passed over, of at most so many bytes: its bits are the
+// compiler's to refuse.
+static void linkSkip(Reader* r, Int most) {
+    Int n = 1;
+    while (readerByte(r) >= 0x80) {
+        ++n;
+    }
+    require(n <= most, "wasm: a number too long");
+}
+
+static void linkLimits(Reader* r) {
+    const u32 flags = readerU32(r);
+    linkSkip(r, 10);
+    if ((flags & 1) != 0) {
+        linkSkip(r, 10);
+    }
+}
+
+// A custom section's body after its name.
+static Slice<u8> linkAfterName(Slice<u8> body) {
+    Reader r{body, 0};
+    readerName(&r);
+    return subslice(body, r.pos, length(body));
+}
+
+static Slice<LinkSection> linkSections(Slice<u8> module) {
+    Reader r{module, 8};
+    Slice<LinkSection> out{};
+    while (!readerEof(&r)) {
+        LinkSection s{};
+        s.id = readerByte(&r);
+        s.body = linkBytes(&r);
+        if (s.id == 0) {
+            Reader name{s.body, 0};
+            s.name = readerName(&name);
+        }
+        out = appendValues(out, s);
+    }
+    return out;
+}
+
+// The types of a type section, each the bytes of it.
+static Slice<String> linkTypes(Slice<u8> body) {
+    Reader r{body, 0};
+    Slice<String> out{};
+    for (u32 n = readerU32(&r); n > 0; --n) {
+        const Int start = r.pos;
+        require(readerByte(&r) == 0x60, "wasm: a type of no function");
+        linkBytes(&r);
+        linkBytes(&r);
+        out = appendValues(out, asString(subslice(body, start, r.pos)));
+    }
+    return out;
+}
+
+static Slice<LinkImport> linkImports(Slice<u8> body) {
+    Reader r{body, 0};
+    Slice<LinkImport> out{};
+    for (u32 n = readerU32(&r); n > 0; --n) {
+        LinkImport imp{};
+        imp.module = readerName(&r);
+        imp.name = readerName(&r);
+        imp.kind = readerByte(&r);
+        require(imp.kind <= 3, "wasm: an import of no kind");
+        if (imp.kind == 0) {
+            imp.typ = readerU32(&r);
+        } else if (imp.kind == 3) {
+            readerBytes(&r, 2);
+        } else {
+            if (imp.kind == 1) {
+                readerByte(&r);
+            }
+            linkLimits(&r);
+        }
+        out = appendValues(out, imp);
+    }
+    return out;
+}
+
+static Slice<u32> linkNumbers(Slice<u8> body) {
+    Reader r{body, 0};
+    Slice<u32> out{};
+    for (u32 n = readerU32(&r); n > 0; --n) {
+        out = appendValues(out, readerU32(&r));
+    }
+    return out;
+}
+
+// A constant expression, to out with the functions it names renumbered,
+// or to nowhere.
+static void linkExpr(Reader* r, PageVec<u8>* out, Slice<u32> funcs) {
+    Int start = r->pos;
+    for (;;) {
+        const u8 op = readerByte(r);
+        if (op == 0x0b) {
+            break;
+        } else if (op == 0xd2) {
+            const Int at = r->pos;
+            const u32 f = readerU32(r);
+            if (out) {
+                sinkBytes(out, Span<const u8>(subslice(r->data, start, at)));
+                sinkLeb(out, funcs[f]);
+                start = r->pos;
+            }
+        } else if (op == 0x41 || op == 0xd0 || op == 0x23) {
+            linkSkip(r, 5);
+        } else if (op == 0x42) {
+            linkSkip(r, 10);
+        } else if (op == 0x43 || op == 0x44) {
+            readerBytes(r, op == 0x43 ? 4 : 8);
+        } else {
+            require(op == 0x6a || op == 0x6b || op == 0x6c || op == 0x7c || op == 0x7d || op == 0x7e, "wasm: an instruction of no constant");
+        }
+    }
+    if (out) {
+        sinkBytes(out, Span<const u8>(subslice(r->data, start, r->pos)));
+    }
+}
+
+// The immediates of an instruction that names no function.
+static void linkImmediates(Reader* r, u8 op) {
+    if (op <= 0x01 || op == 0x05 || op == 0x0b || op == 0x0f || op == 0x1a || op == 0x1b || op == 0xd1 || (op >= 0x45 && op <= 0xc4)) {
+        return;
+    }
+    if ((op >= 0x02 && op <= 0x04) || op == 0xd0 || op == 0x41 || op == 0x0c || op == 0x0d || (op >= 0x20 && op <= 0x26) || op == 0x3f || op == 0x40) {
+        linkSkip(r, 5);
+    } else if (op == 0x0e) {
+        for (u64 n = u64(readerU32(r)) + 1; n > 0; --n) {
+            linkSkip(r, 5);
+        }
+    } else if (op == 0x11 || op == 0x13) {
+        linkSkip(r, 5);
+        linkSkip(r, 5);
+    } else if (op == 0x1c) {
+        linkBytes(r);
+    } else if (op >= 0x28 && op <= 0x3e) {
+        if ((readerU32(r) & 0x40) != 0) {
+            linkSkip(r, 5);
+        }
+        linkSkip(r, 10);
+    } else if (op == 0x42) {
+        linkSkip(r, 10);
+    } else if (op == 0x43 || op == 0x44) {
+        readerBytes(r, op == 0x43 ? 4 : 8);
+    } else {
+        require(op == 0xfc, "wasm: an instruction of no kind");
+        const u32 sub = readerU32(r);
+        require(sub <= 17, "wasm: an instruction of no kind");
+        if (sub == 8 || sub == 10 || sub == 12 || sub == 14) {
+            linkSkip(r, 5);
+            linkSkip(r, 5);
+        } else if (sub > 7) {
+            linkSkip(r, 5);
+        }
+    }
+}
+
+// A function's body with the functions it calls or takes renumbered: a
+// number keeps its width, or is as wide as the new one is. Its size, as
+// wide as it was or as it is now, goes before it; the result is whether its
+// length changed.
+static bool linkBody(PageVec<u8>* out, Slice<u8> body, Int sizeWidth, Slice<u32> funcs, PageVec<u8>* scratch) {
+    Reader r{body, 0};
+    Int last = 0;
+    scratch->clear();
+    for (u32 n = readerU32(&r); n > 0; --n) {
+        linkSkip(&r, 5);
+        const u8 t = readerByte(&r);
+        require(t != 0x63 && t != 0x64, "wasm: a local of a typed reference");
+    }
+    while (!readerEof(&r)) {
+        const u8 op = readerByte(&r);
+        if (op != 0x10 && op != 0x12 && op != 0xd2) {
+            linkImmediates(&r, op);
+            continue;
+        }
+        const Int at = r.pos;
+        Int width;
+        const u32 to = funcs[linkLeb(&r, &width)];
+        sinkBytes(scratch, Span<const u8>(subslice(body, last, at)));
+        sinkLebWide(scratch, to, maximum(width, lebWidth(to)));
+        last = r.pos;
+    }
+    sinkBytes(scratch, Span<const u8>(subslice(body, last, length(body))));
+    const u64 size = scratch->size();
+    sinkLebWide(out, size, maximum(sizeWidth, lebWidth(size)));
+    sinkBytes(out, scratch);
+    return size != u64(length(body));
+}
+
+static Slice<LinkReloc> linkRelocs(Reader* r) {
+    Slice<LinkReloc> out{};
+    for (u32 n = readerU32(r); n > 0; --n) {
+        LinkReloc x{};
+        x.kind = readerByte(r);
+        x.offset = readerU32(r);
+        x.index = readerU32(r);
+        const u8 k = x.kind;
+        if ((k >= 3 && k <= 5) || k == 8 || k == 9 || k == 11 || (k >= 14 && k <= 17) || (k >= 21 && k <= 23) || k == 25) {
+            x.addend = readerS32(r);
+        }
+        out = appendValues(out, x);
+    }
+    sortValues(out, [out](Int i, Int j) {
+        return out[i].offset < out[j].offset;
+    });
+    return out;
+}
+
+static u32 linkRelocWidth(LinkReloc x) {
+    return x.kind == relocTableIndexI32 || x.kind == relocMemoryAddrI32 || x.kind == relocGlobalIndexI32 || x.kind == relocFunctionIndexI32 ? 4 : 5;
+}
+
+// The relocations of a section, each to the piece it is in.
+static void linkPlaceRelocs(Slice<LinkPiece> pieces, Slice<LinkReloc> relocs) {
+    for (Int i = 0; i < length(relocs); ++i) {
+        LinkReloc x = relocs[i];
+        const Int at = convert<Int>(x.offset);
+        const Int k = sortSearch(length(pieces), [&](Int p) {
+            return pieces[p].start > at;
+        }) - 1;
+        require(k >= 0 && u64(at) + linkRelocWidth(x) <= u64(pieces[k].start) + u64(length(pieces[k].data)), "libc.wasm: a relocation of no function or segment");
+        x.offset = convert<u32>(at - pieces[k].start);
+        pieces[k].relocs = appendValues(pieces[k].relocs, x);
+    }
+}
+
+static void objectSymbols(LinkObject* o, Reader* r) {
+    for (u32 n = readerU32(r); n > 0; --n) {
+        LinkSymbol sym{};
+        sym.kind = readerByte(r);
+        sym.flags = readerU32(r);
+        const bool defined = (sym.flags & linkedUndefined) == 0;
+        require(sym.kind <= linkedTable, "libc.wasm: a symbol of no kind");
+        if (sym.kind == linkedData) {
+            sym.name = readerName(r);
+            if (defined) {
+                sym.index = readerU32(r);
+                sym.offset = readerU32(r);
+                readerU32(r);
+            }
+        } else {
+            sym.index = readerU32(r);
+            if (sym.kind != linkedSection && (defined || (sym.flags & linkedExplicitName) != 0)) {
+                sym.name = readerName(r);
+            }
+        }
+        o->symbols = appendValues(o->symbols, sym);
+    }
+}
+
+// The linking section: the table of symbols, and the alignment of each
+// data segment, which is the section's result.
+static Slice<u32> objectLinking(LinkObject* o, Slice<u8> linking) {
+    Reader r{linking, 0};
+    Slice<u32> aligns{};
+    require(length(linking) != 0 && readerU32(&r) == 2, "libc.wasm: no linking section of version 2");
+    while (!readerEof(&r)) {
+        const u8 kind = readerByte(&r);
+        Reader s{linkBytes(&r), 0};
+        if (kind == 5) {
+            for (u32 n = readerU32(&s); n > 0; --n) {
+                readerName(&s);
+                aligns = appendValues(aligns, readerU32(&s));
+                readerU32(&s);
+            }
+        } else if (kind == 6) {
+            require(readerU32(&s) == 0, "libc.wasm: constructors");
+        } else if (kind == 8) {
+            objectSymbols(o, &s);
+        }
+    }
+    return aligns;
+}
+
+static Slice<LinkPiece> objectBodies(Slice<u8> code) {
+    Slice<LinkPiece> out{};
+    if (length(code) != 0) {
+        Reader r{code, 0};
+        for (u32 n = readerU32(&r); n > 0; --n) {
+            LinkPiece piece{};
+            const u32 size = readerU32(&r);
+            piece.start = r.pos;
+            piece.data = readerBytes(&r, convert<i64>(size));
+            out = appendValues(out, piece);
+        }
+    }
+    return out;
+}
+
+static Slice<LinkPiece> objectSegments(Slice<u8> data, Slice<u32> aligns) {
+    Slice<LinkPiece> out{};
+    if (length(data) != 0) {
+        Reader r{data, 0};
+        for (u32 n = readerU32(&r); n > 0; --n) {
+            LinkPiece piece{};
+            require(readerU32(&r) == 0 && readerByte(&r) == 0x41, "libc.wasm: a data segment of no fixed place");
+            readerS32(&r);
+            require(readerByte(&r) == 0x0b, "libc.wasm: a data segment of no fixed place");
+            const u32 size = readerU32(&r);
+            piece.start = r.pos;
+            piece.data = readerBytes(&r, convert<i64>(size));
+            out = appendValues(out, piece);
+        }
+    }
+    require(length(aligns) == length(out), "libc.wasm: the alignments are not of its data segments");
+    for (Int i = 0; i < length(out); ++i) {
+        out[i].align = minimum(aligns[i], u32(12));
+    }
+    return out;
+}
+
+// The names of libc.wasm's functions, its kernel functions and what it
+// exports, of the table of symbols.
+static void objectExports(LinkObject* o) {
+    const u32 all = convert<u32>(length(o->funcImports) + length(o->funcs));
+    const String prefix("__kernel_");
+    for (Int i = 0; i < length(o->symbols); ++i) {
+        const LinkSymbol sym = o->symbols[i];
+        if (sym.kind != linkedFunction || sym.name.count == 0) {
+            continue;
+        }
+        linkRequire(sym.index < all, String("libc.wasm: "), sym.name, String(" is no function of its own"));
+        const bool kernel = linkPrefixed(sym.name, prefix);
+        const auto named = lookupMap(o->names, sym.index);
+        if (!named.v1 || (kernel && !linkPrefixed(named.v0, prefix))) {
+            setMap(o->names, sym.index, sym.name);
+        }
+        if ((sym.flags & (linkedUndefined | linkedLocal)) != 0) {
+            continue;
+        }
+        if ((sym.flags & linkedExported) != 0) {
+            setMap(o->exported, sym.name, sym.index);
+        }
+        if (kernel) {
+            const String name(sym.name.data + prefix.count, sym.name.count - prefix.count);
+            linkRequire(findMap(o->kernel, name) < 0, String("libc.wasm: kernel function "), name, String(" twice"));
+            setMap(o->kernel, name, sym.index);
+        }
+    }
+}
+
+static LinkObject* linkObject(Slice<u8> data) {
+    require(length(data) >= 8 && asString(subslice(data, 0, 8)) == String("\000asm\001\000\000\000"), "libc.wasm: no wasm module");
+    LinkObject* o = activePool->make<LinkObject>();
+    o->names = makeMap<u32, String>();
+    o->kernel = makeMap<String, u32>();
+    o->exported = makeMap<String, u32>();
+    Slice<LinkSection> sections = linkSections(data);
+    Slice<u8> code{};
+    Slice<u8> segments{};
+    Slice<u8> linking{};
+    Int codeAt = -1;
+    Int dataAt = -1;
+    for (Int i = 0; i < length(sections); ++i) {
+        const LinkSection s = sections[i];
+        require(s.id != 4 && s.id != 6 && s.id != 13, "libc.wasm: a table, a global or a tag of its own");
+        if (s.id == 1) {
+            o->types = linkTypes(s.body);
+        } else if (s.id == 2) {
+            Slice<LinkImport> imports = linkImports(s.body);
+            for (Int k = 0; k < length(imports); ++k) {
+                const LinkImport imp = imports[k];
+                if (imp.kind == 0) {
+                    o->funcImports = appendValues(o->funcImports, imp);
+                } else if (imp.kind == 1) {
+                    o->tableImports = appendValues(o->tableImports, imp);
+                } else if (imp.kind == 3) {
+                    o->globalImports = appendValues(o->globalImports, imp);
+                }
+            }
+        } else if (s.id == 3) {
+            o->funcs = linkNumbers(s.body);
+        } else if (s.id == 10) {
+            code = s.body;
+            codeAt = i;
+        } else if (s.id == 11) {
+            segments = s.body;
+            dataAt = i;
+        } else if (s.name == String("linking")) {
+            linking = linkAfterName(s.body);
+        }
+    }
+    o->bodies = objectBodies(code);
+    require(length(o->bodies) == length(o->funcs), "libc.wasm: the bodies are not of its functions");
+    o->segments = objectSegments(segments, objectLinking(o, linking));
+    for (Int i = 0; i < length(sections); ++i) {
+        if (linkPrefixed(sections[i].name, String("reloc."))) {
+            Reader r{linkAfterName(sections[i].body), 0};
+            const Int target = convert<Int>(readerU32(&r));
+            if (target == codeAt) {
+                linkPlaceRelocs(o->bodies, linkRelocs(&r));
+            } else if (target == dataAt) {
+                linkPlaceRelocs(o->segments, linkRelocs(&r));
+            }
+        }
+    }
+    objectExports(o);
+    return o;
+}
+
+static LinkSection* linkSection(Linker* l, u8 id) {
+    for (Int i = 0; i < length(l->sections); ++i) {
+        if (l->sections[i].id == id) {
+            return &l->sections[i];
+        }
+    }
+    return nullptr;
+}
+
+static LinkSymbol linkSymbol(Linker* l, u32 i, u8 kind) {
+    LinkObject* o = l->o;
+    require(i < convert<u32>(length(o->symbols)) && o->symbols[i].kind == kind, "libc.wasm: a relocation of no symbol of its kind");
+    const LinkSymbol sym = o->symbols[i];
+    require(kind != linkedFunction || sym.index < convert<u32>(length(o->funcImports) + length(o->funcs)), "libc.wasm: a symbol of no function");
+    return sym;
+}
+
+static u32 linkTypeOf(Linker* l, u32 t) {
+    const String type = l->o->types[t];
+    const auto have = lookupMap(l->typeAt, type);
+    if (have.v1) {
+        return have.v0;
+    }
+    const u32 at = convert<u32>(length(l->types));
+    l->types = appendValues(l->types, type);
+    setMap(l->typeAt, type, at);
+    return at;
+}
+
+// The value of the program's __heap_base, a global of a constant.
+static u32 linkHeapBase(Linker* l) {
+    LinkSection* s = linkSection(l, 6);
+    require(l->heapGlobal >= 0 && s != nullptr, "wasm: no __heap_base");
+    Reader r{s->body, 0};
+    const Int n = convert<Int>(readerU32(&r));
+    require(l->heapGlobal < n, "wasm: no __heap_base");
+    for (Int i = 0; i < l->heapGlobal; ++i) {
+        readerBytes(&r, 2);
+        linkExpr(&r, nullptr, {});
+    }
+    readerBytes(&r, 2);
+    require(readerByte(&r) == 0x41, "wasm: no constant __heap_base");
+    const i32 v = readerS32(&r);
+    require(readerByte(&r) == 0x0b, "wasm: no constant __heap_base");
+    return convert<u32>(v);
+}
+
+// What of the program the link goes by: its types, its functions, its
+// __stack_pointer and __heap_base, and its table's size.
+static void linkRead(Linker* l) {
+    for (Int i = 0; i < length(l->imports); ++i) {
+        require(l->imports[i].kind == 0, "wasm: an import of no function in a program of libc.wasm's");
+    }
+    if (LinkSection* s = linkSection(l, 1)) {
+        l->types = linkTypes(s->body);
+    }
+    l->typeAt = makeMap<String, u32>();
+    for (Int i = 0; i < length(l->types); ++i) {
+        if (findMap(l->typeAt, l->types[i]) < 0) {
+            setMap(l->typeAt, l->types[i], convert<u32>(i));
+        }
+    }
+    if (LinkSection* s = linkSection(l, 3)) {
+        l->funcs = linkNumbers(s->body);
+    }
+    LinkObject* o = l->o;
+    for (Int i = 0; i < length(l->imports); ++i) {
+        if (l->bound[i] == unlinked) {
+            continue;
+        }
+        const u32 have = l->imports[i].typ;
+        const u32 want = o->funcs[convert<Int>(l->bound[i]) - length(o->funcImports)];
+        const bool same = have < convert<u32>(length(l->types)) && want < convert<u32>(length(o->types)) && l->types[have] == o->types[want];
+        linkRequire(same, String("kernel function "), l->imports[i].name, String(": the module's type is not libc.wasm's"));
+    }
+    l->stack = -1;
+    l->heapGlobal = -1;
+    if (LinkSection* s = linkSection(l, 7)) {
+        Reader r{s->body, 0};
+        for (u32 n = readerU32(&r); n > 0; --n) {
+            const String name = readerName(&r);
+            const u8 kind = readerByte(&r);
+            const Int index = convert<Int>(readerU32(&r));
+            if (kind == 3 && name == String("__stack_pointer")) {
+                l->stack = index;
+            } else if (kind == 3 && name == String("__heap_base")) {
+                l->heapGlobal = index;
+            }
+        }
+    }
+    l->heap = linkHeapBase(l);
+    l->tableBase = 1;
+    if (LinkSection* s = linkSection(l, 4)) {
+        Reader r{s->body, 0};
+        if (readerU32(&r) > 0) {
+            readerByte(&r);
+            readerU32(&r);
+            l->hasTable = true;
+            l->tableBase = readerU32(&r);
+        }
+    }
+}
+
+// What of libc.wasm the program reaches: the functions it imports and
+// those libc.wasm exports, and the functions and segments their
+// relocations name, and theirs.
+static void linkMark(Linker* l) {
+    LinkObject* o = l->o;
+    const Int imported = length(o->funcImports);
+    l->live = makeSlice<bool>(length(o->funcs));
+    l->used = makeSlice<bool>(imported);
+    l->segLive = makeSlice<bool>(length(o->segments));
+    Slice<Int> funcs{};
+    Slice<Int> segs{};
+    auto visit = [&](u32 function) {
+        const Int f = convert<Int>(function);
+        if (f < imported) {
+            l->used[f] = true;
+        } else if (!l->live[f - imported]) {
+            l->live[f - imported] = true;
+            funcs = appendValues(funcs, f - imported);
+        }
+    };
+    for (Int i = 0; i < length(l->bound); ++i) {
+        if (l->bound[i] != unlinked) {
+            visit(l->bound[i]);
+        }
+    }
+    for (Int i = 0; i < mapSlots(o->exported); ++i) {
+        if (mapOccupied(o->exported, i)) {
+            visit(mapValue(o->exported, i));
+        }
+    }
+    while (length(funcs) > 0 || length(segs) > 0) {
+        Slice<LinkReloc> relocs{};
+        if (const Int n = length(funcs); n > 0) {
+            relocs = o->bodies[funcs[n - 1]].relocs;
+            funcs = subslice(funcs, 0, n - 1);
+        } else {
+            const Int m = length(segs);
+            relocs = o->segments[segs[m - 1]].relocs;
+            segs = subslice(segs, 0, m - 1);
+        }
+        for (Int i = 0; i < length(relocs); ++i) {
+            const LinkReloc x = relocs[i];
+            const u8 k = x.kind;
+            if (k == relocFunctionIndexLeb || k == relocFunctionIndexI32 || k == relocTableIndexSleb || k == relocTableIndexI32) {
+                visit(linkSymbol(l, x.index, linkedFunction).index);
+            } else if (k == relocMemoryAddrLeb || k == relocMemoryAddrSleb || k == relocMemoryAddrI32) {
+                const LinkSymbol sym = linkSymbol(l, x.index, linkedData);
+                linkRequire((sym.flags & linkedUndefined) == 0 && sym.index < convert<u32>(length(o->segments)), String("libc.wasm: "), sym.name, String(" is no data of its own"));
+                if (!l->segLive[sym.index]) {
+                    l->segLive[sym.index] = true;
+                    segs = appendValues(segs, convert<Int>(sym.index));
+                }
+            } else {
+                require(k == relocTypeIndexLeb || k == relocGlobalIndexLeb || k == relocGlobalIndexI32 || k == relocTableNumberLeb, "libc.wasm: a relocation of no kind");
+            }
+        }
+    }
+}
+
+// The numbers of the linked module's functions: the program's imports
+// that libc.wasm has not, the imports libc.wasm's functions need beside,
+// the program's functions, and libc.wasm's.
+static void linkLayout(Linker* l) {
+    LinkObject* o = l->o;
+    const Int imported = length(o->funcImports);
+    const String between("\000");
+    Map<String, u32> have = makeMap<String, u32>();
+    l->funcMap = makeSlice<u32>(length(l->imports) + length(l->funcs));
+    l->objMap = makeSlice<u32>(imported + length(o->funcs));
+    for (Int i = 0; i < length(l->objMap); ++i) {
+        l->objMap[i] = unlinked;
+    }
+    for (Int i = 0; i < length(l->imports); ++i) {
+        if (l->bound[i] == unlinked) {
+            const LinkImport imp = l->imports[i];
+            l->funcMap[i] = convert<u32>(length(l->merged));
+            setMap(have, imp.module + between + imp.name, l->funcMap[i]);
+            l->merged = appendValues(l->merged, imp);
+        }
+    }
+    for (Int i = 0; i < imported; ++i) {
+        if (!l->used[i]) {
+            continue;
+        }
+        const LinkImport imp = o->funcImports[i];
+        linkRequire(imp.module == String("kernel") && findMap(o->kernel, imp.name) < 0, String("libc.wasm: "), imp.name, String(" is undefined"));
+        require(imp.typ < convert<u32>(length(o->types)), "libc.wasm: an import of no type");
+        const String key = imp.module + between + imp.name;
+        const auto at = lookupMap(have, key);
+        if (at.v1) {
+            const u32 t = l->merged[at.v0].typ;
+            const bool same = t < convert<u32>(length(l->types)) && l->types[t] == o->types[imp.typ];
+            linkRequire(same, String("kernel function "), imp.name, String(": the module's type is not libc.wasm's"));
+            l->objMap[i] = at.v0;
+            continue;
+        }
+        l->objMap[i] = convert<u32>(length(l->merged));
+        setMap(have, key, l->objMap[i]);
+        l->merged = appendValues(l->merged, LinkImport{imp.module, imp.name, 0, linkTypeOf(l, imp.typ)});
+    }
+    u32 next = convert<u32>(length(l->merged));
+    for (Int j = 0; j < length(l->funcs); ++j) {
+        l->funcMap[length(l->imports) + j] = next++;
+    }
+    for (Int f = 0; f < length(l->live); ++f) {
+        if (l->live[f]) {
+            l->objMap[imported + f] = next++;
+        }
+    }
+    for (Int i = 0; i < length(l->bound); ++i) {
+        if (l->bound[i] != unlinked) {
+            l->funcMap[i] = l->objMap[l->bound[i]];
+        }
+    }
+}
+
+// The places of libc.wasm's segments, from the program's __heap_base on,
+// and the new one.
+static void linkPlace(Linker* l) {
+    u64 at = l->heap;
+    l->segAt = makeSlice<u32>(length(l->o->segments));
+    for (Int s = 0; s < length(l->segLive); ++s) {
+        if (l->segLive[s]) {
+            const u64 align = u64(1) << l->o->segments[s].align;
+            at = (at + align - 1) & ~(align - 1);
+            l->segAt[s] = convert<u32>(at);
+            at += u64(length(l->o->segments[s].data));
+        }
+    }
+    at = (at + 15) & ~u64(15);
+    require(at <= (u64(1) << 32) - 65536, "wasm: libc.wasm's data past the memory");
+    l->newHeap = convert<u32>(at);
+}
+
+static u32 linkFunction(Linker* l, u32 symbol) {
+    const u32 f = l->objMap[linkSymbol(l, symbol, linkedFunction).index];
+    require(f != unlinked, "libc.wasm: a function left out");
+    return f;
+}
+
+// The slot of the table that has a function of libc.wasm's.
+static u32 linkSlot(Linker* l, u32 symbol) {
+    const u32 f = linkFunction(l, symbol);
+    const auto have = lookupMap(l->slots, f);
+    if (have.v1) {
+        return have.v0;
+    }
+    const u32 at = l->tableBase + convert<u32>(length(l->slotFuncs));
+    setMap(l->slots, f, at);
+    l->slotFuncs = appendValues(l->slotFuncs, f);
+    return at;
+}
+
+static u32 linkAddress(Linker* l, LinkReloc x) {
+    const LinkSymbol sym = linkSymbol(l, x.index, linkedData);
+    return l->segAt[sym.index] + sym.offset + convert<u32>(x.addend);
+}
+
+// libc.wasm's one global is the program's __stack_pointer.
+static u32 linkGlobal(Linker* l, u32 symbol) {
+    LinkObject* o = l->o;
+    const LinkSymbol sym = linkSymbol(l, symbol, linkedGlobal);
+    const bool stack = (sym.flags & linkedUndefined) != 0 && sym.index < convert<u32>(length(o->globalImports)) && o->globalImports[sym.index].name == String("__stack_pointer");
+    require(stack, "libc.wasm: a global that is no __stack_pointer");
+    require(l->stack >= 0, "wasm: no __stack_pointer");
+    return convert<u32>(l->stack);
+}
+
+// Its one table is the program's, which a program that calls nothing
+// through one has not: it gets one.
+static u32 linkTable(Linker* l, u32 symbol) {
+    LinkObject* o = l->o;
+    const LinkSymbol sym = linkSymbol(l, symbol, linkedTable);
+    const bool table = (sym.flags & linkedUndefined) != 0 && sym.index < convert<u32>(length(o->tableImports)) && o->tableImports[sym.index].name == String("__indirect_function_table");
+    require(table, "libc.wasm: a table that is no __indirect_function_table");
+    l->needTable = true;
+    return 0;
+}
+
+// A piece of libc.wasm with its relocations done.
+static void linkPatch(Linker* l, PageVec<u8>* out, LinkPiece piece) {
+    Int last = 0;
+    for (Int i = 0; i < length(piece.relocs); ++i) {
+        const LinkReloc x = piece.relocs[i];
+        const Int at = convert<Int>(x.offset);
+        require(at >= last, "libc.wasm: relocations of one place");
+        sinkBytes(out, Span<const u8>(subslice(piece.data, last, at)));
+        last = at + convert<Int>(linkRelocWidth(x));
+        switch (x.kind) {
+            case relocFunctionIndexLeb:
+                sinkLeb5(out, linkFunction(l, x.index));
+                break;
+            case relocFunctionIndexI32:
+                sinkLe32(out, linkFunction(l, x.index));
+                break;
+            case relocTableIndexSleb:
+                sinkSleb5(out, convert<i32>(linkSlot(l, x.index)));
+                break;
+            case relocTableIndexI32:
+                sinkLe32(out, linkSlot(l, x.index));
+                break;
+            case relocMemoryAddrLeb:
+                sinkLeb5(out, linkAddress(l, x));
+                break;
+            case relocMemoryAddrSleb:
+                sinkSleb5(out, convert<i32>(linkAddress(l, x)));
+                break;
+            case relocMemoryAddrI32:
+                sinkLe32(out, linkAddress(l, x));
+                break;
+            case relocTypeIndexLeb:
+                sinkLeb5(out, linkTypeOf(l, x.index));
+                break;
+            case relocGlobalIndexLeb:
+                sinkLeb5(out, linkGlobal(l, x.index));
+                break;
+            case relocGlobalIndexI32:
+                sinkLe32(out, linkGlobal(l, x.index));
+                break;
+            default:
+                sinkLeb5(out, linkTable(l, x.index));
+                break;
+        }
+    }
+    sinkBytes(out, Span<const u8>(subslice(piece.data, last, length(piece.data))));
+}
+
+// The code section: the program's bodies renumbered, then libc.wasm's.
+// shift is how many bytes longer its count is, moved whether a body of the
+// program's changed its length.
+static PageVec<u8>* linkCode(Linker* l, PageVec<u8>* bodies, Int added, Int* shift, bool* moved) {
+    PageVec<u8>* out = linkSink();
+    PageVec<u8>* scratch = linkSink();
+    Reader r{};
+    u32 count = 0;
+    Int width = 1;
+    if (LinkSection* s = linkSection(l, 10)) {
+        r.data = s->body;
+        count = linkLeb(&r, &width);
+    }
+    const u64 total = u64(count) + u64(added);
+    const Int w = maximum(width, lebWidth(total));
+    sinkLebWide(out, total, w);
+    for (; count > 0; --count) {
+        Int sizeWidth;
+        const u32 size = linkLeb(&r, &sizeWidth);
+        if (linkBody(out, readerBytes(&r, convert<i64>(size)), sizeWidth, l->funcMap, scratch)) {
+            *moved = true;
+        }
+    }
+    sinkBytes(out, bodies);
+    *shift = w - width;
+    return out;
+}
+
+static PageVec<u8>* linkTypeSection(Linker* l) {
+    PageVec<u8>* out = linkSink();
+    sinkLeb(out, u64(length(l->types)));
+    for (Int i = 0; i < length(l->types); ++i) {
+        sinkText(out, l->types[i]);
+    }
+    return out;
+}
+
+static PageVec<u8>* linkImportSection(Linker* l) {
+    PageVec<u8>* out = linkSink();
+    sinkLeb(out, u64(length(l->merged)));
+    for (Int i = 0; i < length(l->merged); ++i) {
+        sinkName(out, l->merged[i].module);
+        sinkName(out, l->merged[i].name);
+        out->pushBack(0);
+        sinkLeb(out, l->merged[i].typ);
+    }
+    return out;
+}
+
+static PageVec<u8>* linkFunctionSection(Linker* l) {
+    PageVec<u8>* out = linkSink();
+    PageVec<u8>* types = linkSink();
+    Int added = 0;
+    for (Int f = 0; f < length(l->live); ++f) {
+        if (l->live[f]) {
+            sinkLeb(types, linkTypeOf(l, l->o->funcs[f]));
+            ++added;
+        }
+    }
+    sinkLeb(out, u64(length(l->funcs)) + u64(added));
+    for (Int i = 0; i < length(l->funcs); ++i) {
+        sinkLeb(out, l->funcs[i]);
+    }
+    sinkBytes(out, types);
+    return out;
+}
+
+// The table, longer by the slots of libc.wasm's functions; one of the
+// slots and the null before them where the program has none and libc.wasm
+// needs one; null where there is nothing to change.
+static PageVec<u8>* linkTableSection(Linker* l) {
+    const u64 grow = u64(length(l->slotFuncs));
+    if (!l->hasTable) {
+        if (grow == 0 && !l->needTable) {
+            return nullptr;
+        }
+        PageVec<u8>* out = linkSink();
+        const u64 size = u64(l->tableBase) + grow;
+        out->pushBack(1);
+        out->pushBack(0x70);
+        out->pushBack(1);
+        sinkLeb(out, size);
+        sinkLeb(out, size);
+        return out;
+    }
+    if (grow == 0) {
+        return nullptr;
+    }
+    PageVec<u8>* out = linkSink();
+    LinkSection* s = linkSection(l, 4);
+    Reader r{s->body, 0};
+    const u32 n = readerU32(&r);
+    require(readerByte(&r) == 0x70, "wasm: a table of no functions");
+    const u32 flags = readerU32(&r);
+    require(flags <= 1, "wasm: a table of flags it has not");
+    const u64 size = u64(readerU32(&r)) + grow;
+    sinkLeb(out, n);
+    out->pushBack(0x70);
+    out->pushBack(u8(flags));
+    sinkLeb(out, size);
+    if (flags == 1) {
+        sinkLeb(out, maximum(u64(readerU32(&r)), size));
+    }
+    sinkBytes(out, Span<const u8>(subslice(s->body, r.pos, length(s->body))));
+    return out;
+}
+
+// The memory, of the pages libc.wasm's data needs at least.
+static PageVec<u8>* linkMemorySection(Linker* l) {
+    PageVec<u8>* out = linkSink();
+    LinkSection* s = linkSection(l, 5);
+    require(s != nullptr, "wasm: no memory");
+    Reader r{s->body, 0};
+    require(readerU32(&r) == 1, "wasm: no one memory");
+    const u32 flags = readerU32(&r);
+    require(flags <= 1, "wasm: a memory of flags it has not");
+    const u64 pages = maximum(u64(readerU32(&r)), (u64(l->newHeap) + 65535) / 65536);
+    out->pushBack(1);
+    out->pushBack(u8(flags));
+    sinkLeb(out, pages);
+    if (flags == 1) {
+        const u64 most = readerU32(&r);
+        require(most >= pages, "wasm: libc.wasm's data past the memory's pages");
+        sinkLeb(out, most);
+    }
+    return out;
+}
+
+static PageVec<u8>* linkGlobalSection(Linker* l) {
+    PageVec<u8>* out = linkSink();
+    LinkSection* s = linkSection(l, 6);
+    Reader r{s->body, 0};
+    const Int n = convert<Int>(readerU32(&r));
+    sinkLeb(out, u64(n));
+    for (Int i = 0; i < n; ++i) {
+        sinkBytes(out, Span<const u8>(readerBytes(&r, 2)));
+        if (i != l->heapGlobal) {
+            linkExpr(&r, out, l->funcMap);
+            continue;
+        }
+        linkExpr(&r, nullptr, {});
+        out->pushBack(0x41);
+        sinkSleb(out, i64(convert<i32>(l->newHeap)));
+        out->pushBack(0x0b);
+    }
+    return out;
+}
+
+// The exports: the program's, and libc.wasm's by their names' order.
+static PageVec<u8>* linkExportSection(Linker* l) {
+    LinkObject* o = l->o;
+    PageVec<u8>* entries = linkSink();
+    Map<String, bool> have = makeMap<String, bool>();
+    u64 count = 0;
+    if (LinkSection* s = linkSection(l, 7)) {
+        Reader r{s->body, 0};
+        for (u32 n = readerU32(&r); n > 0; --n) {
+            const String name = readerName(&r);
+            const u8 kind = readerByte(&r);
+            u32 index = readerU32(&r);
+            if (kind == 0) {
+                index = l->funcMap[index];
+            }
+            sinkName(entries, name);
+            entries->pushBack(kind);
+            sinkLeb(entries, index);
+            setMap(have, name, true);
+            ++count;
+        }
+    }
+    Slice<String> names{};
+    for (Int i = 0; i < mapSlots(o->exported); ++i) {
+        if (mapOccupied(o->exported, i)) {
+            names = appendValues(names, mapKey(o->exported, i));
+        }
+    }
+    sortValues(names, [names](Int i, Int j) {
+        return linkBefore(names[i], names[j]);
+    });
+    for (Int i = 0; i < length(names); ++i) {
+        linkRequire(findMap(have, names[i]) < 0, String("wasm: "), names[i], String(" is the module's export and libc.wasm's"));
+        sinkName(entries, names[i]);
+        entries->pushBack(0);
+        sinkLeb(entries, l->objMap[o->exported[names[i]]]);
+        ++count;
+    }
+    if (count == 0) {
+        return nullptr;
+    }
+    PageVec<u8>* out = linkSink();
+    sinkLeb(out, count);
+    sinkBytes(out, entries);
+    return out;
+}
+
+static PageVec<u8>* linkStartSection(Linker* l) {
+    LinkSection* s = linkSection(l, 8);
+    if (s == nullptr) {
+        return nullptr;
+    }
+    PageVec<u8>* out = linkSink();
+    Reader r{s->body, 0};
+    sinkLeb(out, l->funcMap[readerU32(&r)]);
+    return out;
+}
+
+static void linkElement(Linker* l, Reader* r, PageVec<u8>* out) {
+    const u32 flags = readerU32(r);
+    require(flags <= 7, "wasm: an element segment of flags it has not");
+    sinkLeb(out, flags);
+    if ((flags & 3) == 2) {
+        sinkLeb(out, readerU32(r));
+    }
+    if ((flags & 1) == 0) {
+        linkExpr(r, out, l->funcMap);
+    }
+    if ((flags & 3) != 0) {
+        out->pushBack(readerByte(r));
+    }
+    u32 m = readerU32(r);
+    sinkLeb(out, m);
+    for (; m > 0; --m) {
+        if ((flags & 4) != 0) {
+            linkExpr(r, out, l->funcMap);
+        } else {
+            sinkLeb(out, l->funcMap[readerU32(r)]);
+        }
+    }
+}
+
+// The elements: the program's, and one of the functions of the new slots.
+static PageVec<u8>* linkElementSection(Linker* l) {
+    LinkSection* s = linkSection(l, 9);
+    PageVec<u8>* body = linkSink();
+    u32 n = 0;
+    if (s != nullptr) {
+        Reader r{s->body, 0};
+        n = readerU32(&r);
+        for (u32 i = 0; i < n; ++i) {
+            linkElement(l, &r, body);
+        }
+    }
+    if (length(l->slotFuncs) > 0) {
+        body->pushBack(0);
+        body->pushBack(0x41);
+        sinkSleb(body, i64(convert<i32>(l->tableBase)));
+        body->pushBack(0x0b);
+        sinkLeb(body, u64(length(l->slotFuncs)));
+        for (Int i = 0; i < length(l->slotFuncs); ++i) {
+            sinkLeb(body, l->slotFuncs[i]);
+        }
+        ++n;
+    }
+    if (n == 0) {
+        return nullptr;
+    }
+    PageVec<u8>* out = linkSink();
+    sinkLeb(out, n);
+    sinkBytes(out, body);
+    return out;
+}
+
+static PageVec<u8>* linkDataSection(Linker* l, PageVec<u8>* segments, Int added) {
+    LinkSection* s = linkSection(l, 11);
+    if (s == nullptr && added == 0) {
+        return nullptr;
+    }
+    PageVec<u8>* out = linkSink();
+    u32 n = 0;
+    Slice<u8> rest{};
+    if (s != nullptr) {
+        Reader r{s->body, 0};
+        n = readerU32(&r);
+        rest = subslice(s->body, r.pos, length(s->body));
+    }
+    sinkLeb(out, u64(n) + u64(added));
+    sinkBytes(out, Span<const u8>(rest));
+    sinkBytes(out, segments);
+    return out;
+}
+
+static PageVec<u8>* linkDataCountSection(Linker* l, Int added) {
+    LinkSection* s = linkSection(l, 12);
+    if (s == nullptr) {
+        return nullptr;
+    }
+    PageVec<u8>* out = linkSink();
+    Reader r{s->body, 0};
+    sinkLeb(out, u64(readerU32(&r)) + u64(added));
+    return out;
+}
+
+// Whether a function of the program's is the linked module's too, of the
+// number funcMap has: an import libc.wasm defines is not.
+static bool linkKept(Linker* l, u32 index) {
+    return index < convert<u32>(length(l->funcMap)) && (index >= convert<u32>(length(l->bound)) || l->bound[index] == unlinked);
+}
+
+// The functions' names: the program's by the new numbers, and libc.wasm's
+// functions' and imports'.
+static void linkFunctionNames(Linker* l, Slice<u8> sub, PageVec<u8>* out) {
+    LinkObject* o = l->o;
+    Map<u32, LinkName> named = makeMap<u32, LinkName>();
+    Slice<u32> order{};
+    auto name = [&](u32 index, LinkName text) {
+        if (findMap(named, index) < 0) {
+            order = appendValues(order, index);
+        }
+        setMap(named, index, text);
+    };
+    Reader r{sub, 0};
+    for (u32 n = readerU32(&r); n > 0; --n) {
+        const u32 index = readerU32(&r);
+        const Slice<u8> bytes = linkBytes(&r);
+        if (linkKept(l, index)) {
+            name(l->funcMap[index], LinkName{bytes, {}});
+        }
+    }
+    for (Int i = 0; i < length(l->objMap); ++i) {
+        String text = o->names[convert<u32>(i)];
+        if (text.count == 0 && i < length(o->funcImports)) {
+            text = o->funcImports[i].name;
+        }
+        if (l->objMap[i] != unlinked && text.count != 0 && findMap(named, l->objMap[i]) < 0) {
+            name(l->objMap[i], LinkName{{}, text});
+        }
+    }
+    sortValues(order, [order](Int i, Int j) {
+        return order[i] < order[j];
+    });
+    sinkLeb(out, u64(length(order)));
+    for (Int i = 0; i < length(order); ++i) {
+        const LinkName text = named[order[i]];
+        sinkLeb(out, order[i]);
+        sinkLeb(out, u64(length(text.bytes)) + text.text.count);
+        sinkBytes(out, Span<const u8>(text.bytes));
+        sinkText(out, text.text);
+    }
+}
+
+// The names of the locals or the labels of the program's functions, by
+// the functions' new numbers.
+static void linkNestedNames(Linker* l, Slice<u8> sub, PageVec<u8>* out) {
+    Map<u32, Slice<u8>> nested = makeMap<u32, Slice<u8>>();
+    Slice<u32> order{};
+    Reader r{sub, 0};
+    for (u32 n = readerU32(&r); n > 0; --n) {
+        const u32 index = readerU32(&r);
+        const Int start = r.pos;
+        for (u32 m = readerU32(&r); m > 0; --m) {
+            readerU32(&r);
+            linkBytes(&r);
+        }
+        if (linkKept(l, index)) {
+            if (findMap(nested, l->funcMap[index]) < 0) {
+                order = appendValues(order, l->funcMap[index]);
+            }
+            setMap(nested, l->funcMap[index], subslice(sub, start, r.pos));
+        }
+    }
+    sortValues(order, [order](Int i, Int j) {
+        return order[i] < order[j];
+    });
+    sinkLeb(out, u64(length(order)));
+    for (Int i = 0; i < length(order); ++i) {
+        sinkLeb(out, order[i]);
+        sinkBytes(out, Span<const u8>(nested[order[i]]));
+    }
+}
+
+// A name section, after its name: its subsections, those of functions,
+// locals and labels by the new numbers.
+static PageVec<u8>* linkNames(Linker* l, Slice<u8> subsections) {
+    PageVec<u8>* out = linkSink();
+    PageVec<u8>* sub = linkSink();
+    Reader r{subsections, 0};
+    sinkName(out, String("name"));
+    while (!readerEof(&r)) {
+        const u8 id = readerByte(&r);
+        const Slice<u8> body = linkBytes(&r);
+        if (id < 1 || id > 3) {
+            sinkSection(out, id, Span<const u8>(body));
+            continue;
+        }
+        sub->clear();
+        if (id == 1) {
+            linkFunctionNames(l, body, sub);
+        } else {
+            linkNestedNames(l, body, sub);
+        }
+        sinkSection(out, id, sub);
+    }
+    return out;
+}
+
+// The linked module, of the pool the link began in.
+static Slice<u8> linkModule(Linker* l, ObjPool* owner) {
+    LinkObject* o = l->o;
+    linkRead(l);
+    linkMark(l);
+    linkLayout(l);
+    linkPlace(l);
+    PageVec<u8>* bodies = linkSink();
+    PageVec<u8>* segments = linkSink();
+    Int addedBodies = 0;
+    Int addedSegments = 0;
+    for (Int f = 0; f < length(l->live); ++f) {
+        if (l->live[f]) {
+            sinkLeb(bodies, u64(length(o->bodies[f].data)));
+            linkPatch(l, bodies, o->bodies[f]);
+            ++addedBodies;
+        }
+    }
+    for (Int s = 0; s < length(l->segLive); ++s) {
+        const LinkPiece piece = o->segments[s];
+        bool zeros = length(piece.relocs) == 0;
+        for (Int i = 0; zeros && i < length(piece.data); ++i) {
+            zeros = piece.data[i] == 0;
+        }
+        if (!l->segLive[s] || zeros) {
+            continue;
+        }
+        segments->pushBack(0);
+        segments->pushBack(0x41);
+        sinkSleb(segments, i64(convert<i32>(l->segAt[s])));
+        segments->pushBack(0x0b);
+        sinkLeb(segments, u64(length(piece.data)));
+        linkPatch(l, segments, piece);
+        ++addedSegments;
+    }
+    Int shift = 0;
+    bool moved = false;
+    PageVec<u8>* built[14]{};
+    built[10] = linkCode(l, bodies, addedBodies, &shift, &moved);
+    built[3] = linkFunctionSection(l);
+    built[2] = linkImportSection(l);
+    built[4] = linkTableSection(l);
+    built[5] = linkMemorySection(l);
+    built[6] = linkGlobalSection(l);
+    built[7] = linkExportSection(l);
+    built[8] = linkStartSection(l);
+    built[9] = linkElementSection(l);
+    built[11] = linkDataSection(l, segments, addedSegments);
+    built[12] = linkDataCountSection(l, addedSegments);
+    built[1] = linkTypeSection(l);
+
+    auto* module = &owner->make<ArrayStorage<u8, PageVec<u8>>>(owner, ArrayData<u8>::Kind::Paged)->array;
+    PageVec<u8>* out = module->pages();
+    sinkText(out, String("\000asm\001\000\000\000"));
+    if (shift > 0 && !moved) {
+        PageVec<u8>* custom = linkSink();
+        sinkName(custom, String("w2o.code_shift"));
+        sinkLeb(custom, u64(shift));
+        sinkSection(out, 0, custom);
+    }
+    const u8 order[] = {1, 2, 3, 4, 5, 13, 6, 7, 8, 9, 12, 10, 11};
+    for (const u8 id : order) {
+        if (id < 14 && built[id] != nullptr) {
+            sinkSection(out, id, built[id]);
+            // The code is most of the module: it is not kept twice.
+            *built[id] = PageVec<u8>{};
+        } else if (LinkSection* s = linkSection(l, id)) {
+            sinkSection(out, id, Span<const u8>(s->body));
+        }
+    }
+    bool named = false;
+    for (Int i = 0; i < length(l->sections); ++i) {
+        const LinkSection s = l->sections[i];
+        if (s.id != 0 || s.name == String("linking") || linkPrefixed(s.name, String("reloc.")) || (moved && linkPrefixed(s.name, String(".debug_")))) {
+            continue;
+        }
+        if (s.name == String("name")) {
+            sinkSection(out, 0, linkNames(l, linkAfterName(s.body)));
+            named = true;
+        } else {
+            sinkSection(out, 0, Span<const u8>(s.body));
+        }
+    }
+    if (!named) {
+        // A program of no names has libc.wasm's: a subsection of no function.
+        sinkSection(out, 0, linkNames(l, sliceOf<u8>({1, 1, 0})));
+    }
+    require(out->size() <= 0x7fffffff, "wasm: the linked module exceeds the address space");
+    module->count = Int(out->size());
+    return Slice<u8>::of(module, 0, u32(module->count), u32(module->count));
+}
+
+// The program with what it takes of libc.wasm, of descriptor 3; nil where
+// it takes nothing. The link's own is gone with it.
+static Slice<u8> linkLibc(Slice<u8> program) {
+    ObjPool* owner = activePool;
+    ObjPool work;
+    PoolScope scope(work);
+    // What is no module is refused as the compiler refuses it.
+    decodeModule(program);
+    Linker* l = activePool->make<Linker>();
+    l->sections = linkSections(program);
+    l->slots = makeMap<u32, u32>();
+    if (LinkSection* s = linkSection(l, 2)) {
+        l->imports = linkImports(s->body);
+    }
+    bool kernel = false;
+    for (Int i = 0; i < length(l->imports); ++i) {
+        kernel = kernel || (l->imports[i].kind == 0 && l->imports[i].module == String("kernel"));
+    }
+    if (!kernel) {
+        return {};
+    }
+    l->o = linkObject(readInput(work, 3));
+    l->bound = makeSlice<u32>(length(l->imports));
+    bool bound = false;
+    for (Int i = 0; i < length(l->imports); ++i) {
+        const LinkImport imp = l->imports[i];
+        const auto f = lookupMap(l->o->kernel, imp.name);
+        l->bound[i] = f.v1 && imp.kind == 0 && imp.module == String("kernel") ? f.v0 : unlinked;
+        bound = bound || l->bound[i] != unlinked;
+    }
+    if (!bound) {
+        return {};
+    }
+    return linkModule(l, owner);
+}
+
 static void compileWithOptions(CompileOptions options) {
+    ObjPool inputPool;
     ObjPool modulePool;
     ObjPool ssaPool;
     ObjPool machinePool;
     PoolScope scope(modulePool);
     initializeCompilerTables();
-    Module* module = decodeModule(readInput(modulePool));
+    Slice<u8> input = readInput(inputPool, 0);
+    if (options.libc || options.link) {
+        Slice<u8> linked = linkLibc(input);
+        if (!isNil(linked)) {
+            // The linked module is the one compiled: the input is gone.
+            inputPool.clear();
+            input = linked;
+        }
+    }
+    if (options.link) {
+        writeBytes(1, Span<const u8>(input));
+        return;
+    }
+    Module* module = decodeModule(input);
     if (options.asan) {
         // The shadow map's checks take the place of the tail's.
         options.memoryTail = false;
@@ -27111,19 +28649,30 @@ int main(int count, char** arguments) {
 #ifdef AOT_CHAOS
     configureChaos();
 #endif
-    const char* usage = "usage: aot [--plain|--strict|--asan|--tail-profile] < input.wasm > output.o";
+    const char* usage = "usage: aot [--plain|--strict|--asan|--tail-profile] [--libc|--link] < input.wasm [3< libc.wasm] > output";
     CompileOptions options{true, true, false};
-    if (count == 2 && sameString(arguments[1], "--plain")) {
+    int at = 1;
+    if (at < count && sameString(arguments[at], "--plain")) {
         options = CompileOptions{true, false, false};
-    } else if (count == 2 && sameString(arguments[1], "--tail-profile")) {
+        ++at;
+    } else if (at < count && sameString(arguments[at], "--tail-profile")) {
         options = CompileOptions{true, true, true};
-    } else if (count == 2 && sameString(arguments[1], "--asan")) {
+        ++at;
+    } else if (at < count && sameString(arguments[at], "--asan")) {
         options = CompileOptions{false, false, false, true};
-    } else if (count == 2 && sameString(arguments[1], "--strict")) {
+        ++at;
+    } else if (at < count && sameString(arguments[at], "--strict")) {
         options = CompileOptions{};
-    } else {
-        require(count == 1, usage);
+        ++at;
     }
+    if (at < count && sameString(arguments[at], "--libc")) {
+        options.libc = true;
+        ++at;
+    } else if (at < count && sameString(arguments[at], "--link")) {
+        options.link = true;
+        ++at;
+    }
+    require(at == count, usage);
     compileWithOptions(options);
     return 0;
 }

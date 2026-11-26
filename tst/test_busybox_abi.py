@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """busybox.wasm talks to nothing but the kernel and exposes the entry point the kernel calls; the
-functions the kernel calls the program's through are libc.wasm's, which the kernel links into it.
+functions the kernel calls the program's through are libc.wasm's, which the kernel's compiler links into it.
 
     test_busybox_abi.py <busybox.wasm> <busybox.links>
 """

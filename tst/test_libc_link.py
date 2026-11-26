@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""The kernel's link of libc.wasm into a program before it compiles it
-(bin/vm/wasm_linker.go), by `vm link`: tst/link/check.c, 127 functions
-of its own, which libc.wasm's make a count a byte longer. The linked
-module imports none of the kernel functions libc.wasm defines, holds only
-what the program reaches of them, exports libc.wasm's functions the kernel
-calls the program's through, and says how far its code moved, so that its
-trap names the program's line.
+"""The link of libc.wasm into a program before the kernel's compiler
+compiles it (bin/aot/aot.cpp's linkLibc), by `vm link`: tst/link/check.c,
+127 functions of its own, which libc.wasm's make a count a byte longer.
+The linked module imports none of the kernel functions libc.wasm defines,
+holds only what the program reaches of them, exports libc.wasm's functions
+the kernel calls the program's through, and says how far its code moved,
+so that its trap names the program's line. The compiler built for the
+host, libc.wasm on its descriptor 3, links the same module (--link) and
+compiles the same object of the program (--libc) as the kernel's.
 
-    test_libc_link.py <vm> <check.wasm>
+    test_libc_link.py <vm> <check.wasm> <aot> <libc.wasm>
 """
+import os
 import subprocess
 import sys
 import tempfile
@@ -112,14 +115,25 @@ def function_names(body):
     return set()
 
 
+def native(aot, option, module, libc):
+    """What the host's compiler makes of the module, libc.wasm on its
+    descriptor 3."""
+    with open(module, "rb") as source, open(libc, "rb") as library:
+        return subprocess.run([aot, option], stdin=source, stdout=subprocess.PIPE, check=True, timeout=120, pass_fds=(3,),
+                              preexec_fn=lambda: os.dup2(library.fileno(), 3)).stdout
+
+
 def main():
-    vm, module = sys.argv[1:]
+    vm, module, aot, libc = sys.argv[1:]
     original = sections(Path(module).read_bytes())
 
     with tempfile.TemporaryDirectory(prefix="pizdos-link-") as directory:
-        linked, program = Path(directory) / "linked.wasm", Path(directory) / "check"
+        linked, program, compiled = (Path(directory) / name for name in ("linked.wasm", "check", "check.o"))
         subprocess.run([vm, "link", "-o", str(linked), module], check=True, timeout=60)
         merged = sections(linked.read_bytes())
+        assert native(aot, "--link", module, libc) == linked.read_bytes(), "the host's compiler links another module"
+        subprocess.run([vm, "-o", str(compiled), module], check=True, timeout=120)
+        assert native(aot, "--libc", module, libc) == compiled.read_bytes(), "the host's compiler makes another object"
         program.write_bytes(exe.pack(Path(module).read_bytes()))
         result = subprocess.run([vm, "run", "--strace=faults", "--", str(program)], capture_output=True, timeout=120)
 

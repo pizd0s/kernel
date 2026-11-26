@@ -64,7 +64,7 @@ func linkCommand(args []string) {
 
 	module := throw2(os.ReadFile(args[2]))
 
-	throw(os.WriteFile(args[1], linkLibc(module, newKernel(Cred{}, defaultMemory).functions), 0o644))
+	throw(os.WriteFile(args[1], throw2(newKernel(Cred{}, defaultMemory).aot(module, nil, "--link")), 0o644))
 }
 
 func compileCommand(args []string) {

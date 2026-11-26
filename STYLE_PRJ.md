@@ -32,9 +32,9 @@ Per-project settings that the shared [STYLE.md](STYLE.md) delegates here.
   import's prototype as it is, never the C name, and calls the C library
   through its own copy of kernel.c; a function of FreeBSD's, LLVM's or
   Arm's sources there gets the name beside its own (`symbols.py`). The
-  kernel links what a program imports of libc.wasm, and what that reaches,
-  into the program: the two share the imports, each has its own
-  forwarders. A function that takes a structure takes its size after it,
+  kernel's compiler links what a program imports of libc.wasm, and what
+  that reaches, into the program before it compiles it (`bin/aot`): the
+  two share the imports, each has its own forwarders. A function that takes a structure takes its size after it,
   and serves each size it has known.
 - **POSIX's variables.** What POSIX has as a variable is the program's
   variable (`src/crt.c`). The program's entry gives the kernel all their

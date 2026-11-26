@@ -463,8 +463,8 @@ python_core = command(
 # FreeBSD's in lib/libc/freebsd/files.txt, msun and of its libc the stdio,
 # the multibyte functions and more, LLVM libc's in lib/libc/llvm/files.txt
 # and Arm's optimized-routines' in lib/libc/arm/files.txt. It is a
-# relocatable object the kernel links what a program imports of into the
-# program before it compiles it (bin/vm/wasm_linker.go).
+# relocatable object the kernel's compiler links what a program imports of
+# into the program before it compiles it (bin/aot/aot.cpp's linkLibc).
 libc_wasm = command(
     name="libc_wasm",
     inputs=[
@@ -1321,7 +1321,7 @@ E2E_TESTED = {
     "runtime_abi": [vm, aot_native, *runtime_abi_vms],
     "host_signals": [vm, aot_native, wazero],
     "libc": [vm, rootfs, tests_image],
-    "libc_link": [vm, libc_link_check],
+    "libc_link": [vm, libc_link_check, aot_native, libc_wasm],
     "large_functions": [vm, aot_native, rootfs],
     "large_switches": [vm, aot_native, wazero, rootfs],
     "loop_limits": [vm, aot_native, wazero, rootfs],

@@ -2,7 +2,7 @@
 names for those of libc.wasm.
 
 A kernel function a program imports as ("kernel", X) is libc.wasm's
-function __kernel_X (bin/vm/wasm_linker.go). FreeBSD's, LLVM's and Arm's
+function __kernel_X (bin/aot/aot.cpp's linkLibc). FreeBSD's, LLVM's and Arm's
 sources define X itself: named() gives each such function the name
 __kernel_X beside its own, where lib/c's forwarders (kernel.c) import X of
 the kernel by the type the function has; a function of an import's name and

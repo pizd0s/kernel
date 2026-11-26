@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Build libc.wasm: the kernel's functions written in C, all of the C
 library but what a program keeps (lib/c: its forwarders to the kernel, its
-entry and the compiler's runtime). The kernel links those a program imports,
-and what they reach, into the program before it compiles it
-(bin/vm/wasm_linker.go); the rest of its functions are its Go.
+entry and the compiler's runtime). The kernel's compiler links those a
+program imports, and what they reach, into the program before it compiles
+it (bin/aot/aot.cpp's linkLibc); the rest of the kernel's functions are its
+Go.
 
     make.py <cc> <wasm-ld> <llvm-nm> <freebsd-slice> <llvm-slice> <arm-tarball> <libc.wasm>
 
@@ -27,7 +28,7 @@ weak, #pragma weak, and linked after, so the source's function is the
 one, its __kernel_X beside it. All libc.wasm defines but the __kernel_
 functions and its exports is __libc_'s at last, printf __libc_printf, as
 it is of nothing but libc.wasm itself. A
-function a source here exports (export_name) the kernel links into every
+function a source here exports (export_name) the link puts into every
 program and exports from it by its name: the kernel calls the program's
 functions through them (start.c).
 

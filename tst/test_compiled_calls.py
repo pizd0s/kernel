@@ -590,7 +590,7 @@ def module(name, path, body, *, locals_=0, data=(), allocator=False, forwarder=N
     exports = [text("_start") + b"\0" + leb(len(imports) + (path == "forward"))]
 
     # The heap begins at the page's end, as a program says by __heap_base,
-    # where the kernel's linker puts libc.wasm's data of its functions.
+    # where the compiler's link puts libc.wasm's data of its functions.
     result += section(6, vector([bytes([I32, 0]) + constant(PAGE) + b"\x0b"]))
     exports.append(text("__heap_base") + b"\3\0")
 
@@ -805,7 +805,7 @@ def objects(vm, work, name, modules):
     refs = {path: compiled(vm, work, data) for path, data in modules.items()}
 
     if any(function.endswith(":__kernel_" + name) for function in refs["pointer"]):
-        # libc.wasm's function, which the kernel links into the module: a
+        # libc.wasm's function, which the compiler links into the module: a
         # call of it is of a function of the object's own, no symbol it
         # refers to, and what its calls are, the results tell.
         return

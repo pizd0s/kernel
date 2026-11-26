@@ -22,10 +22,6 @@ var (
 	exeMagic   = []byte("PZD1")
 )
 
-var libcObject = sync.OnceValue(func() *WasmObject {
-	return parseWasmObject(libcBlob)
-})
-
 var unpacker = sync.OnceValue(func() *zstd.Decoder {
 	return throw2(zstd.NewReader(nil, zstd.WithDecoderMaxMemory(unpackLimit)))
 })
@@ -82,17 +78,20 @@ func (o CompileOptions) arguments() []string {
 }
 
 func (k *Kernel) compileObject(module []byte, options CompileOptions) ([]byte, error) {
-	module = linkLibc(module, k.functions)
+	return k.aot(module, objectSize, append(options.arguments(), "--libc")...)
+}
 
+func (k *Kernel) aot(module []byte, size func(first []byte) int, arguments ...string) ([]byte, error) {
 	code := k.compiler()
 	p := k.process(0, nil)
-	out, diagnostic := newCapture(objectSize), newCapture(nil)
+	out, diagnostic := newCapture(size), newCapture(nil)
 
 	p.files.put(0, opened(newMemfd(&LinearMemory{data: module}, 0, int64(len(module))), O_RDONLY), false)
 	p.files.put(1, opened(out, O_WRONLY), false)
 	p.files.put(2, opened(diagnostic, O_WRONLY), false)
+	p.files.put(3, opened(newMemfd(&LinearMemory{data: libcBlob}, 0, int64(len(libcBlob))), O_RDONLY), false)
 
-	status := p.run(&ExecImage{code: code, argv: append([]string{"aot"}, options.arguments()...), envp: compilerEnv()})
+	status := p.run(&ExecImage{code: code, argv: append([]string{"aot"}, arguments...), envp: compilerEnv()})
 	text := strings.TrimSpace(string(diagnostic.bytes()))
 	failed := ""
 
