@@ -61,6 +61,7 @@ __pycache__/
 /rootfs
 /rootfs_image
 /busybox_exe
+/aot_exe
 /doom_exe
 /python_exe
 /rootfs_module

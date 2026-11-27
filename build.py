@@ -951,9 +951,13 @@ mc = package(
     color="cyan",
 )
 
-# The system: the base system, python, mc, the terminals' descriptions and
-# doom.
-SYSTEM = [*BASE, python, mc, terminfo_pkg, doom]
+# /bin/aot: the compiler as a program of the system, aot.wasm packed.
+aot_exe = executable("aot_exe", aot, "$(B)/bin/aot/exe/aot")
+aot_pkg = package("bin/aot", ["--file", "bin/aot", aot_exe.outputs[0]], deps=[aot_exe])
+
+# The system: the base system, python, mc, the terminals' descriptions,
+# doom and the compiler.
+SYSTEM = [*BASE, python, mc, terminfo_pkg, doom, aot_pkg]
 rootfs_image, rootfs = system("rootfs", SYSTEM, "bin/rootfs")
 
 # clang for this system: LLVM's multicall program of the release lib/cxx
