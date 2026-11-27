@@ -44,6 +44,12 @@ Per-project settings that the shared [STYLE.md](STYLE.md) delegates here.
   functions the kernel calls the program's through (`lib/libc/start.c`).
   What POSIX has as a macro is a macro over a kernel function (`errno`,
   `stdin`). A variable POSIX has not is not in lib/c.
+- **lib/c/lite.** The C library of a program the kernel runs with its Go
+  alone and no libc.wasm, the compiler (`bin/aot`). Its entry is its own:
+  it tells the kernel's Go errno's and environ's places
+  (`__kernel_begin`), runs the constructors and main, and ends the process
+  with main's result. Its getenv is of environ, and its forwarders are of
+  the kernel's Go, as `src/kernel.c`'s.
 - **Third-party code.** Sources are fetched as release tarballs, a big one
   cut down to what is built (`dev/slice.py`), and never edited in place; what they need from us lives beside their build
   (lib/libc's `freebsd/` and `llvm/` headers). Code

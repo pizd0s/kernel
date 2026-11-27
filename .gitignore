@@ -16,6 +16,7 @@ __pycache__/
 /coverage_check
 /wazero
 /libc
+/libc_lite
 /libstr
 /str_tarball
 /aot

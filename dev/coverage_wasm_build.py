@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build the instrumented wasm compiler, a program on lib/c, without compiler-rt.
+"""Build the instrumented wasm compiler, a program on lib/c/lite, without compiler-rt.
 
     coverage_wasm_build.py <clang> <wasm-ld> <aot.cpp> <shim.c> <output> <flags-json>
 
 The flags carry the compiler's flags, whether it is the chaos build and
-lib/c's libc.a. The VM extracts counters before unmapping each compiler
+lib/c/lite's libc.a. The VM extracts counters before unmapping each compiler
 instance. Keep the coverage mapping custom sections; production --strip-all
 would erase them.
 """

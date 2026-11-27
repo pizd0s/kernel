@@ -251,6 +251,18 @@ libc = command(
     color="green",
 )
 
+# lib/c/lite: the C library of a program the kernel runs with its Go alone
+# and no libc.wasm, the compiler: its entry and the forwarders of the
+# kernel's functions it calls, on lib/c's headers.
+libc_lite = command(
+    name="libc_lite",
+    inputs=[*LIBC_HEADERS, *build.glob("$(S)/lib/c/lite/*"), "$(S)/lib/c/src/kernel.h", "$(S)/dev/wasm.py"],
+    outputs=["$(B)/lib/c/lite/libc.a"],
+    cmd=["python3", "$(S)/lib/c/lite/make.py", CLANG, LLVM_AR, "$(B)/lib/c/lite/libc.a"],
+    descr="CC",
+    color="green",
+)
+
 # lib/c's headers as a program compiled inside the system finds them.
 libc_headers = command(
     name="libc_headers",
@@ -492,13 +504,13 @@ libc_wasm = command(
 
 # bin/aot is a single C++ translation unit, a command: the module comes on
 # fd 0, the object goes to fd 1, the options are its arguments. Its wasm
-# build is a program of the system on lib/c, the one the kernel runs as its
-# compiler; the native build is the same program on the host's libc.
+# build is a program of the system on lib/c/lite, the one the kernel runs as
+# its compiler; the native build is the same program on the host's libc.
 AOT_FLAGS = ["-x", "c++", "-std=c++20", "-O2", "-fno-exceptions", "-fno-rtti", "-fno-builtin", "-fwrapv", "-ffp-contract=off", "-Wno-parentheses-equality"]
 # A program's flags and link (dev/wasm.py, bin/tools/make.py). The
 # multivalue ABI passes and returns small structs, the compiler's slices and
 # views among them, as values instead of through the shadow stack; what it
-# calls of lib/c takes and returns scalars only.
+# calls of lib/c/lite takes and returns scalars only.
 AOT_WASM_FLAGS = [*AOT_FLAGS, "--target=wasm32-unknown-unknown", "-Xclang", "-mlong-double-64", "-mbulk-memory", "-nostdinc", "-nostdinc++",
                   "-nostdlib", "-isystem", "$(S)/lib/c/include", "-ffunction-sections", "-fdata-sections",
                   "-Xclang", "-target-abi", "-Xclang", "experimental-mv", "-Wl,--stack-first", "-Wl,--max-memory=4294967296",
@@ -508,8 +520,8 @@ aot = command(
     name="aot",
     inputs=["$(S)/bin/aot/aot.cpp", *LIBC_HEADERS],
     outputs=["$(B)/bin/aot/aot.wasm"],
-    deps=[libc],
-    cmd=[CLANG, *AOT_WASM_FLAGS, "$(S)/bin/aot/aot.cpp", "-x", "none", libc.outputs[0], "-o", "$(B)/bin/aot/aot.wasm"],
+    deps=[libc_lite],
+    cmd=[CLANG, *AOT_WASM_FLAGS, "$(S)/bin/aot/aot.cpp", "-x", "none", libc_lite.outputs[0], "-o", "$(B)/bin/aot/aot.wasm"],
     descr="CC", color="green",
 )
 
@@ -578,8 +590,8 @@ aot_wasm_chaos = command(
     name="aot_wasm_chaos",
     inputs=["$(S)/bin/aot/aot.cpp", *LIBC_HEADERS],
     outputs=["$(B)/chaos/bin/aot.wasm"],
-    deps=[libc],
-    cmd=[CLANG, *AOT_WASM_FLAGS, "-DAOT_CHAOS", "$(S)/bin/aot/aot.cpp", "-x", "none", libc.outputs[0], "-o", "$(B)/chaos/bin/aot.wasm"],
+    deps=[libc_lite],
+    cmd=[CLANG, *AOT_WASM_FLAGS, "-DAOT_CHAOS", "$(S)/bin/aot/aot.cpp", "-x", "none", libc_lite.outputs[0], "-o", "$(B)/chaos/bin/aot.wasm"],
     descr="CC", color="green",
 )
 
@@ -602,10 +614,10 @@ for chaos in (False, True):
         name="aot_wasm_chaos_coverage" if chaos else "aot_wasm_coverage",
         inputs=["$(S)/bin/aot/aot.cpp", "$(S)/dev/coverage_wasm.c", "$(S)/dev/coverage_wasm_build.py", *LIBC_HEADERS],
         outputs=[prefix + "/aot.wasm"],
-        deps=[libc],
+        deps=[libc_lite],
         cmd=["python3", "$(S)/dev/coverage_wasm_build.py", CLANG, WASM_LD,
              "$(S)/bin/aot/aot.cpp", "$(S)/dev/coverage_wasm.c", prefix + "/aot.wasm",
-             json.dumps({"flags": AOT_WASM_FLAGS, "chaos": chaos, "libc": libc.outputs[0]})],
+             json.dumps({"flags": AOT_WASM_FLAGS, "chaos": chaos, "libc": libc_lite.outputs[0]})],
         descr="CC", color="green",
     )
     embedded = command(

@@ -78,29 +78,6 @@ static void writeAll(int fd, const void* data, usize length) {
 #endif
 }
 
-#if defined(__wasm__) || defined(wasm)
-// The system's start is libc.wasm's, which the kernel links into a program
-// before it compiles it. The compiler is compiled for the kernel by its
-// native build, with no kernel to link it: its start is its own, over the
-// kernel's Go alone, which gets the places it keeps current and gives the
-// arguments; main's end is the process's, with nothing to run or flush.
-extern "C" void __kernel_begin(int*, char***, int*, char***)
-    __attribute__((__import_module__("kernel"), __import_name__("__kernel_begin")));
-extern "C" int __main_argc_argv(int, char**);
-
-namespace {
-    int errorValue;
-    char** environment;
-}
-
-extern "C" __attribute__((__export_name__("_start"))) void _start() {
-    int count = 0;
-    char** arguments = nullptr;
-    __kernel_begin(&errorValue, &environment, &count, &arguments);
-    _exit(__main_argc_argv(count, arguments));
-}
-#endif
-
 [[noreturn]] static void fail(const char* text) {
     usize length = 0;
     while (text[length] != 0) {
@@ -28948,28 +28925,10 @@ static void compileWithOptions(CompileOptions options) {
 }
 
 #ifdef AOT_CHAOS
-// PIZDOS_AOT_CHAOS's rules: in the kernel, of the environment the start
-// got, as getenv is libc.wasm's, which the compiler is not linked with.
-static const char* chaosScript() {
-#if defined(__wasm__) || defined(wasm)
-    const char name[] = "PIZDOS_AOT_CHAOS=";
-    for (char** variable = environment; variable && *variable; ++variable) {
-        usize i = 0;
-        while (name[i] != 0 && (*variable)[i] == name[i]) {
-            ++i;
-        }
-        if (name[i] == 0) {
-            return *variable + i;
-        }
-    }
-    return nullptr;
-#else
-    return ::getenv("PIZDOS_AOT_CHAOS");
-#endif
-}
-
+// PIZDOS_AOT_CHAOS's rules. In the kernel getenv is lib/c/lite's, of the
+// environment the start got.
 static void configureChaos() {
-    const char* script = chaosScript();
+    const char* script = ::getenv("PIZDOS_AOT_CHAOS");
     const char* names[] = {"read", "write", "malloc"};
     while (script && *script) {
         u32 point = 0;
