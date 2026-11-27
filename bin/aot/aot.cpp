@@ -22376,8 +22376,16 @@ static bool optimizerUnrollLoops(Optimizer* o) {
     const Int blocks = length(f->blocks);
     bool changed = false;
     auto order = ci->order;
+    // member marks the blocks of the loop in hand, marked the list of
+    // them, cleared for the next loop.
+    Slice<bool> member = makeSlice<bool>(blocks);
+    Slice<i32> marked = {};
     for (Int oi = 0; oi < length(order); ++oi) {
         const i32 h = order[oi];
+        for (Int i = 0; i < length(marked); ++i) {
+            member[marked[i]] = false;
+        }
+        marked = subslice(marked, 0, 0);
         if (!ci->header[h] || h >= blocks) {
             continue;
         }
@@ -22399,8 +22407,8 @@ static bool optimizerUnrollLoops(Optimizer* o) {
         }
         // The body: what reaches the latch back to the header, with no
         // other loop inside.
-        Slice<bool> member = makeSlice<bool>(blocks);
         member[h] = true;
+        marked = appendValues(marked, h);
         Slice<i32> work = sliceOf<i32>({latch});
         Int insts = 0;
         while (simple && length(work) > 0) {
@@ -22414,24 +22422,26 @@ static bool optimizerUnrollLoops(Optimizer* o) {
                 break;
             }
             member[b] = true;
+            marked = appendValues(marked, b);
             work = appendSlice(work, f->blocks[b].preds);
         }
         if (!simple) {
             continue;
         }
-        // The body accesses memory and calls nothing.
-        Slice<i32> body = {};
+        // The body, its blocks in order, accesses memory and calls
+        // nothing.
+        Slice<i32> body = appendSlice(Slice<i32>{}, marked);
+        sortValues(body, [&](Int x, Int y) {
+            return ci->rpoIndex[body[x]] < ci->rpoIndex[body[y]];
+        });
         bool accesses = false;
-        for (Int i = 0; i < length(order); ++i) {
-            if (member[order[i]]) {
-                body = appendValues(body, order[i]);
-                auto instrs = f->blocks[order[i]].instrs.view();
-                insts += length(instrs);
-                for (Int j = 0; j < length(instrs); ++j) {
-                    const Op op = f->values[instrs[j]].op;
-                    accesses = accesses || op == OpLoad || op == OpStore;
-                    simple = simple && op != OpCall && op != OpCallIndirect;
-                }
+        for (Int i = 0; i < length(body); ++i) {
+            auto instrs = f->blocks[body[i]].instrs.view();
+            insts += length(instrs);
+            for (Int j = 0; j < length(instrs); ++j) {
+                const Op op = f->values[instrs[j]].op;
+                accesses = accesses || op == OpLoad || op == OpStore;
+                simple = simple && op != OpCall && op != OpCallIndirect;
             }
         }
         if (!simple || !accesses) {
