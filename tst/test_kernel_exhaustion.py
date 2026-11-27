@@ -73,7 +73,7 @@ def main():
              ("string-copy", "strndup", [0, 0], True, False, 12),
              ("large-allocation", "malloc", [4194304], True, False, 12),
              ("growing-allocation", "realloc", [0, 4194304], True, False, 12)]
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-kernel-exhaustion-") as directory:
         work = Path(directory)
         source, executable, compiled, embedded = [work / name for name in ("input.wasm", "input", "native.o", "embedded.o")]

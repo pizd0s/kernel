@@ -123,7 +123,7 @@ def main():
             else:
                 assert reference.returncode == 0 and reference.stdout == b"", (case, reference)
             for strict in ((False, True) if case[0] == 17 or case[1] != 4096 else (False,)):
-                env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+                env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
                 result = subprocess.run([native, *(["--strict"] if strict else [])], input=data, capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0, (case, strict, result.stderr)
                 compiled.write_bytes(result.stdout)
@@ -133,7 +133,7 @@ def main():
         # Each mode's programs run in one boot of the system; a trap out of
         # memory ends its program with SIGSEGV.
         for strict, runs in batches.items():
-            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
             results = system.run(vm, rootfs, [("input", data, [], b"") for _, data, _ in runs], env=env)
             for (case, _, trapping), result in zip(runs, results):
                 status, stdout, stderr = result

@@ -103,7 +103,7 @@ def main():
              # An aligned frame, its unaligned address stored to as well.
              ("stack-unaligned-frame", program(b"\x23\0\x41\x28\x6b\x22\0\x41\x70\x71\x24\0\x20\0\x41\0\x36\2\0", stack=True, locals=1),
               "unsupported: an unaligned frame of the stack used")]
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-compiler-rejections-") as directory:
         work = Path(directory)
         source, output = work / "input.wasm", work / "output.o"
@@ -111,7 +111,7 @@ def main():
         for label, data, diagnostic in cases:
             low_memory = label in ("low-data", "low-stack")
             padded = low_memory
-            env = dict(env, W2X_MEMORY_TAIL="optimized" if padded else "strict")
+            env = dict(env, VM_MEMORY_TAIL="optimized" if padded else "strict")
             source.write_bytes(data)
             reference = subprocess.run([wazero, "-compile", str(source)], capture_output=True, timeout=30)
             if label not in ("imported-global", "low-data", "low-stack", "imported-memory") and not label.startswith("stack-"):
@@ -125,7 +125,7 @@ def main():
             assert result.returncode == 1 and diagnostic.encode() in result.stderr and b"panic:" not in result.stderr, (label, result)
             assert output.read_bytes() == b"previous object" and not list(work.glob(".vm-*")), label
             if low_memory:
-                strict_env = dict(env, W2X_MEMORY_TAIL="strict")
+                strict_env = dict(env, VM_MEMORY_TAIL="strict")
                 result = subprocess.run([native, "--strict"], input=data, capture_output=True, env=strict_env, timeout=30)
                 assert result.returncode == 0, (label, result)
                 reference = result.stdout
@@ -136,7 +136,7 @@ def main():
                 runs.append((label, data))
         # The low data and stack, which strict mode compiles, run in one boot
         # of the system.
-        results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=dict(env, W2X_MEMORY_TAIL="strict"))
+        results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=dict(env, VM_MEMORY_TAIL="strict"))
         for (label, _), result in zip(runs, results):
             assert result == (0, b"", b""), (label, result)
     print(f"compiler rejections: {len(cases)} control, segment, index, import-address and stack errors preserve output with both AOTs")

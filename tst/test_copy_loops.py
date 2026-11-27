@@ -133,7 +133,7 @@ def main():
                 strict, asan = mode == "strict", mode == "asan"
                 data = program(*case, kernel=asan)
                 source.write_bytes(data)
-                env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+                env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
                 flag = ["--strict"] if strict else ["--asan"] if asan else []
                 result = subprocess.run([native, *flag], input=data, capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0, (case, mode, result.stderr)
@@ -146,7 +146,7 @@ def main():
         # Each mode's programs run in one boot of the system; ASAN's boots
         # with --asan, which checks the whole system then.
         for mode, runs in batches.items():
-            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if mode == "strict" else "optimized", W2X_TAIL_PROFILE="")
+            env = dict(os.environ, VM_MEMORY_TAIL="strict" if mode == "strict" else "optimized", VM_TAIL_PROFILE="")
             results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env,
                                  flags=["--asan"] if mode == "asan" else [])
             for (case, _), result in zip(runs, results):

@@ -72,7 +72,7 @@ def main():
                           "whose byte 0x8000 is in memory never allocated"))
     cases += [("kernel-range", program(32766, 4, False, host=True), 134, "access of a range at 0x8000: in memory never allocated"),
               ("empty-end-range", program(65536, 0, False, host=True), 0, "")]
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-asan-bounds-") as directory:
         work = Path(directory)
         source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]

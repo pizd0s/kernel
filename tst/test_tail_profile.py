@@ -127,7 +127,7 @@ def module():
 
 def main():
     vm, native = sys.argv[1:]
-    env = dict(os.environ, W2X_MEMORY_TAIL="optimized", W2X_TAIL_PROFILE="1")
+    env = dict(os.environ, VM_MEMORY_TAIL="optimized", VM_TAIL_PROFILE="1")
     with tempfile.TemporaryDirectory(prefix="pizdos-tail-profile-") as directory:
         work = Path(directory)
         source, compiled, embedded, profile = (work / name for name in ("input.wasm", "native.o", "embedded.o", "tail.jsonl"))
@@ -138,7 +138,7 @@ def main():
         compiled.write_bytes(result.stdout)
         result = subprocess.run([vm, "-o", str(embedded), str(source)], env=env, capture_output=True, timeout=60)
         assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), result
-        result = subprocess.run([vm, "run", "--", str(source)], env=dict(env, W2O_TAIL_PROFILE=str(profile)),
+        result = subprocess.run([vm, "run", "--", str(source)], env=dict(env, VM_TAIL_PROFILE_FILE=str(profile)),
                                 capture_output=True, timeout=30)
         assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), result
 

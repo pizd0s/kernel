@@ -171,7 +171,7 @@ def main():
     vm, rootfs, service = sys.argv[1:4]
     script = SCRIPT.replace("{service}", base64.encodebytes(open(service, "rb").read()).decode().strip())
     with tempfile.TemporaryDirectory(prefix="pizdos-devices-") as empty:
-        env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
+        env = {"VM_MEMORY_TAIL": "strict", "VM_TAIL_PROFILE": ""}
         result = system.shell(vm, rootfs, script + "exit 3\n", cwd=empty, env=env, timeout=180)
         assert (result.returncode, result.stdout.decode(), result.stderr) == (3, WANT, b""), result
     print("devices: services register the devices of /dev at /dev/init/ctl, serve their opens, and take them along when they go")

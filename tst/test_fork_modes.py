@@ -81,7 +81,7 @@ def main():
         result = subprocess.run([wazero, "-compile", str(source)], capture_output=True, timeout=60)
         assert result.returncode == 0, result.stderr
         for mode, flag in (("optimized", None), ("strict", "--strict"), ("asan", "--asan"), ("profile", "--tail-profile")):
-            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if mode == "strict" else "optimized", W2X_TAIL_PROFILE="1" if mode == "profile" else "")
+            env = dict(os.environ, VM_MEMORY_TAIL="strict" if mode == "strict" else "optimized", VM_TAIL_PROFILE="1" if mode == "profile" else "")
             compiled, embedded = work / f"{mode}-native.o", work / f"{mode}-embedded.o"
             result = subprocess.run([native, *([flag] if flag else [])], input=data, capture_output=True, env=env, timeout=60)
             assert result.returncode == 0, (mode, result.stderr)
@@ -90,7 +90,7 @@ def main():
             result = subprocess.run([vm, *asan, "-o", str(embedded), str(source)], capture_output=True, env=env, timeout=60)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (mode, result)
             profile = embedded.with_suffix(".jsonl")
-            result = subprocess.run([vm, "run", *asan, "--", str(executable)], capture_output=True, env=dict(env, W2O_TAIL_PROFILE=str(profile)), timeout=30)
+            result = subprocess.run([vm, "run", *asan, "--", str(executable)], capture_output=True, env=dict(env, VM_TAIL_PROFILE_FILE=str(profile)), timeout=30)
             assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), (mode, result)
             if mode == "profile":
                 rows = [json.loads(line) for line in profile.read_text().splitlines()]

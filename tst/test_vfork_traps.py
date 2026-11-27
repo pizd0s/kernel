@@ -49,7 +49,7 @@ def main():
     faults = [(b"\0", 132, b"wasm trap: unreachable"),
               (b"\x41\x81\x80\4\x2d\0\0\x1a", 139, b"out of bounds memory access"),
               (b"\x41\1\x41\0\x6d\x1a", 136, b"integer divide by zero")]
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-vfork-traps-") as directory:
         work = Path(directory)
         source, compiled, embedded = [work / name for name in ("input.wasm", "native.o", "embedded.o")]

@@ -794,7 +794,7 @@ def references(path):
 
 def kernels(refs, name):
     """The functions of an object that call the kernel's function of a name."""
-    symbol = "w2o.import.kernel." + name.replace("_", "_5F") + "."
+    symbol = "vm.import.kernel." + name.replace("_", "_5F") + "."
 
     return {function for function, symbols in refs.items() if any(s.startswith(symbol) for s in symbols)}
 
@@ -957,7 +957,7 @@ def main():
     for mode in ("strict", "optimized"):
         # A trap's check is (name, path, arguments, None, whether past any tail).
         ran = [(check, program) for check, program in zip(checks, programs) if mode == "strict" or check[3] is not None or check[4]]
-        env = dict(os.environ, W2X_MEMORY_TAIL=mode, W2X_TAIL_PROFILE="")
+        env = dict(os.environ, VM_MEMORY_TAIL=mode, VM_TAIL_PROFILE="")
         outcomes = system.run(vm, rootfs, [("calls", program, [], b"") for _, program in ran], env=env)
 
         for ((name, path, sequence, results, want), _), (status, out, err) in zip(ran, outcomes):

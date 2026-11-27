@@ -93,7 +93,7 @@ def main():
         result = subprocess.run([wazero, "-interpreter", str(module)], capture_output=True, timeout=30)
         assert result.returncode == 0 and result.stdout == b"", result
         for strict in (False, True):
-            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
             result = subprocess.run([native, *(["--strict"] if strict else [])], input=module.read_bytes(), capture_output=True, env=env, timeout=60)
             assert result.returncode == 0, (strict, result.stderr)
             compiled.write_bytes(result.stdout)
@@ -107,7 +107,7 @@ def main():
             result = subprocess.run([wazero, "-interpreter", str(module)], capture_output=True, timeout=30)
             assert result.returncode == 1 and b"out of bounds memory access" in result.stderr, (label, result)
             for strict in (False, True):
-                env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+                env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
                 result = subprocess.run([native, *(["--strict"] if strict else [])], input=module.read_bytes(), capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0, (label, strict, result.stderr)
                 compiled.write_bytes(result.stdout)
@@ -118,7 +118,7 @@ def main():
         # Each mode's programs, the modeled one and the trapping ones, run in
         # one boot of the system; a trap ends its program with SIGSEGV.
         for strict, runs in batches.items():
-            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
             results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
             for (label, _), result in zip(runs, results):
                 if label is None:

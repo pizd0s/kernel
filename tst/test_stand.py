@@ -49,7 +49,7 @@ def main():
         image_digest = digest(struct.pack("<II", 2, 1) + bytes(range(1, 9)))
         for mode in ("optimized", "plain", "strict"):
             obj = work / (mode + ".o")
-            compiled = call([vm, "-v", "-o", str(obj), module], W2X_MEMORY_TAIL=mode)
+            compiled = call([vm, "-v", "-o", str(obj), module], VM_MEMORY_TAIL=mode)
             assert compiled.returncode == 0 and b"bytes ->" in compiled.stderr, compiled
             if mode == "optimized":
                 assert obj.read_bytes() == reference
@@ -86,14 +86,14 @@ def main():
         assert result.returncode != 0 and b"result changed on repetition 2" in result.stderr, result
 
         profiled, profile = work / "profiled.o", work / "profile.jsonl"
-        result = call([vm, "-o", str(profiled), module], W2X_MEMORY_TAIL="optimized", W2X_TAIL_PROFILE="1")
+        result = call([vm, "-o", str(profiled), module], VM_MEMORY_TAIL="optimized", VM_TAIL_PROFILE="1")
         assert result.returncode == 0, result
-        result = call([vm, "stand", "im", str(profiled), files[0]], W2O_TAIL_PROFILE=str(profile))
+        result = call([vm, "stand", "im", str(profiled), files[0]], VM_TAIL_PROFILE_FILE=str(profile))
         assert result.returncode == 0, result
         records = [json.loads(line) for line in profile.read_text().splitlines()]
         assert records and any(row["functions"] for row in records), records
         assert any(function["guards"] + function["ordinary_checks"] > 0 for row in records for function in row["functions"]), records
-        result = call([vm, "-o", str(work / "invalid.o"), module], W2X_MEMORY_TAIL="invalid")
+        result = call([vm, "-o", str(work / "invalid.o"), module], VM_MEMORY_TAIL="invalid")
         assert result.returncode != 0 and b"unknown memory tail mode" in result.stderr
 
     print("stand: all decoder protocols, repeats, traps, failures, strict/tail modes and profile output passed")

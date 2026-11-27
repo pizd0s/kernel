@@ -56,7 +56,7 @@ def program(count, order):
 def main():
     vm, native, wazero, rootfs = sys.argv[1:]
     checked = 0
-    env = dict(os.environ, W2X_MEMORY_TAIL="optimized", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="optimized", VM_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-large-switches-") as directory:
         work = Path(directory)
         runs = []

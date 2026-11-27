@@ -109,7 +109,7 @@ func compileCommand(args []string) {
 
 	defer os.Remove(destination.Name())
 
-	if path := os.Getenv("W2X_PROFILE"); path != "" {
+	if path := os.Getenv("VM_PROFILE"); path != "" {
 		f := throw2(os.Create(path))
 
 		throw(pprof.StartCPUProfile(f))

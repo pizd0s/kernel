@@ -235,7 +235,7 @@ def main():
     # vm needs, and the working directory is one nothing is in.
     # The system's user is root; PERMISSIONS run as one who is not.
     with tempfile.TemporaryDirectory(prefix="pizdos-rootfs-") as empty:
-        env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
+        env = {"VM_MEMORY_TAIL": "strict", "VM_TAIL_PROFILE": ""}
         for user, script, want in ((), SCRIPT, WANT), (("--user", "1000:1000"), PERMISSIONS, PERMITTED):
             result = system.shell(vm, rootfs, script + "exit 3\n", user, cwd=empty, env=env, timeout=180)
             assert (result.returncode, stored(result.stdout).decode(), result.stderr) == (3, want, b""), result

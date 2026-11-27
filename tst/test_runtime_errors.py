@@ -109,7 +109,7 @@ def main():
     cases.append(("realloc-interior", program(imports, allocate + pointer + constant(1) + b"\x6a" + constant(80) + call(2) + b"\x1a"), "realloc(): invalid pointer"))
     cases.append(("usable-size-interior", program(imports, allocate + pointer + constant(1) + b"\x6a" + call(3) + b"\x1a"), "malloc_usable_size(): invalid pointer"))
 
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-runtime-errors-") as directory:
         work = Path(directory)
         for name, module, diagnostic in cases:

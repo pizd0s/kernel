@@ -147,7 +147,7 @@ def main():
     assert not CALLS & set(exports(original[7])), exports(original[7])
     calls = {name: entry for name, entry in exports(merged[7]).items() if name in CALLS}
     assert set(calls) == CALLS and all(kind == 0 and index >= count - own for kind, index in calls.values()), calls
-    shift = leb(merged["w2o.code_shift"], 0)[0]
+    shift = leb(merged["vm.code_shift"], 0)[0]
     assert shift == 1 and count > own, (shift, count)
     trap = next(i for i, line in enumerate(SOURCE.read_text().splitlines(), 1) if "__builtin_trap" in line)
     assert result.returncode == 132 and b"wasm trap: unreachable" in result.stderr, result

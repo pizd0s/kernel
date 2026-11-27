@@ -422,7 +422,7 @@ func readEhFrame(data []byte, relocs []ObjReloc, defined map[string]uint32) []Re
 		regions[k].name = names[regions[k].start]
 
 		if regions[k].name == "" {
-			regions[k].name = "w2o.code"
+			regions[k].name = "vm.code"
 		}
 	}
 

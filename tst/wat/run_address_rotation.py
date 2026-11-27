@@ -62,7 +62,7 @@ def main():
             else:
                 assert result.returncode != 0 and b"out of bounds memory access" in result.stderr, result
             for strict in (False, True):
-                env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+                env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
                 result = subprocess.run([native, *(["--strict"] if strict else [])], input=module.read_bytes(), capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0, (strict, result.stderr)
                 compiled.write_bytes(result.stdout)
@@ -73,7 +73,7 @@ def main():
         # of bounds ends its process by SIGSEGV, each line of its report
         # marked with its argv[0] and pid.
         for strict, runs in batches.items():
-            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
             results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
             for (trap_depth, _), result in zip(runs, results):
                 if trap_depth is None:

@@ -99,8 +99,8 @@ def main():
                     if trapped:
                         assert b"out of bounds memory access" in result.stderr, result
                     for mode, flag in (("optimized", None), ("plain", "--plain"), ("strict", "--strict"), ("profile", "--tail-profile")):
-                        env = dict(os.environ, W2X_MEMORY_TAIL="optimized" if mode == "profile" else mode,
-                                   W2X_TAIL_PROFILE="1" if mode == "profile" else "")
+                        env = dict(os.environ, VM_MEMORY_TAIL="optimized" if mode == "profile" else mode,
+                                   VM_TAIL_PROFILE="1" if mode == "profile" else "")
                         result = subprocess.run([native, *([flag] if flag else [])], input=data, capture_output=True, env=env, timeout=60)
                         assert result.returncode == 0, result.stderr
                         compiled.write_bytes(result.stdout)
@@ -113,7 +113,7 @@ def main():
                         # to vm's profile: the module runs alone, as vm's first
                         # process, which a trap out of memory ends with SIGSEGV.
                         profile.unlink(missing_ok=True)
-                        result = subprocess.run([vm, "run", "--", str(source)], env=dict(env, W2O_TAIL_PROFILE=str(profile)),
+                        result = subprocess.run([vm, "run", "--", str(source)], env=dict(env, VM_TAIL_PROFILE_FILE=str(profile)),
                                                 capture_output=True, timeout=30)
                         assert result.returncode == (139 if trapped else 0) and result.stdout == b"", (compare_bits, select_bits, mode, result)
                         assert result.stderr == b"", result
@@ -123,7 +123,7 @@ def main():
         # Each other mode's programs run in one boot of the system, which
         # counts nothing: no instance of it writes a profile.
         for mode, runs in batches.items():
-            env = dict(os.environ, W2X_MEMORY_TAIL=mode, W2X_TAIL_PROFILE="", W2O_TAIL_PROFILE=str(profile))
+            env = dict(os.environ, VM_MEMORY_TAIL=mode, VM_TAIL_PROFILE="", VM_TAIL_PROFILE_FILE=str(profile))
             profile.unlink(missing_ok=True)
             results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
             for ((compare_bits, select_bits, trapped), _), result in zip(runs, results):

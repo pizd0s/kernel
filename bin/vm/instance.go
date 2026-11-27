@@ -683,7 +683,7 @@ func (i *Instance) tailProfile() TailProfile {
 
 func (i *Instance) writeTailProfile() {
 	meta := i.obj.meta.memory
-	path := os.Getenv("W2O_TAIL_PROFILE")
+	path := os.Getenv("VM_TAIL_PROFILE_FILE")
 
 	if path == "" || meta == nil || meta.profile == 0 {
 		return

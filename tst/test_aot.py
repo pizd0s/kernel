@@ -19,7 +19,7 @@ import system
 
 def main():
     aot, vm, fixture, rootfs = sys.argv[1:]
-    env = dict(os.environ, W2X_MEMORY_TAIL="optimized", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="optimized", VM_TAIL_PROFILE="")
     empty = b"\0asm\1\0\0\0"
     malformed = [b"", b"bad!\1\0\0\0", b"\0asm\1\0\0\0\1\1\x80"]
 

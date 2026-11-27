@@ -117,8 +117,8 @@ def check(result, case, phase):
 def environment(case):
     env = dict(os.environ)
     # The native AOT and the embedded compiler use the same mode.
-    env["W2X_MEMORY_TAIL"] = "strict" if aot_flags(case) == ["--strict"] else "optimized"
-    env["W2X_TAIL_PROFILE"] = ""
+    env["VM_MEMORY_TAIL"] = "strict" if aot_flags(case) == ["--strict"] else "optimized"
+    env["VM_TAIL_PROFILE"] = ""
     return env
 
 

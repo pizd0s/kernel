@@ -553,7 +553,7 @@ FUSE2FS (data): Warning: Mounting unchecked fs, running e2fsck is recommended.
 
 
 def run(vm, rootfs, flags, script, cwd):
-    env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
+    env = {"VM_MEMORY_TAIL": "strict", "VM_TAIL_PROFILE": ""}
     return system.shell(vm, rootfs, script + "exit 3\n", flags, cwd=cwd, env=env, timeout=180)
 
 

@@ -76,7 +76,7 @@ def main():
             result = subprocess.run([wazero, "-compile", str(source)], capture_output=True, timeout=60)
             assert result.returncode == 0, (name, result.stderr)
             for strict in (False, True):
-                env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+                env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
                 result = subprocess.run([native, *(["--strict"] if strict else [])], input=source.read_bytes(), capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0, (name, result.stderr)
                 compiled.write_bytes(result.stdout)
@@ -84,7 +84,7 @@ def main():
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (name, result)
         # Each mode's programs run in one boot of the system.
         for strict in (False, True):
-            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
             results = system.run(vm, rootfs, [("input", program(body), [], b"") for _, body in valid], env=env)
             for (name, _), result in zip(valid, results):
                 assert result[0] == ILL and result[1] == b"" and result[2] == b"", (name, result)

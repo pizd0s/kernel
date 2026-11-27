@@ -64,8 +64,8 @@ def main():
         "inputs": [],
     }
     env = dict(os.environ)
-    env.update({key: "" for key in ("W2X_DUMP", "W2X_TRACE", "W2X_CHECK", "W2X_PROFILE", "W2X_TAIL_PROFILE", "W2X_OPT_FUNCS")})
-    env["W2X_MEMORY_TAIL"] = "optimized"
+    env.update({key: "" for key in ("VM_DUMP", "VM_TRACE", "VM_CHECK", "VM_PROFILE", "VM_TAIL_PROFILE", "VM_OPT_FUNCS")})
+    env["VM_MEMORY_TAIL"] = "optimized"
     args.json.parent.mkdir(parents=True, exist_ok=True)
     if args.objects:
         args.objects.mkdir(parents=True, exist_ok=True)

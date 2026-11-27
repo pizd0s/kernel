@@ -109,7 +109,7 @@ def wait_stopped(child):
 
 def main():
     vm, native, wazero = sys.argv[1:]
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
     checked = 0
     with tempfile.TemporaryDirectory(prefix="pizdos-host-signals-") as directory:
         work = Path(directory)

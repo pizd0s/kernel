@@ -173,7 +173,7 @@ def jitdump_lines(path):
 
 def main():
     vm, native, rootfs = sys.argv[1:]
-    env = dict(os.environ, W2X_MEMORY_TAIL="optimized", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="optimized", VM_TAIL_PROFILE="")
     valid = [(f"v{version}-wide{wide}", table(version, wide)) for version in (2, 3, 4) for wide in (False, True)]
     valid += [(f"v5-{wide}-{path}-{index}", table(5, wide, path, index))
               for wide in (False, True) for path in (8, 31, 14) for index in (11, 5, 6, 7, 15)]
@@ -243,7 +243,7 @@ def main():
             compiled.write_bytes(result.stdout)
             result = subprocess.run([vm, "-o", str(embedded), str(source)], env=env, capture_output=True, timeout=30)
             assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (name, result)
-            child = subprocess.Popen([vm, "run", "--strace=faults", "--", str(source)], env=dict(env, W2O_PERFMAP=str(work)),
+            child = subprocess.Popen([vm, "run", "--strace=faults", "--", str(source)], env=dict(env, VM_PERFMAP=str(work)),
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             out, err = child.communicate(timeout=30)
             assert child.returncode == 139 and out == b"" and b"out of bounds memory access" in err, (name, child.returncode, err)

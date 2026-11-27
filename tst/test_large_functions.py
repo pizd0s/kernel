@@ -121,7 +121,7 @@ def main():
             source = work / "input.wasm"
             source.write_bytes(data)
             for strict in (False, True):
-                env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+                env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
                 compiled, embedded = work / "native.o", work / "embedded.o"
                 result = subprocess.run([native, *(["--strict"] if strict else [])], input=data,
                                         capture_output=True, env=env, timeout=180)
@@ -133,7 +133,7 @@ def main():
                 batches[strict].append(((name, count), data))
         # Each mode's programs run in one boot of the system.
         for strict, runs in batches.items():
-            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
             results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
             for ((name, count), _), result in zip(runs, results):
                 assert result == (0, b"", b""), (name, count, strict, result)

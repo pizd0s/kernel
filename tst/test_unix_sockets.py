@@ -58,7 +58,7 @@ def main():
     vm, rootfs, program = sys.argv[1:4]
     script = SCRIPT.replace("{program}", base64.encodebytes(open(program, "rb").read()).decode().strip())
     with tempfile.TemporaryDirectory(prefix="pizdos-sockets-") as empty:
-        env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
+        env = {"VM_MEMORY_TAIL": "strict", "VM_TAIL_PROFILE": ""}
         result = system.shell(vm, rootfs, script + "exit 3\n", cwd=empty, env=env, timeout=180)
         assert (result.returncode, result.stdout.decode(), result.stderr.decode()) == (3, WANT, ""), result
     print("unix sockets: the system's are rootfs's, bound to socket nodes of the VFS's, in /run and registered ones of /dev, "

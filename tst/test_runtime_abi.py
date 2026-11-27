@@ -21,7 +21,7 @@ def main():
         obj.write_bytes(result.stdout)
         module, embedded = work / "command.wasm", work / "embedded.o"
         module.write_bytes(data)
-        env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+        env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
         result = subprocess.run([vm, "-o", str(embedded), str(module)], capture_output=True, env=env, timeout=60)
         assert result.returncode == 0 and embedded.read_bytes() == obj.read_bytes(), result
         profiles = work / "profiles"

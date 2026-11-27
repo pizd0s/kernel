@@ -82,7 +82,7 @@ def program(count, start, trap=False, boundary=False):
 
 def main():
     vm, native, rootfs = sys.argv[1:]
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
     runs = []
     with tempfile.TemporaryDirectory(prefix="pizdos-segments-") as directory:
         work = Path(directory)

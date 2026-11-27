@@ -70,8 +70,8 @@ def main():
         work = Path(directory)
         source = work / "input.wasm"
         for mode, flag in (("optimized", None), ("plain", "--plain"), ("strict", "--strict"), ("profile", "--tail-profile")):
-            env = dict(os.environ, W2X_MEMORY_TAIL="optimized" if mode == "profile" else mode,
-                       W2X_TAIL_PROFILE="1" if mode == "profile" else "")
+            env = dict(os.environ, VM_MEMORY_TAIL="optimized" if mode == "profile" else mode,
+                       VM_TAIL_PROFILE="1" if mode == "profile" else "")
             for trapped in (False, True):
                 source.write_bytes(program(trapped))
                 compiled, embedded = work / f"{mode}-{trapped}-native.o", work / f"{mode}-{trapped}-embedded.o"
@@ -86,7 +86,7 @@ def main():
                     # host, which a boot of the system fills with its own
                     # programs' too: this run is vm's own.
                     profile = embedded.with_suffix(".jsonl")
-                    result = subprocess.run([vm, "run", "--", str(source)], env=dict(env, W2O_TAIL_PROFILE=str(profile)),
+                    result = subprocess.run([vm, "run", "--", str(source)], env=dict(env, VM_TAIL_PROFILE_FILE=str(profile)),
                                             capture_output=True, timeout=30)
                     check(mode, trapped, (result.returncode, result.stdout, result.stderr))
                     rows = [json.loads(line) for line in profile.read_text().splitlines()]
@@ -98,7 +98,7 @@ def main():
                 # writes no profile.
                 profile = work / f"{mode}.jsonl"
                 results = system.run(vm, rootfs, [("input", program(trapped), [], b"") for trapped in (False, True)],
-                                     env=dict(env, W2O_TAIL_PROFILE=str(profile)))
+                                     env=dict(env, VM_TAIL_PROFILE_FILE=str(profile)))
                 for trapped, result in zip((False, True), results):
                     check(mode, trapped, result)
                 assert not profile.exists(), mode

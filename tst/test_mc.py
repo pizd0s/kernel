@@ -282,7 +282,7 @@ class Terminal:
 
     def __init__(self, vm, rootfs, image, rows=24, cols=80, flags=(), kind="xterm-256color"):
         self.screen = Screen(rows, cols)
-        env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="", TERM=kind)
+        env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="", TERM=kind)
         self.pid, self.fd = pty.fork()
 
         if self.pid == 0:

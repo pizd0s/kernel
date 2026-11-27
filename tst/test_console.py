@@ -40,7 +40,7 @@ def read_for(fd, seconds, until=None):
 
 def main():
     vm, rootfs = sys.argv[1:]
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="", TERM="vt220")
+    env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="", TERM="vt220")
     pid, fd = pty.fork()
     if pid == 0:
         fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))

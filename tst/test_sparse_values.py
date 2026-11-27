@@ -82,7 +82,7 @@ def main():
             result = subprocess.run([wazero, "-interpreter", str(source)], capture_output=True, timeout=60)
             assert result.returncode == 0 and result.stdout == b"", (steps, result)
             for strict in (False, True):
-                env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+                env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
                 result = subprocess.run([native, *(["--strict"] if strict else [])], input=data, capture_output=True, env=env, timeout=180)
                 assert result.returncode == 0, (steps, result.stderr)
                 compiled.write_bytes(result.stdout)
@@ -91,7 +91,7 @@ def main():
                 batches[strict].append(((steps, strict), source.read_bytes()))
     # Each mode's programs run in one boot of the system.
     for strict, runs in batches.items():
-        env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+        env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
         results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
         for label, result in zip((label for label, _ in runs), results):
             assert result == (0, b"", b""), (label, result)

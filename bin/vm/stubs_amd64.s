@@ -16,12 +16,12 @@
 // writes the stack pointer cannot be unwound through, so none of these
 // calls anything after that.
 
-// w2oMorestack is called by a stack check that failed, with what the check
+// vmMorestack is called by a stack check that failed, with what the check
 // compared pushed. The preemption the check may have seen can be done by
 // now: the stub compares that once more with g.stackguard0 and grows the
 // stack only when it is still not above. Past the instance's stack limit
 // it traps instead. Every register comes back as it was.
-TEXT ·w2oMorestack(SB), NOSPLIT|NOFRAME, $0-0
+TEXT ·vmMorestack(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 	PUSHQ	BP
 	MOVQ	SP, BP
@@ -105,7 +105,7 @@ fits:
 	POPQ	BP
 	RET
 
-// w2oInterruptCall is the call Go's runtime injects where it interrupts the
+// vmInterruptCall is the call Go's runtime injects where it interrupts the
 // code (lib/goruntime), and the call a return from an import makes while
 // the instance's interrupt word is set. It calls helperInterrupt, which
 // finds the instance in g.instance. A handler may move the memory, and the
@@ -115,7 +115,7 @@ fits:
 // R15 holding the Instance meanwhile, which no address in the memory
 // equals. The stub comes back with every register and flag as it was, but
 // R13, the new bound, and R15 where it was the old base: the new base.
-TEXT ·w2oInterruptCall(SB), NOSPLIT|NOFRAME, $0-0
+TEXT ·vmInterruptCall(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 	PUSHQ	BP
 	MOVQ	SP, BP
@@ -193,13 +193,13 @@ based:
 	POPQ	BP
 	RET
 
-// w2oStackGrow is called by a frame of the memory's stack that does not
+// vmStackGrow is called by a frame of the memory's stack that does not
 // fit below the stack pointer, with the stack pointer and the bytes the
 // frame takes pushed: it puts in place of the stack pointer the one the
 // frame fits below (Process.stackGrow). Every register comes back as it
 // was, but the bound and the base, which follow a move of the memory as
-// in w2oInterruptCall.
-TEXT ·w2oStackGrow(SB), NOSPLIT|NOFRAME, $0-0
+// in vmInterruptCall.
+TEXT ·vmStackGrow(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 	PUSHQ	BP
 	MOVQ	SP, BP
@@ -283,7 +283,7 @@ based:
 	POPQ	BP
 	RET
 
-// w2oLand is what longjmp calls, func(jump uintptr, val uint32, inst
+// vmLand is what longjmp calls, func(jump uintptr, val uint32, inst
 // uintptr) uint32 with AX, BX and CX: inst is the Instance; jump is a Jump
 // (jump.go), its frame,
 // then the code of the caller's function, [start, end). It returns from
@@ -291,7 +291,7 @@ based:
 // on the chain of frame pointers from its own caller, the frame below
 // returns into that code and the token is the frame's: the invocation is
 // the one that made the call. Else it returns 0. The switch is a ret.
-TEXT ·w2oLand(SB), NOSPLIT|NOFRAME, $0-0
+TEXT ·vmLand(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 	MOVQ	8(R14), DX
 	MOVQ	DX, R9
@@ -343,7 +343,7 @@ fail:
 	XORL	AX, AX
 	RET
 
-// w2oFrames is what fork calls first, func(request uintptr) with AX, on a
+// vmFrames is what fork calls first, func(request uintptr) with AX, on a
 // FramesRequest (instance.go): it walks the frame pointers from the jump
 // frame's caller up while each returns into a function of the module, to
 // the frame that returns into the entry thunk or the resume stub's
@@ -351,7 +351,7 @@ fail:
 // to that return address, when they fit the buffer. In the copy each saved
 // RBP is an offset from its start, the top one 0. A leaf that only reads
 // the stack.
-TEXT ·w2oFrames(SB), NOSPLIT|NOFRAME, $0-0
+TEXT ·vmFrames(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 	MOVQ	8(R14), DX
 	MOVQ	0(AX), R10
@@ -415,17 +415,17 @@ fail:
 	MOVQ	$0, 88(AX)
 	RET
 
-// w2oResume is what a child of fork enters by, func(request uintptr)
+// vmResume is what a child of fork enters by, func(request uintptr)
 // uint64 with AX, on a ResumeRequest (instance.go): it grows the stack until
-// the frames fit, then w2oResumePlace, with a frame of its own, places the
+// the frames fit, then vmResumePlace, with a frame of its own, places the
 // frames below its stack pointer, links them to its frame and returns from
 // the call of the jump frame with 0, the instance's base set so that the
-// parent's offsets hold. The top frame returns into w2oResumeReturn's
+// parent's offsets hold. The top frame returns into vmResumeReturn's
 // continuation, after a push never executed that gives it the frame of
 // the saved RBP, and that returns to Go with what the frame left in AX.
-// Writing below its stack pointer, w2oResumePlace must not be preempted,
+// Writing below its stack pointer, vmResumePlace must not be preempted,
 // which assembly is not.
-TEXT ·w2oResume(SB), NOSPLIT|NOFRAME, $0-0
+TEXT ·vmResume(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 start:
 	MOVQ	0(AX), R13
@@ -435,15 +435,15 @@ start:
 	SUBQ	16(AX), DX
 	CMPQ	DX, 16(R14)
 	JBE	grow
-	JMP	·w2oResumePlace(SB)
+	JMP	·vmResumePlace(SB)
 grow:
 	ADJSP	$8
 	MOVQ	DX, 0(SP)
-	CALL	·w2oMorestack(SB)
+	CALL	·vmMorestack(SB)
 	ADJSP	$-8
 	JMP	start
 
-TEXT ·w2oResumePlace(SB), NOSPLIT|NOFRAME, $0-0
+TEXT ·vmResumePlace(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 	ADJSP	$8
 	MOVQ	BP, 0(SP)
@@ -466,7 +466,7 @@ relink:
 	JMP	relink
 last:
 	MOVQ	BP, (DX)(SI*1)
-	LEAQ	·w2oResumeReturn+1(SB), DI
+	LEAQ	·vmResumeReturn+1(SB), DI
 	LEAQ	(DX)(SI*1), CX
 	MOVQ	DI, 8(CX)
 	MOVQ	8(R14), DI
@@ -489,7 +489,7 @@ last:
 	MOVQ	DX, SP
 	JMP	DI
 
-TEXT ·w2oResumeReturn(SB), NOSPLIT|NOFRAME, $0-0
+TEXT ·vmResumeReturn(SB), NOSPLIT|NOFRAME, $0-0
 	NO_LOCAL_POINTERS
 	PUSHQ	BP
 	POPQ	BP
@@ -527,12 +527,12 @@ TEXT ·strMove(SB), 0, $8-32
 	CALL	BX
 	RET
 
-// w2oAsanRange is what an asan object calls, as it calls a function of
+// vmAsanRange is what an asan object calls, as it calls a function of
 // lib/str, with the host address of a range of the shadow map in AX and
 // its length in CX: it returns in AX how many bytes from the start are
 // shadowOK, the length when all are. A word at a time, then the bytes
 // left. It writes AX, CX, DX and SI only, and no stack.
-TEXT ·w2oAsanRange(SB), NOSPLIT|NOFRAME, $0-0
+TEXT ·vmAsanRange(SB), NOSPLIT|NOFRAME, $0-0
 	MOVQ	AX, DX
 	XORL	AX, AX
 words:
@@ -555,41 +555,41 @@ done:
 
 // The addresses of the stubs (stubs.go).
 TEXT ·morestackStub(SB), NOSPLIT, $0-8
-	LEAQ	·w2oMorestack(SB), AX
+	LEAQ	·vmMorestack(SB), AX
 	MOVQ	AX, ret+0(FP)
 	RET
 
 TEXT ·asanRangeStub(SB), NOSPLIT, $0-8
-	LEAQ	·w2oAsanRange(SB), AX
+	LEAQ	·vmAsanRange(SB), AX
 	MOVQ	AX, ret+0(FP)
 	RET
 
 TEXT ·interruptStub(SB), NOSPLIT, $0-8
-	LEAQ	·w2oInterruptCall(SB), AX
+	LEAQ	·vmInterruptCall(SB), AX
 	MOVQ	AX, ret+0(FP)
 	RET
 
 TEXT ·stackGrowStub(SB), NOSPLIT, $0-8
-	LEAQ	·w2oStackGrow(SB), AX
+	LEAQ	·vmStackGrow(SB), AX
 	MOVQ	AX, ret+0(FP)
 	RET
 
 TEXT ·landStub(SB), NOSPLIT, $0-8
-	LEAQ	·w2oLand(SB), AX
+	LEAQ	·vmLand(SB), AX
 	MOVQ	AX, ret+0(FP)
 	RET
 
 TEXT ·framesStub(SB), NOSPLIT, $0-8
-	LEAQ	·w2oFrames(SB), AX
+	LEAQ	·vmFrames(SB), AX
 	MOVQ	AX, ret+0(FP)
 	RET
 
 TEXT ·resumeStub(SB), NOSPLIT, $0-8
-	LEAQ	·w2oResume(SB), AX
+	LEAQ	·vmResume(SB), AX
 	MOVQ	AX, ret+0(FP)
 	RET
 
 TEXT ·resumeReturnStub(SB), NOSPLIT, $0-8
-	LEAQ	·w2oResumeReturn(SB), AX
+	LEAQ	·vmResumeReturn(SB), AX
 	MOVQ	AX, ret+0(FP)
 	RET

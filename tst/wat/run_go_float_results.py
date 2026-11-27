@@ -73,7 +73,7 @@ def main():
             # imports linked into it, the native compiler's input.
             subprocess.run([vm, "link", "-o", str(linked), str(module)], capture_output=True, check=True, timeout=60)
             for strict in (False, True):
-                env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+                env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
                 result = subprocess.run([native, *(["--strict"] if strict else [])], input=linked.read_bytes(), capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0, result.stderr
                 compiled.write_bytes(result.stdout)
@@ -82,7 +82,7 @@ def main():
                 batches[strict].append((reference, module.read_bytes()))
         # Each mode's programs run in one boot of the system.
         for strict, runs in batches.items():
-            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
             results = system.run(vm, rootfs, [("input", data, [], b"") for _, data in runs], env=env)
             for (reference, _), result in zip(runs, results):
                 assert result == (0, b"", b""), (reference, strict, result)

@@ -39,7 +39,7 @@ def run(vm, wast2json, wast, work, native=None):
 
     compiled = 0
     if native:
-        environment = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+        environment = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
         for module in sorted(work.glob("*.wasm")):
             data = module.read_bytes()
             host = subprocess.run([native, "--strict"], input=data, capture_output=True, timeout=60)

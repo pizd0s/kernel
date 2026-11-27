@@ -64,7 +64,7 @@ func traceLines(pcs []uintptr) []string {
 
 		if f.PC != 0 {
 			if code, ok := codeAt(f.PC); ok {
-				if !strings.HasPrefix(f.Function, "w2o.") {
+				if !strings.HasPrefix(f.Function, "vm.") {
 					fr := frame{name: fmt.Sprintf("%s+%#x", moduleFunction(f.Function), f.PC-f.Entry), module: true}
 
 					if f.File != code.name {

@@ -8,17 +8,17 @@ import (
 var typeLetters = map[ValType]byte{I32: 'i', I64: 'I', F32: 'f', F64: 'F', V128: 'v', FuncRef: 'r', ExternRef: 'e'}
 
 const (
-	symInit          = "w2o.init"
-	symMorestackStub = "w2o.morestack"
-	symImport        = "w2o.import."
-	symExport        = "w2o.export."
-	symTrap          = "w2o.trap"
-	symTrapAt        = "w2o.trap_at"
-	symAsanRange     = "w2o.asan_range"
-	symMemoryGrow    = "w2o.memory_grow"
-	symTableGrow     = "w2o.table_grow"
-	symInterruptCall = "w2o.interrupt_call"
-	symStackGrow     = "w2o.stack_grow"
+	symInit          = "vm.init"
+	symMorestackStub = "vm.morestack"
+	symImport        = "vm.import."
+	symExport        = "vm.export."
+	symTrap          = "vm.trap"
+	symTrapAt        = "vm.trap_at"
+	symAsanRange     = "vm.asan_range"
+	symMemoryGrow    = "vm.memory_grow"
+	symTableGrow     = "vm.table_grow"
+	symInterruptCall = "vm.interrupt_call"
+	symStackGrow     = "vm.stack_grow"
 	symStr           = "str."
 )
 

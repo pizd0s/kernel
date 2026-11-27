@@ -95,7 +95,7 @@ def main():
     cases += [("program-short-buffer", "__kernel_program", [4096, 0], {"expected": 0, "error": 34}, 0, ""),
               ("program-without-root", "__kernel_program", [4096, 1024], {"expected": 0, "error": 2}, 0, "")]
     direct = {"program-without-root", "no-linear-memory"}
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-runtime-safety-") as directory:
         work = Path(directory)
         source, executable, compiled, embedded = [work / name for name in ("input.wasm", "input", "native.o", "embedded.o")]

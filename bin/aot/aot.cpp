@@ -3182,7 +3182,7 @@ namespace {
         // codeOffset is where the code section's contents begin in the
         // module, which DWARF's addresses count from, plus codeShift, the
         // bytes a link moved the code by (the custom section
-        // w2o.code_shift, which the kernel's linker writes when the
+        // vm.code_shift, which the kernel's linker writes when the
         // function count it gives the code section is longer); debugLine,
         // debugLineStr and debugStr are its DWARF sections, when it has
         // them, and sourceFiles and lineRows what moduleReadLines made of
@@ -4150,7 +4150,7 @@ namespace {
     // the memory again. It lies outside the functions' code, where the
     // code is never interrupted, so no register of a function ever holds
     // a host address of the memory, which a move of the memory would leave
-    // behind (w2oInterruptCall). An empty sym is the forward copy, by
+    // behind (vmInterruptCall). An empty sym is the forward copy, by
     // DI, SI and CX.
     struct Trampoline {
         String sym{};
@@ -5295,33 +5295,33 @@ static constexpr Int segmentDeclarative = 2;
 
 static constexpr i32 maxPos = 1073741824;
 
-static const String symInit = String("w2o.init");
+static const String symInit = String("vm.init");
 
-static const String symMorestackStub = String("w2o.morestack");
+static const String symMorestackStub = String("vm.morestack");
 
-static const String symImport = String("w2o.import.");
+static const String symImport = String("vm.import.");
 
-static const String symExport = String("w2o.export.");
+static const String symExport = String("vm.export.");
 
-static const String symTrap = String("w2o.trap");
+static const String symTrap = String("vm.trap");
 
 // trap_at is the trap of an asan check, with the access's address and
 // its width and kind; asan_range is the loader's stub that counts the
 // accessible bytes of a range of the shadow map (stubs_amd64.s), called
 // as a function of lib/str is.
-static const String symTrapAt = String("w2o.trap_at");
+static const String symTrapAt = String("vm.trap_at");
 
-static const String symAsanRange = String("w2o.asan_range");
+static const String symAsanRange = String("vm.asan_range");
 
-static const String symMemoryGrow = String("w2o.memory_grow");
+static const String symMemoryGrow = String("vm.memory_grow");
 
-static const String symTableGrow = String("w2o.table_grow");
+static const String symTableGrow = String("vm.table_grow");
 
-static const String symInterruptCall = String("w2o.interrupt_call");
+static const String symInterruptCall = String("vm.interrupt_call");
 
 // symStackGrow is the stub a frame of the memory's stack calls when it
 // does not fit in its block (funcEmitterStackAlloc).
-static const String symStackGrow = String("w2o.stack_grow");
+static const String symStackGrow = String("vm.stack_grow");
 
 // lib/str's functions the loader binds, those of the host's
 // configuration: memcpy and memmove take the destination, the source and
@@ -13871,7 +13871,7 @@ static void funcEmitterShadow(FuncEmitter* e, MInst* in) {
 // the block of the stack (stackBlock) holds it below src over its lowest
 // boundSlack bytes, with the alignment's slack: the offset in the block of
 // the byte below src, which a block holds whole, is compared. Else the
-// stack grows (w2oStackGrow in vm): the stub hands back, in place of the
+// stack grows (vmStackGrow in vm): the stub hands back, in place of the
 // stack pointer pushed, one the frame fits below.
 static void funcEmitterStackAlloc(FuncEmitter* e, MInst* in) {
     Asm* a = e->a;
@@ -16069,7 +16069,7 @@ static void lowererEdgeMoves(Lowerer* l, Edge* e) {
 
 // emit adds in to the current block. No register of a function holds a
 // value made of the memory's base, which a move of the memory changes
-// under it: its addresses stay in instructions (w2oInterruptCall).
+// under it: its addresses stay in instructions (vmInterruptCall).
 static MInst* lowererEmit(Lowerer* l, MInst in) {
     require(in.src != memReg && in.src2 != memReg && (in.op != mLea || (in.mem.base != memReg && in.mem.index != memReg)), "a register of a function holds an address of the memory");
     MBlock* blk = &l->mf->blocks[l->cur];
@@ -20414,7 +20414,7 @@ static void objCodeImportAdapters(ObjCode* oc) {
         if (imp.module == String("kernel") && imp.name == String("malloc") && intrinsicTyped(t, String("i>i")) && !m->funcs[imp.index].returnsTwice) {
             oc->allocator = convert<i32>(imp.index);
         }
-        String name = String("w2o.adapter.") + symbolPart(imp.module) + String(".") + symbolPart(imp.name);
+        String name = String("vm.adapter.") + symbolPart(imp.module) + String(".") + symbolPart(imp.name);
         if (named[imp.index]) {
             oc->importCode[imp.index] = true;
             oc->funcAt[imp.index] = objCodeGoCall(oc, name, t->params, t->results, sym, false);
@@ -20502,9 +20502,9 @@ static void objCodeInitData(ObjCode* oc) {
 // trampolineName names a trampoline's region.
 static String trampolineName(Trampoline t) {
     if (length(t.sym) == 0) {
-        return String("w2o.copy.forward");
+        return String("vm.copy.forward");
     }
-    return String("w2o.str.") + t.sym + fmtSprintf(String(".%d"), convert<i64>(t.guests)) + (t.pointer ? String(".pointer") : String(""));
+    return String("vm.str.") + t.sym + fmtSprintf(String(".%d"), convert<i64>(t.guests)) + (t.pointer ? String(".pointer") : String(""));
 }
 
 // trampoline is the index of the trampoline that calls sym of lib/str
@@ -27262,7 +27262,7 @@ static void moduleCustom(Module* module, Reader* reader) {
         readOptionalNames(module, *reader);
     }
     Slice<u8> rest = subslice(reader->data, reader->pos, length(reader->data));
-    if (name == String("w2o.code_shift")) {
+    if (name == String("vm.code_shift")) {
         module->codeShift = convert<i64>(readerU32(reader));
     } else if (name == String(".debug_line")) {
         module->debugLine = rest;
@@ -27322,7 +27322,7 @@ static Slice<u8> readInput(ObjPool& owner, int fd) {
 // program's heap began, __heap_base after it, and a function libc.wasm
 // takes the address of has a slot at the table's end. A code section whose
 // count of functions grew a byte longer says so in a custom section,
-// w2o.code_shift, for the debug lines, counted from the section's start;
+// vm.code_shift, for the debug lines, counted from the section's start;
 // where a function's body changed its length they would be wrong, and the
 // debug sections are left out.
 //
@@ -28749,7 +28749,7 @@ static Slice<u8> linkModule(Linker* l, ObjPool* owner) {
     sinkText(out, String("\000asm\001\000\000\000"));
     if (shift > 0 && !moved) {
         PageVec<u8>* custom = linkSink();
-        sinkName(custom, String("w2o.code_shift"));
+        sinkName(custom, String("vm.code_shift"));
         sinkLeb(custom, u64(shift));
         sinkSection(out, 0, custom);
     }

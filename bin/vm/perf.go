@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-var perfOut = newPerfOutput(os.Getenv("W2O_PERFMAP"))
+var perfOut = newPerfOutput(os.Getenv("VM_PERFMAP"))
 
 const (
 	jitMagic     = 0x4a695444

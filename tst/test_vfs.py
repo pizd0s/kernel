@@ -496,7 +496,7 @@ def main():
         print(linux(), end="")
         return
     vm, rootfs = sys.argv[1:3]
-    env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
+    env = {"VM_MEMORY_TAIL": "strict", "VM_TAIL_PROFILE": ""}
     script = "python3 - <<'PROBE_EOF'\n" + PROBE + "PROBE_EOF\nexit 0\n"
     result = system.shell(vm, rootfs, script, env=env, timeout=600)
     assert result.returncode == 0 and result.stderr == b"", result

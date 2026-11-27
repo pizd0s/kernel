@@ -41,7 +41,7 @@ def kernel_program():
 
 def main():
     vm, native, wrapper = sys.argv[1:]
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-host-syscalls-") as directory:
         program = Path(directory) / "program"
         program.write_bytes(pack(kernel_program()))

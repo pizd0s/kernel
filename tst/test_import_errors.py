@@ -98,7 +98,7 @@ def main():
             for named in (False, True):
                 cases.append((f"wide-{pattern}-{count}-{named}", wide_program(kinds, named), False, "import kernel.getpid is"))
                 cases.append((f"live-wide-{pattern}-{count}-{named}", wide_program(kinds, named, True), False, "import kernel.getpid is"))
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-import-errors-") as directory:
         work = Path(directory)
         source, executable, compiled, embedded = [work / name for name in ("input.wasm", "input", "native.o", "embedded.o")]

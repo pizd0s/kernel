@@ -43,7 +43,7 @@ type CompileOptions struct {
 func compileOptions() CompileOptions {
 	options := CompileOptions{memoryTail: true, tailRanges: true}
 
-	switch mode := os.Getenv("W2X_MEMORY_TAIL"); mode {
+	switch mode := os.Getenv("VM_MEMORY_TAIL"); mode {
 	case "", "1", "optimized":
 	case "plain":
 		options.tailRanges = false
@@ -53,7 +53,7 @@ func compileOptions() CompileOptions {
 		throwFmt("unknown memory tail mode %q", mode)
 	}
 
-	options.tailProfile = options.tailRanges && os.Getenv("W2X_TAIL_PROFILE") != ""
+	options.tailProfile = options.tailRanges && os.Getenv("VM_TAIL_PROFILE") != ""
 
 	return options
 }

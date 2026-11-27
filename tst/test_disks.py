@@ -134,7 +134,7 @@ def main():
             f.write(bytes(MIB))
         empty = os.path.join(work, "empty")
         os.mkdir(empty)
-        env = {"W2X_MEMORY_TAIL": "strict", "W2X_TAIL_PROFILE": ""}
+        env = {"VM_MEMORY_TAIL": "strict", "VM_TAIL_PROFILE": ""}
         result = system.shell(vm, rootfs, SCRIPT + "exit 3\n", ("--disk", f"sda={sda}", "--disk", f"vd0={vd0}", "--disk", f"raw={raw}"), cwd=empty,
                               env=env, timeout=180)
         assert (result.returncode, result.stdout.decode(), result.stderr) == (3, WANT, b""), result

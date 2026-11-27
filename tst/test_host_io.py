@@ -26,7 +26,7 @@ def section(kind, body):
 
 def main():
     vm, native, rootfs = sys.argv[1:]
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
     payload = bytes(i % 251 for i in range(131072))
     data = b"\0asm\1\0\0\0" + section(1, b"\1\x60\0\0") + section(3, b"\1\0")
     data += section(5, b"\1\1\3\3") + section(7, b"\1\6_start\0\0") + section(10, b"\1\2\0\x0b")

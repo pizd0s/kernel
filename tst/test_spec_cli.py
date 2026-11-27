@@ -66,7 +66,7 @@ def action(field="id", arguments=None, kind="invoke"):
 
 def main():
     vm, native = sys.argv[1:]
-    env = dict(os.environ, W2X_MEMORY_TAIL="strict", W2X_TAIL_PROFILE="")
+    env = dict(os.environ, VM_MEMORY_TAIL="strict", VM_TAIL_PROFILE="")
     with tempfile.TemporaryDirectory(prefix="pizdos-spec-cli-") as directory:
         work = Path(directory)
         modules = {"base": base_module(), "start-trap": base_module(True)}

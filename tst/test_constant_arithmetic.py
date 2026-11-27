@@ -154,7 +154,7 @@ def main():
             if status:
                 assert diagnostic in result.stderr, (label, result)
             for strict in (False, True):
-                env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+                env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
                 result = subprocess.run([native, *(["--strict"] if strict else [])], input=data, capture_output=True, env=env, timeout=60)
                 assert result.returncode == 0, (label, result.stderr)
                 compiled.write_bytes(result.stdout)
@@ -162,7 +162,7 @@ def main():
                 assert result.returncode == 0 and embedded.read_bytes() == compiled.read_bytes(), (label, result)
         # Each mode's programs run in one boot of the system.
         for strict in (False, True):
-            env = dict(os.environ, W2X_MEMORY_TAIL="strict" if strict else "optimized", W2X_TAIL_PROFILE="")
+            env = dict(os.environ, VM_MEMORY_TAIL="strict" if strict else "optimized", VM_TAIL_PROFILE="")
             results = system.run(vm, rootfs, [("input", case[1], [], b"") for case in cases], env=env, faults=True)
             for (label, _, status, diagnostic), result in zip(cases, results):
                 assert result[0] == status and result[1] == b"" and diagnostic in result[2], (label, result)
