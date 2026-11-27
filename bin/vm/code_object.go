@@ -9,10 +9,12 @@ import (
 const (
 	objectMagic  = "PZO1"
 	objectPage   = 4096
-	objectHeader = 96
+	objectHeader = 104
 )
 
 type CodeObject struct {
+	image  []byte
+	head   int
 	text   []byte
 	rodata []byte
 
@@ -30,13 +32,13 @@ func readObject(data []byte) *CodeObject {
 		throwFmt("not an object of this kernel's compiler")
 	}
 
-	text, rodata := le.Uint64(data[16:]), le.Uint64(data[24:])
+	head, text, rodata := le.Uint64(data[16:]), le.Uint64(data[24:]), le.Uint64(data[32:])
 
-	if text >= 1<<31 || rodata >= 1<<31 {
+	if head < objectHeader || head%objectPage != 0 || head >= 1<<31 || text >= 1<<31 || rodata >= 1<<31 {
 		throwFmt("malformed object")
 	}
 
-	textEnd := objectPage + (max(text, 1)+objectPage-1)&^(objectPage-1)
+	textEnd := head + (max(text, 1)+objectPage-1)&^(objectPage-1)
 	imageEnd := textEnd + rodata
 
 	if imageEnd > uint64(len(data)) {
@@ -44,7 +46,7 @@ func readObject(data []byte) *CodeObject {
 	}
 
 	part := func(k int) []byte {
-		at, n := le.Uint64(data[32+16*k:]), le.Uint64(data[40+16*k:])
+		at, n := le.Uint64(data[40+16*k:]), le.Uint64(data[48+16*k:])
 
 		if at < imageEnd || at > uint64(len(data)) || n > uint64(len(data))-at {
 			throwFmt("malformed object")
@@ -53,7 +55,7 @@ func readObject(data []byte) *CodeObject {
 		return data[at : at+n]
 	}
 
-	obj := &CodeObject{text: data[objectPage : objectPage+text], rodata: data[textEnd:imageEnd]}
+	obj := &CodeObject{image: data[:imageEnd], head: int(head), text: data[head : head+text], rodata: data[textEnd:imageEnd]}
 	obj.tables = readTables(part(0), part(1), int(text))
 
 	if got := part(2); len(got) > 0 {
@@ -62,6 +64,10 @@ func readObject(data []byte) *CodeObject {
 		}
 
 		obj.got = strings.Split(string(got[:len(got)-1]), "\x00")
+	}
+
+	if objectHeader+8*uint64(len(obj.got)) > head {
+		throwFmt("malformed object")
 	}
 
 	obj.meta = decodeNote(part(3))

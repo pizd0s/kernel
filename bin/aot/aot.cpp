@@ -4523,7 +4523,7 @@ static constexpr Int ppF2 = 3;
 
 // The object's header and the page its text and constants start from
 // (writeObject).
-static constexpr usize objectHeader = 96;
+static constexpr usize objectHeader = 104;
 
 static constexpr usize objectPage = 4096;
 
@@ -20710,13 +20710,14 @@ static void objCodeRecordFrame(ObjCode* oc) {
 
 // resolve fills every displacement and every entry of a table: the object
 // has no relocations. It is laid out as the kernel lays it: the text from
-// 0, the constants from the page after it, then the GOT, a slot for each
-// external symbol in the order of the symbols. A displacement is relative
-// to the end of its instruction, an entry of a table to the table.
+// 0, the GOT's slots right before it, one for each external symbol in the
+// order of the symbols, and the constants from the page after the text. A
+// displacement is relative to the end of its instruction, an entry of a
+// table to the table.
 static void objCodeResolve(ObjCode* oc) {
     Asm* a = &oc->a;
-    const i64 textSize = convert<i64>(alignUp(usize(length(a->buf) > 0 ? length(a->buf) : 1), usize(4096)));
-    const i64 gotAt = textSize + convert<i64>(alignUp(usize(oc->rodataSize), usize(16)));
+    const i64 textSize = convert<i64>(alignUp(usize(length(a->buf) > 0 ? length(a->buf) : 1), usize(objectPage)));
+    const i64 slots = convert<i64>(length(oc->externs));
     auto put = [&](i32 at, i64 target, i32 end) {
         const i64 d = target - end;
         require(d >= -2147483648LL && d <= 2147483647LL, "displacement overflow");
@@ -20731,7 +20732,7 @@ static void objCodeResolve(ObjCode* oc) {
                 break;
             }
             case labelGot: {
-                put(f.at, gotAt + 8 * convert<i64>(f.label), f.end);
+                put(f.at, 8 * (convert<i64>(f.label) - slots), f.end);
                 break;
             }
             case labelFunc: {
@@ -26669,14 +26670,16 @@ static bool windowBase(Function* f, i32 addr, i64 end, i32* base, i64* c) {
     return *c >= -boundSlack && *c + end <= boundSlack;
 }
 
-// writeObject writes the object: the image of the code as the kernel lays
-// it in memory, and what the kernel reads to run it. A page of header; the
-// text from the next page; the constants from the page after the text; then
-// the Go runtime's tables of the text, the functions' names (the tables',
-// an empty one first), the GOT's symbols, of a slot each in their order, and
-// the description. The header is "PZO1" and four bytes of zeros, then words
-// of eight bytes: the object's size, the text's and the constants', and the
-// offset and the size of each of the four parts.
+// writeObject writes the object, which begins with the image of the code as
+// the kernel lays it in memory: the header and the GOT, of zeros, its slots
+// last, in pages before the text; the text; the constants from the page
+// after the text. After the image, what the kernel reads to run it: the Go
+// runtime's tables of the text, the functions' names (the tables', an empty
+// one first), the GOT's symbols, of a slot each in their order, and the
+// description. The header is "PZO1" and four bytes of zeros, then words of
+// eight bytes: the object's size, where the text starts, the text's size
+// and the constants', and the offset and the size of each of the four
+// parts.
 static void writeObject(ObjCode* oc, Meta* meta, Slice<u8> description) {
     auto regions = oc->regions;
     Slice<u8> names = sliceOf<u8>({u8(0LL)});
@@ -26692,7 +26695,8 @@ static void writeObject(ObjCode* oc, Meta* meta, Slice<u8> description) {
     }
     const Array<Slice<u8>, 4> parts{{goTables(oc, meta, nameAt), names, got, description}};
     const u64 text = convert<u64>(length(oc->a.buf));
-    const u64 textEnd = objectPage + alignUp(usize(text > 0 ? text : 1), usize(objectPage));
+    const u64 head = alignUp(objectHeader + 8 * usize(length(externs)), objectPage);
+    const u64 textEnd = head + alignUp(usize(text > 0 ? text : 1), usize(objectPage));
     Array<u64, 4> partAt{};
     u64 at = textEnd + oc->rodataSize;
     for (Int k = 0; k < 4; ++k) {
@@ -26703,16 +26707,17 @@ static void writeObject(ObjCode* oc, Meta* meta, Slice<u8> description) {
     u8 header[objectHeader]{};
     memcpy(header, "PZO1", 4);
     storeLittle(header + 8, at);
-    storeLittle(header + 16, text);
-    storeLittle(header + 24, oc->rodataSize);
+    storeLittle(header + 16, head);
+    storeLittle(header + 24, text);
+    storeLittle(header + 32, oc->rodataSize);
     for (Int k = 0; k < 4; ++k) {
-        storeLittle(header + 32 + 16 * k, partAt[k]);
-        storeLittle(header + 40 + 16 * k, convert<u64>(length(parts[k])));
+        storeLittle(header + 40 + 16 * k, partAt[k]);
+        storeLittle(header + 48 + 16 * k, convert<u64>(length(parts[k])));
     }
     writeAll(1, header, sizeof(header));
-    writeZeros(1, objectPage - sizeof(header));
+    writeZeros(1, head - sizeof(header));
     writeBytes(1, oc->a.buf);
-    writeZeros(1, textEnd - objectPage - text);
+    writeZeros(1, textEnd - head - text);
     u64 written = 0;
     for (Int i = 0; i < length(oc->blobs); ++i) {
         writeZeros(1, u64(oc->blobAt[i]) - written);

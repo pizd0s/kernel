@@ -12,10 +12,10 @@ import (
 const thunkSize = 16
 
 type Code struct {
-	name string
-	obj  *CodeObject
-	text []byte
-	base uintptr
+	name  string
+	obj   *CodeObject
+	image []byte
+	base  uintptr
 
 	keep    []any
 	thunks  []byte
@@ -210,20 +210,23 @@ func link(name string, obj *CodeObject, imports Imports) *Code {
 		return (n + 4095) &^ 4095
 	}
 
-	textSize := page(max(len(obj.text), 1))
-	gotAt := textSize + int(alignTo(int32(len(obj.rodata)), 16))
+	head, textSize := obj.head, page(max(len(obj.text), 1))
+	got := head - 8*len(obj.got)
 
-	c.text = mmap(textSize+page(gotAt-textSize+8*len(obj.got)), syscall.PROT_READ|syscall.PROT_WRITE)
-	copy(c.text, obj.text)
-	copy(c.text[textSize:], obj.rodata)
-	c.base = uintptr(unsafe.Pointer(unsafe.SliceData(c.text)))
+	c.image = mmap(head+textSize+page(len(obj.rodata)), syscall.PROT_READ|syscall.PROT_WRITE)
+	copy(c.image, obj.image)
+	c.base = uintptr(unsafe.Pointer(unsafe.SliceData(c.image))) + uintptr(head)
 
 	for k, sym := range obj.got {
-		binary.LittleEndian.PutUint64(c.text[gotAt+8*k:], uint64(c.resolve(sym, imports)))
+		binary.LittleEndian.PutUint64(c.image[got+8*k:], uint64(c.resolve(sym, imports)))
 	}
 
-	throw(syscall.Mprotect(c.text[:textSize], syscall.PROT_READ|syscall.PROT_EXEC))
-	throw(syscall.Mprotect(c.text[textSize:], syscall.PROT_READ))
+	throw(syscall.Mprotect(c.image[:head], syscall.PROT_READ))
+	throw(syscall.Mprotect(c.image[head:head+textSize], syscall.PROT_READ|syscall.PROT_EXEC))
+
+	if len(obj.rodata) > 0 {
+		throw(syscall.Mprotect(c.image[head+textSize:], syscall.PROT_READ))
+	}
 
 	if c.thunks != nil {
 		throw(syscall.Mprotect(c.thunks[:cap(c.thunks)], syscall.PROT_READ|syscall.PROT_EXEC))
