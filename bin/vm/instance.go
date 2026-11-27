@@ -25,7 +25,7 @@ type Instance struct {
 	blockAt  uintptr
 
 	name string
-	obj  *ElfObject
+	obj  *CodeObject
 	code *Code
 
 	pool       *Pool
@@ -192,7 +192,7 @@ func current() *Instance {
 	return (*Instance)(unsafe.Pointer(runtime.Instance()))
 }
 
-func instantiate(pool *Pool, name string, obj *ElfObject, imports Imports, stack uint64) *Instance {
+func instantiate(pool *Pool, name string, obj *CodeObject, imports Imports, stack uint64) *Instance {
 	return throw2(newInstance(pool, nil, link(name, obj, imports), stack))
 }
 
@@ -436,7 +436,7 @@ func (i *Instance) setjmp(j *Jump) bool {
 }
 
 func (i *Instance) longjmp(j *Jump, val uint32) {
-	regions := i.obj.meta.regions
+	regions := i.obj.regions()
 	pc := j.frame[jumpPC] - uint64(i.code.base)
 	k := sort.Search(len(regions), func(k int) bool { return uint64(regions[k].end) > pc })
 
@@ -472,7 +472,7 @@ func isFunctionRegion(name string) bool {
 }
 
 func (i *Instance) codeRange(first, last int) [2]uint64 {
-	regions := i.obj.meta.regions
+	regions := i.obj.regions()
 	base := uint64(i.code.base)
 
 	return [2]uint64{base + uint64(regions[first].start), base + uint64(regions[last].end)}
@@ -481,7 +481,7 @@ func (i *Instance) codeRange(first, last int) [2]uint64 {
 func (i *Instance) functionCode() ([2]uint64, bool) {
 	first, last := -1, -1
 
-	for k, r := range i.obj.meta.regions {
+	for k, r := range i.obj.regions() {
 		switch {
 		case !isFunctionRegion(r.name):
 		case first < 0:
@@ -509,7 +509,7 @@ func (i *Instance) exportCode(name string) ([2]uint64, bool) {
 func (i *Instance) symbolCode(sym string) ([2]uint64, bool) {
 	at := i.obj.defined[sym]
 
-	for k, r := range i.obj.meta.regions {
+	for k, r := range i.obj.regions() {
 		if r.start == at {
 			return i.codeRange(k, k), true
 		}
@@ -626,7 +626,7 @@ func (i *Instance) tailProfile() TailProfile {
 	meta := i.obj.meta.memory
 	names := make(map[int]string)
 
-	for _, region := range i.obj.meta.regions {
+	for _, region := range i.obj.regions() {
 		var fn int
 
 		if strings.HasPrefix(region.name, "f") {

@@ -120,12 +120,11 @@ func (k *Kernel) aot(module []byte, size func(first []byte) int, arguments ...st
 }
 
 func objectSize(header []byte) int {
-	if len(header) < 64 || !bytes.HasPrefix(header, []byte("\x7fELF\x02\x01")) {
+	if len(header) < 16 || !bytes.HasPrefix(header, []byte(objectMagic)) {
 		return 0
 	}
 
-	le := binary.LittleEndian
-	size := le.Uint64(header[40:]) + uint64(le.Uint16(header[58:]))*uint64(le.Uint16(header[60:]))
+	size := binary.LittleEndian.Uint64(header[8:])
 
 	if size > maxObjectHint {
 		return 0
@@ -166,7 +165,7 @@ func unpack(exe []byte) ([]byte, error) {
 	return module, nil
 }
 
-func (k *Kernel) compileExecutable(exe []byte, options CompileOptions) (*ElfObject, error) {
+func (k *Kernel) compileExecutable(exe []byte, options CompileOptions) (*CodeObject, error) {
 	module, err := unpack(exe)
 
 	if err != nil {
@@ -176,7 +175,7 @@ func (k *Kernel) compileExecutable(exe []byte, options CompileOptions) (*ElfObje
 	return k.compileModule(module, options)
 }
 
-func (k *Kernel) compileModule(data []byte, options CompileOptions) (obj *ElfObject, err error) {
+func (k *Kernel) compileModule(data []byte, options CompileOptions) (obj *CodeObject, err error) {
 	if !bytes.HasPrefix(data, wasmHeader) {
 		return nil, ENOEXEC
 	}

@@ -41,6 +41,7 @@ import tempfile
 from pathlib import Path
 
 import system
+from objects import read as read_object
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dev"))
 
@@ -760,34 +761,23 @@ def heaped(name, path, blocks, args):
 
 def references(path):
     """The undefined symbols an object's functions refer to, by function,
-    each of its functions there, of none or more."""
-    data = path.read_bytes()
-    offset, size, count = struct.unpack_from("<Q", data, 0x28)[0], *struct.unpack_from("<HH", data, 0x3a)
-    sections = [struct.unpack_from("<IIQQQQIIQQ", data, offset + i * size) for i in range(count)]
-    table = next(s for s in sections if s[1] == 2)
-    names = sections[table[6]][4]
-    symbols = [struct.unpack_from("<IBBHQQ", data, table[4] + i * 24) for i in range(table[5] // 24)]
+    each of its functions there, of none or more. A function reaches one
+    only by a call or a jump through its slot of the GOT, ff 15 or ff 25 and
+    the slot's distance from the end of the instruction."""
+    obj = read_object(path)
+    result = {name: set() for name, _, _ in obj.functions}
 
-    def named(symbol):
-        return data[names + symbol[0]:data.index(0, names + symbol[0])].decode()
+    for name, start, end in obj.functions:
+        code = obj.text[start:end]
 
-    result = {named(s): set() for s in symbols if s[1] & 15 == 2}
+        for at in range(len(code) - 5):
+            if code[at] != 0xff or code[at + 1] not in (0x15, 0x25):
+                continue
 
-    for relocations in sections:
-        # Those of the code.
-        if relocations[1] != 4 or not sections[relocations[7]][2] & 4:
-            continue
+            slot, rest = divmod(start + at + 6 + struct.unpack_from("<i", code, at + 2)[0] - obj.got_at, 8)
 
-        functions = [s for s in symbols if s[1] & 15 == 2 and s[3] == relocations[7]]
-
-        for i in range(relocations[5] // 24):
-            at, info, _ = struct.unpack_from("<QQq", data, relocations[4] + i * 24)
-            symbol = symbols[info >> 32]
-
-            if symbol[3] == 0:
-                inside = [named(f) for f in functions if f[4] <= at < f[4] + f[5]]
-                assert len(inside) == 1, (path, at, inside)
-                result.setdefault(inside[0], set()).add(named(symbol))
+            if 0 <= slot < len(obj.got) and rest == 0:
+                result[name].add(obj.got[slot])
 
     return result
 

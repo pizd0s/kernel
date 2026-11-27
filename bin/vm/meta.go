@@ -81,7 +81,8 @@ type Meta struct {
 	exports      []ExportMeta
 
 	init    string
-	regions []Region
+	symbols []string
+	defined map[string]uint32
 
 	files []string
 	lines []LineEntry
@@ -241,6 +242,14 @@ func decodeNote(data []byte) *Meta {
 		if m.functions < headerSize || m.functions&15 != 0 || m.functionCount == 0 || uint64(m.functions)+uint64(m.functionCount)*descBytes > uint64(m.instanceSize) {
 			throwFmt("invalid function descriptors")
 		}
+	}
+
+	m.symbols = make([]string, r.count())
+	m.defined = make(map[string]uint32, len(m.symbols))
+
+	for i := range m.symbols {
+		m.symbols[i] = r.str()
+		m.defined[m.symbols[i]] = r.u32()
 	}
 
 	if len(r.data) != 0 {

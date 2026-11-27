@@ -13,7 +13,7 @@ const thunkSize = 16
 
 type Code struct {
 	name string
-	obj  *ElfObject
+	obj  *CodeObject
 	text []byte
 	base uintptr
 
@@ -203,69 +203,23 @@ func (c *Code) resolve(sym string, imports Imports) uintptr {
 	return 0
 }
 
-func link(name string, obj *ElfObject, imports Imports) *Code {
+func link(name string, obj *CodeObject, imports Imports) *Code {
 	c := &Code{name: name, obj: obj}
 
 	page := func(n int) int {
 		return (n + 4095) &^ 4095
 	}
 
-	got := map[string]int{}
-
-	for _, r := range obj.relocs {
-		if r.in == inExternal {
-			if _, ok := got[r.sym]; !ok {
-				got[r.sym] = len(got)
-			}
-		}
-	}
-
 	textSize := page(max(len(obj.text), 1))
 	gotAt := textSize + int(alignTo(int32(len(obj.rodata)), 16))
 
-	c.text = mmap(textSize+page(gotAt-textSize+8*len(got)), syscall.PROT_READ|syscall.PROT_WRITE)
+	c.text = mmap(textSize+page(gotAt-textSize+8*len(obj.got)), syscall.PROT_READ|syscall.PROT_WRITE)
 	copy(c.text, obj.text)
 	copy(c.text[textSize:], obj.rodata)
 	c.base = uintptr(unsafe.Pointer(unsafe.SliceData(c.text)))
 
-	for sym, k := range got {
+	for k, sym := range obj.got {
 		binary.LittleEndian.PutUint64(c.text[gotAt+8*k:], uint64(c.resolve(sym, imports)))
-	}
-
-	for _, r := range obj.relocs {
-		var target uint64
-
-		switch r.in {
-		case inText:
-			target = uint64(c.base) + r.value
-		case inRodata:
-			target = uint64(c.base) + uint64(textSize) + r.value
-		}
-
-		place := uint64(c.base) + uint64(r.at)
-
-		switch r.typ {
-		case rX86_64_PC32:
-			if r.in == inExternal {
-				throwFmt("pc-relative relocation to external %s", r.sym)
-			}
-
-			put32rel(c.text[r.at:], int64(target)+r.addend-int64(place))
-		case rX86_64_GOTPCREL, rX86_64_GOTPCRELX, rX86_64_REX_GOTPCRELX:
-			if r.in != inExternal {
-				throwFmt("GOT relocation to a symbol of the object at %#x", r.at)
-			}
-
-			put32rel(c.text[r.at:], int64(c.base)+int64(gotAt+8*got[r.sym])+r.addend-int64(place))
-		case rX86_64_64:
-			if r.in == inExternal {
-				target = uint64(c.resolve(r.sym, imports))
-			}
-
-			binary.LittleEndian.PutUint64(c.text[r.at:], target+uint64(r.addend))
-		default:
-			throwFmt("unsupported relocation type %d at %#x", r.typ, r.at)
-		}
 	}
 
 	throw(syscall.Mprotect(c.text[:textSize], syscall.PROT_READ|syscall.PROT_EXEC))
@@ -275,7 +229,7 @@ func link(name string, obj *ElfObject, imports Imports) *Code {
 		throw(syscall.Mprotect(c.thunks[:cap(c.thunks)], syscall.PROT_READ|syscall.PROT_EXEC))
 	}
 
-	registerCode(name, c.base, uintptr(len(obj.text)), obj.meta.regions, false, obj.meta.files, obj.meta.lines)
+	registerTables(name, c.base, uintptr(len(obj.text)), obj)
 
 	return c
 }

@@ -2499,10 +2499,6 @@ static Slice<u8> littleAppend(Slice<u8> bytes, T value) {
     return bytes;
 }
 
-static Slice<u8> littleAppendUint16(Slice<u8> bytes, u16 value) {
-    return littleAppend(bytes, value);
-}
-
 static Slice<u8> littleAppendUint32(Slice<u8> bytes, u32 value) {
     return littleAppend(bytes, value);
 }
@@ -2641,8 +2637,6 @@ namespace {
     struct Anonymous10;
 
     struct Anonymous17;
-
-    struct Anonymous24;
 
     struct Anonymous4;
 
@@ -2809,7 +2803,7 @@ namespace {
 
     struct TextAddress;
 
-    struct TextReloc;
+    struct TextSymbol;
 
     struct TrapFixup;
 
@@ -3304,12 +3298,6 @@ namespace {
     struct CheckedValue {
         i32 value{};
         i64 end{};
-    };
-
-    struct TextReloc {
-        i32 at{};
-        i32 sym{};
-        i64 addend{};
     };
 
     struct Term {
@@ -3928,6 +3916,9 @@ namespace {
         Slice<LineEntry> lines{};
         u32 functions{};
         u32 functionCount{};
+        // symbols are the text's the kernel calls by name: the exports'
+        // thunks and the init, each at its offset.
+        Slice<TextSymbol> symbols{};
     };
 
     struct CfgInfo {
@@ -4049,6 +4040,12 @@ namespace {
     struct TextAddress {
         i32 at{};
         i32 target{};
+        i32 base{};
+    };
+
+    struct TextSymbol {
+        String name{};
+        u32 at{};
     };
 
     struct MFunc {
@@ -4158,11 +4155,6 @@ namespace {
         bool pointer{};
     };
 
-    struct Anonymous24 {
-        Int index{};
-        String name{};
-    };
-
     struct GoLoc {
         VReg reg{};
         i32 off{};
@@ -4210,7 +4202,6 @@ namespace {
         Map<Array<u64, 2>, i32> floatIx{};
         Slice<String> externs{};
         Map<String, i32> externIx{};
-        Slice<TextReloc> relocs{};
         Slice<TextAddress> addresses{};
         Slice<Region> regions{};
         String regionName{};
@@ -4530,41 +4521,11 @@ static constexpr Int ppF3 = 2;
 
 static constexpr Int ppF2 = 3;
 
-static constexpr Int shtProgbits = 1;
+// The object's header and the page its text and constants start from
+// (writeObject).
+static constexpr usize objectHeader = 96;
 
-static constexpr Int shtSymtab = 2;
-
-static constexpr Int shtStrtab = 3;
-
-static constexpr Int shtRela = 4;
-
-static constexpr Int shtNote = 7;
-
-static constexpr Int shtNobits = 8;
-
-static constexpr Int shfAlloc = 2;
-
-static constexpr Int shfExec = 4;
-
-static constexpr Int shfInfoLink = 64;
-
-static constexpr Int rX86_64_64 = 1;
-
-static constexpr Int rX86_64_PC32 = 2;
-
-static constexpr Int rX86_64_GOTPCREL = 9;
-
-static constexpr Int rX86_64_GOTPCRELX = 41;
-
-static constexpr Int rX86_64_REX_GOTPCRELX = 42;
-
-static const String noteOwner = String("wasm2o");
-
-static constexpr Int inExternal = 0;
-
-static constexpr Int inText = 1;
-
-static constexpr Int inRodata = 2;
+static constexpr usize objectPage = 4096;
 
 static constexpr Int ctrlBlock = 0;
 
@@ -5540,6 +5501,8 @@ static void asmCallReg(Asm* a, VReg r);
 
 static void asmJmpMem(Asm* a, Amem m);
 
+static void asmJmpReg(Asm* a, VReg r);
+
 static i32 asmCallRel(Asm* a);
 
 static void asmCmov(Asm* a, u8 cc, u8 size, VReg dst, VReg src);
@@ -6322,7 +6285,7 @@ static String displayName(String s);
 
 static Span<Move> dropSelfMoves(Span<Move> moves);
 
-static Tuple2<Slice<u8>, Slice<u32>> ehFrame(Slice<Region> regions);
+static Slice<u8> goTables(ObjCode* oc, Meta* meta, Slice<u32> nameAt);
 
 static Slice<u8> encodeNote(Meta* m);
 
@@ -6512,7 +6475,7 @@ static void versionedPreds(Function* f, i32 preheader, i32 header, Int first);
 
 static bool windowBase(Function* f, i32 addr, i64 end, i32* base, i64* c);
 
-static void writeELF(ObjCode* oc, Slice<u8> note);
+static void writeObject(ObjCode* oc, Meta* meta, Slice<u8> description);
 
 static Slice<VReg> xmmRange(Int n);
 
@@ -11442,6 +11405,12 @@ static void asmCallReg(Asm* a, VReg r) {
     asmModrmReg(a, 2, convert<i64>(r));
 }
 
+static void asmJmpReg(Asm* a, VReg r) {
+    asmRex(a, false, -1, -1, convert<i64>(r), false);
+    asmBytes(a, {u8(u8(255LL))});
+    asmModrmReg(a, 4, convert<i64>(r));
+}
+
 static i32 asmCallRel(Asm* a) {
     asmBytes(a, {u8(u8(232LL))});
     asmU32(a, 0);
@@ -14539,11 +14508,14 @@ static void funcEmitterSwitchTable(FuncEmitter* e, MInst* in) {
         asmAluRI(a, aluCmp, 4, in->src, convert<i64>(n));
         funcEmitterJumpTo(e, ccAE, def);
     }
+    // An entry of the table is its target's distance from the table, so
+    // that the code is the same bytes wherever it lies.
     asmRex(a, true, convert<i64>(t0), -1, -1, false);
     asmBytes(a, {u8(u8(141LL)), u8(u8(shiftLeft(lo3(convert<i64>(t0)), 3) | 5))});
     i32 leaAt = asmPos(a);
     asmU32(a, 0);
-    asmOpRM(a, false, Span<const u8>({u8(255LL)}), 4, Amem{t0, in->src, u8(8LL), {}, -1, {}}, 0, false);
+    asmAluRM(a, aluAdd, 8, t0, Amem{t0, in->src, u8(8LL), {}, -1, {}});
+    asmJmpReg(a, t0);
     e->tables = appendValues(e->tables, TableFixup{leaAt, leaAt + 4, mInstTable(in)});
 }
 
@@ -19650,6 +19622,12 @@ static Meta* objCodeDescription(ObjCode* oc) {
         }
     }
     objCodeLines(oc, meta);
+    auto regions = oc->regions;
+    for (Int i = 0; i < length(regions); ++i) {
+        if (oc->globals[regions[i].name]) {
+            meta->symbols = appendValues(meta->symbols, TextSymbol{regions[i].name, regions[i].start});
+        }
+    }
     return meta;
 }
 
@@ -19910,8 +19888,10 @@ static void objCodeCompact(ObjCode* oc, FuncEmitter* e, i32 start, Slice<JumpSit
     restart();
     for (Int i = marks.addresses; i < length(oc->addresses); ++i) {
         const i32 target = oc->addresses[i].target;
+        const i32 base = oc->addresses[i].base;
         oc->addresses[i].at = moved(oc->addresses[i].at);
         oc->addresses[i].target = codeSiteMove(sites, codeSiteAt(sites, target), target);
+        oc->addresses[i].base = codeSiteMove(sites, codeSiteAt(sites, base), base);
     }
     // The displacements again, in the order they were written: a jump
     // made short has its displacement in a byte.
@@ -20194,7 +20174,7 @@ static FuncEmitter* objCodeEmitBody(ObjCode* oc, MFunc* mf, Allocator* al) {
         auto table = t.table;
         for (Int i = 0; i < length(table); ++i) {
             i32 b = table[i];
-            oc->addresses = appendValues(oc->addresses, TextAddress{asmPos(a), e->blockAt[funcEmitterTarget(e, b)]});
+            oc->addresses = appendValues(oc->addresses, TextAddress{asmPos(a), e->blockAt[funcEmitterTarget(e, b)], base});
             asmU64(a, 0);
         }
     }
@@ -20728,29 +20708,43 @@ static void objCodeRecordFrame(ObjCode* oc) {
     asmStore(a, 8, R12, word(jumpToken));
 }
 
-// resolve fills the displacements within the text and turns the others
-// into relocations: a displacement is relative to the end of its
-// instruction, so the addend takes that distance off.
+// resolve fills every displacement and every entry of a table: the object
+// has no relocations. It is laid out as the kernel lays it: the text from
+// 0, the constants from the page after it, then the GOT, a slot for each
+// external symbol in the order of the symbols. A displacement is relative
+// to the end of its instruction, an entry of a table to the table.
 static void objCodeResolve(ObjCode* oc) {
     Asm* a = &oc->a;
+    const i64 textSize = convert<i64>(alignUp(usize(length(a->buf) > 0 ? length(a->buf) : 1), usize(4096)));
+    const i64 gotAt = textSize + convert<i64>(alignUp(usize(oc->rodataSize), usize(16)));
+    auto put = [&](i32 at, i64 target, i32 end) {
+        const i64 d = target - end;
+        require(d >= -2147483648LL && d <= 2147483647LL, "displacement overflow");
+        littlePutUint32(subslice(a->buf, at, length(a->buf)), u32(d));
+    };
     auto fixups = a->fixups;
     for (Int i = 0; i < length(fixups); ++i) {
         RipFixup f = fixups[i];
         switch (f.kind) {
             case labelModule: {
-                oc->relocs = appendValues(oc->relocs, TextReloc{f.at, -1, convert<i64>(oc->blobAt[f.label]) - convert<i64>(f.end - f.at)});
+                put(f.at, textSize + oc->blobAt[f.label], f.end);
                 break;
             }
             case labelGot: {
-                oc->relocs = appendValues(oc->relocs, TextReloc{f.at, f.label, -convert<i64>(f.end - f.at)});
+                put(f.at, gotAt + 8 * convert<i64>(f.label), f.end);
                 break;
             }
             case labelFunc: {
-                littlePutUint32(subslice(a->buf, f.at, length(a->buf)), convert<u32>(oc->funcAt[f.label] - f.end));
+                put(f.at, oc->funcAt[f.label], f.end);
                 break;
             }
                 // RIP fixups are created only for module blobs, GOT entries and functions.
         }
+    }
+    auto addresses = oc->addresses;
+    for (Int i = 0; i < length(addresses); ++i) {
+        TextAddress r = addresses[i];
+        littlePutUint64(subslice(a->buf, r.at, length(a->buf)), u64(i64(r.target) - i64(r.base)));
     }
     auto calls = oc->calls;
     for (Int i = 0; i < length(calls); ++i) {
@@ -24424,52 +24418,135 @@ static Span<Move> dropSelfMoves(Span<Move> moves) {
     return subslice(moves, 0, count);
 }
 
-// ehFrame writes a CIE and an FDE per region, and the offsets of the FDEs'
-// starting addresses, which a relocation to the text fills.
-static Tuple2<Slice<u8>, Slice<u32>> ehFrame(Slice<Region> regions) {
-    Slice<u8> out = {};
-    Slice<u32> starts = {};
-    auto entry = [&](Slice<u8> body) mutable -> void {
-        while ((Int(4LL) + length(body)) % Int(8LL) != Int(0LL)) {
-            body = appendValues(body, u8(0LL));
+// goTables writes the tables the Go runtime finds code by, in Go 1.25's
+// layout, for the kernel to register the code with as they are: a header
+// of eight words (the functions, the end of the last, and where the tables
+// of values by pc, the functions' entries, their records and the buckets
+// that find a function by pc are, with sizes), then those tables. Every
+// offset is from the start of the text, wherever it lies. A function's name
+// is its symbol's in .strtab, at nameAt, which the runtime takes for its
+// table of names; its files and lines are the description's.
+static Slice<u8> goTables(ObjCode* oc, Meta* meta, Slice<u32> nameAt) {
+    auto regions = oc->regions;
+    const Int count = length(regions);
+    require(count > 0, "no code");
+    Slice<u8> pctab = sliceOf<u8>({u8(0LL)});
+    Slice<u8> ftab = {};
+    Slice<u8> pcln = {};
+    // A table of values by pc, Go's pcvalue: of each value its change, then
+    // the length of the pcs it holds for, ending with a zero.
+    auto table = [&](Slice<SpEntry> values, u32 size) mutable -> u32 {
+        const u32 offset = convert<u32>(length(pctab));
+        i32 previous = -1;
+        for (Int k = 0; k < length(values); ++k) {
+            const SpEntry v = values[k];
+            const i32 end = k + 1 < length(values) ? values[k + 1].pc : i32(size);
+            require(end > v.pc && (k == 0 || v.delta != previous), "internal error: bad pc table");
+            const i32 delta = v.delta - previous;
+            pctab = appendUleb(pctab, u64((u32(delta) << 1) ^ u32(delta >> 31)));
+            pctab = appendUleb(pctab, u64(end - v.pc));
+            previous = v.delta;
         }
-        out = littleAppendUint32(out, convert<u32>(length(body)));
-        out = appendSlice(out, body);
+        pctab = appendValues(pctab, u8(0LL));
+        return offset;
     };
-    Slice<u8> cie = sliceOf<u8>({u8(0LL), u8(0LL), u8(0LL), u8(0LL), u8(1LL), u8(122LL), u8(82LL), u8(0LL), u8(1LL), u8(120LL), u8(16LL), u8(1LL), u8(27LL), u8(12LL), u8(7LL), u8(8LL), u8(144LL), u8(1LL)});
-    entry(cie);
-    for (Int i = 0; i < length(regions); ++i) {
-        Region r = regions[i];
-        Int at = length(out);
-        Slice<u8> body = littleAppendUint32({}, convert<u32>(at + 4));
-        starts = appendValues(starts, convert<u32>(at + 8));
-        body = littleAppendUint32(body, 0);
-        body = littleAppendUint32(body, r.end - r.start);
-        body = appendValues(body, u8(0LL));
-        i32 loc = 0;
-        auto sp = r.sp;
-        for (Int k = 0; k < length(sp); ++k) {
-            SpEntry e = sp[k];
-            if (k == 0 && e.delta == 0) {
-                continue;
-            }
-            i32 d = e.pc - loc;
-            if (d == 0) {
-            } else if (d < 64) {
-                body = appendValues(body, u8(64 | convert<u8>(d)));
-            } else if (d < 256) {
-                body = appendValues(body, u8(2LL), convert<u8>(d));
-            } else if (d < 65536) {
-                body = littleAppendUint16(appendValues(body, u8(3LL)), convert<u16>(d));
-            } else {
-                body = littleAppendUint32(appendValues(body, u8(4LL)), convert<u32>(d));
-            }
-            loc = e.pc;
-            body = appendUleb(appendValues(body, u8(14LL)), convert<u64>(e.delta + 8));
+    auto change = [](Slice<SpEntry> values, i32 pc, i32 value) -> Slice<SpEntry> {
+        if (values[length(values) - 1].delta == value) {
+            return values;
         }
-        entry(body);
+        return appendValues(values, SpEntry{pc, value});
+    };
+    auto lines = meta->lines;
+    for (Int index = 0; index < count; ++index) {
+        const Region r = regions[index];
+        const u32 size = r.end - r.start;
+        require(index == 0 || r.start >= regions[index - 1].end, "internal error: code regions out of order");
+        // The stack pointer's delta: an entry where it changes, the last of
+        // those at one pc.
+        Slice<SpEntry> sp = sliceOf<SpEntry>({SpEntry{0, 0}});
+        for (Int k = 0; k < length(r.sp); ++k) {
+            const SpEntry e = r.sp[k];
+            require(e.pc >= 0 && u32(e.pc) < size, "internal error: a stack entry past its region");
+            const Int n = length(sp);
+            if (sp[n - 1].pc == e.pc) {
+                sp[n - 1].delta = e.delta;
+            } else if (sp[n - 1].delta != e.delta) {
+                sp = appendValues(sp, e);
+            }
+            const Int kept = length(sp);
+            if (kept > 1 && sp[kept - 2].delta == sp[kept - 1].delta) {
+                sp = subslice(sp, 0, kept - 1);
+            }
+        }
+        // The file, of the module's name first, and the line; with no lines a
+        // function's line is its number.
+        Slice<SpEntry> files = sliceOf<SpEntry>({SpEntry{0, 0}});
+        Slice<SpEntry> rows = sliceOf<SpEntry>({SpEntry{0, i32(index + 1)}});
+        Int k = sortSearch(length(lines), [&](Int x) mutable -> bool {
+            return lines[x].pc >= r.start;
+        });
+        for (; k < length(lines) && lines[k].pc < r.end; ++k) {
+            const LineEntry e = lines[k];
+            const i32 pc = i32(e.pc - r.start);
+            if (k > 0 && lines[k - 1].pc >= r.start) {
+                files = change(files, pc, i32(e.file + 1));
+                rows = change(rows, pc, i32(e.line));
+            } else {
+                files = sliceOf<SpEntry>({SpEntry{0, i32(e.file + 1)}});
+                rows = sliceOf<SpEntry>({SpEntry{0, i32(e.line)}});
+            }
+        }
+        const u32 pcsp = table(sp, size);
+        const u32 pcfile = table(files, size);
+        const u32 pcline = table(rows, size);
+        ftab = littleAppendUint32(littleAppendUint32(ftab, r.start), convert<u32>(length(pcln)));
+        // The record (_func): the entry, the name, no arguments or
+        // deferreturn, the three tables, no pcdata, the unit, the first line,
+        // the funcID, flags and two funcdata, both of no pointers.
+        const Array<u32, 13> words{{r.start, nameAt[index], 0, 0, pcsp, pcfile, pcline, 0, 0, u32(rows[0].delta), u32(2) << 24, 0, 0}};
+        for (Int w = 0; w < 13; ++w) {
+            pcln = littleAppendUint32(pcln, words[w]);
+        }
     }
-    return {out, starts};
+    const u32 end = regions[count - 1].end;
+    ftab = littleAppendUint32(littleAppendUint32(ftab, end), 0);
+    // A bucket of 4 KiB of the text: the first function it may hold, and no
+    // subbuckets, so that the runtime walks the entries from there.
+    Slice<u8> buckets = {};
+    Int function = 0;
+    for (u32 bucket = 0; bucket < (end + 4095) / 4096; ++bucket) {
+        while (function + 1 < count && regions[function + 1].start <= bucket * 4096) {
+            ++function;
+        }
+        buckets = littleAppendUint32(buckets, convert<u32>(function));
+        for (Int z = 0; z < 16; ++z) {
+            buckets = appendValues(buckets, u8(0LL));
+        }
+    }
+    auto aligned = [](Int n) -> Int {
+        return (n + 7) & ~Int(7);
+    };
+    const Int pctabAt = 32;
+    const Int ftabAt = aligned(pctabAt + length(pctab));
+    const Int pclnAt = aligned(ftabAt + length(ftab));
+    const Int bucketsAt = aligned(pclnAt + length(pcln));
+    const Array<Int, 8> header{{count, convert<Int>(end), pctabAt, length(pctab), ftabAt, pclnAt, length(pcln), bucketsAt}};
+    Slice<u8> out = {};
+    for (Int h = 0; h < 8; ++h) {
+        out = littleAppendUint32(out, convert<u32>(header[h]));
+    }
+    auto pad = [&](Int at) mutable {
+        while (length(out) < at) {
+            out = appendValues(out, u8(0LL));
+        }
+    };
+    out = appendSlice(out, pctab);
+    pad(ftabAt);
+    out = appendSlice(out, ftab);
+    pad(pclnAt);
+    out = appendSlice(out, pcln);
+    pad(bucketsAt);
+    return appendSlice(out, buckets);
 }
 
 // encodeNote writes the descriptor: imports and exports of functions, the
@@ -24559,6 +24636,11 @@ static Slice<u8> encodeNote(Meta* m) {
     if (functions) {
         metaWriterU(w, m->functions);
         metaWriterU(w, m->functionCount);
+    }
+    metaWriterU(w, convert<u64>(length(m->symbols)));
+    for (Int i = 0; i < length(m->symbols); ++i) {
+        metaWriterStr(w, m->symbols[i].name);
+        metaWriterU(w, m->symbols[i].at);
     }
     return w->out;
 }
@@ -26587,198 +26669,63 @@ static bool windowBase(Function* f, i32 addr, i64 end, i32* base, i64* c) {
     return *c >= -boundSlack && *c + end <= boundSlack;
 }
 
-static void writeELF(ObjCode* oc, Slice<u8> note) {
-    constexpr Int secText = 11;
-    constexpr Int secRelaText = {};
-    constexpr Int secRodata = {};
-    constexpr Int secEhFrame = {};
-    constexpr Int secRelaEhFrame = {};
-    constexpr Int secNoteModule = {};
-    constexpr Int secSymtab = {};
-    constexpr Int secStrtab = {};
-    constexpr Int secShstrtab = {};
-    constexpr Int secNoteStack = {};
-    constexpr Int secCount = {};
-    Slice<u8> strtab = {};
-    auto str = [&](String s) mutable -> u32 {
-        u32 off = convert<u32>(length(strtab));
-        strtab = appendSlice(strtab, s);
-        strtab = appendValues(strtab, u8(0LL));
-        return off;
-    };
-    str(String(""));
-    Slice<u8> symtab = {};
-    auto sym = [&](u32 name, u8 info, u16 shndx, u64 value, u64 size) mutable -> void {
-        symtab = littleAppendUint32(symtab, name);
-        symtab = appendValues(symtab, info, u8(0LL));
-        symtab = littleAppendUint16(symtab, shndx);
-        symtab = littleAppendUint64(symtab, value);
-        symtab = littleAppendUint64(symtab, size);
-    };
-    constexpr Int stbLocal = 0;
-    constexpr Int stbGlobal = 1;
-    constexpr Int sttNotype = 0;
-    constexpr Int sttFunc = 2;
-    constexpr Int sttSect = 3;
-    constexpr Int symText = 1;
-    constexpr Int symRodata = 2;
-    sym(u32(0LL), u8(0LL), u16(0LL), u64(0LL), u64(0LL));
-    sym(u32(0LL), u8(3LL), u16(1LL), u64(0LL), u64(0LL));
-    sym(u32(0LL), u8(3LL), u16(3LL), u64(0LL), u64(0LL));
-    Int count = 3;
+// writeObject writes the object: the image of the code as the kernel lays
+// it in memory, and what the kernel reads to run it. A page of header; the
+// text from the next page; the constants from the page after the text; then
+// the Go runtime's tables of the text, the functions' names (the tables',
+// an empty one first), the GOT's symbols, of a slot each in their order, and
+// the description. The header is "PZO1" and four bytes of zeros, then words
+// of eight bytes: the object's size, the text's and the constants', and the
+// offset and the size of each of the four parts.
+static void writeObject(ObjCode* oc, Meta* meta, Slice<u8> description) {
     auto regions = oc->regions;
+    Slice<u8> names = sliceOf<u8>({u8(0LL)});
+    Slice<u32> nameAt = makeSlice<u32>(length(regions));
     for (Int i = 0; i < length(regions); ++i) {
-        Region r = regions[i];
-        if (!oc->globals[r.name]) {
-            sym(str(r.name), u8(2LL), u16(1LL), convert<u64>(r.start), convert<u64>(r.end - r.start));
-            count++;
-        }
+        nameAt[i] = convert<u32>(length(names));
+        names = appendValues(appendSlice(names, regions[i].name), u8(0LL));
     }
-    Int firstGlobal = count;
-    auto range1654 = oc->regions;
-    for (Int index1655 = 0, rangeEnd1656 = length(range1654); index1655 < rangeEnd1656; ++index1655) {
-        Region r = range1654[index1655];
-        if (oc->globals[r.name]) {
-            sym(str(r.name), u8(18LL), u16(1LL), convert<u64>(r.start), convert<u64>(r.end - r.start));
-            count++;
-        }
-    }
-    Int externBase = count;
+    Slice<u8> got = {};
     auto externs = oc->externs;
     for (Int i = 0; i < length(externs); ++i) {
-        String name = externs[i];
-        sym(str(name), u8(16LL), u16(0LL), u64(0LL), u64(0LL));
+        got = appendValues(appendSlice(got, externs[i]), u8(0LL));
     }
-    auto rela = [&](Slice<u8> out, u64 at, Int symbol, u32 typ, i64 addend) mutable -> Slice<u8> {
-        out = littleAppendUint64(out, at);
-        out = littleAppendUint64(out, shiftLeft(convert<u64>(symbol), 32) | convert<u64>(typ));
-        return littleAppendUint64(out, convert<u64>(addend));
-    };
-    Slice<u8> relaText = {};
-    auto relocs = oc->relocs;
-    for (Int i = 0; i < length(relocs); ++i) {
-        TextReloc r = relocs[i];
-        if (r.sym < 0) {
-            relaText = rela(relaText, convert<u64>(r.at), 2, rX86_64_PC32, r.addend);
-        } else {
-            relaText = rela(relaText, convert<u64>(r.at), externBase + convert<i64>(r.sym), rX86_64_GOTPCREL, r.addend);
-        }
+    const Array<Slice<u8>, 4> parts{{goTables(oc, meta, nameAt), names, got, description}};
+    const u64 text = convert<u64>(length(oc->a.buf));
+    const u64 textEnd = objectPage + alignUp(usize(text > 0 ? text : 1), usize(objectPage));
+    Array<u64, 4> partAt{};
+    u64 at = textEnd + oc->rodataSize;
+    for (Int k = 0; k < 4; ++k) {
+        at = alignUp(usize(at), usize(8));
+        partAt[k] = at;
+        at += convert<u64>(length(parts[k]));
     }
-    auto addresses = oc->addresses;
-    for (Int i = 0; i < length(addresses); ++i) {
-        TextAddress r = addresses[i];
-        relaText = rela(relaText, convert<u64>(r.at), 1, rX86_64_64, convert<i64>(r.target));
+    u8 header[objectHeader]{};
+    memcpy(header, "PZO1", 4);
+    storeLittle(header + 8, at);
+    storeLittle(header + 16, text);
+    storeLittle(header + 24, oc->rodataSize);
+    for (Int k = 0; k < 4; ++k) {
+        storeLittle(header + 32 + 16 * k, partAt[k]);
+        storeLittle(header + 40 + 16 * k, convert<u64>(length(parts[k])));
     }
-    auto temporary1666 = ehFrame(oc->regions);
-    Slice<u8> eh = temporary1666.v0;
-    Slice<u32> starts = temporary1666.v1;
-    Slice<u8> relaEh = {};
-    for (Int k = 0; k < length(starts); ++k) {
-        u32 at = starts[k];
-        relaEh = rela(relaEh, convert<u64>(at), 1, rX86_64_PC32, convert<i64>(oc->regions[k].start));
+    writeAll(1, header, sizeof(header));
+    writeZeros(1, objectPage - sizeof(header));
+    writeBytes(1, oc->a.buf);
+    writeZeros(1, textEnd - objectPage - text);
+    u64 written = 0;
+    for (Int i = 0; i < length(oc->blobs); ++i) {
+        writeZeros(1, u64(oc->blobAt[i]) - written);
+        writeBytes(1, oc->blobs[i].bytes);
+        written = u64(oc->blobAt[i]) + length(oc->blobs[i].bytes);
     }
-    Slice<u8> noteBody = littleAppendUint32({}, 7);
-    noteBody = littleAppendUint32(noteBody, convert<u32>(length(note)));
-    noteBody = littleAppendUint32(noteBody, 1);
-    noteBody = appendValues(appendSlice(noteBody, noteOwner), u8(0LL));
-    while (length(noteBody) % Int(4LL) != Int(0LL)) {
-        noteBody = appendValues(noteBody, u8(0LL));
+    require(written == oc->rodataSize, "rodata layout mismatch");
+    u64 position = textEnd + oc->rodataSize;
+    for (Int k = 0; k < 4; ++k) {
+        writeZeros(1, partAt[k] - position);
+        writeBytes(1, parts[k]);
+        position = partAt[k] + convert<u64>(length(parts[k]));
     }
-    noteBody = appendSlice(noteBody, note);
-    while (length(noteBody) % Int(4LL) != Int(0LL)) {
-        noteBody = appendValues(noteBody, u8(0LL));
-    }
-    Slice<u8> shstrtab = {};
-    auto sh = [&](String s) mutable -> u32 {
-        u32 off = convert<u32>(length(shstrtab));
-        shstrtab = appendSlice(shstrtab, s);
-        shstrtab = appendValues(shstrtab, u8(0LL));
-        return off;
-    };
-    sh(String(""));
-    Array<u32, 11> names = Array<u32, 11>{{}};
-    auto range1670 = Array<Anonymous24, 10>{{Anonymous24{1, String(".text")}, Anonymous24{2, String(".rela.text")}, Anonymous24{3, String(".rodata")}, Anonymous24{4, String(".eh_frame")}, Anonymous24{5, String(".rela.eh_frame")}, Anonymous24{6, String(".note.wasm2o")}, Anonymous24{7, String(".symtab")}, Anonymous24{8, String(".strtab")}, Anonymous24{9, String(".shstrtab")}, Anonymous24{10, String(".note.GNU-stack")}}};
-    for (Int index1671 = 0, rangeEnd1672 = length(range1670); index1671 < rangeEnd1672; ++index1671) {
-        Anonymous24 sec = range1670[index1671];
-        names[sec.index] = sh(sec.name);
-    }
-    Array<u64, 11> offsets{};
-    Array<u64, 11> sizes{};
-    Array<Span<const u8>, 11> contents{};
-    u64 position = 64;
-    auto reserveSection = [&](Int section, u64 bytes, usize alignment) {
-        position = alignUp(usize(position), alignment);
-        offsets[section] = position;
-        sizes[section] = bytes;
-        position += bytes;
-    };
-    auto place = [&](Int section, Span<const u8> data, usize alignment) {
-        reserveSection(section, length(data), alignment);
-        contents[section] = data;
-    };
-    place(1, oc->a.buf, 16);
-    place(2, relaText, 8);
-    reserveSection(3, oc->rodataSize, 16);
-    place(4, eh, 8);
-    place(5, relaEh, 8);
-    place(6, noteBody, 4);
-    place(7, symtab, 8);
-    place(8, strtab, 1);
-    place(9, shstrtab, 1);
-    place(10, {}, 1);
-    const u64 shoff = alignUp(usize(position), 8);
-    u8 fileHeader[64]{};
-    memcpy(fileHeader, "\177ELF\002\001\001", 8);
-    storeLittle(fileHeader + 16, u16(1));
-    storeLittle(fileHeader + 18, u16(62));
-    storeLittle(fileHeader + 20, u32(1));
-    storeLittle(fileHeader + 40, shoff);
-    storeLittle(fileHeader + 52, u16(64));
-    storeLittle(fileHeader + 58, u16(64));
-    storeLittle(fileHeader + 60, u16(11));
-    storeLittle(fileHeader + 62, u16(9));
-    u8 sectionHeaders[11 * 64]{};
-    auto header = [&](Int section, u32 type, u64 flags, u32 link, u32 info, u64 alignment, u64 entrySize) {
-        u8* bytes = sectionHeaders + usize(section) * 64;
-        storeLittle(bytes, names[section]);
-        storeLittle(bytes + 4, type);
-        storeLittle(bytes + 8, flags);
-        storeLittle(bytes + 24, offsets[section]);
-        storeLittle(bytes + 32, sizes[section]);
-        storeLittle(bytes + 40, link);
-        storeLittle(bytes + 44, info);
-        storeLittle(bytes + 48, alignment);
-        storeLittle(bytes + 56, entrySize);
-    };
-    header(1, shtProgbits, shfAlloc | shfExec, 0, 0, 16, 0);
-    header(2, shtRela, shfInfoLink, 7, 1, 8, 24);
-    header(3, shtProgbits, shfAlloc, 0, 0, 16, 0);
-    header(4, shtProgbits, shfAlloc, 0, 0, 8, 0);
-    header(5, shtRela, shfInfoLink, 7, 4, 8, 24);
-    header(6, shtNote, 0, 0, 0, 4, 0);
-    header(7, shtSymtab, 0, 8, u32(firstGlobal), 8, 24);
-    header(8, shtStrtab, 0, 0, 0, 1, 0);
-    header(9, shtStrtab, 0, 0, 0, 1, 0);
-    header(10, shtProgbits, 0, 0, 0, 1, 0);
-    writeAll(1, fileHeader, sizeof(fileHeader));
-    position = sizeof(fileHeader);
-    for (Int section = 1; section < 11; ++section) {
-        writeZeros(1, offsets[section] - position);
-        if (section == 3) {
-            u64 written = 0;
-            for (Int i = 0; i < length(oc->blobs); ++i) {
-                writeZeros(1, u64(oc->blobAt[i]) - written);
-                writeBytes(1, oc->blobs[i].bytes);
-                written = u64(oc->blobAt[i]) + length(oc->blobs[i].bytes);
-            }
-            require(written == oc->rodataSize, "rodata layout mismatch");
-        } else {
-            writeBytes(1, contents[section]);
-        }
-        position = offsets[section] + sizes[section];
-    }
-    writeZeros(1, shoff - position);
-    writeAll(1, sectionHeaders, sizeof(sectionHeaders));
 }
 
 static Slice<VReg> xmmRange(Int n) {
@@ -28877,7 +28824,6 @@ static void compileWithOptions(CompileOptions options) {
     code->floatIx = makeMap<Array<u64, 2>, i32>();
     code->externs = makeSlice<String>(0);
     code->externIx = makeMap<String, i32>();
-    code->relocs = makeSlice<TextReloc>(0);
     code->addresses = makeSlice<TextAddress>(0);
     code->regions = makeSlice<Region>(0);
     code->globals = makeMap<String, bool>();
@@ -28921,7 +28867,8 @@ static void compileWithOptions(CompileOptions options) {
     objCodeInitThunk(code);
     objCodePlaceBlobs(code);
     objCodeResolve(code);
-    writeELF(code, encodeNote(objCodeDescription(code)));
+    Meta* meta = objCodeDescription(code);
+    writeObject(code, meta, encodeNote(meta));
 }
 
 #ifdef AOT_CHAOS

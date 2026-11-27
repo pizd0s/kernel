@@ -7,21 +7,10 @@ import (
 )
 
 const (
-	shtProgbits           = 1
-	shtSymtab             = 2
-	shtStrtab             = 3
-	shtRela               = 4
-	shtNote               = 7
-	shtNobits             = 8
-	shfAlloc              = 2
-	shfExec               = 4
-	shfInfoLink           = 0x40
-	rX86_64_64            = 1
-	rX86_64_PC32          = 2
-	rX86_64_GOTPCREL      = 9
-	rX86_64_GOTPCRELX     = 41
-	rX86_64_REX_GOTPCRELX = 42
-	noteOwner             = "wasm2o"
+	shtRela      = 4
+	shtNobits    = 8
+	rX86_64_64   = 1
+	rX86_64_PC32 = 2
 )
 
 const (
@@ -29,15 +18,6 @@ const (
 	inText
 	inRodata
 )
-
-type ElfObject struct {
-	text   []byte
-	rodata []byte
-
-	defined map[string]uint32
-	relocs  []ObjReloc
-	meta    *Meta
-}
 
 type ObjReloc struct {
 	at     uint32
@@ -237,60 +217,6 @@ func (f *ElfFile) relocations(of int) []ObjReloc {
 	}
 
 	return out[:n]
-}
-
-func readObject(data []byte) *ElfObject {
-	f := parseELF(data)
-	obj := &ElfObject{text: f.sections[f.text].data, defined: f.functions()}
-
-	if f.rodata >= 0 {
-		obj.rodata = f.sections[f.rodata].data
-	}
-
-	obj.relocs = f.relocations(f.text)
-
-	note := f.find(".note.wasm2o")
-
-	if note < 0 {
-		throwFmt("no .note.wasm2o: not an object of vm")
-	}
-
-	obj.meta = decodeNote(readNote(f.sections[note].data))
-
-	eh := f.find(".eh_frame")
-
-	if eh < 0 {
-		throwFmt("no .eh_frame")
-	}
-
-	obj.meta.regions = readEhFrame(f.sections[eh].data, f.relocations(eh), obj.defined)
-	obj.describeSymbols(f.symbols, f.text)
-
-	return obj
-}
-
-func readNote(data []byte) []byte {
-	le := binary.LittleEndian
-
-	for len(data) >= 12 {
-		namesz, descsz, typ := le.Uint32(data), le.Uint32(data[4:]), le.Uint32(data[8:])
-		name := (uint64(namesz) + 3) &^ 3
-		desc := (uint64(descsz) + 3) &^ 3
-
-		if 12+name+desc > uint64(len(data)) {
-			break
-		}
-
-		if typ == 1 && string(data[12:12+uint64(namesz)]) == noteOwner+"\x00" {
-			return data[12+name : 12+name+uint64(descsz)]
-		}
-
-		data = data[12+name+desc:]
-	}
-
-	throwFmt("no wasm2o note")
-
-	return nil
 }
 
 func readEhFrame(data []byte, relocs []ObjReloc, defined map[string]uint32) []Region {
@@ -524,32 +450,4 @@ func cfaProgram(b []byte, code uint64, cfa int64, sp *[]SpEntry, size uint32) in
 	}
 
 	return cfa
-}
-
-func (obj *ElfObject) describeSymbols(symbols []ElfSymbol, text int) {
-	m := obj.meta
-
-	m.init = symInit
-
-	if _, ok := obj.defined[symInit]; !ok {
-		throwFmt("no %s", symInit)
-	}
-
-	seen := map[string]bool{}
-
-	for _, s := range symbols {
-		if seen[s.name] {
-			continue
-		}
-
-		seen[s.name] = true
-
-		if names, t, ok := parseFuncSymbol(s.name, symExport, 1); ok && s.section == text {
-			m.exports = append(m.exports, ExportMeta{kind: externFunc, name: names[0], sym: s.name, params: t.params, results: t.results})
-		}
-
-		if names, t, ok := parseFuncSymbol(s.name, symImport, 2); ok && s.section == 0 {
-			m.imports = append(m.imports, ImportMeta{kind: externFunc, module: names[0], name: names[1], sym: s.name, params: t.params, results: t.results})
-		}
-	}
 }

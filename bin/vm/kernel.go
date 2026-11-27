@@ -218,7 +218,7 @@ type CodeEntry struct {
 	traced  map[uint32]*Code
 }
 
-func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *ElfObject) (*Code, error) {
+func (k *Kernel) codeOf(p *Process, data []byte, name string, obj *CodeObject) (*Code, error) {
 	key := CodeKey{hash: sha256.Sum256(data), asan: p.modes&EXEC_ASAN != 0}
 
 	k.mu.Lock()
@@ -302,7 +302,7 @@ func (k *Kernel) traced(e *CodeEntry, name string, classes uint32) (*Code, error
 	return c, nil
 }
 
-func (k *Kernel) compile(data []byte, name string, obj *ElfObject, asan bool) (*Code, error) {
+func (k *Kernel) compile(data []byte, name string, obj *CodeObject, asan bool) (*Code, error) {
 	if obj == nil {
 		var err error
 

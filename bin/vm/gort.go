@@ -175,12 +175,7 @@ func registerCode(name string, base uintptr, size uintptr, regions []Region, ass
 	m.gofunc = uintptr(unsafe.Pointer(unsafe.SliceData(img.stackMap)))
 	m.names = []byte{0}
 	m.pctab = []byte{0}
-	m.files, m.cutab = append([]byte(name), 0), []uint32{0}
-
-	for _, f := range files {
-		m.cutab = append(m.cutab, uint32(len(m.files)))
-		m.files = append(append(m.files, f...), 0)
-	}
+	m.files, m.cutab = moduleFiles(name, files)
 
 	for index, r := range regions {
 		size := r.end - r.start
@@ -235,6 +230,45 @@ func registerCode(name string, base uintptr, size uintptr, regions []Region, ass
 
 	m.findfunctab = uintptr(unsafe.Pointer(unsafe.SliceData(img.buckets)))
 	perfOut.code(name, base, regions, files, lines)
+	publish(img, name, base, size)
+}
+
+func registerTables(name string, base uintptr, size uintptr, obj *CodeObject) {
+	checkGo()
+
+	t := obj.tables
+	img := &GoImage{stackMap: append32(nil, 1, 0), buckets: t.buckets}
+	m := &img.module
+
+	img.header = GoPCHeader{magic: 0xfffffff1, minLC: 1, ptrSize: 8, nfunc: t.nfunc, nfiles: uint(1 + len(obj.meta.files)), textStart: base}
+
+	m.header = &img.header
+	m.text, m.minpc, m.maxpc, m.etext = base, base, base+uintptr(t.end), base+size
+	m.modulename = name
+	m.gofunc = uintptr(unsafe.Pointer(unsafe.SliceData(img.stackMap)))
+	m.names, m.pctab, m.ftab, m.pcln = t.names, t.pctab, t.ftab, t.pcln
+	m.files, m.cutab = moduleFiles(name, obj.meta.files)
+	m.findfunctab = uintptr(unsafe.Pointer(unsafe.SliceData(img.buckets)))
+
+	if perfOut != nil {
+		perfOut.code(name, base, obj.regions(), obj.meta.files, obj.meta.lines)
+	}
+
+	publish(img, name, base, size)
+}
+
+func moduleFiles(name string, files []string) ([]byte, []uint32) {
+	names, offsets := append([]byte(name), 0), []uint32{0}
+
+	for _, f := range files {
+		offsets = append(offsets, uint32(len(names)))
+		names = append(append(names, f...), 0)
+	}
+
+	return names, offsets
+}
+
+func publish(img *GoImage, name string, base, size uintptr) {
 	noteCode(name, base, base+size)
 
 	r := Registration{img, make(chan struct{})}

@@ -5,13 +5,14 @@
 """
 import os
 from pathlib import Path
-import re
+import struct
 import subprocess
 import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import objects  # noqa: E402
 import system  # noqa: E402
 
 
@@ -30,26 +31,27 @@ def program(template):
 
 
 def byte_reads(obj, env):
-    # Inspect the public ELF with the Go toolchain already used to build VM.
-    result = subprocess.run([os.environ.get("GO") or "go", "tool", "objdump", "-s", "^f0$", str(obj)],
-                            capture_output=True, env=env, timeout=60)
-    assert result.returncode == 0, result.stderr.decode()
+    # The reads of f0 at [r15 + disp32], the module's memory: an operand of
+    # mod 10 and rm 111, the base r15 by a REX prefix's B, after one opcode
+    # byte or after 0f and one. 0F B6 is MOVZX from a byte; a word/dword read
+    # here would leave redundant dispatch masks.
+    obj = objects.read(obj)
+    code = next(obj.text[start:end] for name, start, end in obj.functions if name == "f0")
     reads = {}
-    for line in result.stdout.decode().splitlines():
-        match = re.search(r"\s([0-9a-f]+)\s+(\w+)\s+0x([0-9a-f]+)\(R15\),", line)
-        if match is None:
+    for at in range(3, len(code) - 4):
+        address = struct.unpack_from("<i", code, at + 1)[0]
+        if code[at] & 0xc7 != 0x87 or not 2048 <= address < 2112 or address % 4:
             continue
-        address = int(match[3], 16)
-        if 2048 <= address < 2112 and address % 4 == 0:
-            instruction = bytes.fromhex(match[1])
-            # Strip the optional x86-64 REX prefix. 0F B6 is MOVZX from a byte;
-            # a word/dword read here would leave redundant dispatch masks.
-            if 0x40 <= instruction[0] <= 0x4f:
-                instruction = instruction[1:]
-            reads.setdefault(address, []).append((match[2], instruction[:2].hex()))
+        if code[at - 2] == 0x0f and code[at - 3] & 0xf1 == 0x41:
+            opcode = code[at - 2:at]
+        elif code[at - 2] & 0xf1 == 0x41:
+            opcode = code[at - 1:at + 1]
+        else:
+            continue
+        reads.setdefault(address, []).append(opcode.hex())
     expected = set(range(2048, 2112, 4))
     assert set(reads) == expected, ("missing dispatch reads", reads)
-    assert all(opcode == "0fb6" for values in reads.values() for _, opcode in values), ("dispatch reads were not narrowed to bytes", reads)
+    assert all(opcode == "0fb6" for values in reads.values() for opcode in values), ("dispatch reads were not narrowed to bytes", reads)
 
 
 def main():

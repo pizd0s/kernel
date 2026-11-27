@@ -1403,7 +1403,7 @@ for test in build.glob("$(S)/tst/test_*.py"):
     tested = TESTED[name]
     case_test = command(
         name=f"test_{name}",
-        inputs=[test, "$(S)/dev/wasm_info.py", "$(S)/dev/exe.py", "$(S)/tst/system.py"],
+        inputs=[test, "$(S)/dev/wasm_info.py", "$(S)/dev/exe.py", "$(S)/tst/system.py", "$(S)/tst/objects.py"],
         outputs=[stamp],
         deps=tested,
         cmd=[
@@ -1493,7 +1493,7 @@ for name, runner, fixture in (("wat_updates", "run_updates.py", "update_branches
     stamp = f"$(B)/tst/{name}.stamp"
     case_test = command(
         name="test_" + name,
-        inputs=[runner, fixture, "$(S)/dev/exe.py", "$(S)/tst/system.py"],
+        inputs=[runner, fixture, "$(S)/dev/exe.py", "$(S)/tst/system.py", "$(S)/tst/objects.py"],
         outputs=[stamp],
         deps=[vm, aot_native, wazero, rootfs],
         cmd=[["python3", runner, vm.outputs[0], aot_native.outputs[0], wazero.outputs[0], WAT2WASM, fixture, rootfs.outputs[0]], touch(stamp)],

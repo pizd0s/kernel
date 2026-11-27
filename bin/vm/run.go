@@ -19,7 +19,7 @@ func runModule(path string, argv []string, asan, network bool, disks []Disk, use
 	k := newKernel(user, memory)
 	options := programOptions(asan)
 
-	var obj *ElfObject
+	var obj *CodeObject
 
 	if exe {
 		obj, err = k.compileExecutable(data, options)
@@ -105,7 +105,7 @@ func hostProgram(path string) (data []byte, exe bool, tail []byte, err error) {
 	return data, exe, pages[int64(len(data))-from:], nil
 }
 
-func importsKernel(obj *ElfObject) bool {
+func importsKernel(obj *CodeObject) bool {
 	for _, imp := range obj.meta.imports {
 		if imp.module == "kernel" {
 			return true
@@ -115,7 +115,7 @@ func importsKernel(obj *ElfObject) bool {
 	return false
 }
 
-func runKernel(k *Kernel, path string, argv []string, asan, network bool, data []byte, obj *ElfObject, disks []Disk, traced uint32) int {
+func runKernel(k *Kernel, path string, argv []string, asan, network bool, data []byte, obj *CodeObject, disks []Disk, traced uint32) int {
 	syscall.Umask(0)
 	k.routeSignals()
 
