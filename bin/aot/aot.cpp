@@ -3870,6 +3870,16 @@ static void appendMove(PositionedMoves& moves, i32 position, Move move) {
 }
 
 namespace {
+    // What the passes after resolve ask of an instruction: the registers it
+    // reads, those it writes, its clobbers among them, and its kind,
+    // maskSlot when it names a slot and maskMove when deadMoves may drop it
+    // or some of its moves.
+    struct InstMask {
+        u32 reads{};
+        u32 writes{};
+        u8 kind{};
+    };
+
     struct Allocator {
         MFunc* mf{};
         Vec<i32> order{};
@@ -3908,6 +3918,12 @@ namespace {
         // that part's register while it is free, and evicts its holder when
         // it can, so that the value returns to the header where it left it.
         Vec<Interval*> home{};
+        // The masks of every instruction, which resolve finds as it rewrites
+        // the operands, of the blocks in order, a block's from first[b] on.
+        // Copies and deadMoves keep them as they change instructions; what
+        // they drop may leave a kind it no longer has.
+        Vec<u32> first{};
+        Vec<InstMask> masks{};
     };
 }
 
@@ -10147,6 +10163,33 @@ static u8 allocatorRegClass(Allocator* a, VReg r) {
     return classGPR;
 }
 
+// registerBit is a physical register's bit in a mask of them; no other
+// operand has one.
+static u32 registerBit(VReg r) {
+    return vRegIsPhys(r) ? u32(1) << u32(r) : 0;
+}
+
+static constexpr u8 maskSlot = 1;
+static constexpr u8 maskMove = 2;
+
+// slotted tells whether an operand names a spill slot, a constant's not.
+static bool slotted(VReg r) {
+    return isSlot(r) && slotOf(r) < constantSlot;
+}
+
+// movesMasks gives what parallel moves read and write, and their kind.
+static InstMask movesMasks(Span<Move> moves) {
+    InstMask m{0, 0, maskMove};
+    for (Int k = 0; k < length(moves); ++k) {
+        m.reads |= registerBit(moves[k].src);
+        m.writes |= registerBit(moves[k].dst);
+        if (slotted(moves[k].src) || slotted(moves[k].dst)) {
+            m.kind |= maskSlot;
+        }
+    }
+    return m;
+}
+
 // resolve rewrites operands to registers and inserts the moves for split
 // intervals inside blocks and on edges.
 static void allocatorResolve(Allocator* a) {
@@ -10233,12 +10276,25 @@ static void allocatorResolve(Allocator* a) {
             return left.position < right.position || (left.position == right.position && left.order < right.order);
         });
     }
+    // The masks of every instruction as it leaves here, in the order of
+    // the blocks and of their instructions: at most the instructions, the
+    // inner moves' and a block's two of its edges.
+    a->first.resize(mf->blocks.size());
+    usize most = inner.entries.size() + 2 * a->order.size();
+    for (usize index = 0; index < a->order.size(); ++index) {
+        most += mf->blocks[a->order[index]].insts.size();
+    }
+    a->masks.reserve(most);
+    auto noteMoves = [&](MInst* in) {
+        a->masks.pushBack(movesMasks(mInstMoves(in)));
+    };
     usize nextMove = 0;
     for (usize index = 0; index < a->order.size(); ++index) {
         const i32 b = a->order[index];
         MBlock* blk = &mf->blocks[b];
         const usize count = blk->insts.size();
         const auto instructions = blk->insts.view();
+        a->first[usize(b)] = u32(a->masks.size());
         Vec<MInst> out;
         bool rebuilding = false;
         // Keep the original storage until an inserted instruction needs
@@ -10254,6 +10310,7 @@ static void allocatorResolve(Allocator* a) {
             if (length(moves)) {
                 prepareOutput(prefix);
                 out.pushBack(parMove(moves));
+                noteMoves(&out[out.size() - 1]);
             }
         };
         const auto endMoves = atEnd[b];
@@ -10275,6 +10332,7 @@ static void allocatorResolve(Allocator* a) {
                         do {
                             list.pushBack(inner.entries[nextMove++].move);
                         } while (nextMove < inner.entries.size() && inner.entries[nextMove].position == key);
+                        noteMoves(&moves);
                         out.pushBack(moves);
                     }
                 }
@@ -10292,15 +10350,36 @@ static void allocatorResolve(Allocator* a) {
             // Scan keeps required uses in registers. Only parallel
             // moves and supported memory operands may resolve to slots;
             // a constant deliberately spilled at its definition is gone.
+            u32 reads = 0;
+            u32 writes = 0;
+            u8 kind = 0;
             mInstForEachOperand(in, [&](VReg* r, Int role) {
-                if (*r == noReg || vRegIsPhys(*r)) {
-                    return;
+                if (*r != noReg && !vRegIsPhys(*r)) {
+                    const i32 at = role == roleDef ? p + 1 : p;
+                    *r = allocatorLocation(a, *r, at);
                 }
-                const i32 at = role == roleDef ? p + 1 : p;
-                *r = allocatorLocation(a, *r, at);
+                if (role == roleTemp || (role & roleDef) != 0) {
+                    writes |= registerBit(*r);
+                }
+                if ((role & roleUse) != 0) {
+                    reads |= registerBit(*r);
+                }
+                if (slotted(*r)) {
+                    kind = maskSlot;
+                }
             });
             if (in->op == mParMove) {
                 mInstExtra(in)->moves.resize(usize(length(dropSelfMoves(mInstMoves(in)))));
+                noteMoves(in);
+            } else {
+                auto clobbers = mInstClobberSet(in, mf->registerClasses);
+                for (Int c = 0; c < length(clobbers); ++c) {
+                    writes |= registerBit(clobbers[c]);
+                }
+                if (in->op == mMov || in->op == mFMov || in->op == mMovImm || in->op == mFConst || in->op == mLea || in->op == mExt) {
+                    kind |= maskMove;
+                }
+                a->masks.pushBack(InstMask{reads, writes, kind});
             }
             if (rebuilding) {
                 out.pushBack(*in);
@@ -10476,58 +10555,30 @@ static Interval* allocatorPartAt(Interval* root, i32 p) {
 static void allocatorDeadMoves(Allocator* a) {
     MFunc* mf = a->mf;
     const usize n = mf->blocks.size();
-    auto bit = [](VReg r) -> u32 {
-        return vRegIsPhys(r) ? u32(1) << u32(r) : 0;
-    };
-    // masks are the registers an instruction reads and those it writes.
-    auto masks = [&](MInst* in) -> Tuple2<u32, u32> {
-        u32 defs = 0;
-        u32 uses = 0;
-        auto clobbers = mInstClobberSet(in, mf->registerClasses);
-        for (Int i = 0; i < length(clobbers); ++i) {
-            defs |= bit(clobbers[i]);
-        }
-        mInstForEachOperand(in, [&](VReg* r, Int role) {
-            if (role == roleTemp || (role & roleDef) != 0) {
-                defs |= bit(*r);
-            }
-            if ((role & roleUse) != 0) {
-                uses |= bit(*r);
-            }
-        });
-        return {uses, defs};
-    };
     auto order = a->order.view();
-    // uses and defs are the masks of every instruction, a block's from
-    // first on: an instruction's are found once, and again where the pass
-    // changes it, for every round reads them twice.
-    Vec<u32> first;
-    first.resize(n);
-    Vec<u32> uses;
-    Vec<u32> defs;
-    for (Int j = 0; j < length(order); ++j) {
-        const i32 b = order[j];
-        first[usize(b)] = u32(uses.size());
-        auto instructions = mf->blocks[b].insts.view();
-        for (Int i = 0; i < length(instructions); ++i) {
-            const auto m = masks(&instructions[i]);
-            uses.pushBack(m.v0);
-            defs.pushBack(m.v1);
-        }
-    }
-    Vec<u32> liveIn;
-    liveIn.resize(n);
-    // gen are the registers a block reads before it writes them, kill
-    // those it writes.
-    Vec<u32> gen;
-    gen.resize(n);
-    Vec<u32> kill;
-    kill.resize(n);
+    // The masks are resolve's of every instruction, found again where the
+    // pass changes one: every round reads them twice.
+    const auto first = a->first.view();
+    Vec<InstMask>& masks = a->masks;
+    // Of a block: gen, the registers it reads before it writes them, kill,
+    // those it writes; walked, the live-out it was last walked with, with
+    // which a walk would drop nothing more; touched, whether the last walk
+    // changed it, its gen and kill to be found again.
+    struct Block {
+        u32 liveIn;
+        u32 gen;
+        u32 kill;
+        u32 walked;
+        bool touched;
+    };
+    Vec<Block> blocks;
+    blocks.resize(n);
+    blocks.fill(Block{0, 0, 0, 0, true});
     auto liveOut = [&](i32 b) {
         u32 out = 0;
         const auto succs = mf->blocks[b].succs;
         for (Int k = 0; k < length(succs); ++k) {
-            out |= liveIn[usize(succs[k])];
+            out |= blocks[usize(succs[k])].liveIn;
         }
         return out;
     };
@@ -10536,28 +10587,32 @@ static void allocatorDeadMoves(Allocator* a) {
         dropped = 0;
         for (Int j = 0; j < length(order); ++j) {
             const i32 b = order[j];
-            u32 g = 0;
-            u32 k = 0;
-            const usize from = first[usize(b)];
-            for (usize i = mf->blocks[b].insts.size(); i-- > 0;) {
-                // Through an instruction a register written and not read
-                // is killed, one read is generated.
-                const u32 read = uses[from + i];
-                const u32 written = defs[from + i];
-                g = (g & ~written) | read;
-                k = (k | written) & ~read;
+            Block& blk = blocks[usize(b)];
+            if (blk.touched) {
+                u32 g = 0;
+                u32 k = 0;
+                const usize from = first[usize(b)];
+                for (usize i = mf->blocks[b].insts.size(); i-- > 0;) {
+                    // Through an instruction a register written and not
+                    // read is killed, one read is generated.
+                    const u32 read = masks[from + i].reads;
+                    const u32 written = masks[from + i].writes;
+                    g = (g & ~written) | read;
+                    k = (k | written) & ~read;
+                }
+                blk.gen = g;
+                blk.kill = k;
+                blk.touched = false;
             }
-            gen[usize(b)] = g;
-            kill[usize(b)] = k;
-            liveIn[usize(b)] = g;
+            blk.liveIn = blk.gen;
         }
         for (bool changed = true; changed;) {
             changed = false;
             for (Int j = length(order) - 1; j >= 0; --j) {
                 const i32 b = order[j];
-                const u32 live = gen[usize(b)] | (liveOut(b) & ~kill[usize(b)]);
-                if (live != liveIn[usize(b)]) {
-                    liveIn[usize(b)] = live;
+                const u32 live = blocks[usize(b)].gen | (liveOut(b) & ~blocks[usize(b)].kill);
+                if (live != blocks[usize(b)].liveIn) {
+                    blocks[usize(b)].liveIn = live;
                     changed = true;
                 }
             }
@@ -10565,31 +10620,46 @@ static void allocatorDeadMoves(Allocator* a) {
         for (Int j = 0; j < length(order); ++j) {
             const i32 b = order[j];
             u32 live = liveOut(b);
+            if (round > 0 && live == blocks[usize(b)].walked) {
+                continue;
+            }
+            blocks[usize(b)].walked = live;
+            const Int was = dropped;
             const usize from = first[usize(b)];
             auto instructions = mf->blocks[b].insts.view();
             for (Int i = length(instructions) - 1; i >= 0; --i) {
+                // What is no move the pass looks at only for its masks.
+                const InstMask& mask = masks[from + usize(i)];
+                if ((mask.kind & maskMove) == 0) {
+                    live = (live & ~mask.writes) | mask.reads;
+                    continue;
+                }
                 MInst* in = &instructions[i];
                 const Int before = dropped;
                 if (in->op == mParMove) {
                     auto& moves = mInstExtra(in)->moves;
                     usize kept = 0;
                     for (usize k = 0; k < moves.size(); ++k) {
-                        if (!vRegIsPhys(moves[k].dst) || (live & bit(moves[k].dst)) != 0) {
+                        if (!vRegIsPhys(moves[k].dst) || (live & registerBit(moves[k].dst)) != 0) {
                             moves[kept++] = moves[k];
                         }
                     }
                     dropped += Int(moves.size() - kept);
                     moves.resize(kept);
-                } else if ((in->op == mMov || in->op == mFMov || in->op == mMovImm || in->op == mFConst || in->op == mLea || in->op == mExt) && vRegIsPhys(in->dst) && (live & bit(in->dst)) == 0) {
+                } else if ((in->op == mMov || in->op == mFMov || in->op == mMovImm || in->op == mFConst || in->op == mLea || in->op == mExt) && vRegIsPhys(in->dst) && (live & registerBit(in->dst)) == 0) {
                     *in = inst(mNop);
                     dropped++;
                 }
+                // What a drop leaves is a no-op or moves.
                 if (dropped != before) {
-                    const auto m = masks(in);
-                    uses[from + usize(i)] = m.v0;
-                    defs[from + usize(i)] = m.v1;
+                    const InstMask m = in->op == mParMove ? movesMasks(mInstMoves(in)) : InstMask{};
+                    masks[from + usize(i)].reads = m.reads;
+                    masks[from + usize(i)].writes = m.writes;
                 }
-                live = (live & ~defs[from + usize(i)]) | uses[from + usize(i)];
+                live = (live & ~masks[from + usize(i)].writes) | masks[from + usize(i)].reads;
+            }
+            if (dropped != was) {
+                blocks[usize(b)].touched = true;
             }
         }
     }
@@ -10612,19 +10682,17 @@ static void allocatorDeadSpills(Allocator* a) {
     auto slot = [](VReg r) -> i32 {
         return isSlot(r) && slotOf(r) < constantSlot ? slotOf(r) : -1;
     };
-    // The sets are rows of words, one per block: a Vec of many is paged,
-    // so a row is reached by index, never by a pointer into it.
-    Vec<u64> liveIn;
-    liveIn.resize(n * words);
-    liveIn.fill(0);
-    Vec<u64> gen;
-    gen.resize(n * words);
-    gen.fill(0);
-    Vec<u64> kill;
-    kill.resize(n * words);
-    kill.fill(0);
-    Vec<u64> out;
-    out.resize(words);
+    // The sets are rows of words, one per block, the live-in ones, then
+    // the gen, then the kill, and last the live-out row of the block in
+    // hand: a Vec of many is paged, so a row is reached by index, never by
+    // a pointer into it.
+    const usize rows = n * words;
+    const usize gen = rows;
+    const usize kill = 2 * rows;
+    const usize out = 3 * rows;
+    Vec<u64> sets;
+    sets.resize(out + words);
+    sets.fill(0);
     auto bit = [](i32 k) {
         return u64(1) << (u64(k) % 64);
     };
@@ -10634,47 +10702,56 @@ static void allocatorDeadSpills(Allocator* a) {
         mInstForEachOperand(in, [&](VReg* r, Int role) {
             const i32 k = slot(*r);
             if (k >= 0 && role == roleDef) {
-                out[usize(k) / 64] &= ~bit(k);
+                sets[out + usize(k) / 64] &= ~bit(k);
             }
         });
         mInstForEachOperand(in, [&](VReg* r, Int role) {
             const i32 k = slot(*r);
             if (k >= 0 && role != roleDef) {
-                out[usize(k) / 64] |= bit(k);
+                sets[out + usize(k) / 64] |= bit(k);
             }
         });
     };
+    // An instruction resolve found no slot in reads and writes none: the
+    // walks pass it.
+    Vec<InstMask>& masks = a->masks;
     for (Int j = 0; j < length(order); ++j) {
         const usize b = usize(order[j]);
         const usize row = b * words;
+        const usize from = a->first[b];
         auto instructions = mf->blocks[b].insts.view();
         for (Int i = length(instructions) - 1; i >= 0; --i) {
+            if ((masks[from + usize(i)].kind & maskSlot) == 0) {
+                continue;
+            }
             mInstForEachOperand(&instructions[i], [&](VReg* r, Int role) {
                 const i32 x = slot(*r);
                 if (x >= 0 && role == roleDef) {
-                    gen[row + usize(x) / 64] &= ~bit(x);
-                    kill[row + usize(x) / 64] |= bit(x);
+                    sets[gen + row + usize(x) / 64] &= ~bit(x);
+                    sets[kill + row + usize(x) / 64] |= bit(x);
                 }
             });
             mInstForEachOperand(&instructions[i], [&](VReg* r, Int role) {
                 const i32 x = slot(*r);
                 if (x >= 0 && role != roleDef) {
-                    gen[row + usize(x) / 64] |= bit(x);
-                    kill[row + usize(x) / 64] &= ~bit(x);
+                    sets[gen + row + usize(x) / 64] |= bit(x);
+                    sets[kill + row + usize(x) / 64] &= ~bit(x);
                 }
             });
         }
         for (usize w = 0; w < words; ++w) {
-            liveIn[row + w] = gen[row + w];
+            sets[row + w] = sets[gen + row + w];
         }
     }
     auto liveOut = [&](usize b) {
-        out.fill(0);
+        for (usize w = 0; w < words; ++w) {
+            sets[out + w] = 0;
+        }
         const auto succs = mf->blocks[b].succs;
         for (Int k = 0; k < length(succs); ++k) {
             const usize row = usize(succs[k]) * words;
             for (usize w = 0; w < words; ++w) {
-                out[w] |= liveIn[row + w];
+                sets[out + w] |= sets[row + w];
             }
         }
     };
@@ -10685,22 +10762,26 @@ static void allocatorDeadSpills(Allocator* a) {
             const usize row = b * words;
             liveOut(b);
             for (usize w = 0; w < words; ++w) {
-                const u64 x = gen[row + w] | (out[w] & ~kill[row + w]);
-                if (x != liveIn[row + w]) {
-                    liveIn[row + w] = x;
+                const u64 x = sets[gen + row + w] | (sets[out + w] & ~sets[kill + row + w]);
+                if (x != sets[row + w]) {
+                    sets[row + w] = x;
                     changed = true;
                 }
             }
         }
     }
     auto live = [&](i32 k) {
-        return ((out[usize(k) / 64] >> (u64(k) % 64)) & 1) != 0;
+        return ((sets[out + usize(k) / 64] >> (u64(k) % 64)) & 1) != 0;
     };
     for (Int j = 0; j < length(order); ++j) {
         const usize b = usize(order[j]);
         liveOut(b);
+        const usize from = a->first[b];
         auto instructions = mf->blocks[b].insts.view();
         for (Int i = length(instructions) - 1; i >= 0; --i) {
+            if ((masks[from + usize(i)].kind & maskSlot) == 0) {
+                continue;
+            }
             MInst* in = &instructions[i];
             // Resolve permits stack destinations only in parallel moves;
             // the following passes add none to scalar moves.
@@ -10765,36 +10846,56 @@ static void allocatorDuplicateDispatch(Allocator* a) {
 static void allocatorCopies(Allocator* a) {
     MFunc* mf = a->mf;
     auto order = a->order.view();
-    for (Int j = 0; j < length(order); ++j) {
-        // copy[r] is the register r holds a copy of, or noReg.
-        Array<VReg, 32> copy{};
+    // copy[r] is the register r holds a copy of, or noReg. involved are the
+    // registers the block made a copy or the original of: to forget any
+    // other changes nothing, and a block clears these alone.
+    Array<VReg, 32> copy{};
+    for (Int r = 0; r < 32; ++r) {
+        copy[r] = noReg;
+    }
+    u32 involved = 0;
+    // forget takes a register of involved.
+    auto forget = [&](VReg d) {
+        copy[d] = noReg;
         for (Int r = 0; r < 32; ++r) {
-            copy[r] = noReg;
+            if (copy[r] == d) {
+                copy[r] = noReg;
+            }
         }
-        auto forget = [&](VReg d) {
-            if (!vRegIsPhys(d)) {
-                return;
-            }
-            copy[d] = noReg;
-            for (Int r = 0; r < 32; ++r) {
-                if (copy[r] == d) {
-                    copy[r] = noReg;
-                }
-            }
-        };
+    };
+    for (Int j = 0; j < length(order); ++j) {
+        for (u32 held = involved; held != 0; held &= held - 1) {
+            copy[__builtin_ctz(held)] = noReg;
+        }
+        involved = 0;
         auto insts = mf->blocks[order[j]].insts.view();
+        const Int from = Int(a->first[usize(order[j])]);
         for (Int i = 0; i < length(insts); ++i) {
             MInst* in = &insts[i];
+            const usize at = usize(from + i);
             if (in->op == mParMove) {
                 auto& moves = mInstExtra(in)->moves;
+                bool read = false;
                 for (usize k = 0; k < moves.size(); ++k) {
                     const VReg src = moves[k].src;
                     if (vRegIsPhys(src) && copy[src] != noReg && vRegIsXMM(copy[src]) == vRegIsXMM(moves[k].dst)) {
                         moves[k].src = copy[src];
+                        read = true;
                     }
                 }
+                // The moves read other registers now: what they read is
+                // their sources.
+                if (read) {
+                    u32 reads = 0;
+                    for (usize k = 0; k < moves.size(); ++k) {
+                        reads |= registerBit(moves[k].src);
+                    }
+                    a->masks[at].reads = reads;
+                }
                 for (usize k = 0; k < moves.size(); ++k) {
-                    forget(moves[k].dst);
+                    if ((involved & registerBit(moves[k].dst)) != 0) {
+                        forget(moves[k].dst);
+                    }
                 }
                 for (usize k = 0; k < moves.size(); ++k) {
                     const VReg src = moves[k].src;
@@ -10805,18 +10906,15 @@ static void allocatorCopies(Allocator* a) {
                     }
                     if (vRegIsPhys(src) && vRegIsPhys(dst) && src != dst && !written) {
                         copy[dst] = src;
+                        involved |= registerBit(dst) | registerBit(src);
                     }
                 }
                 continue;
             }
-            mInstForEachOperand(in, [&](VReg* r, Int role) {
-                if (role == roleTemp || (role & roleDef) != 0) {
-                    forget(*r);
-                }
-            });
-            auto clobbers = mInstClobberSet(in, mf->registerClasses);
-            for (Int c = 0; c < length(clobbers); ++c) {
-                forget(clobbers[c]);
+            // What an instruction writes, its clobbers among it, holds a
+            // copy no more, nor does a copy of it.
+            for (u32 written = a->masks[at].writes & involved; written != 0; written &= written - 1) {
+                forget(VReg(__builtin_ctz(written)));
             }
         }
     }
@@ -10894,6 +10992,7 @@ static void allocatorOrderSlots(Allocator* a) {
         return;
     }
     MFunc* mf = a->mf;
+    Vec<InstMask>& masks = a->masks;
     auto each = [&](auto&& f) {
         for (Int j = 0; j < length(a->order); ++j) {
             MBlock* blk = &mf->blocks[a->order[j]];
@@ -10901,8 +11000,12 @@ static void allocatorOrderSlots(Allocator* a) {
             for (Int d = 0; !blk->cold && d < blk->depth && d < 6; ++d) {
                 w *= 8;
             }
+            const Int from = Int(a->first[usize(a->order[j])]);
             auto instructions = blk->insts.view();
             for (Int i = 0; i < length(instructions); ++i) {
+                if ((masks[usize(from + i)].kind & maskSlot) == 0) {
+                    continue;
+                }
                 mInstForEachOperand(&instructions[i], [&](VReg* r, Int) {
                     if (isSlot(*r) && slotOf(*r) < constantSlot) {
                         f(r, w);
@@ -23266,6 +23369,8 @@ static Allocator* allocate(MFunc* mf) {
     allocatorCopies(a);
     allocatorDeadMoves(a);
     allocatorDeadSpills(a);
+    a->first = Vec<u32>{};
+    a->masks = Vec<InstMask>{};
     allocatorDuplicateDispatch(a);
     allocatorNarrowMasks(a);
     return a;
