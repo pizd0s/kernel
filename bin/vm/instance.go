@@ -394,7 +394,7 @@ func (i *Instance) symbol(name string) uintptr {
 		throwFmt("no symbol %s", name)
 	}
 
-	return i.code.base + uintptr(at)
+	return i.code.base + uintptr(at[0])
 }
 
 func (i *Instance) start() {
@@ -467,37 +467,14 @@ type Frames struct {
 	req   ResumeRequest
 }
 
-func isFunctionRegion(name string) bool {
-	return len(name) > 1 && name[0] == 'f' && name[1] >= '0' && name[1] <= '9'
-}
-
-func (i *Instance) codeRange(first, last int) [2]uint64 {
-	regions := i.obj.regions()
+func (i *Instance) codeRange(at [2]uint32) [2]uint64 {
 	base := uint64(i.code.base)
 
-	return [2]uint64{base + uint64(regions[first].start), base + uint64(regions[last].end)}
+	return [2]uint64{base + uint64(at[0]), base + uint64(at[1])}
 }
 
 func (i *Instance) functionCode() ([2]uint64, bool) {
-	first, last := -1, -1
-
-	for k, r := range i.obj.regions() {
-		switch {
-		case !isFunctionRegion(r.name):
-		case first < 0:
-			first, last = k, k
-		case last != k-1:
-			return [2]uint64{}, false
-		default:
-			last = k
-		}
-	}
-
-	if first < 0 {
-		return [2]uint64{}, false
-	}
-
-	return i.codeRange(first, last), true
+	return i.codeRange(i.obj.functions), i.obj.functions[0] < i.obj.functions[1]
 }
 
 func (i *Instance) exportCode(name string) ([2]uint64, bool) {
@@ -507,15 +484,9 @@ func (i *Instance) exportCode(name string) ([2]uint64, bool) {
 }
 
 func (i *Instance) symbolCode(sym string) ([2]uint64, bool) {
-	at := i.obj.defined[sym]
+	at, ok := i.obj.defined[sym]
 
-	for k, r := range i.obj.regions() {
-		if r.start == at {
-			return i.codeRange(k, k), true
-		}
-	}
-
-	return [2]uint64{}, false
+	return i.codeRange(at), ok
 }
 
 func (i *Instance) frames(j *Jump, entry string) (*Frames, bool) {

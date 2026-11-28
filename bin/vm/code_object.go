@@ -9,7 +9,7 @@ import (
 const (
 	objectMagic  = "PZO1"
 	objectPage   = 4096
-	objectHeader = 104
+	objectHeader = 120
 )
 
 type CodeObject struct {
@@ -18,11 +18,12 @@ type CodeObject struct {
 	text   []byte
 	rodata []byte
 
-	defined map[string]uint32
-	got     []string
-	meta    *Meta
-	tables  *GoTables
-	regions func() []Region
+	functions [2]uint32
+	defined   map[string][2]uint32
+	got       []string
+	meta      *Meta
+	tables    *GoTables
+	regions   func() []Region
 }
 
 func readObject(data []byte) *CodeObject {
@@ -33,8 +34,9 @@ func readObject(data []byte) *CodeObject {
 	}
 
 	head, text, rodata := le.Uint64(data[16:]), le.Uint64(data[24:]), le.Uint64(data[32:])
+	functionsAt, functionsEnd := le.Uint64(data[40:]), le.Uint64(data[48:])
 
-	if head < objectHeader || head%objectPage != 0 || head >= 1<<31 || text >= 1<<31 || rodata >= 1<<31 {
+	if head < objectHeader || head%objectPage != 0 || head >= 1<<31 || text >= 1<<31 || rodata >= 1<<31 || functionsAt > functionsEnd || functionsEnd > text {
 		throwFmt("malformed object")
 	}
 
@@ -46,7 +48,7 @@ func readObject(data []byte) *CodeObject {
 	}
 
 	part := func(k int) []byte {
-		at, n := le.Uint64(data[40+16*k:]), le.Uint64(data[48+16*k:])
+		at, n := le.Uint64(data[56+16*k:]), le.Uint64(data[64+16*k:])
 
 		if at < imageEnd || at > uint64(len(data)) || n > uint64(len(data))-at {
 			throwFmt("malformed object")
@@ -55,7 +57,7 @@ func readObject(data []byte) *CodeObject {
 		return data[at : at+n]
 	}
 
-	obj := &CodeObject{image: data[:imageEnd], head: int(head), text: data[head : head+text], rodata: data[textEnd:imageEnd]}
+	obj := &CodeObject{image: data[:imageEnd], head: int(head), text: data[head : head+text], rodata: data[textEnd:imageEnd], functions: [2]uint32{uint32(functionsAt), uint32(functionsEnd)}}
 	obj.tables = readTables(part(0), part(1), int(text))
 
 	if got := part(2); len(got) > 0 {
@@ -84,7 +86,7 @@ func (obj *CodeObject) describe() {
 	m.init = symInit
 
 	for _, name := range m.symbols {
-		if obj.defined[name] >= uint32(len(obj.text)) {
+		if at := obj.defined[name]; at[0] >= at[1] || at[1] > uint32(len(obj.text)) {
 			throwFmt("symbol %s out of the text", name)
 		}
 

@@ -21,7 +21,7 @@ def read(path):
     data = Path(path).read_bytes()
     assert data[:4] == b"PZO1" and struct.unpack_from("<Q", data, 8)[0] == len(data), path
     head, text = struct.unpack_from("<QQ", data, 16)
-    tables, names, got, _ = (data[at:at + size] for at, size in (struct.unpack_from("<QQ", data, 40 + 16 * k) for k in range(4)))
+    tables, names, got, _ = (data[at:at + size] for at, size in (struct.unpack_from("<QQ", data, 56 + 16 * k) for k in range(4)))
     # The tables' header: the functions and the end of the last, then where
     # the tables of values, the entries and the records are.
     count, end, _, _, entries_at, records_at = struct.unpack_from("<6I", tables)

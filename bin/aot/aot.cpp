@@ -3917,7 +3917,7 @@ namespace {
         u32 functions{};
         u32 functionCount{};
         // symbols are the text's the kernel calls by name: the exports'
-        // thunks and the init, each at its offset.
+        // thunks and the init, each from its offset to its end.
         Slice<TextSymbol> symbols{};
     };
 
@@ -4046,6 +4046,7 @@ namespace {
     struct TextSymbol {
         String name{};
         u32 at{};
+        u32 end{};
     };
 
     struct MFunc {
@@ -4205,6 +4206,10 @@ namespace {
         Slice<TextAddress> addresses{};
         Slice<Region> regions{};
         String regionName{};
+        // functionsAt and functionsEnd are where the module's functions,
+        // one run of the text, start and end; with none both are 0.
+        u32 functionsAt{};
+        u32 functionsEnd{};
         Map<String, bool> globals{};
         Int initFn{};
         i32 dataInitTable = -1;
@@ -4523,7 +4528,7 @@ static constexpr Int ppF2 = 3;
 
 // The object's header and the page its text and constants start from
 // (writeObject).
-static constexpr usize objectHeader = 104;
+static constexpr usize objectHeader = 120;
 
 static constexpr usize objectPage = 4096;
 
@@ -19625,7 +19630,7 @@ static Meta* objCodeDescription(ObjCode* oc) {
     auto regions = oc->regions;
     for (Int i = 0; i < length(regions); ++i) {
         if (oc->globals[regions[i].name]) {
-            meta->symbols = appendValues(meta->symbols, TextSymbol{regions[i].name, regions[i].start});
+            meta->symbols = appendValues(meta->symbols, TextSymbol{regions[i].name, regions[i].start, regions[i].end});
         }
     }
     return meta;
@@ -24642,6 +24647,7 @@ static Slice<u8> encodeNote(Meta* m) {
     for (Int i = 0; i < length(m->symbols); ++i) {
         metaWriterStr(w, m->symbols[i].name);
         metaWriterU(w, m->symbols[i].at);
+        metaWriterU(w, m->symbols[i].end);
     }
     return w->out;
 }
@@ -26678,8 +26684,8 @@ static bool windowBase(Function* f, i32 addr, i64 end, i32* base, i64* c) {
 // one first), the GOT's symbols, of a slot each in their order, and the
 // description. The header is "PZO1" and four bytes of zeros, then words of
 // eight bytes: the object's size, where the text starts, the text's size
-// and the constants', and the offset and the size of each of the four
-// parts.
+// and the constants', where in the text the module's functions start and
+// end, and the offset and the size of each of the four parts.
 static void writeObject(ObjCode* oc, Meta* meta, Slice<u8> description) {
     auto regions = oc->regions;
     Slice<u8> names = sliceOf<u8>({u8(0LL)});
@@ -26710,9 +26716,11 @@ static void writeObject(ObjCode* oc, Meta* meta, Slice<u8> description) {
     storeLittle(header + 16, head);
     storeLittle(header + 24, text);
     storeLittle(header + 32, oc->rodataSize);
+    storeLittle(header + 40, convert<u64>(oc->functionsAt));
+    storeLittle(header + 48, convert<u64>(oc->functionsEnd));
     for (Int k = 0; k < 4; ++k) {
-        storeLittle(header + 40 + 16 * k, partAt[k]);
-        storeLittle(header + 48 + 16 * k, convert<u64>(length(parts[k])));
+        storeLittle(header + 56 + 16 * k, partAt[k]);
+        storeLittle(header + 64 + 16 * k, convert<u64>(length(parts[k])));
     }
     writeAll(1, header, sizeof(header));
     writeZeros(1, head - sizeof(header));
@@ -28846,6 +28854,7 @@ static void compileWithOptions(CompileOptions options) {
     }
     objCodeAddFixedBlobs(code);
     objCodeImportAdapters(code);
+    const Int adapters = length(code->regions);
     const i64 stackPointer = moduleStackPointer(module);
     for (Int i = module->importedFuncs; i < length(module->funcs); ++i) {
         Function* function;
@@ -28863,6 +28872,10 @@ static void compileWithOptions(CompileOptions options) {
         Allocator* allocation = allocate(machine);
         objCodeEmitFunction(code, i, machine, allocation);
         machinePool.clear();
+    }
+    if (length(code->regions) > adapters) {
+        code->functionsAt = code->regions[adapters].start;
+        code->functionsEnd = code->regions[length(code->regions) - 1].end;
     }
     objCodeTrampolines(code);
     if (code->lay->size > (Int(1) << 30)) {

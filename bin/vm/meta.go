@@ -82,7 +82,7 @@ type Meta struct {
 
 	init    string
 	symbols []string
-	defined map[string]uint32
+	defined map[string][2]uint32
 
 	files []string
 	lines []LineEntry
@@ -245,11 +245,11 @@ func decodeNote(data []byte) *Meta {
 	}
 
 	m.symbols = make([]string, r.count())
-	m.defined = make(map[string]uint32, len(m.symbols))
+	m.defined = make(map[string][2]uint32, len(m.symbols))
 
 	for i := range m.symbols {
 		m.symbols[i] = r.str()
-		m.defined[m.symbols[i]] = r.u32()
+		m.defined[m.symbols[i]] = [2]uint32{r.u32(), r.u32()}
 	}
 
 	if len(r.data) != 0 {
